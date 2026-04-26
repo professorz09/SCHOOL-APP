@@ -1,5 +1,6 @@
 import { School, CreateSchoolInput, UpdateSchoolInput } from '../types/school.types';
 import { SchoolStatus, BillingPlan, PaymentStatus } from '../config/constants';
+import { authService } from './auth.service';
 
 // ---------------------------------------------------------------------------
 // Mock seed data — swap each function body for supabase.from('schools') calls
@@ -225,29 +226,25 @@ export const schoolService = {
   },
 
   async create(input: CreateSchoolInput): Promise<School> {
+    const id = `s${Date.now()}`;
+    const { password, ...schoolFields } = input;
     const school: School = {
-      ...input,
-      id: `s${Date.now()}`,
+      ...schoolFields,
+      id,
       studentCount: 0,
       teacherCount: 0,
       paymentStatus: PaymentStatus.PENDING,
       paymentStartDate: input.paymentStartDate ?? new Date().toISOString().split('T')[0],
       createdAt: new Date().toISOString().split('T')[0],
-      academicYears: [
-        {
-          id: `ay${Date.now()}`,
-          label: '2024-2025',
-          startDate: '2024-04-01',
-          endDate: '2025-03-31',
-          isActive: true,
-          totalStudents: 0,
-          totalRevenue: 0,
-          totalExpense: 0,
-          sections: [],
-        },
-      ],
+      academicYears: [],
     };
     _db = [..._db, school];
+
+    const cleanPhone = (input.principalPhone || '').replace(/\D/g, '').slice(-10);
+    if (cleanPhone && password) {
+      authService.createPrincipalAccount(id, cleanPhone, input.principalEmail, password);
+    }
+
     return school;
   },
 

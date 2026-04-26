@@ -1,7 +1,6 @@
 import React from 'react';
-import { Home, LayoutGrid, Search, User, Bell, ChevronDown } from 'lucide-react';
+import { Home, LayoutGrid, Search, User, Bell } from 'lucide-react';
 import { AppRole, NavTab } from '../types';
-import { useAcademicYear } from '../context/AcademicYearContext';
 import { useAuthStore } from '../store/authStore';
 
 interface BottomNavProps {
@@ -51,11 +50,9 @@ export const BottomNav: React.FC<BottomNavProps> = ({ currentTab, setTab }) => {
 
 interface HeaderProps {
   role: AppRole;
-  onOpenAcademicYearSettings?: () => void;
 }
 
-export const Header: React.FC<HeaderProps> = ({ role, onOpenAcademicYearSettings }) => {
-  const { activeYear } = useAcademicYear();
+export const Header: React.FC<HeaderProps> = ({ role }) => {
   const session = useAuthStore(state => state.session);
   const firstName = session?.name?.split(' ')[0] ?? 'User';
   const initials = session?.name
@@ -79,14 +76,6 @@ export const Header: React.FC<HeaderProps> = ({ role, onOpenAcademicYearSettings
         </div>
       </div>
       <div className="flex items-center gap-2">
-        {role === 'PRINCIPAL' && (
-          <button 
-             onClick={onOpenAcademicYearSettings}
-             className="flex items-center gap-1 bg-white border border-slate-200 px-2.5 py-1.5 rounded-full text-[10px] font-black text-slate-700 shadow-sm hover:bg-slate-50 transition-colors uppercase tracking-widest active:scale-95"
-          >
-            <span className="text-emerald-500">●</span> {activeYear ? activeYear.name : 'Setup Year'} <ChevronDown size={14} />
-          </button>
-        )}
         <button className="relative p-2 bg-slate-100 rounded-full text-slate-600 hover:bg-slate-200 transition-colors">
           <Bell size={20} />
           <span className="absolute -top-1 -right-1 w-4 h-4 bg-red-500 text-white text-[10px] font-bold flex items-center justify-center rounded-full border-2 border-white">3</span>

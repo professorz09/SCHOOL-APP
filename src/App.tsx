@@ -2,30 +2,48 @@ import React, { useState, useEffect } from 'react';
 import { AppRole, NavTab } from './types';
 import { Header, BottomNav } from './components/Navigation';
 import { LoginPage } from './components/LoginPage';
+import { FirstLoginPasswordChange } from './components/FirstLoginPasswordChange';
 import { PrincipalLayout } from './features/principal';
 import { SuperAdminLayout } from './features/super-admin';
 import { TeacherLayout } from './features/teacher';
 import { StudentLayout } from './features/student';
 import { DriverLayout } from './features/driver/DriverLayout';
 import { PaymentsView } from './views/PaymentsView';
-import { AcademicYearManager } from './views/AcademicYearManager';
 import { useAuthStore, restoreAuthSession } from './store/authStore';
+import { studentService } from './services/student.service';
+import { Student } from './types/principal.types';
 import { Settings2, LogOut } from 'lucide-react';
 
 export default function App() {
   const { session, logout } = useAuthStore();
   const [tab, setTab] = useState<NavTab>('HOME');
   const [showRoleSelector, setShowRoleSelector] = useState(false);
-  const [showAcademicYearManager, setShowAcademicYearManager] = useState(false);
   const [selectedStudentId, setSelectedStudentId] = useState<string | null>(null);
+  const [linkedStudents, setLinkedStudents] = useState<Student[]>([]);
 
   // Restore auth session on app load
   useEffect(() => {
     restoreAuthSession();
   }, []);
 
+  // Load linked student records when a parent with siblings logs in.
+  useEffect(() => {
+    const ids = session?.linkedStudentIds ?? [];
+    if (session?.role !== 'PARENT' || ids.length <= 1) {
+      setLinkedStudents([]);
+      return;
+    }
+    Promise.all(ids.map(id => studentService.getById(id))).then(results => {
+      setLinkedStudents(results.filter((s): s is Student => !!s));
+    });
+  }, [session?.userId, session?.role, (session?.linkedStudentIds ?? []).join(',')]);
+
   if (!session) {
     return <LoginPage onLoginSuccess={() => window.location.reload()} />;
+  }
+
+  if (session.mustChangePassword) {
+    return <FirstLoginPasswordChange />;
   }
 
   // For parents with multiple students, handle student selection
@@ -39,16 +57,23 @@ export default function App() {
             <div className="text-xs font-bold text-blue-100 mt-1">Choose which child to view</div>
           </div>
           <div className="flex-1 overflow-y-auto flex flex-col justify-center p-6 gap-3">
-            {parentLinkedStudents.map((sid) => (
-              <button
-                key={sid}
-                onClick={() => setSelectedStudentId(sid)}
-                className="w-full p-4 bg-white rounded-xl border border-slate-200 shadow-sm active:scale-95 transition-transform text-left"
-              >
-                <div className="font-black text-slate-900">Student {sid}</div>
-                <div className="text-[10px] font-bold text-slate-400 mt-1">Tap to view dashboard</div>
-              </button>
-            ))}
+            {parentLinkedStudents.map((sid) => {
+              const student = linkedStudents.find(s => s.id === sid);
+              const displayName = student?.name ?? 'Loading…';
+              const subtitle = student
+                ? `${student.className} · Section ${student.section} · Roll ${student.rollNo}`
+                : 'Tap to view dashboard';
+              return (
+                <button
+                  key={sid}
+                  onClick={() => setSelectedStudentId(sid)}
+                  className="w-full p-4 bg-white rounded-xl border border-slate-200 shadow-sm active:scale-95 transition-transform text-left"
+                >
+                  <div className="font-black text-slate-900">{displayName}</div>
+                  <div className="text-[10px] font-bold text-slate-400 mt-1">{subtitle}</div>
+                </button>
+              );
+            })}
           </div>
         </div>
       </div>
@@ -90,7 +115,7 @@ export default function App() {
       <div className="w-full h-screen sm:h-[850px] sm:max-w-[400px] bg-slate-50 relative sm:rounded-[40px] sm:border-[8px] border-slate-800 shadow-2xl flex flex-col overflow-hidden">
 
         {/* Dynamic Header */}
-        <Header role={role} onOpenAcademicYearSettings={() => setShowAcademicYearManager(true)} />
+        <Header role={role} />
 
         {/* Scrollable Main Content */}
         <main className="flex-1 overflow-y-auto px-5 pb-24 hide-scrollbar">
@@ -99,10 +124,6 @@ export default function App() {
 
         {/* Bottom Navigation */}
         <BottomNav currentTab={tab} setTab={setTab} />
-
-        {showAcademicYearManager && (
-          <AcademicYearManager onClose={() => setShowAcademicYearManager(false)} />
-        )}
 
         {/* Logout & Dev Role Switcher Overlay */}
         {showRoleSelector && (

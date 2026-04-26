@@ -1,11 +1,13 @@
 import React, { useEffect, useState } from 'react';
-import { ArrowLeft, Plus, Trash2, ChevronDown, ChevronUp, Save, Calendar, Users, QrCode, CreditCard, CheckCircle2 } from 'lucide-react';
+import { ArrowLeft, Plus, Trash2, ChevronDown, ChevronUp, Save, Calendar, Users, QrCode, CreditCard, CheckCircle2, Lock, Eye, EyeOff, ShieldCheck } from 'lucide-react';
 import { principalService } from '../../../services/principal.service';
 import { AcademicYearConfig, ClassConfig, Student } from '../../../types/principal.types';
 import { useUIStore } from '../../../store/uiStore';
 import { studentService } from '../../../services/student.service';
+import { authService } from '../../../services/auth.service';
+import { useAuthStore } from '../../../store/authStore';
 
-type Tab = 'ACADEMIC' | 'CLASSES' | 'PROMOTION' | 'PAYMENTS';
+type Tab = 'ACADEMIC' | 'CLASSES' | 'PROMOTION' | 'PAYMENTS' | 'SECURITY';
 type View = 'CONFIG' | 'CREATE_AY' | 'PROMOTION';
 
 interface Props { onBack: () => void; }
@@ -38,6 +40,47 @@ export const SettingsManager: React.FC<Props> = ({ onBack }) => {
   const [upiId, setUpiId] = useState('school@upi');
   const [upiSaved, setUpiSaved] = useState(false);
   const [qrFileName, setQrFileName] = useState('');
+
+  const session = useAuthStore(s => s.session);
+  const setSession = useAuthStore(s => s.setSession);
+  const [pwCurrent, setPwCurrent] = useState('');
+  const [pwNew, setPwNew] = useState('');
+  const [pwConfirm, setPwConfirm] = useState('');
+  const [pwShow, setPwShow] = useState(false);
+  const [pwError, setPwError] = useState('');
+  const [pwSaving, setPwSaving] = useState(false);
+
+  const handleChangePassword = () => {
+    if (!session) return;
+    setPwError('');
+    if (!pwCurrent || !pwNew || !pwConfirm) {
+      setPwError('All fields required'); return;
+    }
+    if (pwNew.length < 6) {
+      setPwError('New password must be at least 6 characters'); return;
+    }
+    if (pwNew === pwCurrent) {
+      setPwError('New password must differ from current password'); return;
+    }
+    if (pwNew !== pwConfirm) {
+      setPwError('Passwords do not match'); return;
+    }
+    setPwSaving(true);
+    const ok = session.role === 'PRINCIPAL'
+      ? authService.changePrincipalPassword(session.userId, pwCurrent, pwNew)
+      : authService.changeParentPassword(session.userId, pwCurrent, pwNew);
+    if (!ok) {
+      setPwError('Current password is incorrect');
+      setPwSaving(false);
+      return;
+    }
+    if (session.mustChangePassword) {
+      setSession({ ...session, mustChangePassword: false });
+    }
+    setPwCurrent(''); setPwNew(''); setPwConfirm('');
+    setPwSaving(false);
+    showToast('Password changed successfully');
+  };
 
   useEffect(() => {
     principalService.getAYConfig().then(data => {
@@ -144,6 +187,7 @@ export const SettingsManager: React.FC<Props> = ({ onBack }) => {
     { key: 'CLASSES' as Tab, label: 'Classes' },
     { key: 'PROMOTION' as Tab, label: 'Promotion' },
     { key: 'PAYMENTS' as Tab, label: 'Payments' },
+    { key: 'SECURITY' as Tab, label: 'Security' },
   ];
 
   // ─── CREATE ACADEMIC YEAR VIEW ─────────────────────────────────────────
@@ -507,6 +551,72 @@ export const SettingsManager: React.FC<Props> = ({ onBack }) => {
               <p className="text-xs font-black text-blue-700">
                 UPI ID and QR code are shown in the student/parent Fee Payment screen under "Pay via UPI".
               </p>
+            </div>
+          </>
+        )}
+
+        {/* SECURITY TAB */}
+        {tab === 'SECURITY' && (
+          <>
+            {session?.mustChangePassword && (
+              <div className="bg-amber-50 border border-amber-200 rounded-2xl p-4 flex items-start gap-2">
+                <ShieldCheck size={18} className="text-amber-700 shrink-0 mt-0.5" />
+                <p className="text-xs font-black text-amber-800">
+                  You're still using the temporary password. Please set a new one before continuing.
+                </p>
+              </div>
+            )}
+
+            <div className="bg-white rounded-2xl border border-slate-100 shadow-sm p-4 space-y-3">
+              <div className="flex items-center gap-2 mb-1">
+                <Lock size={16} className="text-blue-600" />
+                <p className="text-[10px] font-black uppercase tracking-widest text-slate-400">Change Password</p>
+              </div>
+
+              {pwError && (
+                <div className="bg-rose-50 border border-rose-200 rounded-xl px-3 py-2 text-xs font-bold text-rose-700">{pwError}</div>
+              )}
+
+              <div>
+                <label className="block text-[10px] font-black uppercase tracking-widest text-slate-500 mb-1.5">Current Password</label>
+                <div className="relative">
+                  <input
+                    type={pwShow ? 'text' : 'password'}
+                    value={pwCurrent}
+                    onChange={e => setPwCurrent(e.target.value)}
+                    placeholder="Enter current password"
+                    className="w-full border border-slate-200 bg-slate-50 rounded-xl px-4 py-3 pr-11 font-bold text-sm outline-none focus:border-blue-500 focus:bg-white" />
+                  <button type="button" onClick={() => setPwShow(!pwShow)}
+                    className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400">
+                    {pwShow ? <EyeOff size={16} /> : <Eye size={16} />}
+                  </button>
+                </div>
+              </div>
+
+              <div>
+                <label className="block text-[10px] font-black uppercase tracking-widest text-slate-500 mb-1.5">New Password</label>
+                <input
+                  type={pwShow ? 'text' : 'password'}
+                  value={pwNew}
+                  onChange={e => setPwNew(e.target.value)}
+                  placeholder="Min 6 characters"
+                  className="w-full border border-slate-200 bg-slate-50 rounded-xl px-4 py-3 font-bold text-sm outline-none focus:border-blue-500 focus:bg-white" />
+              </div>
+
+              <div>
+                <label className="block text-[10px] font-black uppercase tracking-widest text-slate-500 mb-1.5">Confirm New Password</label>
+                <input
+                  type={pwShow ? 'text' : 'password'}
+                  value={pwConfirm}
+                  onChange={e => setPwConfirm(e.target.value)}
+                  placeholder="Re-enter new password"
+                  className="w-full border border-slate-200 bg-slate-50 rounded-xl px-4 py-3 font-bold text-sm outline-none focus:border-blue-500 focus:bg-white" />
+              </div>
+
+              <button onClick={handleChangePassword} disabled={pwSaving}
+                className="w-full flex items-center justify-center gap-2 bg-slate-900 text-white font-black text-xs uppercase tracking-widest py-3 rounded-2xl active:scale-95 transition-transform disabled:opacity-60">
+                {pwSaving ? 'Saving…' : <><Save size={14} /> Update Password</>}
+              </button>
             </div>
           </>
         )}
