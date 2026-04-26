@@ -1,34 +1,43 @@
 import React, { useEffect, useState } from 'react';
-import { ArrowLeft, Plus, Users, ChevronRight, CheckCircle2, XCircle, BookOpen, UserCheck } from 'lucide-react';
+import {
+  ArrowLeft, Plus, Users, ChevronRight, CheckCircle2, XCircle,
+  BookOpen, UserCheck, Calendar,
+} from 'lucide-react';
 import { staffService } from '../../../services/staff.service';
 import { studentService } from '../../../services/student.service';
-import { StaffMember, ClassPermission } from '../../../types/principal.types';
+import { StaffMember, ClassPermission, Student } from '../../../types/principal.types';
 import { useUIStore } from '../../../store/uiStore';
+
+interface SectionInfo {
+  section: string;
+  students: Student[];
+  permissions: ClassPermission[];
+}
 
 interface ClassInfo {
   className: string;
-  sections: string[];
+  sections: SectionInfo[];
   studentCount: number;
-  permissions: ClassPermission[];
 }
 
 interface Props { onBack: () => void; }
 
 let _permissions: ClassPermission[] = [
-  { className: 'Class 10', section: 'A', teacherId: 'staff1', teacherName: 'Aarti Desai', canMarkAttendance: true, canUploadResults: true },
-  { className: 'Class 10', section: 'B', teacherId: 'staff1', teacherName: 'Aarti Desai', canMarkAttendance: true, canUploadResults: false },
-  { className: 'Class 9', section: 'A', teacherId: 'staff2', teacherName: 'Sanjay Mehta', canMarkAttendance: true, canUploadResults: true },
-  { className: 'Class 9', section: 'B', teacherId: 'staff3', teacherName: 'Priya Singh', canMarkAttendance: true, canUploadResults: false },
+  { className: 'Class 10', section: 'A', teacherId: 'staff1', teacherName: 'Aarti Desai', canMarkAttendance: true, canUploadResults: true, canScheduleExam: true },
+  { className: 'Class 10', section: 'B', teacherId: 'staff1', teacherName: 'Aarti Desai', canMarkAttendance: true, canUploadResults: false, canScheduleExam: false },
+  { className: 'Class 9', section: 'A', teacherId: 'staff2', teacherName: 'Sanjay Mehta', canMarkAttendance: true, canUploadResults: true, canScheduleExam: false },
+  { className: 'Class 9', section: 'B', teacherId: 'staff3', teacherName: 'Priya Singh', canMarkAttendance: true, canUploadResults: false, canScheduleExam: false },
 ];
 
 export const ClassManagementManager: React.FC<Props> = ({ onBack }) => {
   const { showToast } = useUIStore();
-  const [view, setView] = useState<'LIST' | 'CLASS_DETAIL' | 'ADD_PERMISSION'>('LIST');
+  const [view, setView] = useState<'LIST' | 'CLASS_DETAIL' | 'SECTION_DETAIL' | 'ADD_PERMISSION'>('LIST');
   const [classes, setClasses] = useState<ClassInfo[]>([]);
   const [selectedClass, setSelectedClass] = useState<ClassInfo | null>(null);
+  const [selectedSection, setSelectedSection] = useState<SectionInfo | null>(null);
   const [teachers, setTeachers] = useState<StaffMember[]>([]);
-  const [form, setForm] = useState<{ teacherId: string; section: string; canAttend: boolean; canResults: boolean }>({
-    teacherId: '', section: 'A', canAttend: true, canResults: false,
+  const [form, setForm] = useState<{ teacherId: string; section: string; canAttend: boolean; canResults: boolean; canExam: boolean }>({
+    teacherId: '', section: 'A', canAttend: true, canResults: false, canExam: false,
   });
 
   useEffect(() => {
@@ -41,68 +50,91 @@ export const ClassManagementManager: React.FC<Props> = ({ onBack }) => {
       setTeachers(teacherStaff);
       if (teacherStaff.length > 0) setForm(f => ({ ...f, teacherId: teacherStaff[0].id }));
 
-      const classMap: Record<string, { sections: Set<string>; count: number }> = {};
+      const classMap: Record<string, { sections: Record<string, Student[]> }> = {};
       students.forEach(s => {
-        if (!classMap[s.className]) classMap[s.className] = { sections: new Set(), count: 0 };
-        classMap[s.className].sections.add(s.section);
-        classMap[s.className].count++;
+        if (!classMap[s.className]) classMap[s.className] = { sections: {} };
+        if (!classMap[s.className].sections[s.section]) classMap[s.className].sections[s.section] = [];
+        classMap[s.className].sections[s.section].push(s);
       });
 
       const classList: ClassInfo[] = Object.entries(classMap)
         .sort(([a], [b]) => a.localeCompare(b))
-        .map(([className, { sections, count }]) => ({
+        .map(([className, { sections }]) => ({
           className,
-          sections: [...sections].sort(),
-          studentCount: count,
-          permissions: _permissions.filter(p => p.className === className),
+          sections: Object.entries(sections).sort(([a], [b]) => a.localeCompare(b)).map(([sec, studs]) => ({
+            section: sec,
+            students: studs,
+            permissions: _permissions.filter(p => p.className === className && p.section === sec),
+          })),
+          studentCount: Object.values(sections).flat().length,
         }));
       setClasses(classList);
     };
     load();
   }, []);
 
+  const refreshPermissions = (className: string) => {
+    setClasses(prev => prev.map(c => c.className === className ? {
+      ...c,
+      sections: c.sections.map(sec => ({
+        ...sec,
+        permissions: _permissions.filter(p => p.className === className && p.section === sec.section),
+      })),
+    } : c));
+    if (selectedClass?.className === className) {
+      setSelectedClass(prev => prev ? {
+        ...prev,
+        sections: prev.sections.map(sec => ({
+          ...sec,
+          permissions: _permissions.filter(p => p.className === className && p.section === sec.section),
+        })),
+      } : null);
+    }
+    if (selectedSection && selectedClass?.className === className) {
+      setSelectedSection(prev => prev ? {
+        ...prev,
+        permissions: _permissions.filter(p => p.className === className && p.section === prev.section),
+      } : null);
+    }
+  };
+
   const handleAddPermission = () => {
     if (!selectedClass || !form.teacherId) { showToast('Select a teacher', 'error'); return; }
     const teacher = teachers.find(t => t.id === form.teacherId);
     if (!teacher) return;
 
+    const targetSection = selectedSection?.section ?? form.section;
+
     const existing = _permissions.findIndex(
-      p => p.className === selectedClass.className && p.section === form.section && p.teacherId === form.teacherId
+      p => p.className === selectedClass.className && p.section === targetSection && p.teacherId === form.teacherId
     );
     if (existing !== -1) {
       _permissions = _permissions.map((p, i) => i === existing ? {
-        ...p, canMarkAttendance: form.canAttend, canUploadResults: form.canResults,
+        ...p, canMarkAttendance: form.canAttend, canUploadResults: form.canResults, canScheduleExam: form.canExam,
       } : p);
     } else {
       _permissions.push({
         className: selectedClass.className,
-        section: form.section,
+        section: targetSection,
         teacherId: form.teacherId,
         teacherName: teacher.name,
         canMarkAttendance: form.canAttend,
         canUploadResults: form.canResults,
+        canScheduleExam: form.canExam,
       });
     }
 
-    setClasses(prev => prev.map(c => c.className === selectedClass.className ? {
-      ...c,
-      permissions: _permissions.filter(p => p.className === selectedClass.className),
-    } : c));
-    setSelectedClass(prev => prev ? { ...prev, permissions: _permissions.filter(p => p.className === selectedClass.className) } : null);
-    showToast(`${teacher.name} assigned to ${selectedClass.className}-${form.section}`);
-    setView('CLASS_DETAIL');
+    refreshPermissions(selectedClass.className);
+    showToast(`${teacher.name} assigned to ${selectedClass.className}-${targetSection}`);
+    setView(selectedSection ? 'SECTION_DETAIL' : 'CLASS_DETAIL');
   };
 
   const handleRemovePermission = (perm: ClassPermission) => {
     _permissions = _permissions.filter(p =>
       !(p.className === perm.className && p.section === perm.section && p.teacherId === perm.teacherId)
     );
-    setClasses(prev => prev.map(c => c.className === selectedClass?.className ? {
-      ...c,
-      permissions: _permissions.filter(p => p.className === c.className),
-    } : c));
-    setSelectedClass(prev => prev ? { ...prev, permissions: _permissions.filter(p => p.className === prev.className) } : null);
-    showToast('Permission removed', 'info');
+    if (selectedClass) refreshPermissions(selectedClass.className);
+    showToast('Permission removed');
   };
 
   const renderHeader = (title: string, back: () => void, action?: React.ReactNode) => (
@@ -115,27 +147,38 @@ export const ClassManagementManager: React.FC<Props> = ({ onBack }) => {
     </div>
   );
 
+  /* ── ADD PERMISSION ── */
   if (view === 'ADD_PERMISSION' && selectedClass) return (
     <div className="absolute inset-0 z-50 bg-slate-50 flex flex-col animate-in slide-in-from-right-8 duration-300">
-      {renderHeader('Assign Teacher', () => setView('CLASS_DETAIL'))}
+      {renderHeader('Assign Teacher', () => setView(selectedSection ? 'SECTION_DETAIL' : 'CLASS_DETAIL'))}
       <div className="flex-1 overflow-y-auto p-4 pb-28 space-y-4">
         <div className="bg-white rounded-2xl border border-slate-100 shadow-sm p-4 space-y-4">
-          <p className="text-[10px] font-black uppercase tracking-widest text-slate-400">Class Details</p>
           <div>
             <label className="block text-[10px] font-black uppercase tracking-widest text-slate-500 mb-1.5">Class</label>
             <div className="border border-slate-200 bg-slate-100 rounded-xl px-4 py-3 font-bold text-sm text-slate-600">{selectedClass.className}</div>
           </div>
-          <div>
-            <label className="block text-[10px] font-black uppercase tracking-widest text-slate-500 mb-1.5">Section</label>
-            <div className="flex gap-2 flex-wrap">
-              {selectedClass.sections.map(sec => (
-                <button key={sec} onClick={() => setForm(f => ({ ...f, section: sec }))}
-                  className={`px-4 py-2 rounded-xl text-xs font-black transition-colors ${form.section === sec ? 'bg-indigo-600 text-white' : 'bg-slate-50 border border-slate-200 text-slate-600'}`}>
-                  Section {sec}
-                </button>
-              ))}
+
+          {/* Section selector — only shown when entering from class level (not section level) */}
+          {!selectedSection && (
+            <div>
+              <label className="block text-[10px] font-black uppercase tracking-widest text-slate-500 mb-1.5">Section</label>
+              <div className="flex gap-2 flex-wrap">
+                {selectedClass.sections.map(sec => (
+                  <button key={sec.section} onClick={() => setForm(f => ({ ...f, section: sec.section }))}
+                    className={`px-4 py-2 rounded-xl text-xs font-black transition-colors ${form.section === sec.section ? 'bg-indigo-600 text-white' : 'bg-slate-50 border border-slate-200 text-slate-600'}`}>
+                    Section {sec.section}
+                  </button>
+                ))}
+              </div>
             </div>
-          </div>
+          )}
+          {selectedSection && (
+            <div>
+              <label className="block text-[10px] font-black uppercase tracking-widest text-slate-500 mb-1.5">Section</label>
+              <div className="border border-slate-200 bg-slate-100 rounded-xl px-4 py-3 font-bold text-sm text-slate-600">Section {selectedSection.section}</div>
+            </div>
+          )}
+
           <div>
             <label className="block text-[10px] font-black uppercase tracking-widest text-slate-500 mb-1.5">Teacher</label>
             <select value={form.teacherId} onChange={e => setForm(f => ({ ...f, teacherId: e.target.value }))}
@@ -143,22 +186,22 @@ export const ClassManagementManager: React.FC<Props> = ({ onBack }) => {
               {teachers.map(t => <option key={t.id} value={t.id}>{t.name} ({t.subject})</option>)}
             </select>
           </div>
+
           <div className="space-y-2">
             <p className="text-[10px] font-black uppercase tracking-widest text-slate-500">Permissions</p>
-            <label className="flex items-center gap-3 p-3 bg-slate-50 rounded-xl cursor-pointer">
-              <input type="checkbox" checked={form.canAttend} onChange={e => setForm(f => ({ ...f, canAttend: e.target.checked }))} className="w-4 h-4" />
-              <div>
-                <div className="font-bold text-slate-800 text-sm">Mark Attendance</div>
-                <div className="text-[10px] text-slate-400">Teacher can mark daily attendance for this section</div>
-              </div>
-            </label>
-            <label className="flex items-center gap-3 p-3 bg-slate-50 rounded-xl cursor-pointer">
-              <input type="checkbox" checked={form.canResults} onChange={e => setForm(f => ({ ...f, canResults: e.target.checked }))} className="w-4 h-4" />
-              <div>
-                <div className="font-bold text-slate-800 text-sm">Upload Results</div>
-                <div className="text-[10px] text-slate-400">Teacher can enter exam marks for this section</div>
-              </div>
-            </label>
+            {[
+              { key: 'canAttend', label: 'Mark Attendance', desc: 'Teacher can mark daily attendance for this section', stateKey: 'canAttend' as const },
+              { key: 'canResults', label: 'Upload Results', desc: 'Teacher can enter exam marks for this section', stateKey: 'canResults' as const },
+              { key: 'canExam', label: 'Schedule Exams', desc: 'Teacher can create and schedule exams for this section', stateKey: 'canExam' as const },
+            ].map(({ label, desc, stateKey }) => (
+              <label key={stateKey} className="flex items-center gap-3 p-3 bg-slate-50 rounded-xl cursor-pointer">
+                <input type="checkbox" checked={form[stateKey]} onChange={e => setForm(f => ({ ...f, [stateKey]: e.target.checked }))} className="w-4 h-4 accent-indigo-600" />
+                <div>
+                  <div className="font-bold text-slate-800 text-sm">{label}</div>
+                  <div className="text-[10px] text-slate-400">{desc}</div>
+                </div>
+              </label>
+            ))}
           </div>
         </div>
         <button onClick={handleAddPermission}
@@ -169,10 +212,78 @@ export const ClassManagementManager: React.FC<Props> = ({ onBack }) => {
     </div>
   );
 
+  /* ── SECTION DETAIL ── */
+  if (view === 'SECTION_DETAIL' && selectedClass && selectedSection) return (
+    <div className="absolute inset-0 z-50 bg-slate-50 flex flex-col animate-in slide-in-from-right-8 duration-300">
+      {renderHeader(
+        `${selectedClass.className} — Section ${selectedSection.section}`,
+        () => setView('CLASS_DETAIL'),
+        <button onClick={() => setView('ADD_PERMISSION')} className="p-2 bg-indigo-500 text-white rounded-full shadow-md">
+          <Plus size={18} />
+        </button>
+      )}
+      <div className="flex-1 overflow-y-auto p-4 pb-28 space-y-4">
+        {/* Student count */}
+        <div className="bg-white rounded-2xl border border-slate-100 shadow-sm p-4 text-center">
+          <div className="text-3xl font-black text-indigo-600">{selectedSection.students.length}</div>
+          <div className="text-[9px] font-black uppercase tracking-widest text-slate-400 mt-1">Students</div>
+        </div>
+
+        {/* Student list */}
+        <div className="bg-white rounded-2xl border border-slate-100 shadow-sm overflow-hidden">
+          <div className="px-4 py-2.5 border-b border-slate-50">
+            <p className="text-[10px] font-black uppercase tracking-widest text-slate-400">Student List</p>
+          </div>
+          {selectedSection.students.map((s, idx) => (
+            <div key={s.id} className={`flex items-center gap-3 px-4 py-3 ${idx < selectedSection.students.length - 1 ? 'border-b border-slate-50' : ''}`}>
+              <div className="w-8 h-8 rounded-full bg-indigo-100 text-indigo-700 flex items-center justify-center font-black text-xs shrink-0">
+                {s.name.split(' ').map((w: string) => w[0]).join('').slice(0, 2)}
+              </div>
+              <div className="flex-1">
+                <div className="font-bold text-slate-800 text-sm">{s.name}</div>
+                <div className="text-[10px] font-bold text-slate-400">Roll {s.rollNo.padStart(2, '0')}</div>
+              </div>
+            </div>
+          ))}
+        </div>
+
+        {/* Teacher permissions */}
+        <div className="bg-white rounded-2xl border border-slate-100 shadow-sm p-4">
+          <p className="text-[10px] font-black uppercase tracking-widest text-slate-400 mb-3">Teacher Permissions</p>
+          {selectedSection.permissions.length === 0 && (
+            <div className="flex flex-col items-center py-6 text-slate-400">
+              <UserCheck size={24} className="mb-2 opacity-40" />
+              <p className="font-bold text-xs">No teachers assigned</p>
+              <button onClick={() => setView('ADD_PERMISSION')} className="mt-2 text-xs font-black text-indigo-600">+ Assign Teacher</button>
+            </div>
+          )}
+          <div className="space-y-3">
+            {selectedSection.permissions.map((perm, i) => (
+              <div key={i} className="p-3 bg-slate-50 rounded-xl">
+                <div className="flex items-center justify-between mb-2">
+                  <div className="font-bold text-slate-800 text-sm">{perm.teacherName}</div>
+                  <button onClick={() => handleRemovePermission(perm)} className="p-1 text-slate-300 hover:text-rose-500 transition-colors">
+                    <XCircle size={16} />
+                  </button>
+                </div>
+                <div className="flex gap-1.5 flex-wrap">
+                  <PermBadge active={perm.canMarkAttendance} label="Attendance" />
+                  <PermBadge active={perm.canUploadResults} label="Results" color="blue" />
+                  <PermBadge active={!!perm.canScheduleExam} label="Exams" color="amber" />
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+
+  /* ── CLASS DETAIL ── */
   if (view === 'CLASS_DETAIL' && selectedClass) return (
     <div className="absolute inset-0 z-50 bg-slate-50 flex flex-col animate-in slide-in-from-right-8 duration-300">
       {renderHeader(selectedClass.className, () => { setSelectedClass(null); setView('LIST'); },
-        <button onClick={() => setView('ADD_PERMISSION')} className="p-2 bg-indigo-500 text-white rounded-full shadow-md">
+        <button onClick={() => { setSelectedSection(null); setView('ADD_PERMISSION'); }} className="p-2 bg-indigo-500 text-white rounded-full shadow-md">
           <Plus size={18} />
         </button>
       )}
@@ -188,43 +299,43 @@ export const ClassManagementManager: React.FC<Props> = ({ onBack }) => {
           </div>
         </div>
 
-        <div className="bg-white rounded-2xl border border-slate-100 shadow-sm p-4">
-          <p className="text-[10px] font-black uppercase tracking-widest text-slate-400 mb-3">Teacher Permissions</p>
-          {selectedClass.permissions.length === 0 && (
-            <div className="flex flex-col items-center py-8 text-slate-400">
-              <UserCheck size={28} className="mb-2 opacity-40" />
-              <p className="font-bold text-sm">No teachers assigned</p>
-              <button onClick={() => setView('ADD_PERMISSION')} className="mt-2 text-xs font-black text-indigo-600">+ Assign Teacher</button>
-            </div>
-          )}
-          <div className="space-y-3">
-            {selectedClass.permissions.map((perm, i) => (
-              <div key={i} className="p-3 bg-slate-50 rounded-xl">
-                <div className="flex items-center justify-between mb-2">
-                  <div>
-                    <div className="font-bold text-slate-800 text-sm">{perm.teacherName}</div>
-                    <div className="text-[10px] font-bold text-slate-400">Section {perm.section}</div>
-                  </div>
-                  <button onClick={() => handleRemovePermission(perm)} className="p-1.5 text-slate-300 hover:text-rose-500 transition-colors">
-                    <XCircle size={16} />
-                  </button>
+        {/* Section-wise breakdown */}
+        <p className="text-[10px] font-black uppercase tracking-widest text-slate-400">Sections</p>
+        {selectedClass.sections.map(sec => (
+          <button key={sec.section}
+            onClick={() => { setSelectedSection(sec); setView('SECTION_DETAIL'); }}
+            className="w-full bg-white rounded-2xl border border-slate-100 shadow-sm p-4 text-left active:scale-[0.98] transition-transform">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-3">
+                <div className="w-10 h-10 bg-indigo-50 text-indigo-700 rounded-xl flex items-center justify-center font-black text-sm">
+                  {sec.section}
                 </div>
-                <div className="flex gap-2">
-                  <span className={`flex items-center gap-1 text-[9px] font-black px-2 py-0.5 rounded-full ${perm.canMarkAttendance ? 'bg-emerald-100 text-emerald-700' : 'bg-slate-100 text-slate-400'}`}>
-                    {perm.canMarkAttendance ? <CheckCircle2 size={9} /> : <XCircle size={9} />} Attendance
-                  </span>
-                  <span className={`flex items-center gap-1 text-[9px] font-black px-2 py-0.5 rounded-full ${perm.canUploadResults ? 'bg-blue-100 text-blue-700' : 'bg-slate-100 text-slate-400'}`}>
-                    {perm.canUploadResults ? <CheckCircle2 size={9} /> : <XCircle size={9} />} Results
-                  </span>
+                <div>
+                  <div className="font-extrabold text-slate-900 text-sm">Section {sec.section}</div>
+                  <div className="text-[10px] font-bold text-slate-400 mt-0.5">
+                    {sec.students.length} students · {sec.permissions.length} teacher{sec.permissions.length !== 1 ? 's' : ''}
+                  </div>
                 </div>
               </div>
-            ))}
-          </div>
-        </div>
+              <div className="flex items-center gap-2">
+                <div className="flex gap-1 flex-wrap justify-end">
+                  {sec.permissions.slice(0, 2).map((p, i) => (
+                    <span key={i} className="text-[8px] font-black bg-indigo-50 text-indigo-600 px-1.5 py-0.5 rounded">{p.teacherName.split(' ')[0]}</span>
+                  ))}
+                  {sec.permissions.length > 2 && (
+                    <span className="text-[8px] font-black bg-slate-100 text-slate-500 px-1.5 py-0.5 rounded">+{sec.permissions.length - 2}</span>
+                  )}
+                </div>
+                <ChevronRight size={16} className="text-slate-300" />
+              </div>
+            </div>
+          </button>
+        ))}
       </div>
     </div>
   );
 
+  /* ── LIST ── */
   return (
     <div className="absolute inset-0 z-50 bg-slate-50 flex flex-col animate-in slide-in-from-right-8 duration-300">
       {renderHeader('Class Management', onBack)}
@@ -247,7 +358,12 @@ export const ClassManagementManager: React.FC<Props> = ({ onBack }) => {
                 </div>
               </div>
               <div className="flex flex-col items-end gap-1">
-                <span className="text-[9px] font-black text-indigo-700 bg-indigo-50 px-2 py-0.5 rounded-full">{cls.permissions.length} teachers</span>
+                {/* Section pills */}
+                <div className="flex gap-1">
+                  {cls.sections.map(s => (
+                    <span key={s.section} className="text-[8px] font-black bg-indigo-50 text-indigo-600 px-2 py-0.5 rounded-full">{s.section}</span>
+                  ))}
+                </div>
                 <ChevronRight size={16} className="text-slate-300" />
               </div>
             </div>
@@ -255,5 +371,14 @@ export const ClassManagementManager: React.FC<Props> = ({ onBack }) => {
         ))}
       </div>
     </div>
+  );
+};
+
+const PermBadge: React.FC<{ active: boolean; label: string; color?: 'green' | 'blue' | 'amber' }> = ({ active, label, color = 'green' }) => {
+  const activeClass = color === 'blue' ? 'bg-blue-100 text-blue-700' : color === 'amber' ? 'bg-amber-100 text-amber-700' : 'bg-emerald-100 text-emerald-700';
+  return (
+    <span className={`flex items-center gap-1 text-[9px] font-black px-2 py-0.5 rounded-full ${active ? activeClass : 'bg-slate-100 text-slate-400'}`}>
+      {active ? <CheckCircle2 size={9} /> : <XCircle size={9} />} {label}
+    </span>
   );
 };

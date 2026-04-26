@@ -234,4 +234,5 @@ export interface ClassPermission {
   teacherName: string;
   canMarkAttendance: boolean;
   canUploadResults: boolean;
+  canScheduleExam?: boolean;
 }

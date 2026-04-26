@@ -1,8 +1,9 @@
 import React, { useState, useCallback } from 'react';
-import { ArrowLeft, Plus, Trash2, ChevronDown, AlertTriangle, CheckCircle2, Edit3 } from 'lucide-react';
+import { ArrowLeft, Plus, Trash2, ChevronDown, AlertTriangle, CheckCircle2, Edit3, Clock } from 'lucide-react';
 import {
-  timetableService, DAYS, PERIOD_SLOTS, TimetableEntry, TDay, TimetableTeacher,
+  timetableService, PERIOD_SLOTS, DAYS, TimetableEntry, TDay, TimetableTeacher,
 } from '../../../services/timetable.service';
+import { useUIStore } from '../../../store/uiStore';
 
 const CLASSES = ['8-A', '8-B', '9-A', '9-B', '10-A', '10-B'];
 
@@ -18,26 +19,39 @@ interface EntryFormState {
   subject: string;
   teacherId: string;
   room: string;
+  startTime: string;
+  endTime: string;
+}
+
+interface SlotTimeModal {
+  slotId: string;
+  label: string;
+  startTime: string;
+  endTime: string;
 }
 
 interface Props { onBack: () => void; }
 
 export const TimetableManager: React.FC<Props> = ({ onBack }) => {
+  const { showToast } = useUIStore();
   const [selectedClass, setSelectedClass] = useState('10-A');
   const [activeDay, setActiveDay] = useState<TDay>('Monday');
   const [entries, setEntries] = useState<TimetableEntry[]>(() =>
     timetableService.getClassTimetable(selectedClass)
   );
+  const [slots, setSlots] = useState(() => [...PERIOD_SLOTS]);
   const [editModal, setEditModal] = useState<{ slotId: string; existing?: TimetableEntry } | null>(null);
-  const [form, setForm] = useState<EntryFormState>({ subject: '', teacherId: '', room: '' });
+  const [form, setForm] = useState<EntryFormState>({ subject: '', teacherId: '', room: '', startTime: '', endTime: '' });
   const [conflictMsg, setConflictMsg] = useState('');
   const [successMsg, setSuccessMsg] = useState('');
+  const [slotTimeModal, setSlotTimeModal] = useState<SlotTimeModal | null>(null);
 
   const teachers: TimetableTeacher[] = timetableService.getTeachers();
   const subjects = timetableService.getSubjectsForClass(selectedClass);
 
   const reload = useCallback((cls: string) => {
     setEntries(timetableService.getClassTimetable(cls));
+    setSlots([...PERIOD_SLOTS]);
   }, []);
 
   const handleClassChange = (cls: string) => {
@@ -48,12 +62,18 @@ export const TimetableManager: React.FC<Props> = ({ onBack }) => {
 
   const openEdit = (slotId: string) => {
     const slot = PERIOD_SLOTS.find(s => s.slotId === slotId)!;
-    if (slot.isFixed) return;
+    // Fixed slots (assembly, break, lunch) open time-edit modal
+    if (slot.isFixed) {
+      setSlotTimeModal({ slotId: slot.slotId, label: slot.label, startTime: slot.startTime, endTime: slot.endTime });
+      return;
+    }
     const existing = entries.find(e => e.day === activeDay && e.slotId === slotId);
     setForm({
       subject: existing?.subject ?? subjects[0] ?? '',
       teacherId: existing?.teacherId ?? teachers[0]?.id ?? '',
       room: existing?.room ?? '',
+      startTime: slot.startTime,
+      endTime: slot.endTime,
     });
     setConflictMsg('');
     setEditModal({ slotId, existing });
@@ -63,6 +83,13 @@ export const TimetableManager: React.FC<Props> = ({ onBack }) => {
     if (!form.subject || !form.teacherId) return;
     const teacher = teachers.find(t => t.id === form.teacherId)!;
     const [className, section] = selectedClass.split('-');
+
+    // Update slot time if changed
+    const slot = PERIOD_SLOTS.find(s => s.slotId === editModal!.slotId)!;
+    if (form.startTime !== slot.startTime || form.endTime !== slot.endTime) {
+      timetableService.updateSlotTime(editModal!.slotId, form.startTime, form.endTime);
+    }
+
     const result = timetableService.saveEntry({
       id: editModal?.existing?.id,
       classId: selectedClass,
@@ -95,6 +122,17 @@ export const TimetableManager: React.FC<Props> = ({ onBack }) => {
     setEditModal(null);
   };
 
+  const handleSlotTimeSave = () => {
+    if (!slotTimeModal) return;
+    if (!slotTimeModal.startTime || !slotTimeModal.endTime) {
+      showToast('Start and end time required', 'error'); return;
+    }
+    timetableService.updateSlotTime(slotTimeModal.slotId, slotTimeModal.startTime, slotTimeModal.endTime);
+    setSlots([...PERIOD_SLOTS]);
+    setSlotTimeModal(null);
+    showToast(`${slotTimeModal.label} time updated`);
+  };
+
   const dayEntries = entries.filter(e => e.day === activeDay);
   const getEntry = (slotId: string) => dayEntries.find(e => e.slotId === slotId);
 
@@ -108,7 +146,7 @@ export const TimetableManager: React.FC<Props> = ({ onBack }) => {
           </button>
           <div className="flex-1">
             <h2 className="text-xl font-black text-slate-900 uppercase tracking-tight">Timetable Manager</h2>
-            <p className="text-[10px] font-bold text-slate-400">Assign weekly schedule per class</p>
+            <p className="text-[10px] font-bold text-slate-400">Tap a period to assign · Tap Assembly/Break to change time</p>
           </div>
           {successMsg && (
             <div className="flex items-center gap-1 text-emerald-600 text-[10px] font-black">
@@ -150,17 +188,16 @@ export const TimetableManager: React.FC<Props> = ({ onBack }) => {
           {selectedClass} · {activeDay} — tap a period to assign
         </p>
 
-        {PERIOD_SLOTS.map(slot => {
+        {slots.map(slot => {
           const entry = getEntry(slot.slotId);
           const isFixed = slot.isFixed;
 
           return (
             <button key={slot.slotId}
               onClick={() => openEdit(slot.slotId)}
-              disabled={isFixed}
               className={`w-full flex items-stretch gap-3 p-3.5 rounded-2xl border text-left transition-all active:scale-[0.98] ${
                 isFixed
-                  ? slotBg[slot.type] + ' opacity-80 cursor-default'
+                  ? slotBg[slot.type] + ' opacity-90'
                   : entry
                     ? 'bg-white border-slate-200 hover:border-blue-300 shadow-sm'
                     : 'bg-white border-dashed border-slate-300 hover:border-blue-400'
@@ -175,7 +212,12 @@ export const TimetableManager: React.FC<Props> = ({ onBack }) => {
               {/* Content */}
               <div className="flex-1 min-w-0 flex flex-col justify-center">
                 {isFixed ? (
-                  <div className="font-extrabold text-xs">{slot.label}</div>
+                  <div className="flex items-center justify-between">
+                    <span className="font-extrabold text-xs">{slot.label}</span>
+                    <div className="flex items-center gap-1 text-[9px] font-black opacity-60">
+                      <Clock size={10} /> Edit Time
+                    </div>
+                  </div>
                 ) : entry ? (
                   <>
                     <div className="font-extrabold text-slate-900 text-sm">{entry.subject}</div>
@@ -200,20 +242,58 @@ export const TimetableManager: React.FC<Props> = ({ onBack }) => {
         })}
       </div>
 
-      {/* Edit Modal */}
-      {editModal && (
+      {/* Slot Time Edit Modal (for Assembly / Break / Lunch) */}
+      {slotTimeModal && (
         <div className="absolute inset-0 bg-slate-900/50 backdrop-blur-sm z-50 flex items-end">
           <div className="w-full bg-white rounded-t-3xl p-6 pb-8 animate-in slide-in-from-bottom-8 duration-300">
+            <div className="flex justify-between items-center mb-5">
+              <div>
+                <p className="text-[9px] font-black uppercase tracking-widest text-slate-400">Edit Time Slot</p>
+                <h3 className="text-lg font-black text-slate-900 mt-0.5">{slotTimeModal.label}</h3>
+              </div>
+              <button onClick={() => setSlotTimeModal(null)} className="w-8 h-8 bg-slate-100 rounded-full flex items-center justify-center text-slate-500">✕</button>
+            </div>
+
+            <div className="grid grid-cols-2 gap-4 mb-5">
+              <div>
+                <label className="text-[9px] font-black uppercase tracking-widest text-slate-400 mb-1.5 block">Start Time</label>
+                <input
+                  type="time"
+                  value={slotTimeModal.startTime}
+                  onChange={e => setSlotTimeModal(m => m ? { ...m, startTime: e.target.value } : m)}
+                  className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-3 text-sm font-bold text-slate-900 outline-none focus:border-violet-500"
+                />
+              </div>
+              <div>
+                <label className="text-[9px] font-black uppercase tracking-widest text-slate-400 mb-1.5 block">End Time</label>
+                <input
+                  type="time"
+                  value={slotTimeModal.endTime}
+                  onChange={e => setSlotTimeModal(m => m ? { ...m, endTime: e.target.value } : m)}
+                  className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-3 text-sm font-bold text-slate-900 outline-none focus:border-violet-500"
+                />
+              </div>
+            </div>
+
+            <button onClick={handleSlotTimeSave}
+              className="w-full py-3 bg-violet-600 text-white rounded-xl text-sm font-black">
+              Save Time
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* Period Edit Modal */}
+      {editModal && (
+        <div className="absolute inset-0 bg-slate-900/50 backdrop-blur-sm z-50 flex items-end">
+          <div className="w-full bg-white rounded-t-3xl p-6 pb-8 animate-in slide-in-from-bottom-8 duration-300 max-h-[90vh] overflow-y-auto">
             <div className="flex justify-between items-center mb-5">
               <div>
                 <p className="text-[9px] font-black uppercase tracking-widest text-slate-400">
                   {selectedClass} · {activeDay}
                 </p>
                 <h3 className="text-lg font-black text-slate-900 mt-0.5">
-                  {PERIOD_SLOTS.find(s => s.slotId === editModal.slotId)?.label}
-                  <span className="text-slate-400 ml-1.5 text-sm font-bold">
-                    {PERIOD_SLOTS.find(s => s.slotId === editModal.slotId)?.startTime}–{PERIOD_SLOTS.find(s => s.slotId === editModal.slotId)?.endTime}
-                  </span>
+                  {slots.find(s => s.slotId === editModal.slotId)?.label}
                 </h3>
               </div>
               <button onClick={() => setEditModal(null)} className="w-8 h-8 bg-slate-100 rounded-full flex items-center justify-center text-slate-500">✕</button>
@@ -227,6 +307,31 @@ export const TimetableManager: React.FC<Props> = ({ onBack }) => {
             )}
 
             <div className="space-y-3">
+              {/* Time Range */}
+              <div>
+                <label className="text-[9px] font-black uppercase tracking-widest text-slate-400 mb-1.5 block">Time Range</label>
+                <div className="grid grid-cols-2 gap-3">
+                  <div>
+                    <label className="text-[8px] font-black text-slate-400 mb-1 block">From</label>
+                    <input
+                      type="time"
+                      value={form.startTime}
+                      onChange={e => setForm(f => ({ ...f, startTime: e.target.value }))}
+                      className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3 py-2.5 text-sm font-bold text-slate-900 outline-none focus:border-blue-500"
+                    />
+                  </div>
+                  <div>
+                    <label className="text-[8px] font-black text-slate-400 mb-1 block">To</label>
+                    <input
+                      type="time"
+                      value={form.endTime}
+                      onChange={e => setForm(f => ({ ...f, endTime: e.target.value }))}
+                      className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3 py-2.5 text-sm font-bold text-slate-900 outline-none focus:border-blue-500"
+                    />
+                  </div>
+                </div>
+              </div>
+
               {/* Subject */}
               <div>
                 <label className="text-[9px] font-black uppercase tracking-widest text-slate-400 mb-1.5 block">Subject</label>

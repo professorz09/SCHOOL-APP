@@ -1,11 +1,11 @@
 import React, { useEffect, useState } from 'react';
-import { ArrowLeft, Settings, Plus, Trash2, ChevronDown, ChevronUp, Save, Calendar, Users } from 'lucide-react';
+import { ArrowLeft, Plus, Trash2, ChevronDown, ChevronUp, Save, Calendar, Users, QrCode, CreditCard, CheckCircle2 } from 'lucide-react';
 import { principalService } from '../../../services/principal.service';
 import { AcademicYearConfig, ClassConfig, Student } from '../../../types/principal.types';
 import { useUIStore } from '../../../store/uiStore';
 import { studentService } from '../../../services/student.service';
 
-type Tab = 'ACADEMIC' | 'CLASSES' | 'PROMOTION';
+type Tab = 'ACADEMIC' | 'CLASSES' | 'PROMOTION' | 'PAYMENTS';
 type View = 'CONFIG' | 'CREATE_AY' | 'PROMOTION';
 
 interface Props { onBack: () => void; }
@@ -34,6 +34,10 @@ export const SettingsManager: React.FC<Props> = ({ onBack }) => {
     endDate: '',
     board: 'CBSE',
   });
+
+  const [upiId, setUpiId] = useState('school@upi');
+  const [upiSaved, setUpiSaved] = useState(false);
+  const [qrFileName, setQrFileName] = useState('');
 
   useEffect(() => {
     principalService.getAYConfig().then(data => {
@@ -139,6 +143,7 @@ export const SettingsManager: React.FC<Props> = ({ onBack }) => {
     { key: 'ACADEMIC' as Tab, label: 'Academic Year' },
     { key: 'CLASSES' as Tab, label: 'Classes' },
     { key: 'PROMOTION' as Tab, label: 'Promotion' },
+    { key: 'PAYMENTS' as Tab, label: 'Payments' },
   ];
 
   // ─── CREATE ACADEMIC YEAR VIEW ─────────────────────────────────────────
@@ -406,6 +411,102 @@ export const SettingsManager: React.FC<Props> = ({ onBack }) => {
             </button>
             <div className="bg-amber-50 border border-amber-200 rounded-2xl p-4">
               <p className="text-xs font-black text-amber-700">When a new academic year is created, use promotion workflow to mark failed, RTE, and transfer certificate students.</p>
+            </div>
+          </>
+        )}
+
+        {/* PAYMENTS TAB */}
+        {tab === 'PAYMENTS' && (
+          <>
+            {/* UPI ID */}
+            <div className="bg-white rounded-2xl border border-slate-100 shadow-sm p-4 space-y-3">
+              <div className="flex items-center gap-2 mb-1">
+                <CreditCard size={16} className="text-blue-600" />
+                <p className="text-[10px] font-black uppercase tracking-widest text-slate-400">UPI Payment ID</p>
+              </div>
+              <p className="text-xs font-bold text-slate-500">
+                This UPI ID will be shown to parents in the fee payment screen.
+              </p>
+              <div className="flex gap-2">
+                <input
+                  value={upiId}
+                  onChange={e => { setUpiId(e.target.value); setUpiSaved(false); }}
+                  placeholder="e.g. school@okaxis"
+                  className="flex-1 border border-slate-200 bg-slate-50 rounded-xl px-4 py-3 font-bold text-sm outline-none focus:border-blue-500 focus:bg-white transition-colors"
+                />
+                <button
+                  onClick={() => { setUpiSaved(true); showToast('UPI ID saved'); }}
+                  className={`px-4 py-3 rounded-xl font-black text-sm transition-colors ${upiSaved ? 'bg-emerald-500 text-white' : 'bg-slate-900 text-white'}`}>
+                  {upiSaved ? <CheckCircle2 size={16} /> : <Save size={16} />}
+                </button>
+              </div>
+              {upiId && (
+                <div className="flex items-center gap-2 bg-blue-50 rounded-xl px-3 py-2">
+                  <QrCode size={14} className="text-blue-600 shrink-0" />
+                  <span className="text-xs font-black text-blue-700">{upiId}</span>
+                </div>
+              )}
+            </div>
+
+            {/* QR Code Upload */}
+            <div className="bg-white rounded-2xl border border-slate-100 shadow-sm p-4 space-y-3">
+              <div className="flex items-center gap-2 mb-1">
+                <QrCode size={16} className="text-violet-600" />
+                <p className="text-[10px] font-black uppercase tracking-widest text-slate-400">Payment QR Code</p>
+              </div>
+              <p className="text-xs font-bold text-slate-500">
+                Upload a QR code image. Parents can scan this to pay fees directly.
+              </p>
+
+              {/* QR preview placeholder */}
+              <div className="w-36 h-36 mx-auto bg-slate-100 rounded-2xl border-2 border-dashed border-slate-300 flex flex-col items-center justify-center gap-2">
+                {qrFileName ? (
+                  <>
+                    <div className="w-full h-full grid grid-cols-6 gap-px p-3 rounded-2xl">
+                      {Array.from({ length: 36 }, (_, i) => (
+                        <div key={i} className={`rounded-sm ${(i * 7 + i * 3) % 3 === 0 ? 'bg-slate-800' : 'bg-white'}`} />
+                      ))}
+                    </div>
+                  </>
+                ) : (
+                  <>
+                    <QrCode size={28} className="text-slate-300" />
+                    <span className="text-[9px] font-black text-slate-400 uppercase tracking-widest">No QR</span>
+                  </>
+                )}
+              </div>
+
+              <label className="w-full flex items-center justify-center gap-2 bg-violet-600 text-white font-black text-xs uppercase tracking-widest py-3 rounded-2xl cursor-pointer active:scale-95 transition-transform">
+                <Plus size={14} /> {qrFileName ? 'Replace QR Image' : 'Upload QR Image'}
+                <input
+                  type="file"
+                  accept="image/*"
+                  className="hidden"
+                  onChange={e => {
+                    const file = e.target.files?.[0];
+                    if (file) {
+                      setQrFileName(file.name);
+                      showToast(`QR image "${file.name}" uploaded`);
+                    }
+                  }}
+                />
+              </label>
+
+              {qrFileName && (
+                <div className="flex items-center justify-between bg-slate-50 rounded-xl px-3 py-2.5">
+                  <span className="text-xs font-bold text-slate-600 truncate">{qrFileName}</span>
+                  <button onClick={() => setQrFileName('')} className="text-slate-400 hover:text-rose-500 transition-colors ml-2 shrink-0">
+                    <Trash2 size={13} />
+                  </button>
+                </div>
+              )}
+            </div>
+
+            {/* Info note */}
+            <div className="bg-blue-50 border border-blue-200 rounded-2xl p-4">
+              <p className="text-xs font-black text-blue-700">
+                UPI ID and QR code are shown in the student/parent Fee Payment screen under "Pay via UPI".
+              </p>
             </div>
           </>
         )}

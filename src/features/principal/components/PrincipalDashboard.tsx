@@ -9,6 +9,7 @@ import { staffService } from '../../../services/staff.service';
 import { principalService } from '../../../services/principal.service';
 import { PaymentStatus } from '../../../config/constants';
 import { PrincipalView } from '../pages/PrincipalLayout';
+import { useAuthStore } from '../../../store/authStore';
 
 interface Props {
   onNavigate: (view: PrincipalView) => void;
@@ -16,6 +17,7 @@ interface Props {
 
 
 export const PrincipalDashboard: React.FC<Props> = ({ onNavigate }) => {
+  const session = useAuthStore(state => state.session);
   const [stats, setStats] = useState({
     totalStudents: 0, presentToday: 0, paidFees: 0, totalFees: 0,
     totalStaff: 0, openComplaints: 0, pendingApprovals: 0,
@@ -67,7 +69,7 @@ export const PrincipalDashboard: React.FC<Props> = ({ onNavigate }) => {
       {/* Greeting */}
       <div>
         <p className="text-[10px] font-black uppercase tracking-widest text-slate-400">PRINCIPAL DASHBOARD</p>
-        <h2 className="text-2xl font-black text-slate-900 mt-0.5">Good Morning, Dr. Kumar</h2>
+        <h2 className="text-2xl font-black text-slate-900 mt-0.5">Good Morning, {session?.name ?? 'Principal'}</h2>
       </div>
 
       {/* KPI row */}

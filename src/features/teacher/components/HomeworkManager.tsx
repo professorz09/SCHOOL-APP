@@ -15,14 +15,20 @@ export const HomeworkManager: React.FC<Props> = ({ onBack }) => {
   const [classes, setClasses] = useState<TeacherClass[]>([]);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [form, setForm] = useState({
-    classId: 'tc1', className: 'Class 10', section: 'A', subject: 'Mathematics',
+    classId: '', className: '', section: '', subject: '',
     title: '', description: '', assignedDate: new Date().toISOString().split('T')[0],
-    dueDate: '', totalStudents: 40,
+    dueDate: '', totalStudents: 0,
   });
 
   useEffect(() => {
     teacherService.getHomework().then(setHomework);
-    teacherService.getClasses().then(setClasses);
+    teacherService.getClasses().then(loaded => {
+      setClasses(loaded);
+      if (loaded.length > 0) {
+        const c = loaded[0];
+        setForm(f => ({ ...f, classId: c.id, className: c.className, section: c.section, subject: c.subject, totalStudents: c.studentCount }));
+      }
+    });
   }, []);
 
   const handleCreate = async () => {
@@ -32,7 +38,11 @@ export const HomeworkManager: React.FC<Props> = ({ onBack }) => {
       const hw = await teacherService.createHomework(form);
       setHomework(prev => [hw, ...prev]);
       showToast('Homework assigned');
-      setForm({ classId: 'tc1', className: 'Class 10', section: 'A', subject: 'Mathematics', title: '', description: '', assignedDate: new Date().toISOString().split('T')[0], dueDate: '', totalStudents: 40 });
+      const first = classes[0];
+      setForm(first
+        ? { classId: first.id, className: first.className, section: first.section, subject: first.subject, title: '', description: '', assignedDate: new Date().toISOString().split('T')[0], dueDate: '', totalStudents: first.studentCount }
+        : { classId: '', className: '', section: '', subject: '', title: '', description: '', assignedDate: new Date().toISOString().split('T')[0], dueDate: '', totalStudents: 0 }
+      );
       setView('LIST');
     } finally { setIsSubmitting(false); }
   };
