@@ -32,6 +32,9 @@ export interface StudentTransportAssignment {
   boardingStopId: string;
   boardingStopName: string;
   academicYearId: string;
+  monthlyAmount: number; // Transport fee per month (determined by route/stop)
+  startDate: string; // YYYY-MM-DD (when transport starts)
+  endDate: string | null; // YYYY-MM-DD or null if ongoing
 }
 
 // ─── Seed Data ────────────────────────────────────────────────────────────────
@@ -78,30 +81,37 @@ let _assignments: StudentTransportAssignment[] = [
   {
     id: 'ta1', studentId: 'student1', studentName: 'Aakash Sharma', className: '10-A',
     vehicleId: 'v1', boardingStopId: 's1d', boardingStopName: 'Dwarka Sector 7', academicYearId: 'ay1',
+    monthlyAmount: 500, startDate: '2026-04-01', endDate: null,
   },
   {
     id: 'ta2', studentId: 'student2', studentName: 'Priya Mehta', className: '10-A',
     vehicleId: 'v1', boardingStopId: 's1e', boardingStopName: 'Dwarka Sector 14', academicYearId: 'ay1',
+    monthlyAmount: 500, startDate: '2026-04-01', endDate: null,
   },
   {
     id: 'ta3', studentId: 'student3', studentName: 'Rahul Verma', className: '9-A',
     vehicleId: 'v2', boardingStopId: 's2c', boardingStopName: 'Pitampura', academicYearId: 'ay1',
+    monthlyAmount: 400, startDate: '2026-04-01', endDate: null,
   },
   {
     id: 'ta4', studentId: 'student4', studentName: 'Ananya Singh', className: '9-B',
     vehicleId: 'v1', boardingStopId: 's1b', boardingStopName: 'Janakpuri West', academicYearId: 'ay1',
+    monthlyAmount: 500, startDate: '2026-04-01', endDate: null,
   },
   {
     id: 'ta5', studentId: 'student5', studentName: 'Vikram Rathore', className: '8-A',
     vehicleId: 'v2', boardingStopId: 's2b', boardingStopName: 'Shalimar Bagh', academicYearId: 'ay1',
+    monthlyAmount: 400, startDate: '2026-04-01', endDate: null,
   },
   {
     id: 'ta6', studentId: 'student6', studentName: 'Neha Gupta', className: '8-B',
     vehicleId: 'v1', boardingStopId: 's1c', boardingStopName: 'Uttam Nagar', academicYearId: 'ay1',
+    monthlyAmount: 500, startDate: '2026-04-01', endDate: null,
   },
   {
     id: 'ta7', studentId: 'student7', studentName: 'Arjun Patel', className: '10-B',
     vehicleId: 'v2', boardingStopId: 's2d', boardingStopName: 'Rohini Sector 10', academicYearId: 'ay1',
+    monthlyAmount: 400, startDate: '2026-04-01', endDate: null,
   },
 ];
 
@@ -221,6 +231,7 @@ export const transportService = {
   assignStudent(
     studentId: string, studentName: string, className: string,
     vehicleId: string, stopId: string, stopName: string,
+    monthlyAmount = 500, startDate = '2026-04-01',
     academicYearId = 'ay1',
   ): StudentTransportAssignment {
     // Remove existing assignment if any
@@ -230,6 +241,9 @@ export const transportService = {
       studentId, studentName, className,
       vehicleId, boardingStopId: stopId, boardingStopName: stopName,
       academicYearId,
+      monthlyAmount,
+      startDate,
+      endDate: null,
     };
     _assignments = [..._assignments, assignment];
     return assignment;
