@@ -1,41 +1,31 @@
 import React, { useState, useEffect } from 'react';
 import {
-  Power, MapPin, CheckCircle2, Circle, Settings, Plus, Trash2,
-  Crosshair, AlertTriangle, Bus, Navigation, Clock,
+  Power, CheckCircle2, Circle, AlertTriangle, Bus, Navigation, Clock,
 } from 'lucide-react';
+import { transportService, TransportVehicle, RouteStop } from '../../services/transport.service';
 
-interface Stop {
-  id: number;
-  name: string;
-  lat: string;
-  lng: string;
-  estimatedTime: string;
-}
-
-const INITIAL_STOPS: Stop[] = [
-  { id: 1, name: 'School Campus (Start)', lat: '28.6139', lng: '77.2090', estimatedTime: '07:30' },
-  { id: 2, name: 'City Center Point',     lat: '28.6200', lng: '77.2100', estimatedTime: '07:50' },
-  { id: 3, name: 'Green Park Avenue',     lat: '28.6250', lng: '77.2150', estimatedTime: '08:05' },
-  { id: 4, name: 'Sunrise Apartments',    lat: '28.6310', lng: '77.2205', estimatedTime: '08:20' },
-  { id: 5, name: 'Sector 14 Market',      lat: '28.6380', lng: '77.2270', estimatedTime: '08:35' },
-  { id: 6, name: 'School Campus (End)',   lat: '28.6139', lng: '77.2090', estimatedTime: '08:50' },
-];
-
-const VEHICLES = [
-  { id: 'v1', number: 'DL 1C 4455', type: 'Bus', route: 'Route #4', capacity: 40, students: 32 },
-  { id: 'v2', number: 'DL 8C 1122', type: 'Van', route: 'Route #2', capacity: 12, students: 10 },
-];
+const DRIVER_ID = 'staff6';
 
 export const DriverLayout: React.FC = () => {
   const [isTracking, setIsTracking] = useState(false);
   const [currentStopIndex, setCurrentStopIndex] = useState(0);
   const [autoArrive, setAutoArrive] = useState(false);
-  const [showSettings, setShowSettings] = useState(false);
   const [showEmergencyConfirm, setShowEmergencyConfirm] = useState(false);
   const [emergencySent, setEmergencySent] = useState(false);
-  const [vehicle, setVehicle] = useState(VEHICLES[0]);
-  const [stops, setStops] = useState<Stop[]>(INITIAL_STOPS);
+  const [vehicle, setVehicle] = useState<TransportVehicle | null>(null);
+  const [stops, setStops] = useState<RouteStop[]>([]);
   const [tripComplete, setTripComplete] = useState(false);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    const vehicles = transportService.getVehicles();
+    const assignedVehicle = vehicles.find(v => v.driverId === DRIVER_ID);
+    if (assignedVehicle) {
+      setVehicle(assignedVehicle);
+      setStops(assignedVehicle.stops);
+    }
+    setLoading(false);
+  }, []);
 
   useEffect(() => {
     let interval: ReturnType<typeof setInterval>;
@@ -62,105 +52,28 @@ export const DriverLayout: React.FC = () => {
     setShowEmergencyConfirm(false);
   };
 
-  const handleAddStop = () => {
-    const newStop: Stop = {
-      id: Date.now(),
-      name: '',
-      lat: (28.61 + Math.random() * 0.05).toFixed(4),
-      lng: (77.20 + Math.random() * 0.05).toFixed(4),
-      estimatedTime: '',
-    };
-    setStops([...stops, newStop]);
-  };
-
-  const updateStop = (id: number, field: keyof Stop, value: string) => {
-    setStops(stops.map(s => s.id === id ? { ...s, [field]: value } : s));
-  };
-
-  const refreshCoords = (id: number) => {
-    setStops(stops.map(s => s.id === id
-      ? { ...s, lat: (28.61 + Math.random() * 0.05).toFixed(4), lng: (77.20 + Math.random() * 0.05).toFixed(4) }
-      : s));
-  };
-
-  if (showSettings) {
+  if (loading) {
     return (
-      <div className="flex flex-col gap-4 animate-in slide-in-from-bottom-4 duration-300 fade-in pt-4">
-        <div className="flex items-center justify-between">
-          <div>
-            <p className="text-[10px] font-black uppercase tracking-widest text-slate-400">Settings</p>
-            <h2 className="text-xl font-black text-slate-900">Trip Configuration</h2>
-          </div>
-          <button onClick={() => setShowSettings(false)}
-            className="bg-slate-900 text-white px-4 py-2 rounded-full text-[10px] font-black uppercase">
-            Done
-          </button>
-        </div>
-
-        {/* Vehicle selector */}
-        <div className="bg-white rounded-2xl border border-slate-100 shadow-sm p-4">
-          <p className="text-[9px] font-black uppercase tracking-widest text-slate-400 mb-3">Assigned Vehicle</p>
-          <div className="space-y-2">
-            {VEHICLES.map(v => (
-              <button key={v.id} onClick={() => setVehicle(v)}
-                className={`w-full p-4 rounded-2xl border-2 text-left transition-colors ${
-                  vehicle.id === v.id ? 'border-blue-600 bg-blue-50' : 'border-slate-100 bg-white'
-                }`}>
-                <div className="flex items-center justify-between">
-                  <div>
-                    <div className="font-extrabold text-slate-900">{v.number}</div>
-                    <div className="text-[10px] font-bold text-slate-400 mt-0.5">{v.type} · {v.route} · {v.students}/{v.capacity} students</div>
-                  </div>
-                  {vehicle.id === v.id && <CheckCircle2 size={20} className="text-blue-600" />}
-                </div>
-              </button>
-            ))}
-          </div>
-        </div>
-
-        {/* Route stops */}
-        <div className="bg-white rounded-2xl border border-slate-100 shadow-sm p-4">
-          <div className="flex items-center justify-between mb-4">
-            <p className="text-[9px] font-black uppercase tracking-widest text-slate-400">Route Stops</p>
-            <button onClick={handleAddStop}
-              className="flex items-center gap-1 text-[9px] font-black text-blue-600 bg-blue-50 px-3 py-1.5 rounded-full">
-              <Plus size={12} /> Add Stop
-            </button>
-          </div>
-          <div className="space-y-4">
-            {stops.map((stop, i) => (
-              <div key={stop.id} className="bg-slate-50 rounded-2xl border border-slate-200 p-3 space-y-2">
-                <div className="flex items-center justify-between">
-                  <span className="text-[9px] font-black uppercase tracking-widest text-slate-400">Stop {i + 1}</span>
-                  {stops.length > 2 && (
-                    <button onClick={() => setStops(stops.filter(s => s.id !== stop.id))}
-                      className="text-rose-400 p-1">
-                      <Trash2 size={14} />
-                    </button>
-                  )}
-                </div>
-                <input value={stop.name} onChange={e => updateStop(stop.id, 'name', e.target.value)}
-                  placeholder="Stop name..."
-                  className="w-full bg-white px-3 py-2 rounded-xl border border-slate-200 text-sm font-bold outline-none focus:border-blue-500" />
-                <div className="flex gap-2">
-                  <input value={stop.estimatedTime} onChange={e => updateStop(stop.id, 'estimatedTime', e.target.value)}
-                    placeholder="HH:MM"
-                    className="w-24 bg-white px-3 py-2 rounded-xl border border-slate-200 text-sm font-bold outline-none focus:border-blue-500" />
-                  <div className="flex-1 bg-slate-200 rounded-xl px-3 py-2 flex items-center justify-between">
-                    <span className="text-[10px] font-mono text-slate-600">{stop.lat}°N, {stop.lng}°E</span>
-                  </div>
-                  <button onClick={() => refreshCoords(stop.id)}
-                    className="w-10 h-10 bg-blue-100 text-blue-600 rounded-xl flex items-center justify-center">
-                    <Crosshair size={16} />
-                  </button>
-                </div>
-              </div>
-            ))}
-          </div>
-        </div>
+      <div className="flex items-center justify-center p-10 text-center bg-white rounded-3xl border border-slate-100 shadow-sm">
+        <div className="inline-block w-12 h-12 border-4 border-slate-200 border-t-blue-600 rounded-full animate-spin mb-3" />
+        <p className="text-sm font-bold text-slate-600">Loading...</p>
       </div>
     );
   }
+
+  if (!vehicle) {
+    return (
+      <div className="flex flex-col items-center justify-center p-10 text-center bg-white rounded-3xl border border-slate-100 shadow-sm">
+        <Bus size={48} className="text-slate-200 mb-4" />
+        <h3 className="font-extrabold text-slate-900 text-lg">No Vehicle Assigned</h3>
+        <p className="text-xs font-bold text-slate-400 mt-2 max-w-[200px]">
+          Wait for the principal to assign a vehicle to you.
+        </p>
+      </div>
+    );
+  }
+
+  const studentCount = transportService.getAssignmentsByVehicle(vehicle.id).length;
 
   return (
     <div className="flex flex-col gap-4 animate-in slide-in-from-bottom-4 duration-500 fade-in pt-4">
@@ -169,18 +82,12 @@ export const DriverLayout: React.FC = () => {
       <div className={`rounded-3xl p-6 transition-colors duration-300 ${isTracking ? 'bg-blue-600' : 'bg-slate-900'}`}>
         <div className="flex justify-between items-start text-white">
           <div>
-            <div className="flex items-center gap-2 mb-1">
-              <p className="font-bold text-[10px] uppercase tracking-widest text-white/70">Vehicle Status</p>
-              <button onClick={() => setShowSettings(true)}
-                className="p-1 bg-white/10 rounded-full hover:bg-white/20">
-                <Settings size={11} />
-              </button>
-            </div>
+            <p className="font-bold text-[10px] uppercase tracking-widest text-white/70">Vehicle Status</p>
             <h2 className="text-3xl font-black mt-1">
               {tripComplete ? 'TRIP DONE' : isTracking ? 'ON TRIP' : 'OFFLINE'}
             </h2>
-            <p className="text-xs font-bold mt-2 text-white/80">{vehicle.type} · {vehicle.number} · {vehicle.route}</p>
-            <p className="text-[10px] font-bold text-white/60 mt-0.5">{vehicle.students} students on board</p>
+            <p className="text-xs font-bold mt-2 text-white/80">{vehicle.type} · {vehicle.vehicleNo} · {vehicle.routeName}</p>
+            <p className="text-[10px] font-bold text-white/60 mt-0.5">{studentCount} students on board</p>
           </div>
           <button
             onClick={() => {
@@ -261,14 +168,12 @@ export const DriverLayout: React.FC = () => {
                         isNext      ? 'text-blue-700' :
                         'text-slate-900'
                       }`}>
-                        {stop.name || 'Unnamed Stop'}
+                        {stop.name}
                       </div>
                       <div className="flex items-center gap-2 mt-0.5">
-                        {stop.estimatedTime && (
-                          <span className="flex items-center gap-1 text-[10px] font-bold text-slate-400">
-                            <Clock size={9} /> {stop.estimatedTime}
-                          </span>
-                        )}
+                        <span className="flex items-center gap-1 text-[10px] font-bold text-slate-400">
+                          <Clock size={9} /> {stop.estimatedTime}
+                        </span>
                         {isNext && (
                           <span className="text-[9px] font-black text-blue-500">
                             {autoArrive ? 'GPS detecting...' : 'Next stop'}
