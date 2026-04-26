@@ -1,10 +1,10 @@
 import React, { useState } from 'react';
 import { AppRole, NavTab } from './types';
 import { Header, BottomNav } from './components/Navigation';
-import { StudentDashboard } from './views/StudentDashboard';
-import { TeacherDashboard } from './views/TeacherDashboard';
 import { PrincipalLayout } from './features/principal';
 import { SuperAdminLayout } from './features/super-admin';
+import { TeacherLayout } from './features/teacher';
+import { StudentLayout } from './features/student';
 import { DriverDashboard } from './views/DriverDashboard';
 import { PaymentsView } from './views/PaymentsView';
 import { AcademicYearManager } from './views/AcademicYearManager';
@@ -20,8 +20,8 @@ export default function App() {
     switch (role) {
       case 'SUPER_ADMIN': return <SuperAdminLayout />;
       case 'PRINCIPAL': return <PrincipalLayout />;
-      case 'TEACHER': return <TeacherDashboard />;
-      case 'STUDENT': return <StudentDashboard />;
+      case 'TEACHER': return <TeacherLayout />;
+      case 'STUDENT': return <StudentLayout />;
       case 'DRIVER': return <DriverDashboard />;
       default: return null;
     }
