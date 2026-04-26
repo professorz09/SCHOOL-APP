@@ -2,6 +2,7 @@ import React from 'react';
 import { Home, LayoutGrid, Search, User, Bell, ChevronDown } from 'lucide-react';
 import { AppRole, NavTab } from '../types';
 import { useAcademicYear } from '../context/AcademicYearContext';
+import { useAuthStore } from '../store/authStore';
 
 interface BottomNavProps {
   currentTab: NavTab;
@@ -53,29 +54,24 @@ interface HeaderProps {
   onOpenAcademicYearSettings?: () => void;
 }
 
-const getGreeting = (role: AppRole) => {
-  switch (role) {
-    case 'SUPER_ADMIN': return 'Hi, Founder';
-    case 'PRINCIPAL': return 'Hi, Principal';
-    case 'TEACHER': return 'Hi, Mr. Sharma';
-    case 'STUDENT': return 'Hi, Rohan';
-    case 'DRIVER': return 'Hi, Raju Bhai';
-    default: return 'Hello';
-  }
-};
-
 export const Header: React.FC<HeaderProps> = ({ role, onOpenAcademicYearSettings }) => {
   const { activeYear } = useAcademicYear();
+  const session = useAuthStore(state => state.session);
+  const firstName = session?.name?.split(' ')[0] ?? 'User';
+  const initials = session?.name
+    ? session.name.split(' ').map((w: string) => w[0]).join('').slice(0, 2).toUpperCase()
+    : 'U';
+  const greeting = `Hi, ${firstName}`;
 
   return (
     <div className="flex items-center justify-between px-5 pt-8 pb-4 sticky top-0 bg-slate-50/90 backdrop-blur-md z-10">
       <div className="flex items-center gap-3">
         <div className="w-10 h-10 rounded-full bg-blue-100 border-2 border-blue-500 overflow-hidden flex items-center justify-center text-blue-700 font-bold">
-          {getGreeting(role).split(' ')[1]?.[0] || 'U'}
+          {initials}
         </div>
         <div>
           <h1 className="text-2xl font-black text-slate-900 tracking-tight uppercase leading-tight">
-            {getGreeting(role)}
+            {greeting}
           </h1>
           <p className="text-xs font-bold text-slate-500 uppercase tracking-widest">
             Welcome to EduGrow

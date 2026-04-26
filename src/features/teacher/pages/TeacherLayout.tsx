@@ -1,10 +1,11 @@
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useEffect } from 'react';
 import {
   Users, FileCheck2, ClipboardList, ScrollText, CircleAlert,
   TrendingUp, BookOpen, Calendar, IndianRupee, Bell, CalendarDays,
   Clock, MapPin,
 } from 'lucide-react';
 import { timetableService } from '../../../services/timetable.service';
+import { teacherService } from '../../../services/teacher.service';
 import { AttendanceManager } from '../components/AttendanceManager';
 import { TestsManager } from '../components/TestsManager';
 import { HomeworkManager } from '../components/HomeworkManager';
@@ -12,6 +13,8 @@ import { ExamPaperGeneratorView } from '../components/ExamPaperGenerator';
 import { TeacherComplaintsView } from '../components/TeacherComplaints';
 import { TeacherNoticesView } from '../components/TeacherNoticesView';
 import { TeacherTimetableView } from '../components/TeacherTimetableView';
+import { useAuthStore } from '../../../store/authStore';
+import { TeacherClass } from '../../../types/teacher.types';
 
 type TeacherView = 'DASHBOARD' | 'ATTENDANCE' | 'TESTS' | 'HOMEWORK' | 'EXAM_GEN' | 'COMPLAINTS' | 'NOTICES' | 'TIMETABLE';
 
@@ -28,7 +31,18 @@ const isCurrentPeriod = (startTime: string, endTime: string): boolean => {
 export const TeacherLayout: React.FC = () => {
   const [view, setView] = useState<TeacherView>('DASHBOARD');
   const goBack = () => setView('DASHBOARD');
+  const session = useAuthStore(state => state.session);
+  const teacherName = session?.name ?? 'Teacher';
   const todayClasses = useMemo(() => timetableService.getTodayForTeacher(MY_TEACHER_ID), []);
+  const [teacherClasses, setTeacherClasses] = useState<TeacherClass[]>([]);
+
+  useEffect(() => {
+    teacherService.getClasses().then(setTeacherClasses);
+  }, []);
+
+  const totalStudents = teacherClasses.reduce((sum, c) => sum + c.studentCount, 0);
+  const primarySubject = teacherClasses[0]?.subject ?? '—';
+  const classLabels = teacherClasses.map(c => `${c.className}-${c.section}`).join(', ');
 
   if (view === 'ATTENDANCE')  return <AttendanceManager      onBack={goBack} />;
   if (view === 'TESTS')       return <TestsManager           onBack={goBack} />;
@@ -53,16 +67,16 @@ export const TeacherLayout: React.FC = () => {
       {/* Greeting */}
       <div>
         <p className="text-[10px] font-black uppercase tracking-widest text-slate-400">TEACHER DASHBOARD</p>
-        <h2 className="text-2xl font-black text-slate-900 mt-0.5">Hello, Aarti Desai</h2>
-        <p className="text-xs font-bold text-slate-400 mt-0.5">Mathematics · Class 10-A, 10-B, 9-A</p>
+        <h2 className="text-2xl font-black text-slate-900 mt-0.5">Hello, {teacherName}</h2>
+        <p className="text-xs font-bold text-slate-400 mt-0.5">{primarySubject}{classLabels ? ` · ${classLabels}` : ''}</p>
       </div>
 
       {/* Today's summary */}
       <div className="grid grid-cols-3 gap-2">
         {[
           { label: "Today's Classes", val: String(todayClasses.length), color: 'text-blue-600' },
-          { label: 'Total Students', val: '120', color: 'text-slate-900' },
-          { label: 'Avg Attendance', val: '92%', color: 'text-emerald-600' },
+          { label: 'Total Students', val: totalStudents > 0 ? String(totalStudents) : '—', color: 'text-slate-900' },
+          { label: 'Classes', val: teacherClasses.length > 0 ? String(teacherClasses.length) : '—', color: 'text-emerald-600' },
         ].map(({ label, val, color }) => (
           <div key={label} className="bg-white rounded-2xl border border-slate-100 shadow-sm p-3 text-center">
             <div className={`text-xl font-black ${color}`}>{val}</div>

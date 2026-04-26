@@ -11,11 +11,9 @@ import {
 } from 'lucide-react';
 import { timetableService, PERIOD_SLOTS } from '../../../services/timetable.service';
 import { feeService } from '../../../services/fee.service';
+import { useAuthStore } from '../../../store/authStore';
 
 const MY_CLASS = '10-A';
-const MY_STUDENT_ID = 'student1';
-const STUDENT_NAME = 'Rohan';
-const STUDENT_FULL = 'Rohan Sharma';
 const SCHOOL_NAME = 'EduGrow School';
 
 const getCurrentPeriod = () => {
@@ -46,10 +44,15 @@ const getDaysUntilDue = () => {
 type StudentView = 'DASHBOARD' | 'TIMETABLE' | 'RESULTS' | 'FEES' | 'TRANSPORT' | 'NOTICES' | 'COMPLAINTS';
 
 export const StudentLayout: React.FC = () => {
+  const session = useAuthStore(state => state.session);
+  const STUDENT_FULL = session?.name ?? 'Student';
+  const STUDENT_NAME = STUDENT_FULL.split(' ')[0];
+  const MY_STUDENT_ID = session?.linkedStudentIds?.[0] ?? session?.userId ?? 'student1';
+
   const [view, setView] = useState<StudentView>('DASHBOARD');
   const goBack = () => setView('DASHBOARD');
   const currentPeriod = useMemo(() => getCurrentPeriod(), []);
-  const feeSummary = useMemo(() => feeService.getParentDueSummary(MY_STUDENT_ID), []);
+  const feeSummary = useMemo(() => feeService.getParentDueSummary(MY_STUDENT_ID), [MY_STUDENT_ID]);
   const daysUntilDue = getDaysUntilDue();
 
   if (view === 'TIMETABLE')   return <TimetableView        onBack={goBack} />;
