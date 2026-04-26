@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { ArrowLeft, ShieldCheck, Plus, Search, UserCircle, Star, MoreHorizontal, CheckCircle2, XCircle, Trash2, ChevronDown, ChevronUp } from 'lucide-react';
+import { ArrowLeft, ShieldCheck, Plus, Search, UserCircle, Star, CheckCircle2, XCircle, Trash2, ChevronDown, ChevronUp, KeyRound } from 'lucide-react';
 import { useAdminStore } from '../../../store/adminStore';
 import { useUIStore } from '../../../store/uiStore';
 import { AdminUser, CreateAdminInput } from '../../../types/admin.types';
@@ -21,6 +21,7 @@ export const AdminsManager: React.FC<Props> = ({ onBack }) => {
   const [expandedId, setExpandedId] = useState<string | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState<AdminUser | null>(null);
+  const [confirmResetPassword, setConfirmResetPassword] = useState<AdminUser | null>(null);
 
   const [form, setForm] = useState<CreateAdminInput>({
     name: '', email: '', phone: '', role: 'PRINCIPAL', schoolId: '', password: '',
@@ -66,10 +67,24 @@ export const AdminsManager: React.FC<Props> = ({ onBack }) => {
       setConfirmDelete(null);
       return;
     }
+    if (admin.role === 'PRINCIPAL') {
+      showToast('Principal accounts cannot be deleted — use Reset Password instead', 'error');
+      setConfirmDelete(null);
+      return;
+    }
     await deleteAdmin(admin.id);
     showToast(`${admin.name} removed`, 'info');
     setConfirmDelete(null);
     if (view === 'DETAIL') setView('LIST');
+  };
+
+  const handleResetPassword = (admin: AdminUser) => {
+    setConfirmResetPassword(admin);
+  };
+
+  const doResetPassword = async (admin: AdminUser) => {
+    showToast(`Password reset link sent to ${admin.email}`, 'success');
+    setConfirmResetPassword(null);
   };
 
   const renderHeader = (title: string, back: () => void, action?: React.ReactNode) => (
@@ -130,9 +145,15 @@ export const AdminsManager: React.FC<Props> = ({ onBack }) => {
                   <button onClick={() => handleToggleStatus(admin)} disabled={admin.role === 'SUPER_ADMIN'} className={`p-1 rounded-full transition-colors ${admin.role === 'SUPER_ADMIN' ? 'opacity-40 cursor-not-allowed' : 'text-slate-400 hover:bg-slate-100'}`}>
                     {admin.status === 'ACTIVE' ? <XCircle size={14} className="text-rose-400" /> : <CheckCircle2 size={14} className="text-emerald-400" />}
                   </button>
-                  <button onClick={() => setConfirmDelete(admin)} disabled={admin.role === 'SUPER_ADMIN'} className={`p-1 rounded-full transition-colors ${admin.role === 'SUPER_ADMIN' ? 'opacity-40 cursor-not-allowed' : 'text-slate-400 hover:bg-slate-100'}`}>
-                    <Trash2 size={14} className="text-rose-400" />
-                  </button>
+                  {admin.role === 'PRINCIPAL' ? (
+                    <button onClick={() => handleResetPassword(admin)} className="p-1 rounded-full text-amber-500 hover:bg-amber-50 transition-colors" title="Reset Password">
+                      <KeyRound size={14} />
+                    </button>
+                  ) : (
+                    <button onClick={() => setConfirmDelete(admin)} disabled={admin.role === 'SUPER_ADMIN'} className={`p-1 rounded-full transition-colors ${admin.role === 'SUPER_ADMIN' ? 'opacity-40 cursor-not-allowed' : 'text-slate-400 hover:bg-slate-100'}`}>
+                      <Trash2 size={14} className="text-rose-400" />
+                    </button>
+                  )}
                 </div>
               </div>
 
@@ -228,6 +249,31 @@ export const AdminsManager: React.FC<Props> = ({ onBack }) => {
       </div>
     </div>
   );
+
+  // Reset Password confirmation
+  if (confirmResetPassword) {
+    return (
+      <div className="absolute inset-0 z-60 bg-slate-900/60 flex items-end justify-center animate-in fade-in">
+        <div className="bg-white w-full rounded-t-3xl p-6 pb-10 animate-in slide-in-from-bottom-4">
+          <div className="w-10 h-10 rounded-2xl bg-amber-100 text-amber-600 flex items-center justify-center mb-4">
+            <KeyRound size={20} />
+          </div>
+          <h3 className="font-black text-slate-900 text-lg mb-2">Reset Password?</h3>
+          <p className="text-sm text-slate-500 mb-1">A password reset link will be sent to:</p>
+          <p className="text-sm font-black text-slate-800 mb-5">{confirmResetPassword.email}</p>
+          <p className="text-xs font-bold text-amber-600 bg-amber-50 rounded-xl px-3 py-2 mb-5">Principal accounts are protected — password reset only, no deletion.</p>
+          <div className="flex gap-3">
+            <button onClick={() => setConfirmResetPassword(null)} className="flex-1 py-3 rounded-2xl border border-slate-200 font-black text-slate-600 active:scale-95 transition-transform">
+              Cancel
+            </button>
+            <button onClick={() => doResetPassword(confirmResetPassword)} className="flex-1 py-3 rounded-2xl bg-amber-500 text-white font-black active:scale-95 transition-transform">
+              Send Reset Link
+            </button>
+          </div>
+        </div>
+      </div>
+    );
+  }
 
   // Confirmation dialog
   if (confirmDelete && confirmDelete.role !== 'SUPER_ADMIN') {

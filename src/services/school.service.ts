@@ -20,6 +20,7 @@ export const MOCK_SCHOOLS: School[] = [
     studentCount: 2400,
     teacherCount: 120,
     paymentStatus: PaymentStatus.PAID,
+    paymentStartDate: '2024-04-01',
     createdAt: '2023-04-01',
     academicYears: [
       {
@@ -65,6 +66,7 @@ export const MOCK_SCHOOLS: School[] = [
     studentCount: 850,
     teacherCount: 45,
     paymentStatus: PaymentStatus.PAID,
+    paymentStartDate: '2024-04-01',
     createdAt: '2023-06-15',
     academicYears: [
       {
@@ -97,6 +99,7 @@ export const MOCK_SCHOOLS: School[] = [
     studentCount: 420,
     teacherCount: 22,
     paymentStatus: PaymentStatus.PENDING,
+    paymentStartDate: '2024-04-01',
     createdAt: '2023-08-01',
     academicYears: [
       {
@@ -127,6 +130,7 @@ export const MOCK_SCHOOLS: School[] = [
     studentCount: 1800,
     teacherCount: 95,
     paymentStatus: PaymentStatus.PAID,
+    paymentStartDate: '2024-04-01',
     createdAt: '2022-11-10',
     academicYears: [
       {
@@ -157,6 +161,7 @@ export const MOCK_SCHOOLS: School[] = [
     studentCount: 960,
     teacherCount: 52,
     paymentStatus: PaymentStatus.OVERDUE,
+    paymentStartDate: '2024-04-01',
     createdAt: '2023-03-20',
     academicYears: [
       {
@@ -187,6 +192,7 @@ export const MOCK_SCHOOLS: School[] = [
     studentCount: 310,
     teacherCount: 18,
     paymentStatus: PaymentStatus.PENDING,
+    paymentStartDate: '2025-02-01',
     createdAt: '2025-02-01',
     academicYears: [
       {
@@ -225,6 +231,7 @@ export const schoolService = {
       studentCount: 0,
       teacherCount: 0,
       paymentStatus: PaymentStatus.PENDING,
+      paymentStartDate: input.paymentStartDate ?? new Date().toISOString().split('T')[0],
       createdAt: new Date().toISOString().split('T')[0],
       academicYears: [
         {

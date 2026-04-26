@@ -4,10 +4,12 @@ import {
   Edit2, Trash2, CheckCircle2, XCircle, X, Save, Eye, BookOpen, UserCheck, IndianRupee,
 } from 'lucide-react';
 import { useSchoolStore } from '../../../store/schoolStore';
+import { useBillingStore } from '../../../store/billingStore';
 import { useUIStore } from '../../../store/uiStore';
 import { School, CreateSchoolInput } from '../../../types/school.types';
 import { SchoolStatus, BillingPlan, PaymentStatus, STATUS_COLORS, PLAN_COLORS, PAYMENT_COLORS, PLAN_PRICES } from '../../../config/constants';
 import { schoolService } from '../../../services/school.service';
+import { billingService } from '../../../services/billing.service';
 
 type View = 'LIST' | 'CREATE' | 'DETAIL' | 'EDIT' | 'SECTIONS' | 'STUDENTS' | 'STAFF';
 
@@ -24,6 +26,7 @@ interface Props {
 
 export const SchoolsManager: React.FC<Props> = ({ onBack }) => {
   const { schools, fetchSchools, addSchool, updateSchool, deleteSchool } = useSchoolStore();
+  const { fetchAll: fetchBilling } = useBillingStore();
   const { showToast } = useUIStore();
 
   const [view, setView] = useState<View>('LIST');
@@ -33,11 +36,13 @@ export const SchoolsManager: React.FC<Props> = ({ onBack }) => {
   const [activeAYIdx, setActiveAYIdx] = useState(0);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState<School | null>(null);
+  const [confirmDeactivate, setConfirmDeactivate] = useState<School | null>(null);
 
   const [form, setForm] = useState<Partial<CreateSchoolInput>>({
     name: '', code: '', location: '', address: '', phone: '',
     principalName: '', principalEmail: '', principalPhone: '',
     status: SchoolStatus.ACTIVE, plan: BillingPlan.STANDARD,
+    paymentStartDate: new Date().toISOString().split('T')[0],
     password: '',
   });
 
@@ -50,15 +55,28 @@ export const SchoolsManager: React.FC<Props> = ({ onBack }) => {
   );
 
   const handleCreate = async () => {
-    if (!form.name || !form.code || !form.principalEmail) {
+    if (!form.name || !form.code || !form.principalEmail || !form.paymentStartDate) {
       showToast('Please fill all required fields', 'error'); return;
     }
     setIsSubmitting(true);
     try {
       const school = await schoolService.create(form as CreateSchoolInput);
       addSchool(school);
-      showToast(`${school.name} onboarded successfully!`);
-      setForm({ name: '', code: '', location: '', address: '', phone: '', principalName: '', principalEmail: '', principalPhone: '', status: SchoolStatus.ACTIVE, plan: BillingPlan.STANDARD, password: '' });
+      // Auto-generate 12 months of billing schedule from payment start date
+      await billingService.generateScheduleForSchool(
+        school.id,
+        school.name,
+        school.plan,
+        school.paymentStartDate,
+      );
+      await fetchBilling();
+      showToast(`${school.name} onboarded! 12 months billing scheduled.`);
+      setForm({
+        name: '', code: '', location: '', address: '', phone: '',
+        principalName: '', principalEmail: '', principalPhone: '',
+        status: SchoolStatus.ACTIVE, plan: BillingPlan.STANDARD,
+        paymentStartDate: new Date().toISOString().split('T')[0], password: '',
+      });
       setView('LIST');
     } finally {
       setIsSubmitting(false);
@@ -72,11 +90,19 @@ export const SchoolsManager: React.FC<Props> = ({ onBack }) => {
     if (view === 'DETAIL') setView('LIST');
   };
 
-  const handleStatusToggle = async (school: School) => {
-    const next = school.status === SchoolStatus.ACTIVE ? SchoolStatus.INACTIVE : SchoolStatus.ACTIVE;
+  const handleStatusToggle = (school: School) => {
+    if (school.status === SchoolStatus.ACTIVE) {
+      setConfirmDeactivate(school);
+    } else {
+      doStatusChange(school, SchoolStatus.ACTIVE);
+    }
+  };
+
+  const doStatusChange = async (school: School, next: SchoolStatus) => {
     await updateSchool(school.id, { status: next });
     showToast(`${school.name} marked ${next.toLowerCase()}`);
     if (selected?.id === school.id) setSelected(s => s ? { ...s, status: next } : null);
+    setConfirmDeactivate(null);
   };
 
   const handleEdit = (school: School) => {
@@ -96,9 +122,16 @@ export const SchoolsManager: React.FC<Props> = ({ onBack }) => {
     }
     setIsSubmitting(true);
     try {
+      const planChanged = form.plan && form.plan !== selected.plan;
       await updateSchool(selected.id, form as any);
       setSelected(s => s ? { ...s, ...form } : null);
-      showToast(`${form.name} updated successfully!`);
+      if (planChanged) {
+        const { updated, unchanged } = await billingService.updatePlan(selected.id, form.plan!);
+        await fetchBilling();
+        showToast(`Plan updated! ${updated} upcoming payments repriced, ${unchanged} paid records unchanged.`);
+      } else {
+        showToast(`${form.name} updated successfully!`);
+      }
       setView('DETAIL');
     } finally {
       setIsSubmitting(false);
@@ -240,6 +273,13 @@ export const SchoolsManager: React.FC<Props> = ({ onBack }) => {
                 {Object.values(SchoolStatus).map(s => <option key={s}>{s}</option>)}
               </select>
             </div>
+          </div>
+
+          <div>
+            <label className="block text-[10px] font-black uppercase tracking-widest text-slate-500 mb-1.5">Payment Start Date *</label>
+            <input type="date" value={form.paymentStartDate ?? ''} onChange={e => setForm(f => ({ ...f, paymentStartDate: e.target.value }))}
+              className="w-full border border-slate-200 bg-slate-50 rounded-xl px-4 py-3 font-bold text-sm outline-none focus:border-blue-500 focus:bg-white transition-colors" />
+            <p className="text-[10px] font-bold text-slate-400 mt-1">12 months billing schedule will be auto-generated from this date (1st of each month)</p>
           </div>
         </div>
 
@@ -462,9 +502,20 @@ export const SchoolsManager: React.FC<Props> = ({ onBack }) => {
         <div className="flex-1 overflow-y-auto p-4 pb-28 space-y-4">
           <div className="bg-white rounded-2xl p-4 border border-slate-100 shadow-sm space-y-4">
             <p className="text-[10px] font-black uppercase tracking-widest text-slate-400 mb-1">School Info</p>
+
+            {/* School Code — LOCKED in edit mode (this is the unique identity) */}
+            <div>
+              <label className="flex items-center gap-1.5 text-[10px] font-black uppercase tracking-widest text-slate-500 mb-1.5">
+                School Code
+                <span className="text-[9px] font-black text-amber-700 bg-amber-50 px-1.5 py-0.5 rounded">🔒 LOCKED</span>
+              </label>
+              <input value={form.code ?? ''} readOnly disabled
+                className="w-full border border-slate-200 bg-slate-100 rounded-xl px-4 py-3 font-black text-sm text-slate-500 cursor-not-allowed" />
+              <p className="text-[10px] font-bold text-slate-400 mt-1">School code is the unique identity — cannot be changed after creation</p>
+            </div>
+
             {[
               { label: 'School Name *', key: 'name', placeholder: 'e.g. Delhi Public School' },
-              { label: 'School Code *', key: 'code', placeholder: 'e.g. DPS-01' },
               { label: 'City / Location *', key: 'location', placeholder: 'e.g. New Delhi' },
               { label: 'Full Address', key: 'address', placeholder: 'Street, Area, City, PIN' },
               { label: 'Phone', key: 'phone', placeholder: '+91 XXXXX XXXXX' },
@@ -514,6 +565,40 @@ export const SchoolsManager: React.FC<Props> = ({ onBack }) => {
             className="w-full flex items-center justify-center gap-2 bg-blue-600 text-white font-black text-xs uppercase tracking-widest py-4 rounded-2xl active:scale-95 transition-transform shadow-lg disabled:opacity-60">
             {isSubmitting ? 'Updating…' : <><Save size={16} /> Update School</>}
           </button>
+        </div>
+      </div>
+    );
+  }
+
+  // Cascade deactivate warning
+  if (confirmDeactivate) {
+    return (
+      <div className="absolute inset-0 z-60 bg-slate-900/60 flex items-end justify-center animate-in fade-in">
+        <div className="bg-white w-full rounded-t-3xl p-6 pb-10 animate-in slide-in-from-bottom-4">
+          <div className="w-10 h-10 rounded-2xl bg-rose-100 text-rose-600 flex items-center justify-center mb-4">
+            <XCircle size={22} />
+          </div>
+          <h3 className="font-black text-slate-900 text-lg mb-1">Deactivate School?</h3>
+          <p className="text-sm text-slate-500 mb-2">
+            Deactivating <span className="font-black text-slate-800">"{confirmDeactivate.name}"</span> will suspend access for:
+          </p>
+          <div className="bg-rose-50 rounded-2xl p-3 mb-5 space-y-1.5">
+            <div className="flex items-center gap-2 text-sm font-bold text-rose-700">
+              <Users size={14} /> {confirmDeactivate.studentCount.toLocaleString('en-IN')} students
+            </div>
+            <div className="flex items-center gap-2 text-sm font-bold text-rose-700">
+              <UserCheck size={14} /> {confirmDeactivate.teacherCount} teachers &amp; staff
+            </div>
+          </div>
+          <p className="text-xs font-bold text-slate-400 mb-5">All data is retained. Re-activate anytime.</p>
+          <div className="flex gap-3">
+            <button onClick={() => setConfirmDeactivate(null)} className="flex-1 py-3 rounded-2xl border border-slate-200 font-black text-slate-600 active:scale-95 transition-transform">
+              Cancel
+            </button>
+            <button onClick={() => doStatusChange(confirmDeactivate, SchoolStatus.INACTIVE)} className="flex-1 py-3 rounded-2xl bg-rose-600 text-white font-black active:scale-95 transition-transform">
+              Deactivate
+            </button>
+          </div>
         </div>
       </div>
     );
