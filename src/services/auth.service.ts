@@ -83,6 +83,12 @@ let _principalUsers: PrincipalUser[] = [
 
 export const authService = {
 
+  // ── Unified Login (auto-detects role) ───────────────────────────────────
+  login(mobileNumber: string, password: string): AuthSession | null {
+    return authService.principalLogin(mobileNumber, password)
+        ?? authService.parentLogin(mobileNumber, password);
+  },
+
   // ── Parent Login ────────────────────────────────────────────────────────
   parentLogin(mobileNumber: string, password: string): AuthSession | null {
     const parent = _parentUsers.find(p => p.mobileNumber === mobileNumber && p.password === password);

@@ -7,11 +7,8 @@ interface Props {
   onLoginSuccess: () => void;
 }
 
-type LoginRole = 'PARENT' | 'PRINCIPAL';
-
 export const LoginPage: React.FC<Props> = ({ onLoginSuccess }) => {
   const { setSession, setLoading, setError, error: authError } = useAuthStore();
-  const [role, setRole] = useState<LoginRole>('PARENT');
   const [mobileNumber, setMobileNumber] = useState('');
   const [password, setPassword] = useState('');
   const [showPassword, setShowPassword] = useState(false);
@@ -30,13 +27,7 @@ export const LoginPage: React.FC<Props> = ({ onLoginSuccess }) => {
     setLoading(true);
 
     try {
-      let session = null;
-
-      if (role === 'PARENT') {
-        session = authService.parentLogin(mobileNumber, password);
-      } else {
-        session = authService.principalLogin(mobileNumber, password);
-      }
+      const session = authService.login(mobileNumber, password);
 
       if (session) {
         setSession(session);
@@ -57,12 +48,6 @@ export const LoginPage: React.FC<Props> = ({ onLoginSuccess }) => {
     }
   };
 
-  // Demo credentials hint
-  const demoCredentials =
-    role === 'PARENT'
-      ? { mobile: '9876543210', password: 'parent123' }
-      : { mobile: '9000000001', password: 'principal123' };
-
   return (
     <div className="min-h-screen bg-gradient-to-br from-blue-600 to-blue-800 flex items-center justify-center sm:py-8 sm:px-4">
       <div className="w-full h-screen sm:h-[850px] sm:max-w-[400px] bg-slate-50 relative sm:rounded-[40px] sm:border-[8px] border-slate-800 shadow-2xl flex flex-col overflow-hidden">
@@ -76,26 +61,6 @@ export const LoginPage: React.FC<Props> = ({ onLoginSuccess }) => {
 
         {/* Content */}
         <div className="flex-1 overflow-y-auto flex flex-col p-6 pb-28 justify-center">
-          {/* Role Selector */}
-          <div className="flex gap-3 mb-8">
-            {(['PARENT', 'PRINCIPAL'] as const).map((r) => (
-              <button
-                key={r}
-                onClick={() => {
-                  setRole(r);
-                  setLocalError('');
-                }}
-                className={`flex-1 py-3 px-4 rounded-xl font-black text-sm transition-all ${
-                  role === r
-                    ? 'bg-blue-600 text-white shadow-lg'
-                    : 'bg-slate-100 text-slate-600 border border-slate-200'
-                }`}
-              >
-                {r === 'PARENT' ? '👨‍👩‍👧\nParent' : '🏫\nPrincipal'}
-              </button>
-            ))}
-          </div>
-
           {/* Error Message */}
           {(localError || authError) && (
             <div className="bg-rose-50 border border-rose-200 rounded-xl p-3 mb-6 flex gap-2 items-start">
@@ -120,7 +85,6 @@ export const LoginPage: React.FC<Props> = ({ onLoginSuccess }) => {
                 className="w-full pl-12 pr-4 py-3 bg-slate-50 border border-slate-200 rounded-xl font-bold text-slate-900 outline-none focus:border-blue-500 focus:ring-1 focus:ring-blue-500"
               />
             </div>
-            <div className="text-[9px] font-bold text-slate-400 mt-1">Demo: {demoCredentials.mobile}</div>
           </div>
 
           {/* Password Input */}
@@ -146,7 +110,6 @@ export const LoginPage: React.FC<Props> = ({ onLoginSuccess }) => {
                 {showPassword ? <EyeOff size={18} /> : <Eye size={18} />}
               </button>
             </div>
-            <div className="text-[9px] font-bold text-slate-400 mt-1">Demo: {demoCredentials.password}</div>
           </div>
 
           {/* Login Button */}
@@ -165,14 +128,6 @@ export const LoginPage: React.FC<Props> = ({ onLoginSuccess }) => {
             )}
           </button>
 
-          {/* Demo Credentials Hint */}
-          <div className="bg-blue-50 border border-blue-200 rounded-xl p-3 mt-6 text-center">
-            <div className="text-[10px] font-black uppercase tracking-widest text-blue-700 mb-1">Demo Credentials</div>
-            <div className="text-[10px] font-bold text-blue-600">
-              Mobile: {demoCredentials.mobile}<br />
-              Password: {demoCredentials.password}
-            </div>
-          </div>
         </div>
 
         {/* Footer */}

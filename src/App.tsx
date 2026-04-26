@@ -9,7 +9,6 @@ import { TeacherLayout } from './features/teacher';
 import { StudentLayout } from './features/student';
 import { DriverLayout } from './features/driver/DriverLayout';
 import { PaymentsView } from './views/PaymentsView';
-import { AcademicYearManager } from './views/AcademicYearManager';
 import { useAuthStore, restoreAuthSession } from './store/authStore';
 import { studentService } from './services/student.service';
 import { Student } from './types/principal.types';
@@ -19,7 +18,6 @@ export default function App() {
   const { session, logout } = useAuthStore();
   const [tab, setTab] = useState<NavTab>('HOME');
   const [showRoleSelector, setShowRoleSelector] = useState(false);
-  const [showAcademicYearManager, setShowAcademicYearManager] = useState(false);
   const [selectedStudentId, setSelectedStudentId] = useState<string | null>(null);
   const [linkedStudents, setLinkedStudents] = useState<Student[]>([]);
 
@@ -117,7 +115,7 @@ export default function App() {
       <div className="w-full h-screen sm:h-[850px] sm:max-w-[400px] bg-slate-50 relative sm:rounded-[40px] sm:border-[8px] border-slate-800 shadow-2xl flex flex-col overflow-hidden">
 
         {/* Dynamic Header */}
-        <Header role={role} onOpenAcademicYearSettings={() => setShowAcademicYearManager(true)} />
+        <Header role={role} />
 
         {/* Scrollable Main Content */}
         <main className="flex-1 overflow-y-auto px-5 pb-24 hide-scrollbar">
@@ -126,10 +124,6 @@ export default function App() {
 
         {/* Bottom Navigation */}
         <BottomNav currentTab={tab} setTab={setTab} />
-
-        {showAcademicYearManager && (
-          <AcademicYearManager onClose={() => setShowAcademicYearManager(false)} />
-        )}
 
         {/* Logout & Dev Role Switcher Overlay */}
         {showRoleSelector && (

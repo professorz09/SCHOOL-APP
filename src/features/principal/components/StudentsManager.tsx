@@ -135,9 +135,17 @@ export const StudentsManager: React.FC<Props> = ({ onBack }) => {
     </div>
   );
 
+  // ─── PROFILE short-circuit ─────────────────────────────────────────────
+  // Profile rendering is independent of the active mainView. It must be
+  // checked BEFORE the mainView blocks because clicking a student from any
+  // tab (Admission / Fees / Classes) only flips subView, leaving mainView
+  // pointing at the source list — without this guard the source list would
+  // re-render instead of the profile.
+  const renderProfile = subView === 'PROFILE' && selected;
+
   // ─── MENU (Main Folders) ────────────────────────────────────────────────
 
-  if (mainView === 'MENU') return (
+  if (!renderProfile && mainView === 'MENU') return (
     <div className="absolute inset-0 z-50 bg-slate-50 flex flex-col animate-in slide-in-from-right-8 duration-300">
       {renderHeader('Students', onBack)}
       <div className="flex-1 overflow-y-auto p-4 pb-28 space-y-4">
@@ -180,7 +188,7 @@ export const StudentsManager: React.FC<Props> = ({ onBack }) => {
 
   // ─── ADMISSION (Add/Search) ────────────────────────────────────────────
 
-  if (mainView === 'ADMISSION') {
+  if (!renderProfile && mainView === 'ADMISSION') {
     const filteredStudents = students.filter(s =>
       s.name.toLowerCase().includes(search.toLowerCase()) ||
       s.rollNo.includes(search) || s.admissionNo.toLowerCase().includes(search.toLowerCase())
@@ -360,7 +368,7 @@ export const StudentsManager: React.FC<Props> = ({ onBack }) => {
 
   // ─── FEES (Fee Collection) ──────────────────────────────────────────────
 
-  if (mainView === 'FEES') {
+  if (!renderProfile && mainView === 'FEES') {
     const filteredFees = students.filter(s =>
       (classFilter === 'ALL' || s.className === classFilter) &&
       s.name.toLowerCase().includes(search.toLowerCase())
@@ -412,7 +420,7 @@ export const StudentsManager: React.FC<Props> = ({ onBack }) => {
 
   // ─── CLASSES (Class → Section → Students) ────────────────────────────────
 
-  if (mainView === 'CLASSES') {
+  if (!renderProfile && mainView === 'CLASSES') {
     const classes = [...new Set(students.map(s => s.className))].sort();
     const sections = selectedClass
       ? [...new Set(students.filter(s => s.className === selectedClass).map(s => s.section))].sort()
