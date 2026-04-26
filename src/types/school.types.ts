@@ -15,6 +15,7 @@ export interface School {
   studentCount: number;
   teacherCount: number;
   paymentStatus: PaymentStatus;
+  paymentStartDate: string;
   createdAt: string;
   academicYears: SchoolAcademicYear[];
 }

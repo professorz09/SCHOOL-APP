@@ -1,22 +1,77 @@
 import { BillingRecord, CreateBillingInput, PaymentHistoryEntry } from '../types/billing.types';
-import { BillingPlan, PaymentStatus } from '../config/constants';
+import { BillingPlan, PaymentStatus, PLAN_PRICES } from '../config/constants';
 
 const MOCK_BILLING: BillingRecord[] = [
-  { id: 'b1', schoolId: 's1', schoolName: 'Delhi Public School', plan: BillingPlan.PREMIUM, amount: 9999, cycleType: 'MONTHLY', dueDate: '2025-05-01', paidAt: '2025-04-28', status: PaymentStatus.PAID, transactionId: 'TXN-2504-DPS-001', notes: '' },
-  { id: 'b2', schoolId: 's2', schoolName: 'Greenwood High School', plan: BillingPlan.STANDARD, amount: 5999, cycleType: 'MONTHLY', dueDate: '2025-05-01', paidAt: '2025-04-25', status: PaymentStatus.PAID, transactionId: 'TXN-2504-GWH-001', notes: '' },
-  { id: 'b3', schoolId: 's3', schoolName: 'Sunrise Valley Academy', plan: BillingPlan.BASIC, amount: 2999, cycleType: 'MONTHLY', dueDate: '2025-05-01', paidAt: null, status: PaymentStatus.PENDING, transactionId: null, notes: '' },
-  { id: 'b4', schoolId: 's4', schoolName: "St. Mary's Convent", plan: BillingPlan.PREMIUM, amount: 9999, cycleType: 'QUARTERLY', dueDate: '2025-06-01', paidAt: '2025-04-10', status: PaymentStatus.PAID, transactionId: 'TXN-2504-SMC-001', notes: 'Q1 advance paid' },
-  { id: 'b5', schoolId: 's5', schoolName: 'Heritage International School', plan: BillingPlan.STANDARD, amount: 5999, cycleType: 'MONTHLY', dueDate: '2025-04-01', paidAt: null, status: PaymentStatus.OVERDUE, transactionId: null, notes: 'Follow-up sent on 10th April' },
-  { id: 'b6', schoolId: 's6', schoolName: 'Oakridge International', plan: BillingPlan.PREMIUM, amount: 0, cycleType: 'MONTHLY', dueDate: '2025-05-31', paidAt: null, status: PaymentStatus.PENDING, transactionId: null, notes: 'Trial period active' },
+  // DPS — 12 months, 4 paid (Apr/May/Jun/Jul) + 8 upcoming
+  ...generateMonthlySchedule('s1', 'Delhi Public School', BillingPlan.PREMIUM, '2024-04-01', 4),
+  ...generateMonthlySchedule('s2', 'Greenwood High School', BillingPlan.STANDARD, '2024-04-01', 3),
+  ...generateMonthlySchedule('s3', 'Sunrise Valley Academy', BillingPlan.BASIC, '2024-04-01', 2),
+  ...generateMonthlySchedule('s4', "St. Mary's Convent", BillingPlan.PREMIUM, '2024-04-01', 4),
+  ...generateMonthlySchedule('s5', 'Heritage International School', BillingPlan.STANDARD, '2024-04-01', 0),
+  ...generateMonthlySchedule('s6', 'Oakridge International', BillingPlan.PREMIUM, '2025-02-01', 0),
 ];
 
-const MOCK_PAYMENT_HISTORY: PaymentHistoryEntry[] = [
-  { id: 'ph1', schoolId: 's1', schoolName: 'Delhi Public School', amount: 9999, paidAt: '2025-04-28', method: 'NEFT', transactionId: 'TXN-2504-DPS-001', plan: BillingPlan.PREMIUM },
-  { id: 'ph2', schoolId: 's2', schoolName: 'Greenwood High School', amount: 5999, paidAt: '2025-04-25', method: 'UPI', transactionId: 'TXN-2504-GWH-001', plan: BillingPlan.STANDARD },
-  { id: 'ph3', schoolId: 's4', schoolName: "St. Mary's Convent", amount: 9999, paidAt: '2025-04-10', method: 'NEFT', transactionId: 'TXN-2504-SMC-001', plan: BillingPlan.PREMIUM },
-  { id: 'ph4', schoolId: 's1', schoolName: 'Delhi Public School', amount: 9999, paidAt: '2025-03-28', method: 'NEFT', transactionId: 'TXN-2503-DPS-001', plan: BillingPlan.PREMIUM },
-  { id: 'ph5', schoolId: 's2', schoolName: 'Greenwood High School', amount: 5999, paidAt: '2025-03-25', method: 'UPI', transactionId: 'TXN-2503-GWH-001', plan: BillingPlan.STANDARD },
-];
+function generateMonthlySchedule(
+  schoolId: string,
+  schoolName: string,
+  plan: BillingPlan,
+  startDate: string,
+  paidCount: number,
+): BillingRecord[] {
+  const records: BillingRecord[] = [];
+  const start = new Date(startDate);
+  const amount = PLAN_PRICES[plan];
+
+  for (let i = 0; i < 12; i++) {
+    const due = new Date(start);
+    due.setMonth(due.getMonth() + i);
+    const dueDate = `${due.getFullYear()}-${String(due.getMonth() + 1).padStart(2, '0')}-01`;
+
+    let status: PaymentStatus;
+    let paidAt: string | null = null;
+    let txnId: string | null = null;
+
+    if (i < paidCount) {
+      status = PaymentStatus.PAID;
+      paidAt = dueDate;
+      txnId = `TXN-${due.getFullYear()}${String(due.getMonth() + 1).padStart(2, '0')}-${schoolId.toUpperCase()}-001`;
+    } else if (i === paidCount && new Date() > due) {
+      status = PaymentStatus.OVERDUE;
+    } else if (i === paidCount) {
+      status = PaymentStatus.PENDING;
+    } else {
+      status = PaymentStatus.PENDING;
+    }
+
+    records.push({
+      id: `b-${schoolId}-${i}`,
+      schoolId,
+      schoolName,
+      plan,
+      amount,
+      cycleType: 'MONTHLY',
+      dueDate,
+      paidAt,
+      status,
+      transactionId: txnId,
+      notes: '',
+    });
+  }
+  return records;
+}
+
+const MOCK_PAYMENT_HISTORY: PaymentHistoryEntry[] = MOCK_BILLING
+  .filter(b => b.status === PaymentStatus.PAID)
+  .map(b => ({
+    id: `ph-${b.id}`,
+    schoolId: b.schoolId,
+    schoolName: b.schoolName,
+    amount: b.amount,
+    paidAt: b.paidAt!,
+    method: 'NEFT',
+    transactionId: b.transactionId!,
+    plan: b.plan,
+  }));
 
 let _billingDb: BillingRecord[] = [...MOCK_BILLING];
 const _historyDb: PaymentHistoryEntry[] = [...MOCK_PAYMENT_HISTORY];
@@ -32,6 +87,12 @@ export const billingService = {
 
   async getPaymentHistory(): Promise<PaymentHistoryEntry[]> {
     return [..._historyDb];
+  },
+
+  async generateScheduleForSchool(schoolId: string, schoolName: string, plan: BillingPlan, startDate: string): Promise<BillingRecord[]> {
+    const records = generateMonthlySchedule(schoolId, schoolName, plan, startDate, 0);
+    _billingDb = [..._billingDb, ...records];
+    return records;
   },
 
   async create(input: CreateBillingInput): Promise<BillingRecord> {
@@ -68,10 +129,26 @@ export const billingService = {
     return updated;
   },
 
-  async updatePlan(schoolId: string, plan: BillingPlan): Promise<void> {
-    _billingDb = _billingDb.map(b =>
-      b.schoolId === schoolId ? { ...b, plan, amount: { BASIC: 2999, STANDARD: 5999, PREMIUM: 9999 }[plan] } : b,
-    );
+  // CHANGE PLAN: Only updates amount of UNPAID future schedules.
+  // Already-paid records remain unchanged (historical accuracy).
+  async updatePlan(schoolId: string, plan: BillingPlan): Promise<{ updated: number; unchanged: number }> {
+    let updated = 0;
+    let unchanged = 0;
+    const newAmount = PLAN_PRICES[plan];
+    _billingDb = _billingDb.map(b => {
+      if (b.schoolId !== schoolId) return b;
+      if (b.status === PaymentStatus.PAID) {
+        unchanged++;
+        return b;
+      }
+      updated++;
+      return { ...b, plan, amount: newAmount };
+    });
+    return { updated, unchanged };
+  },
+
+  async deleteBySchool(schoolId: string): Promise<void> {
+    _billingDb = _billingDb.filter(b => b.schoolId !== schoolId);
   },
 
   async delete(id: string): Promise<void> {
