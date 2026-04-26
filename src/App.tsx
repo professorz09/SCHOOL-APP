@@ -4,7 +4,7 @@ import { Header, BottomNav } from './components/Navigation';
 import { StudentDashboard } from './views/StudentDashboard';
 import { TeacherDashboard } from './views/TeacherDashboard';
 import { PrincipalDashboard } from './views/PrincipalDashboard';
-import { SuperAdminDashboard } from './views/SuperAdminDashboard';
+import { SuperAdminLayout } from './features/super-admin';
 import { DriverDashboard } from './views/DriverDashboard';
 import { PaymentsView } from './views/PaymentsView';
 import { AcademicYearManager } from './views/AcademicYearManager';
@@ -18,7 +18,7 @@ export default function App() {
 
   const renderDashboard = () => {
     switch (role) {
-      case 'SUPER_ADMIN': return <SuperAdminDashboard />;
+      case 'SUPER_ADMIN': return <SuperAdminLayout />;
       case 'PRINCIPAL': return <PrincipalDashboard />;
       case 'TEACHER': return <TeacherDashboard />;
       case 'STUDENT': return <StudentDashboard />;
