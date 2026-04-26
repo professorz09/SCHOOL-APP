@@ -1,13 +1,12 @@
 import React, { useEffect, useState } from 'react';
 import {
-  Users, UserCheck, BookOpen, Receipt, Library, Bus, CircleAlert,
-  Wallet, Bell, CheckSquare, Settings, TrendingUp, IndianRupee, Calendar,
-  CalendarDays, CreditCard, Banknote, Lock, ClipboardCheck,
+  Users, UserCheck, Receipt, Library, Bus, CircleAlert,
+  Bell, CheckSquare, Settings, TrendingUp, IndianRupee, Calendar,
+  CalendarDays, CreditCard, Banknote, Lock, ClipboardCheck, ArrowUpRight,
 } from 'lucide-react';
 import { studentService } from '../../../services/student.service';
 import { staffService } from '../../../services/staff.service';
 import { principalService } from '../../../services/principal.service';
-import { PaymentStatus } from '../../../config/constants';
 import { PrincipalView } from '../pages/PrincipalLayout';
 import { useAuthStore } from '../../../store/authStore';
 
@@ -15,6 +14,18 @@ interface Props {
   onNavigate: (view: PrincipalView) => void;
 }
 
+interface Module {
+  icon: React.ComponentType<{ size?: number; className?: string }>;
+  label: string;
+  view: PrincipalView;
+  iconBg: string;
+  iconFg: string;
+  badge?: number | null;
+}
+
+const todayLabel = new Date().toLocaleDateString('en-IN', {
+  weekday: 'long', day: 'numeric', month: 'long', year: 'numeric',
+});
 
 export const PrincipalDashboard: React.FC<Props> = ({ onNavigate }) => {
   const session = useAuthStore(state => state.session);
@@ -33,7 +44,9 @@ export const PrincipalDashboard: React.FC<Props> = ({ onNavigate }) => {
       ]);
       setStats({
         totalStudents: students.length,
-        presentToday: Math.round(students.reduce((a, s) => a + s.attendancePercent, 0) / students.length),
+        presentToday: students.length > 0
+          ? Math.round(students.reduce((a, s) => a + s.attendancePercent, 0) / students.length)
+          : 0,
         paidFees: students.reduce((a, s) => a + s.paidFee, 0),
         totalFees: students.reduce((a, s) => a + s.totalFee, 0),
         totalStaff: staff.length,
@@ -45,108 +58,171 @@ export const PrincipalDashboard: React.FC<Props> = ({ onNavigate }) => {
   }, []);
 
   const feePercent = stats.totalFees > 0 ? Math.round((stats.paidFees / stats.totalFees) * 100) : 0;
+  const feePending = Math.max(0, stats.totalFees - stats.paidFees);
+  const firstName = session?.name?.split(' ')[0] ?? 'Principal';
 
-  const modules = [
-    { icon: Users,       label: 'Students',    view: 'STUDENTS'      as PrincipalView, color: 'bg-indigo-50 text-indigo-600',  badge: stats.totalStudents },
-    { icon: UserCheck,   label: 'Staff',       view: 'STAFF'         as PrincipalView, color: 'bg-blue-50 text-blue-600',      badge: stats.totalStaff },
-    { icon: ClipboardCheck, label: 'Staff Attend',view: 'STAFF_ATTENDANCE' as PrincipalView, color: 'bg-cyan-50 text-cyan-600', badge: null },
-    { icon: CalendarDays,label: 'Timetable',   view: 'TIMETABLE'     as PrincipalView, color: 'bg-sky-50 text-sky-600',        badge: null },
-    { icon: CreditCard,  label: 'Fee Ledger',  view: 'FEE_LEDGER'    as PrincipalView, color: 'bg-emerald-50 text-emerald-600',badge: null },
-    { icon: Banknote,    label: 'Salary',      view: 'SALARY_LEDGER' as PrincipalView, color: 'bg-teal-50 text-teal-600',      badge: null },
-    { icon: Calendar,    label: 'Class Mgmt',  view: 'CLASS_MGMT'    as PrincipalView, color: 'bg-violet-50 text-violet-600',  badge: null },
-    { icon: Library,     label: 'Assets',      view: 'ASSETS'        as PrincipalView, color: 'bg-amber-50 text-amber-600',    badge: null },
-    { icon: Receipt,     label: 'Expenses',    view: 'EXPENSES'      as PrincipalView, color: 'bg-rose-50 text-rose-600',      badge: null },
-    { icon: Bus,         label: 'Transport',   view: 'TRANSPORT_MGMT' as PrincipalView, color: 'bg-orange-50 text-orange-600', badge: null },
-    { icon: Bell,        label: 'Notices',     view: 'NOTICES'       as PrincipalView, color: 'bg-violet-50 text-violet-600',  badge: null },
-    { icon: CircleAlert, label: 'Complaints',  view: 'COMPLAINTS'    as PrincipalView, color: 'bg-orange-50 text-orange-600',  badge: stats.openComplaints || null },
-    { icon: CheckSquare, label: 'Approvals',   view: 'APPROVALS'     as PrincipalView, color: 'bg-emerald-50 text-emerald-600',badge: stats.pendingApprovals || null },
-    { icon: Lock,        label: 'Year Close',  view: 'YEAR_CLOSING'  as PrincipalView, color: 'bg-slate-100 text-slate-600',   badge: null },
-    { icon: Settings,    label: 'Settings',    view: 'SETTINGS'      as PrincipalView, color: 'bg-slate-100 text-slate-600',   badge: null },
+  const sections: { title: string; items: Module[] }[] = [
+    {
+      title: 'People',
+      items: [
+        { icon: Users,          label: 'Students',     view: 'STUDENTS',         iconBg: 'bg-indigo-50',   iconFg: 'text-indigo-600',   badge: stats.totalStudents },
+        { icon: UserCheck,      label: 'Staff',        view: 'STAFF',            iconBg: 'bg-blue-50',     iconFg: 'text-blue-600',     badge: stats.totalStaff },
+        { icon: ClipboardCheck, label: 'Attendance',   view: 'STAFF_ATTENDANCE', iconBg: 'bg-cyan-50',     iconFg: 'text-cyan-600' },
+      ],
+    },
+    {
+      title: 'Academics',
+      items: [
+        { icon: CalendarDays, label: 'Timetable',  view: 'TIMETABLE',  iconBg: 'bg-sky-50',     iconFg: 'text-sky-600' },
+        { icon: Calendar,     label: 'Classes',    view: 'CLASS_MGMT', iconBg: 'bg-violet-50',  iconFg: 'text-violet-600' },
+        { icon: Lock,         label: 'Year Close', view: 'YEAR_CLOSING', iconBg: 'bg-slate-100',iconFg: 'text-slate-700' },
+      ],
+    },
+    {
+      title: 'Finance',
+      items: [
+        { icon: CreditCard, label: 'Fee Ledger', view: 'FEE_LEDGER',    iconBg: 'bg-emerald-50', iconFg: 'text-emerald-600' },
+        { icon: Banknote,   label: 'Salary',     view: 'SALARY_LEDGER', iconBg: 'bg-teal-50',    iconFg: 'text-teal-600' },
+        { icon: Receipt,    label: 'Expenses',   view: 'EXPENSES',      iconBg: 'bg-rose-50',    iconFg: 'text-rose-600' },
+      ],
+    },
+    {
+      title: 'Operations',
+      items: [
+        { icon: Library,     label: 'Assets',     view: 'ASSETS',         iconBg: 'bg-amber-50',  iconFg: 'text-amber-600' },
+        { icon: Bus,         label: 'Transport',  view: 'TRANSPORT_MGMT', iconBg: 'bg-orange-50', iconFg: 'text-orange-600' },
+        { icon: Bell,        label: 'Notices',    view: 'NOTICES',        iconBg: 'bg-fuchsia-50', iconFg: 'text-fuchsia-600' },
+        { icon: CircleAlert, label: 'Complaints', view: 'COMPLAINTS',     iconBg: 'bg-orange-50', iconFg: 'text-orange-600',   badge: stats.openComplaints || null },
+        { icon: CheckSquare, label: 'Approvals',  view: 'APPROVALS',      iconBg: 'bg-emerald-50',iconFg: 'text-emerald-600',  badge: stats.pendingApprovals || null },
+        { icon: Settings,    label: 'Settings',   view: 'SETTINGS',       iconBg: 'bg-slate-100', iconFg: 'text-slate-700' },
+      ],
+    },
   ];
 
   return (
-    <div className="flex flex-col gap-4 animate-in slide-in-from-bottom-4 duration-300 fade-in pt-2">
-      {/* Greeting */}
-      <div>
-        <p className="text-[10px] font-black uppercase tracking-widest text-slate-400">PRINCIPAL DASHBOARD</p>
-        <h2 className="text-2xl font-black text-slate-900 mt-0.5">Good Morning, {session?.name ?? 'Principal'}</h2>
+    <div className="flex flex-col gap-5 animate-in slide-in-from-bottom-4 duration-300 fade-in pt-2 pb-4">
+      {/* Hero card — greeting + headline KPI */}
+      <div className="relative overflow-hidden rounded-3xl bg-gradient-to-br from-slate-900 via-slate-800 to-indigo-900 p-5 text-white shadow-lg">
+        <div className="absolute -top-16 -right-16 w-48 h-48 rounded-full bg-indigo-500/20 blur-3xl" />
+        <div className="absolute -bottom-12 -left-12 w-40 h-40 rounded-full bg-emerald-400/10 blur-3xl" />
+        <div className="relative">
+          <p className="text-[10px] font-black uppercase tracking-[0.2em] text-indigo-200/80">{todayLabel}</p>
+          <h2 className="text-2xl font-black mt-1 leading-tight">Good morning, {firstName}</h2>
+          <p className="text-xs font-bold text-slate-300/80 mt-1">Here's what's happening at school today.</p>
+
+          <div className="mt-5 grid grid-cols-2 gap-3">
+            <div className="rounded-2xl bg-white/10 backdrop-blur border border-white/10 p-3">
+              <p className="text-[9px] font-black uppercase tracking-widest text-slate-300/80">Attendance</p>
+              <div className="text-3xl font-black mt-0.5">{stats.presentToday}<span className="text-lg text-slate-300/80">%</span></div>
+              <p className="text-[10px] font-bold text-slate-300/70 mt-0.5">{stats.totalStudents.toLocaleString('en-IN')} students</p>
+            </div>
+            <div className="rounded-2xl bg-white/10 backdrop-blur border border-white/10 p-3">
+              <p className="text-[9px] font-black uppercase tracking-widest text-slate-300/80">Fee Collection</p>
+              <div className="text-3xl font-black mt-0.5 text-emerald-300">{feePercent}<span className="text-lg text-slate-300/80">%</span></div>
+              <div className="mt-1.5 w-full h-1 bg-white/10 rounded-full overflow-hidden">
+                <div className="h-full bg-emerald-400 rounded-full transition-all" style={{ width: `${feePercent}%` }} />
+              </div>
+            </div>
+          </div>
+        </div>
       </div>
 
-      {/* KPI row */}
+      {/* Action chips: alerts + finance summary */}
       <div className="grid grid-cols-2 gap-3">
-        <div className="bg-slate-900 rounded-2xl p-4">
-          <p className="text-[10px] font-black uppercase tracking-widest text-slate-400 mb-1">Today's Attendance</p>
-          <div className="text-3xl font-black text-white">{stats.presentToday}%</div>
-          <div className="mt-2 text-[10px] font-black text-emerald-400">{stats.totalStudents} total students</div>
-        </div>
-        <div className="bg-white border border-slate-100 rounded-2xl p-4 shadow-sm">
-          <p className="text-[10px] font-black uppercase tracking-widest text-slate-400 mb-1">Fee Collection</p>
-          <div className="text-2xl font-black text-emerald-600">{feePercent}%</div>
-          <div className="mt-1 w-full bg-slate-100 rounded-full h-1.5">
-            <div className="bg-emerald-500 h-1.5 rounded-full transition-all" style={{ width: `${feePercent}%` }} />
+        <button
+          onClick={() => onNavigate('FEE_LEDGER')}
+          className="bg-white border border-slate-100 rounded-2xl p-4 shadow-sm text-left active:scale-[0.98] transition-transform">
+          <div className="flex items-center justify-between mb-2">
+            <div className="w-9 h-9 rounded-xl bg-rose-50 text-rose-600 flex items-center justify-center">
+              <IndianRupee size={18} />
+            </div>
+            <ArrowUpRight size={16} className="text-slate-300" />
           </div>
-          <div className="mt-1.5 text-[10px] font-bold text-slate-400">
-            ₹{(stats.paidFees / 100000).toFixed(1)}L / ₹{(stats.totalFees / 100000).toFixed(1)}L
+          <div className="text-[10px] font-black uppercase tracking-widest text-slate-400">Pending Fees</div>
+          <div className="text-xl font-black text-slate-900 mt-0.5">
+            ₹{(feePending / 100000).toFixed(1)}<span className="text-sm text-slate-500">L</span>
           </div>
-        </div>
+        </button>
+
+        <button
+          onClick={() => onNavigate('APPROVALS')}
+          className="bg-white border border-slate-100 rounded-2xl p-4 shadow-sm text-left active:scale-[0.98] transition-transform">
+          <div className="flex items-center justify-between mb-2">
+            <div className="w-9 h-9 rounded-xl bg-emerald-50 text-emerald-600 flex items-center justify-center">
+              <CheckSquare size={18} />
+            </div>
+            <ArrowUpRight size={16} className="text-slate-300" />
+          </div>
+          <div className="text-[10px] font-black uppercase tracking-widest text-slate-400">Approvals</div>
+          <div className="text-xl font-black text-slate-900 mt-0.5">
+            {stats.pendingApprovals}<span className="text-sm text-slate-500"> pending</span>
+          </div>
+        </button>
       </div>
 
-      {/* Alert badges */}
-      {(stats.openComplaints > 0 || stats.pendingApprovals > 0) && (
-        <div className="flex gap-2">
-          {stats.openComplaints > 0 && (
-            <button onClick={() => onNavigate('COMPLAINTS')}
-              className="flex-1 flex items-center gap-2 bg-orange-50 border border-orange-200 rounded-2xl px-3 py-2.5 text-left active:scale-95 transition-transform">
-              <CircleAlert size={14} className="text-orange-500 shrink-0" />
-              <span className="text-[11px] font-black text-orange-700">{stats.openComplaints} open complaint{stats.openComplaints > 1 ? 's' : ''}</span>
-            </button>
-          )}
-          {stats.pendingApprovals > 0 && (
-            <button onClick={() => onNavigate('APPROVALS')}
-              className="flex-1 flex items-center gap-2 bg-emerald-50 border border-emerald-200 rounded-2xl px-3 py-2.5 text-left active:scale-95 transition-transform">
-              <CheckSquare size={14} className="text-emerald-500 shrink-0" />
-              <span className="text-[11px] font-black text-emerald-700">{stats.pendingApprovals} pending approval{stats.pendingApprovals > 1 ? 's' : ''}</span>
-            </button>
-          )}
-        </div>
+      {/* Inline alert if there are open complaints */}
+      {stats.openComplaints > 0 && (
+        <button
+          onClick={() => onNavigate('COMPLAINTS')}
+          className="flex items-center gap-3 bg-orange-50 border border-orange-200 rounded-2xl px-4 py-3 text-left active:scale-[0.98] transition-transform">
+          <div className="w-8 h-8 rounded-full bg-orange-100 text-orange-600 flex items-center justify-center shrink-0">
+            <CircleAlert size={16} />
+          </div>
+          <div className="flex-1">
+            <div className="text-xs font-black text-orange-800">
+              {stats.openComplaints} open complaint{stats.openComplaints > 1 ? 's' : ''}
+            </div>
+            <div className="text-[10px] font-bold text-orange-600/80 mt-0.5">Tap to review and resolve</div>
+          </div>
+          <ArrowUpRight size={16} className="text-orange-500" />
+        </button>
       )}
 
-      {/* Module grid */}
-      <div>
-        <p className="text-[10px] font-black uppercase tracking-widest text-slate-400 mb-3">Modules</p>
-        <div className="grid grid-cols-4 gap-2">
-          {modules.map(({ icon: Icon, label, view, color, badge }) => (
-            <button key={label} onClick={() => onNavigate(view)}
-              className="relative flex flex-col items-center gap-2 bg-white rounded-2xl border border-slate-100 shadow-sm py-4 px-1 active:scale-95 transition-transform">
-              {badge !== null && badge !== undefined && (
-                <div className="absolute -top-1 -right-1 w-4 h-4 bg-rose-500 text-white text-[8px] font-black rounded-full flex items-center justify-center">
-                  {badge}
+      {/* Module sections */}
+      {sections.map(({ title, items }) => (
+        <div key={title}>
+          <p className="text-[10px] font-black uppercase tracking-[0.2em] text-slate-400 mb-3 px-1">{title}</p>
+          <div className="grid grid-cols-3 gap-3">
+            {items.map(({ icon: Icon, label, view, iconBg, iconFg, badge }) => (
+              <button
+                key={label}
+                onClick={() => onNavigate(view)}
+                className="relative flex flex-col items-start gap-3 bg-white rounded-2xl border border-slate-100 shadow-sm p-3.5 active:scale-[0.97] transition-transform hover:border-slate-200 hover:shadow-md">
+                {badge !== null && badge !== undefined && badge !== 0 && (
+                  <div className="absolute top-2 right-2 min-w-[18px] h-[18px] px-1.5 bg-rose-500 text-white text-[9px] font-black rounded-full flex items-center justify-center shadow-sm">
+                    {badge > 99 ? '99+' : badge}
+                  </div>
+                )}
+                <div className={`w-11 h-11 rounded-2xl flex items-center justify-center ${iconBg} ${iconFg}`}>
+                  <Icon size={22} />
                 </div>
-              )}
-              <div className={`w-10 h-10 rounded-xl flex items-center justify-center ${color}`}>
-                <Icon size={20} />
-              </div>
-              <span className="text-[9px] font-black uppercase tracking-widest text-slate-600 text-center leading-tight">{label}</span>
-            </button>
-          ))}
+                <span className="text-[11px] font-black text-slate-800 text-left leading-tight">{label}</span>
+              </button>
+            ))}
+          </div>
         </div>
-      </div>
+      ))}
 
       {/* Quick stats */}
       <div className="bg-white rounded-2xl border border-slate-100 shadow-sm p-4">
-        <p className="text-[10px] font-black uppercase tracking-widest text-slate-400 mb-3">Quick Stats — Oct 2024</p>
-        <div className="space-y-3">
+        <div className="flex items-center justify-between mb-3">
+          <p className="text-[10px] font-black uppercase tracking-[0.2em] text-slate-400">At a glance</p>
+          <span className="text-[10px] font-bold text-slate-400">Today</span>
+        </div>
+        <div className="divide-y divide-slate-100">
           {[
-            { label: 'Active Staff', val: `${stats.totalStaff} members`, icon: UserCheck, color: 'text-blue-500' },
-            { label: 'Fee Pending', val: `₹${((stats.totalFees - stats.paidFees) / 1000).toFixed(0)}K`, icon: IndianRupee, color: 'text-rose-500' },
-            { label: 'Avg Attendance', val: `${stats.presentToday}%`, icon: TrendingUp, color: 'text-emerald-500' },
-          ].map(({ label, val, icon: Icon, color }) => (
-            <div key={label} className="flex items-center justify-between">
-              <div className="flex items-center gap-2">
-                <Icon size={14} className={color} />
-                <span className="text-xs font-bold text-slate-600">{label}</span>
+            { label: 'Active Staff',   val: `${stats.totalStaff} members`,                                      icon: UserCheck,  color: 'text-blue-500',    bg: 'bg-blue-50' },
+            { label: 'Fee Pending',    val: `₹${(feePending / 1000).toFixed(0)}K`,                              icon: IndianRupee,color: 'text-rose-500',    bg: 'bg-rose-50' },
+            { label: 'Avg Attendance', val: `${stats.presentToday}%`,                                           icon: TrendingUp, color: 'text-emerald-500', bg: 'bg-emerald-50' },
+          ].map(({ label, val, icon: Icon, color, bg }) => (
+            <div key={label} className="flex items-center justify-between py-2.5 first:pt-0 last:pb-0">
+              <div className="flex items-center gap-3">
+                <div className={`w-8 h-8 rounded-xl ${bg} ${color} flex items-center justify-center`}>
+                  <Icon size={16} />
+                </div>
+                <span className="text-sm font-bold text-slate-700">{label}</span>
               </div>
-              <span className="text-xs font-black text-slate-900">{val}</span>
+              <span className="text-sm font-black text-slate-900">{val}</span>
             </div>
           ))}
         </div>
