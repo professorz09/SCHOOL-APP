@@ -1,4 +1,4 @@
-import { StaffMember } from '../types/principal.types';
+import { StaffMember, SalaryPayment } from '../types/principal.types';
 
 const MOCK_STAFF: StaffMember[] = [
   {
@@ -7,6 +7,11 @@ const MOCK_STAFF: StaffMember[] = [
     salary: 45000, joiningDate: '2020-04-01', status: 'ACTIVE',
     assignedClasses: ['Class 10-A', 'Class 10-B'], address: '34, Saket, Delhi',
     photo: '',
+    salaryHistory: [
+      { id: 's1a', month: 'October 2024', amount: 45000, paidAt: '2024-10-31', transactionId: 'TXN-OCT-S1', note: '' },
+      { id: 's1b', month: 'September 2024', amount: 45000, paidAt: '2024-09-30', transactionId: 'TXN-SEP-S1', note: '' },
+      { id: 's1c', month: 'August 2024', amount: 45000, paidAt: '2024-08-31', transactionId: 'TXN-AUG-S1', note: '' },
+    ],
   },
   {
     id: 'staff2', name: 'Sanjay Mehta', role: 'TEACHER', subject: 'Science',
@@ -84,5 +89,21 @@ export const staffService = {
 
   async delete(id: string): Promise<void> {
     _staff = _staff.filter(s => s.id !== id);
+  },
+
+  async paySalary(id: string, month: string, note: string): Promise<StaffMember> {
+    const member = _staff.find(s => s.id === id);
+    if (!member) throw new Error('Staff not found');
+    const payment: SalaryPayment = {
+      id: `sal${Date.now()}`,
+      month,
+      amount: member.salary,
+      paidAt: new Date().toISOString().split('T')[0],
+      transactionId: `TXN-${Date.now()}`,
+      note,
+    };
+    const updated = { ...member, salaryHistory: [payment, ...(member.salaryHistory || [])] };
+    _staff = _staff.map(s => s.id === id ? updated : s);
+    return updated;
   },
 };

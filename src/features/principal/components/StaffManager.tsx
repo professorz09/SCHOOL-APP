@@ -1,10 +1,10 @@
 import React, { useEffect, useState } from 'react';
-import { ArrowLeft, Plus, Search, UserCheck, Phone, Mail, IndianRupee, Calendar, AlertTriangle, CheckCircle2, X, Save } from 'lucide-react';
+import { ArrowLeft, Plus, Search, UserCheck, Phone, Mail, IndianRupee, Calendar, AlertTriangle, CheckCircle2, X, Save, History } from 'lucide-react';
 import { staffService } from '../../../services/staff.service';
 import { StaffMember, StaffRole, StaffStatus } from '../../../types/principal.types';
 import { useUIStore } from '../../../store/uiStore';
 
-type View = 'LIST' | 'CREATE' | 'PROFILE';
+type View = 'LIST' | 'CREATE' | 'PROFILE' | 'PAY_SALARY';
 
 interface Props { onBack: () => void; }
 
@@ -40,6 +40,8 @@ export const StaffManager: React.FC<Props> = ({ onBack }) => {
   const [form, setForm] = useState<Omit<StaffMember, 'id'>>(BLANK);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [confirmSuspend, setConfirmSuspend] = useState<StaffMember | null>(null);
+  const [payMonth, setPayMonth] = useState(new Date().toLocaleString('default', { month: 'long', year: 'numeric' }));
+  const [payNote, setPayNote] = useState('');
 
   useEffect(() => { staffService.getAll().then(setStaff); }, []);
 
@@ -252,11 +254,89 @@ export const StaffManager: React.FC<Props> = ({ onBack }) => {
               </div>
             </div>
           )}
+
+          {/* Salary History */}
+          <div className="bg-white rounded-2xl border border-slate-100 shadow-sm p-4">
+            <div className="flex items-center justify-between mb-3">
+              <p className="text-[10px] font-black uppercase tracking-widest text-slate-400">Salary History</p>
+              <button onClick={() => setView('PAY_SALARY')}
+                className="flex items-center gap-1 text-[10px] font-black text-emerald-700 bg-emerald-50 px-2.5 py-1 rounded-xl">
+                <IndianRupee size={10} /> Pay Salary
+              </button>
+            </div>
+            {(selected.salaryHistory?.length ?? 0) === 0 ? (
+              <div className="flex flex-col items-center py-6 text-slate-400">
+                <History size={24} className="mb-2 opacity-40" />
+                <p className="font-bold text-xs">No salary payments yet</p>
+              </div>
+            ) : (
+              <div className="space-y-2">
+                {selected.salaryHistory?.map(pay => (
+                  <div key={pay.id} className="flex items-center justify-between p-2.5 bg-slate-50 rounded-xl">
+                    <div>
+                      <div className="font-bold text-slate-800 text-xs">{pay.month}</div>
+                      <div className="text-[9px] font-bold text-slate-400 mt-0.5">{pay.paidAt} · {pay.transactionId}</div>
+                    </div>
+                    <div className="font-black text-emerald-600 text-sm">₹{pay.amount.toLocaleString('en-IN')}</div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+
           <button onClick={() => setConfirmSuspend(selected)}
             className={`w-full py-3 rounded-2xl font-black text-sm active:scale-95 transition-transform ${selected.status === 'SUSPENDED' ? 'bg-emerald-50 text-emerald-700 border border-emerald-200' : 'bg-rose-50 text-rose-700 border border-rose-200'}`}>
             {selected.status === 'SUSPENDED' ? '✓ Reinstate Staff Member' : '⚠ Suspend Staff Member'}
           </button>
         </div>
+      </div>
+    </div>
+  );
+
+  if (view === 'PAY_SALARY' && selected) return (
+    <div className="absolute inset-0 z-50 bg-slate-50 flex flex-col animate-in slide-in-from-right-8 duration-300">
+      {renderHeader(`Pay Salary: ${selected.name}`, () => setView('PROFILE'))}
+      <div className="flex-1 overflow-y-auto p-4 pb-28 space-y-4">
+        <div className="bg-white rounded-2xl border border-slate-100 shadow-sm p-4 space-y-4">
+          <div className="flex items-center gap-3 p-3 bg-emerald-50 rounded-xl">
+            <IndianRupee size={20} className="text-emerald-600" />
+            <div>
+              <div className="font-extrabold text-slate-900">{selected.name}</div>
+              <div className="text-xs font-bold text-slate-500">{selected.role.replace('_', ' ')} · ₹{selected.salary.toLocaleString('en-IN')}/month</div>
+            </div>
+          </div>
+          <div>
+            <label className="block text-[10px] font-black uppercase tracking-widest text-slate-500 mb-1.5">Month *</label>
+            <input value={payMonth} onChange={e => setPayMonth(e.target.value)}
+              placeholder="e.g. November 2024"
+              className="w-full border border-slate-200 bg-slate-50 rounded-xl px-4 py-3 font-bold text-sm outline-none focus:border-emerald-500" />
+          </div>
+          <div>
+            <label className="block text-[10px] font-black uppercase tracking-widest text-slate-500 mb-1.5">Note (optional)</label>
+            <input value={payNote} onChange={e => setPayNote(e.target.value)}
+              placeholder="e.g. Includes performance bonus"
+              className="w-full border border-slate-200 bg-slate-50 rounded-xl px-4 py-3 font-bold text-sm outline-none focus:border-emerald-500" />
+          </div>
+          <div>
+            <label className="block text-[10px] font-black uppercase tracking-widest text-slate-500 mb-1.5">Amount</label>
+            <div className="border border-slate-200 bg-slate-100 rounded-xl px-4 py-3 font-black text-sm text-slate-700">
+              ₹{selected.salary.toLocaleString('en-IN')}
+            </div>
+          </div>
+        </div>
+        <button onClick={async () => {
+          if (!payMonth.trim()) { showToast('Enter month', 'error'); return; }
+          const updated = await staffService.paySalary(selected.id, payMonth, payNote);
+          setSelected(updated);
+          setStaff(prev => prev.map(s => s.id === updated.id ? updated : s));
+          showToast(`Salary paid for ${payMonth}`);
+          setPayMonth(new Date().toLocaleString('default', { month: 'long', year: 'numeric' }));
+          setPayNote('');
+          setView('PROFILE');
+        }}
+          className="w-full flex items-center justify-center gap-2 bg-emerald-600 text-white font-black text-xs uppercase tracking-widest py-4 rounded-2xl active:scale-95 transition-transform shadow-lg">
+          <CheckCircle2 size={16} /> Confirm Payment
+        </button>
       </div>
     </div>
   );

@@ -100,6 +100,15 @@ export interface AttendanceMonth {
   total: number;
 }
 
+export interface SalaryPayment {
+  id: string;
+  month: string;
+  amount: number;
+  paidAt: string;
+  transactionId: string;
+  note: string;
+}
+
 export interface StaffMember {
   id: string;
   name: string;
@@ -114,6 +123,7 @@ export interface StaffMember {
   assignedClasses: string[];
   address: string;
   photo: string;
+  salaryHistory?: SalaryPayment[];
 }
 
 export interface Complaint {
