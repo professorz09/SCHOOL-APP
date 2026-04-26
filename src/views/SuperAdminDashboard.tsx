@@ -28,16 +28,6 @@ export const SuperAdminDashboard: React.FC = () => {
 
   return (
     <div className="flex flex-col gap-6 animate-in slide-in-from-bottom-4 duration-500 fade-in">
-      <div className="pt-4">
-        <p className="text-slate-500 font-bold text-xs uppercase tracking-widest mb-2">Monthly MRR</p>
-        <div className="flex items-end gap-3">
-          <h2 className="text-4xl font-black text-emerald-600">₹4.2L</h2>
-          <span className="text-emerald-700 text-[10px] font-black uppercase tracking-widest bg-emerald-50 px-2 py-1 rounded-full mb-1">
-            +15%
-          </span>
-        </div>
-      </div>
-
       <ActionGrid actions={actions} />
 
       <div className="grid grid-cols-2 gap-4">

@@ -9,30 +9,6 @@ interface BillingManagerProps {
 
 export const BillingManager: React.FC<BillingManagerProps> = ({ onClose }) => {
   const [view, setView] = useState<'OVERVIEW' | 'SETTINGS'>('OVERVIEW');
-  const [showAddSchool, setShowAddSchool] = useState(false);
-  const [newSchool, setNewSchool] = useState({ name: '', principalId: '', principalName: '', principalPassword: '', agreedAmount: 0 });
-
-  const handleAddSchool = () => {
-    if (!newSchool.name || !newSchool.principalId) return;
-    
-    setSchools([
-      ...schools, 
-      {
-         id: Math.floor(Math.random() * 100000),
-         name: newSchool.name,
-         principalId: newSchool.principalId,
-         isActive: true,
-         agreedAmount: newSchool.agreedAmount,
-         registeredDate: new Date().toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' }),
-         billingCycle: 'MONTHLY',
-         expectedSchedule: [],
-         history: [],
-         logs: [{ date: new Date().toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' }), description: 'School onboarded.' }]
-      }
-    ]);
-    setShowAddSchool(false);
-    setNewSchool({ name: '', principalId: '', principalName: '', principalPassword: '', agreedAmount: 0 });
-  };
   const [selectedSchool, setSelectedSchool] = useState<any>(null);
 
   const [schools, setSchools] = useState([
@@ -190,6 +166,7 @@ export const BillingManager: React.FC<BillingManagerProps> = ({ onClose }) => {
                </div>
 
                <SectionTitle title="Schools & Recent Payments" />
+
                <div className="space-y-6">
                  {schools.map(school => (
                    <AppCard 
@@ -282,78 +259,7 @@ export const BillingManager: React.FC<BillingManagerProps> = ({ onClose }) => {
             <div className="space-y-6">
                <div className="flex justify-between items-center">
                  <SectionTitle title="School Financials Configuration" />
-                 {!showAddSchool && (
-                   <button onClick={() => setShowAddSchool(true)} className="bg-slate-900 text-white px-4 py-2 rounded-full text-[10px] font-black uppercase tracking-widest shadow-sm active:scale-95 transition-transform">
-                     + Add School
-                   </button>
-                 )}
                </div>
-               
-               {showAddSchool && (
-                 <AppCard className="space-y-4 border border-slate-200 bg-slate-50 shadow-sm relative">
-                   <h3 className="font-extrabold text-slate-900 text-sm uppercase tracking-tight mb-2">New School Details</h3>
-                   <div className="space-y-3">
-                     <div>
-                       <label className="block text-[10px] font-black uppercase tracking-widest text-slate-500 mb-1">School Name</label>
-                       <input 
-                          value={newSchool.name} 
-                          onChange={(e) => setNewSchool({...newSchool, name: e.target.value})} 
-                          placeholder="e.g. Modern High School"
-                          className="w-full border border-slate-200 bg-white rounded-xl px-4 py-3 font-bold text-sm text-slate-900 outline-none focus:border-emerald-500" 
-                       />
-                     </div>
-                     <div>
-                       <label className="block text-[10px] font-black uppercase tracking-widest text-slate-500 mb-1">Create Principal Account</label>
-                       <div className="grid grid-cols-2 gap-3">
-                         <input 
-                            value={newSchool.principalName} 
-                            onChange={(e) => setNewSchool({...newSchool, principalName: e.target.value})} 
-                            placeholder="Principal Name (e.g. Dr. Rajesh Kumar)"
-                            className="w-full border border-slate-200 bg-white rounded-xl px-4 py-3 font-bold text-sm text-slate-900 outline-none focus:border-emerald-500" 
-                         />
-                         <input 
-                            value={newSchool.principalId} 
-                            onChange={(e) => setNewSchool({...newSchool, principalId: e.target.value})} 
-                            placeholder="Email ID (principal@school.com)"
-                            className="w-full border border-slate-200 bg-white rounded-xl px-4 py-3 font-bold text-sm text-slate-900 outline-none focus:border-emerald-500" 
-                         />
-                         <input 
-                            type="password"
-                            value={newSchool.principalPassword} 
-                            onChange={(e) => setNewSchool({...newSchool, principalPassword: e.target.value})} 
-                            placeholder="Set Password"
-                            className="w-full border border-slate-200 bg-white rounded-xl px-4 py-3 font-bold text-sm text-slate-900 outline-none focus:border-emerald-500 col-span-2" 
-                         />
-                       </div>
-                       <p className="text-[10px] text-slate-400 font-bold mt-1.5 ml-1">This will automatically create a Principal (Admin) account for this school.</p>
-                     </div>
-                     <div>
-                       <label className="block text-[10px] font-black uppercase tracking-widest text-slate-500 mb-1">Agreed Amount (₹)</label>
-                       <input 
-                          type="number"
-                          value={newSchool.agreedAmount || ''} 
-                          onChange={(e) => setNewSchool({...newSchool, agreedAmount: Number(e.target.value)})} 
-                          placeholder="0"
-                          className="w-full border border-slate-200 bg-white rounded-xl px-4 py-3 font-bold text-sm text-slate-900 outline-none focus:border-emerald-500" 
-                       />
-                     </div>
-                   </div>
-                   <div className="pt-4 flex gap-3">
-                     <button 
-                       onClick={() => setShowAddSchool(false)}
-                       className="flex-1 bg-white border border-slate-200 text-slate-600 font-black text-[10px] uppercase tracking-widest py-3 rounded-xl hover:bg-slate-50 active:scale-95 transition-transform"
-                     >
-                        Cancel
-                     </button>
-                     <button 
-                       onClick={handleAddSchool}
-                       className="flex-1 bg-emerald-600 text-white font-black text-[10px] uppercase tracking-widest py-3 rounded-xl shadow-sm hover:bg-emerald-700 active:scale-95 transition-transform"
-                     >
-                        Create School
-                     </button>
-                   </div>
-                 </AppCard>
-               )}
 
                <div className="space-y-4">
                   {schools.map(school => (

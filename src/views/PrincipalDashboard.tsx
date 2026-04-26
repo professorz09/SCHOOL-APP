@@ -1,23 +1,24 @@
 import React, { useState } from 'react';
-import { Users, UserCheck, Receipt, Presentation, CircleAlert, CheckCircle2, AlertTriangle, MonitorPlay, BookOpen, Wallet, MoreHorizontal, CalendarSync, IndianRupee, Bus, MapPin, CalendarOff, IdCard, Library, FlaskConical } from 'lucide-react';
+import { Users, UserCheck, Receipt, BookOpen, CircleAlert, CheckCircle2, AlertTriangle, Wallet, MoreHorizontal, CalendarSync, IndianRupee, Bus, MapPin, CalendarOff, IdCard, Library, FlaskConical } from 'lucide-react';
 import { ActionGrid, AppCard, SectionTitle } from '../components/SharedUI';
 import { ActionItem } from '../types';
 import { AdmitCardManager } from './AdmitCardManager';
 import { LabInventoryManager } from './LabInventoryManager';
+import { PrincipalFeatureView } from './PrincipalFeatureView';
 
 export const PrincipalDashboard: React.FC = () => {
   const [showAdmitCards, setShowAdmitCards] = useState(false);
   const [showLabInventory, setShowLabInventory] = useState(false);
+  const [featureView, setFeatureView] = useState<string | null>(null);
 
   const actions: ActionItem[] = [
-
-    { title: 'Students', icon: <Users size={28} />, color: 'text-indigo-600' },
-    { title: 'Staff', icon: <UserCheck size={28} />, color: 'text-blue-600' },
-    { title: 'Classes', icon: <BookOpen size={28} />, color: 'text-purple-600' },
-    { title: 'Fees Col.', icon: <Receipt size={28} />, color: 'text-emerald-600' },
-    { title: 'Transport', icon: <Bus size={28} />, color: 'text-amber-500' },
-    { title: 'Complaints', icon: <CircleAlert size={28} />, color: 'text-rose-500' },
-    { title: 'Expenses', icon: <Wallet size={28} />, color: 'text-red-500' },
+    { title: 'Students', icon: <Users size={28} />, color: 'text-indigo-600', onClick: () => setFeatureView('STUDENTS') },
+    { title: 'Staff', icon: <UserCheck size={28} />, color: 'text-blue-600', onClick: () => setFeatureView('STAFF') },
+    { title: 'Classes', icon: <BookOpen size={28} />, color: 'text-purple-600', onClick: () => setFeatureView('CLASSES') },
+    { title: 'Fees Col.', icon: <Receipt size={28} />, color: 'text-emerald-600', onClick: () => setFeatureView('FEES') },
+    { title: 'Transport', icon: <Bus size={28} />, color: 'text-amber-500', onClick: () => setFeatureView('TRANSPORT') },
+    { title: 'Complaints', icon: <CircleAlert size={28} />, color: 'text-rose-500', onClick: () => setFeatureView('COMPLAINTS') },
+    { title: 'Expenses', icon: <Wallet size={28} />, color: 'text-red-500', onClick: () => setFeatureView('EXPENSES') },
     { title: 'More', icon: <MoreHorizontal size={28} />, color: 'text-slate-600' },
   ];
 
@@ -262,6 +263,7 @@ export const PrincipalDashboard: React.FC = () => {
 
       {showAdmitCards && <AdmitCardManager onClose={() => setShowAdmitCards(false)} />}
       {showLabInventory && <LabInventoryManager onClose={() => setShowLabInventory(false)} />}
+      {featureView && <PrincipalFeatureView feature={featureView} onClose={() => setFeatureView(null)} />}
     </div>
   );
 };
