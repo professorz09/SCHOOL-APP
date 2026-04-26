@@ -1,30 +1,33 @@
 import React, { useState } from 'react';
 import {
   Users, FileCheck2, ClipboardList, ScrollText, CircleAlert,
-  TrendingUp, BookOpen, Calendar, IndianRupee,
+  TrendingUp, BookOpen, Calendar, IndianRupee, Bell,
 } from 'lucide-react';
 import { AttendanceManager } from '../components/AttendanceManager';
 import { TestsManager } from '../components/TestsManager';
 import { HomeworkManager } from '../components/HomeworkManager';
 import { ExamPaperGeneratorView } from '../components/ExamPaperGenerator';
 import { TeacherComplaintsView } from '../components/TeacherComplaints';
+import { TeacherNoticesView } from '../components/TeacherNoticesView';
 
-type TeacherView = 'DASHBOARD' | 'ATTENDANCE' | 'TESTS' | 'HOMEWORK' | 'EXAM_GEN' | 'COMPLAINTS';
+type TeacherView = 'DASHBOARD' | 'ATTENDANCE' | 'TESTS' | 'HOMEWORK' | 'EXAM_GEN' | 'COMPLAINTS' | 'NOTICES';
 
 export const TeacherLayout: React.FC = () => {
   const [view, setView] = useState<TeacherView>('DASHBOARD');
   const goBack = () => setView('DASHBOARD');
 
-  if (view === 'ATTENDANCE')  return <AttendanceManager  onBack={goBack} />;
-  if (view === 'TESTS')       return <TestsManager       onBack={goBack} />;
-  if (view === 'HOMEWORK')    return <HomeworkManager    onBack={goBack} />;
+  if (view === 'ATTENDANCE')  return <AttendanceManager      onBack={goBack} />;
+  if (view === 'TESTS')       return <TestsManager           onBack={goBack} />;
+  if (view === 'HOMEWORK')    return <HomeworkManager        onBack={goBack} />;
   if (view === 'EXAM_GEN')    return <ExamPaperGeneratorView onBack={goBack} />;
-  if (view === 'COMPLAINTS')  return <TeacherComplaintsView onBack={goBack} />;
+  if (view === 'COMPLAINTS')  return <TeacherComplaintsView  onBack={goBack} />;
+  if (view === 'NOTICES')     return <TeacherNoticesView     onBack={goBack} />;
 
   const modules = [
     { icon: FileCheck2, label: 'Attendance', view: 'ATTENDANCE' as TeacherView, color: 'bg-blue-50 text-blue-600', desc: 'Mark class attendance' },
     { icon: ClipboardList, label: 'Tests', view: 'TESTS' as TeacherView, color: 'bg-indigo-50 text-indigo-600', desc: 'Schedule & manage tests' },
     { icon: BookOpen, label: 'Homework', view: 'HOMEWORK' as TeacherView, color: 'bg-purple-50 text-purple-600', desc: 'Assign & track homework' },
+    { icon: Bell, label: 'Notices', view: 'NOTICES' as TeacherView, color: 'bg-violet-50 text-violet-600', desc: 'Send notices to your classes' },
     { icon: ScrollText, label: 'AI Exam Gen', view: 'EXAM_GEN' as TeacherView, color: 'bg-amber-50 text-amber-600', desc: 'Generate with Gemini AI' },
     { icon: CircleAlert, label: 'Complaints', view: 'COMPLAINTS' as TeacherView, color: 'bg-rose-50 text-rose-600', desc: 'Report to principal' },
   ];

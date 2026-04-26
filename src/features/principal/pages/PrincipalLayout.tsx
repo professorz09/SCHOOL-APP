@@ -8,6 +8,7 @@ import { ExpensesManager } from '../components/ExpensesManager';
 import { NoticesManager } from '../components/NoticesManager';
 import { ApprovalsManager } from '../components/ApprovalsManager';
 import { SettingsManager } from '../components/SettingsManager';
+import { ClassManagementManager } from '../components/ClassManagementManager';
 
 type PrincipalView =
   | 'DASHBOARD'
@@ -18,7 +19,8 @@ type PrincipalView =
   | 'EXPENSES'
   | 'NOTICES'
   | 'APPROVALS'
-  | 'SETTINGS';
+  | 'SETTINGS'
+  | 'CLASS_MGMT';
 
 export const PrincipalLayout: React.FC = () => {
   const [view, setView] = useState<PrincipalView>('DASHBOARD');
@@ -26,14 +28,15 @@ export const PrincipalLayout: React.FC = () => {
   const goTo = (v: PrincipalView) => setView(v);
   const goBack = () => setView('DASHBOARD');
 
-  if (view === 'STUDENTS')    return <StudentsManager    onBack={goBack} />;
-  if (view === 'STAFF')       return <StaffManager       onBack={goBack} />;
-  if (view === 'ASSETS')      return <AssetsManager      onBack={goBack} />;
-  if (view === 'COMPLAINTS')  return <ComplaintsManager  onBack={goBack} />;
-  if (view === 'EXPENSES')    return <ExpensesManager    onBack={goBack} />;
-  if (view === 'NOTICES')     return <NoticesManager     onBack={goBack} />;
-  if (view === 'APPROVALS')   return <ApprovalsManager   onBack={goBack} />;
-  if (view === 'SETTINGS')    return <SettingsManager    onBack={goBack} />;
+  if (view === 'STUDENTS')    return <StudentsManager         onBack={goBack} />;
+  if (view === 'STAFF')       return <StaffManager            onBack={goBack} />;
+  if (view === 'ASSETS')      return <AssetsManager           onBack={goBack} />;
+  if (view === 'COMPLAINTS')  return <ComplaintsManager       onBack={goBack} />;
+  if (view === 'EXPENSES')    return <ExpensesManager         onBack={goBack} />;
+  if (view === 'NOTICES')     return <NoticesManager          onBack={goBack} />;
+  if (view === 'APPROVALS')   return <ApprovalsManager        onBack={goBack} />;
+  if (view === 'SETTINGS')    return <SettingsManager         onBack={goBack} />;
+  if (view === 'CLASS_MGMT')  return <ClassManagementManager  onBack={goBack} />;
 
   return <PrincipalDashboard onNavigate={goTo} />;
 };

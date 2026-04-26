@@ -126,6 +126,24 @@ export const billingService = {
       transactionId,
       plan: updated.plan,
     });
+
+    // Auto-schedule next 12 months if all current 12 months are paid
+    const schoolRecords = _billingDb.filter(b => b.schoolId === record.schoolId);
+    const allPaid = schoolRecords.length >= 12 && schoolRecords.slice(0, 12).every(r => r.status === PaymentStatus.PAID);
+    if (allPaid) {
+      const lastRecord = schoolRecords[11];
+      const nextStart = new Date(lastRecord.dueDate);
+      nextStart.setMonth(nextStart.getMonth() + 1);
+      const nextSchedule = generateMonthlySchedule(
+        record.schoolId,
+        record.schoolName,
+        record.plan,
+        nextStart.toISOString().split('T')[0],
+        0
+      );
+      _billingDb = [..._billingDb, ...nextSchedule];
+    }
+
     return updated;
   },
 

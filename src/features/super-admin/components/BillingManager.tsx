@@ -1,11 +1,11 @@
 import React, { useEffect, useState } from 'react';
-import { ArrowLeft, IndianRupee, CheckCircle2, Clock, AlertCircle, Plus, X, CreditCard, History, ChevronRight } from 'lucide-react';
+import { ArrowLeft, IndianRupee, CheckCircle2, Clock, AlertCircle, Plus, X, CreditCard, History, ChevronRight, Building2 } from 'lucide-react';
 import { useBillingStore } from '../../../store/billingStore';
 import { useUIStore } from '../../../store/uiStore';
 import { BillingRecord } from '../../../types/billing.types';
 import { PaymentStatus, BillingPlan, PLAN_PRICES, PAYMENT_COLORS, PLAN_COLORS } from '../../../config/constants';
 
-type View = 'LIST' | 'HISTORY' | 'MARK_PAID' | 'ADD';
+type View = 'LIST' | 'HISTORY' | 'MARK_PAID' | 'ADD' | 'SCHOOL_DETAIL';
 
 interface Props {
   onBack: () => void;
@@ -17,6 +17,7 @@ export const BillingManager: React.FC<Props> = ({ onBack }) => {
 
   const [view, setView] = useState<View>('LIST');
   const [selected, setSelected] = useState<BillingRecord | null>(null);
+  const [selectedSchoolId, setSelectedSchoolId] = useState<string | null>(null);
   const [txnId, setTxnId] = useState('');
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [filterStatus, setFilterStatus] = useState<PaymentStatus | 'ALL'>('ALL');
@@ -60,6 +61,60 @@ export const BillingManager: React.FC<Props> = ({ onBack }) => {
     return <Clock size={16} className="text-amber-500" />;
   };
 
+  if (view === 'SCHOOL_DETAIL' && selectedSchoolId) {
+    const schoolName = records.find(r => r.schoolId === selectedSchoolId)?.schoolName ?? '';
+    const schoolRecords = records.filter(r => r.schoolId === selectedSchoolId)
+      .sort((a, b) => a.dueDate.localeCompare(b.dueDate));
+    const paidCount = schoolRecords.filter(r => r.status === PaymentStatus.PAID).length;
+    const totalPaid = schoolRecords.filter(r => r.status === PaymentStatus.PAID).reduce((a, r) => a + r.amount, 0);
+    return (
+      <div className="absolute inset-0 z-50 bg-slate-50 flex flex-col animate-in slide-in-from-right-8 duration-300">
+        {renderHeader(schoolName, () => setView('LIST'))}
+        <div className="flex-1 overflow-y-auto p-4 pb-28 space-y-3">
+          <div className="grid grid-cols-3 gap-2">
+            <div className="bg-emerald-50 rounded-2xl p-3 text-center">
+              <div className="text-lg font-black text-emerald-700">{paidCount}</div>
+              <div className="text-[9px] font-black uppercase tracking-widest text-emerald-600 mt-0.5">Paid</div>
+            </div>
+            <div className="bg-amber-50 rounded-2xl p-3 text-center">
+              <div className="text-lg font-black text-amber-700">{schoolRecords.length - paidCount}</div>
+              <div className="text-[9px] font-black uppercase tracking-widest text-amber-600 mt-0.5">Pending</div>
+            </div>
+            <div className="bg-blue-50 rounded-2xl p-3 text-center">
+              <div className="text-lg font-black text-blue-700">₹{(totalPaid / 1000).toFixed(0)}K</div>
+              <div className="text-[9px] font-black uppercase tracking-widest text-blue-600 mt-0.5">Total Paid</div>
+            </div>
+          </div>
+          <div className="space-y-2">
+            {schoolRecords.map(rec => (
+              <div key={rec.id} className="bg-white rounded-2xl border border-slate-100 shadow-sm p-4">
+                <div className="flex items-center justify-between">
+                  <div>
+                    <div className="font-bold text-slate-800 text-sm">{rec.dueDate}</div>
+                    <div className="text-[10px] font-bold text-slate-400 mt-0.5">{rec.cycleType} · {rec.plan}</div>
+                    {rec.paidAt && <div className="text-[10px] font-bold text-emerald-600 mt-0.5">Paid: {rec.paidAt}</div>}
+                  </div>
+                  <div className="flex flex-col items-end gap-2">
+                    <div className="flex items-center gap-1">
+                      {statusIcon(rec.status)}
+                      <span className="font-black text-slate-900 text-sm">₹{rec.amount.toLocaleString('en-IN')}</span>
+                    </div>
+                    {rec.status !== PaymentStatus.PAID && (
+                      <button onClick={() => { setSelected(rec); setView('MARK_PAID'); }}
+                        className="text-[10px] font-black text-white bg-slate-900 px-2.5 py-1 rounded-xl">
+                        Mark Paid
+                      </button>
+                    )}
+                  </div>
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      </div>
+    );
+  }
+
   if (view === 'LIST') return (
     <div className="absolute inset-0 z-50 bg-slate-50 flex flex-col animate-in slide-in-from-right-8 duration-300">
       {renderHeader('Billing',  onBack,
@@ -92,6 +147,38 @@ export const BillingManager: React.FC<Props> = ({ onBack }) => {
               {f}
             </button>
           ))}
+        </div>
+
+        {/* Per-school quick view */}
+        <div className="bg-white rounded-2xl border border-slate-100 shadow-sm p-4">
+          <p className="text-[10px] font-black uppercase tracking-widest text-slate-400 mb-3">By School</p>
+          <div className="space-y-2">
+            {[...new Set(records.map(r => r.schoolId))].map(schoolId => {
+              const schoolRecs = records.filter(r => r.schoolId === schoolId);
+              const name = schoolRecs[0]?.schoolName ?? '';
+              const paid = schoolRecs.filter(r => r.status === PaymentStatus.PAID).length;
+              const overdue = schoolRecs.filter(r => r.status === PaymentStatus.OVERDUE).length;
+              return (
+                <button key={schoolId}
+                  onClick={() => { setSelectedSchoolId(schoolId); setView('SCHOOL_DETAIL'); }}
+                  className="w-full flex items-center justify-between p-3 bg-slate-50 rounded-xl active:scale-95 transition-transform">
+                  <div className="flex items-center gap-2">
+                    <div className="w-8 h-8 rounded-xl bg-blue-50 text-blue-600 flex items-center justify-center">
+                      <Building2 size={14} />
+                    </div>
+                    <div className="text-left">
+                      <div className="font-bold text-slate-800 text-xs">{name}</div>
+                      <div className="text-[9px] font-bold text-slate-400 mt-0.5">{paid}/{schoolRecs.length} paid</div>
+                    </div>
+                  </div>
+                  <div className="flex items-center gap-1.5">
+                    {overdue > 0 && <span className="text-[9px] font-black bg-rose-100 text-rose-600 px-1.5 py-0.5 rounded-full">{overdue} overdue</span>}
+                    <ChevronRight size={14} className="text-slate-300" />
+                  </div>
+                </button>
+              );
+            })}
+          </div>
         </div>
 
         {/* Records */}
