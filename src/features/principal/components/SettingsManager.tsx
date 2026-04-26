@@ -1,10 +1,12 @@
 import React, { useEffect, useState } from 'react';
-import { ArrowLeft, Settings, Plus, Trash2, ChevronDown, ChevronUp, Save } from 'lucide-react';
+import { ArrowLeft, Settings, Plus, Trash2, ChevronDown, ChevronUp, Save, Calendar, Users } from 'lucide-react';
 import { principalService } from '../../../services/principal.service';
-import { AcademicYearConfig, ClassConfig } from '../../../types/principal.types';
+import { AcademicYearConfig, ClassConfig, Student } from '../../../types/principal.types';
 import { useUIStore } from '../../../store/uiStore';
+import { studentService } from '../../../services/student.service';
 
 type Tab = 'ACADEMIC' | 'CLASSES' | 'PROMOTION';
+type View = 'CONFIG' | 'CREATE_AY' | 'PROMOTION';
 
 interface Props { onBack: () => void; }
 
@@ -12,6 +14,7 @@ const BOARDS = ['CBSE', 'ICSE', 'State Board', 'IB', 'Cambridge'];
 
 export const SettingsManager: React.FC<Props> = ({ onBack }) => {
   const { showToast } = useUIStore();
+  const [view, setView] = useState<View>('CONFIG');
   const [tab, setTab] = useState<Tab>('ACADEMIC');
   const [configs, setConfigs] = useState<AcademicYearConfig[]>([]);
   const [activeConfig, setActiveConfig] = useState<AcademicYearConfig | null>(null);
@@ -20,11 +23,24 @@ export const SettingsManager: React.FC<Props> = ({ onBack }) => {
   const [newClassName, setNewClassName] = useState('');
   const [newSection, setNewSection] = useState('');
 
+  const [students, setStudents] = useState<Student[]>([]);
+  const [failedStudents, setFailedStudents] = useState<Set<string>>(new Set());
+  const [rteStudents, setRteStudents] = useState<Set<string>>(new Set());
+  const [tcStudents, setTcStudents] = useState<Set<string>>(new Set());
+
+  const [newAY, setNewAY] = useState({
+    label: '',
+    startDate: '',
+    endDate: '',
+    board: 'CBSE',
+  });
+
   useEffect(() => {
     principalService.getAYConfig().then(data => {
       setConfigs(data);
       setActiveConfig(data.find(c => c.isActive) ?? data[0] ?? null);
     });
+    studentService.getAll().then(setStudents);
   }, []);
 
   const handleSaveBoard = async (board: string) => {
@@ -79,17 +95,188 @@ export const SettingsManager: React.FC<Props> = ({ onBack }) => {
     showToast(`${className} removed`);
   };
 
+  const handleCreateAY = async () => {
+    if (!newAY.label || !newAY.startDate || !newAY.endDate) {
+      showToast('All fields required', 'error'); return;
+    }
+    setIsSaving(true);
+    try {
+      const ayConfig: AcademicYearConfig = {
+        id: `ay${Date.now()}`,
+        label: newAY.label,
+        startDate: newAY.startDate,
+        endDate: newAY.endDate,
+        isActive: false,
+        board: newAY.board,
+        classes: activeConfig?.classes || [],
+      };
+      setConfigs(prev => [...prev, ayConfig]);
+      showToast(`Academic Year ${newAY.label} created!`);
+      setNewAY({ label: '', startDate: '', endDate: '', board: 'CBSE' });
+      setView('CONFIG');
+      setTab('ACADEMIC');
+    } finally { setIsSaving(false); }
+  };
+
+  const handlePromoteStudents = async () => {
+    setIsSaving(true);
+    try {
+      const promoted = students.filter(s =>
+        !failedStudents.has(s.id) && !tcStudents.has(s.id)
+      );
+      const rte = students.filter(s => rteStudents.has(s.id));
+
+      showToast(`${promoted.length} students promoted, ${rte.length} RTE marked, ${failedStudents.size} retained`);
+      setFailedStudents(new Set());
+      setRteStudents(new Set());
+      setTcStudents(new Set());
+      setView('CONFIG');
+      setTab('ACADEMIC');
+    } finally { setIsSaving(false); }
+  };
+
   const tabs = [
     { key: 'ACADEMIC' as Tab, label: 'Academic Year' },
     { key: 'CLASSES' as Tab, label: 'Classes' },
     { key: 'PROMOTION' as Tab, label: 'Promotion' },
   ];
 
+  // ─── CREATE ACADEMIC YEAR VIEW ─────────────────────────────────────────
+
+  if (view === 'CREATE_AY') return (
+    <div className="absolute inset-0 z-50 bg-slate-50 flex flex-col animate-in slide-in-from-right-8 duration-300">
+      <div className="bg-white border-b border-slate-100 px-4 pt-12 pb-4 sticky top-0 z-10 shadow-sm flex items-center gap-3">
+        <button onClick={() => setView('CONFIG')} className="p-2 -ml-2 bg-slate-100 rounded-full text-slate-600">
+          <ArrowLeft size={20} />
+        </button>
+        <h2 className="text-xl font-black text-slate-900 uppercase tracking-tight">New Academic Year</h2>
+      </div>
+
+      <div className="flex-1 overflow-y-auto p-4 pb-28 space-y-4">
+        <div className="bg-white rounded-2xl border border-slate-100 shadow-sm p-4 space-y-4">
+          <p className="text-[10px] font-black uppercase tracking-widest text-slate-400">Year Details</p>
+          <div>
+            <label className="block text-[10px] font-black uppercase tracking-widest text-slate-500 mb-1.5">Label (e.g., 2024-25) *</label>
+            <input value={newAY.label} onChange={e => setNewAY(s => ({ ...s, label: e.target.value }))}
+              placeholder="2024-25" className="w-full border border-slate-200 bg-slate-50 rounded-xl px-4 py-3 font-bold text-sm outline-none focus:border-slate-900 focus:bg-white" />
+          </div>
+          <div className="grid grid-cols-2 gap-3">
+            <div>
+              <label className="block text-[10px] font-black uppercase tracking-widest text-slate-500 mb-1.5">Start Date *</label>
+              <input type="date" value={newAY.startDate} onChange={e => setNewAY(s => ({ ...s, startDate: e.target.value }))}
+                className="w-full border border-slate-200 bg-slate-50 rounded-xl px-3 py-3 font-bold text-sm outline-none focus:border-slate-900" />
+            </div>
+            <div>
+              <label className="block text-[10px] font-black uppercase tracking-widest text-slate-500 mb-1.5">End Date *</label>
+              <input type="date" value={newAY.endDate} onChange={e => setNewAY(s => ({ ...s, endDate: e.target.value }))}
+                className="w-full border border-slate-200 bg-slate-50 rounded-xl px-3 py-3 font-bold text-sm outline-none focus:border-slate-900" />
+            </div>
+          </div>
+          <div>
+            <label className="block text-[10px] font-black uppercase tracking-widest text-slate-500 mb-1.5">Board</label>
+            <div className="flex flex-wrap gap-2">
+              {BOARDS.map(board => (
+                <button key={board} onClick={() => setNewAY(s => ({ ...s, board }))}
+                  className={`px-3 py-2 rounded-xl text-xs font-black transition-colors ${newAY.board === board ? 'bg-slate-900 text-white' : 'bg-slate-50 border border-slate-200 text-slate-600'}`}>
+                  {board}
+                </button>
+              ))}
+            </div>
+          </div>
+        </div>
+
+        <button onClick={handleCreateAY} disabled={isSaving}
+          className="w-full flex items-center justify-center gap-2 bg-slate-900 text-white font-black text-xs uppercase tracking-widest py-4 rounded-2xl active:scale-95 transition-transform shadow-lg disabled:opacity-60">
+          {isSaving ? 'Creating…' : <><Plus size={16} /> Create Academic Year</>}
+        </button>
+      </div>
+    </div>
+  );
+
+  // ─── PROMOTION VIEW ────────────────────────────────────────────────────
+
+  if (view === 'PROMOTION') return (
+    <div className="absolute inset-0 z-50 bg-slate-50 flex flex-col animate-in slide-in-from-right-8 duration-300">
+      <div className="bg-white border-b border-slate-100 px-4 pt-12 pb-4 sticky top-0 z-10 shadow-sm flex items-center gap-3">
+        <button onClick={() => setView('CONFIG')} className="p-2 -ml-2 bg-slate-100 rounded-full text-slate-600">
+          <ArrowLeft size={20} />
+        </button>
+        <h2 className="text-xl font-black text-slate-900 uppercase tracking-tight">Promotion Logic</h2>
+      </div>
+
+      <div className="flex-1 overflow-y-auto p-4 pb-28 space-y-4">
+        <div className="bg-white rounded-2xl border border-slate-100 shadow-sm p-4">
+          <p className="text-[10px] font-black uppercase tracking-widest text-slate-400 mb-3">System Rules</p>
+          {[
+            { label: 'Minimum Attendance for Promotion', val: '75%' },
+            { label: 'Minimum Pass Percentage', val: '33%' },
+            { label: 'Grace Marks', val: 'Up to 5 marks per subject' },
+            { label: 'Compartmental Policy', val: 'Max 2 subjects allowed' },
+          ].map(({ label, val }) => (
+            <div key={label} className="flex items-start justify-between gap-2 mb-3">
+              <span className="text-[11px] font-bold text-slate-500 flex-1">{label}</span>
+              <span className="text-[11px] font-black text-slate-900 text-right">{val}</span>
+            </div>
+          ))}
+        </div>
+
+        <div className="bg-white rounded-2xl border border-slate-100 shadow-sm p-4">
+          <p className="text-[10px] font-black uppercase tracking-widest text-slate-400 mb-4">Mark Student Status</p>
+          <div className="space-y-3">
+            {students.map(student => (
+              <div key={student.id} className="flex items-center justify-between p-3 bg-slate-50 rounded-xl">
+                <div>
+                  <div className="font-bold text-slate-800 text-sm">{student.name}</div>
+                  <div className="text-[10px] font-bold text-slate-400 mt-0.5">{student.className}-{student.section} · {student.attendancePercent}% attendance</div>
+                </div>
+                <div className="flex gap-1">
+                  <button onClick={() => {
+                    const newFailed = new Set(failedStudents);
+                    newFailed.has(student.id) ? newFailed.delete(student.id) : newFailed.add(student.id);
+                    setFailedStudents(newFailed);
+                  }}
+                    className={`px-2 py-1 rounded text-[9px] font-black uppercase ${failedStudents.has(student.id) ? 'bg-rose-600 text-white' : 'bg-slate-100 text-slate-600'}`}>
+                    Failed
+                  </button>
+                  <button onClick={() => {
+                    const newRte = new Set(rteStudents);
+                    newRte.has(student.id) ? newRte.delete(student.id) : newRte.add(student.id);
+                    setRteStudents(newRte);
+                  }}
+                    className={`px-2 py-1 rounded text-[9px] font-black uppercase ${rteStudents.has(student.id) ? 'bg-amber-600 text-white' : 'bg-slate-100 text-slate-600'}`}>
+                    RTE
+                  </button>
+                  <button onClick={() => {
+                    const newTc = new Set(tcStudents);
+                    newTc.has(student.id) ? newTc.delete(student.id) : newTc.add(student.id);
+                    setTcStudents(newTc);
+                  }}
+                    className={`px-2 py-1 rounded text-[9px] font-black uppercase ${tcStudents.has(student.id) ? 'bg-indigo-600 text-white' : 'bg-slate-100 text-slate-600'}`}>
+                    TC
+                  </button>
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+
+        <button onClick={handlePromoteStudents} disabled={isSaving}
+          className="w-full flex items-center justify-center gap-2 bg-emerald-600 text-white font-black text-xs uppercase tracking-widest py-4 rounded-2xl active:scale-95 transition-transform shadow-lg disabled:opacity-60">
+          {isSaving ? 'Processing…' : <><Save size={16} /> Confirm Promotions</>}
+        </button>
+      </div>
+    </div>
+  );
+
+  // ─── CONFIG VIEW (Default) ─────────────────────────────────────────────
+
   return (
     <div className="absolute inset-0 z-50 bg-slate-50 flex flex-col animate-in slide-in-from-right-8 duration-300">
       <div className="bg-white border-b border-slate-100 px-4 pt-12 pb-0 sticky top-0 z-10 shadow-sm">
         <div className="flex items-center gap-3 pb-3">
-          <button onClick={onBack} className="p-2 -ml-2 bg-slate-100 rounded-full text-slate-600"><ArrowLeft size={20} /></button>
+          <button onClick={onBack} className="p-2 -ml-2 bg-slate-100 rounded-full text-slate-600">
+            <ArrowLeft size={20} />
+          </button>
           <h2 className="text-xl font-black text-slate-900 uppercase tracking-tight">Settings</h2>
         </div>
         <div className="flex border-t border-slate-100">
@@ -107,7 +294,11 @@ export const SettingsManager: React.FC<Props> = ({ onBack }) => {
         {/* ACADEMIC YEAR TAB */}
         {tab === 'ACADEMIC' && activeConfig && (
           <>
-            {/* AY switcher */}
+            <button onClick={() => setView('CREATE_AY')}
+              className="w-full flex items-center justify-center gap-2 bg-indigo-600 text-white font-black text-xs uppercase tracking-widest py-3 rounded-2xl active:scale-95 transition-transform">
+              <Calendar size={14} /> Create New Academic Year
+            </button>
+
             <div className="bg-white rounded-2xl border border-slate-100 shadow-sm p-4 space-y-3">
               <p className="text-[10px] font-black uppercase tracking-widest text-slate-400">Active Academic Year</p>
               <div className="flex gap-2 overflow-x-auto pb-1 hide-scrollbar">
@@ -120,7 +311,6 @@ export const SettingsManager: React.FC<Props> = ({ onBack }) => {
               </div>
             </div>
 
-            {/* AY details */}
             <div className="bg-white rounded-2xl border border-slate-100 shadow-sm p-4 space-y-3">
               <p className="text-[10px] font-black uppercase tracking-widest text-slate-400">Year Details</p>
               {[
@@ -136,7 +326,6 @@ export const SettingsManager: React.FC<Props> = ({ onBack }) => {
               ))}
             </div>
 
-            {/* Board */}
             <div className="bg-white rounded-2xl border border-slate-100 shadow-sm p-4 space-y-3">
               <p className="text-[10px] font-black uppercase tracking-widest text-slate-400">Board Affiliation</p>
               <div className="flex flex-wrap gap-2">
@@ -210,25 +399,15 @@ export const SettingsManager: React.FC<Props> = ({ onBack }) => {
 
         {/* PROMOTION TAB */}
         {tab === 'PROMOTION' && (
-          <div className="space-y-4">
-            <div className="bg-white rounded-2xl border border-slate-100 shadow-sm p-4 space-y-3">
-              <p className="text-[10px] font-black uppercase tracking-widest text-slate-400">Promotion Logic</p>
-              {[
-                { label: 'Minimum Attendance for Promotion', val: '75%' },
-                { label: 'Minimum Pass Percentage', val: '33%' },
-                { label: 'Grace Marks', val: 'Up to 5 marks per subject' },
-                { label: 'Compartmental Policy', val: 'Max 2 subjects allowed' },
-              ].map(({ label, val }) => (
-                <div key={label} className="flex items-start justify-between gap-2">
-                  <span className="text-[11px] font-bold text-slate-500 flex-1">{label}</span>
-                  <span className="text-[11px] font-black text-slate-900 text-right">{val}</span>
-                </div>
-              ))}
-            </div>
+          <>
+            <button onClick={() => setView('PROMOTION')}
+              className="w-full flex items-center justify-center gap-2 bg-amber-600 text-white font-black text-xs uppercase tracking-widest py-3 rounded-2xl active:scale-95 transition-transform">
+              <Users size={14} /> Process Promotions
+            </button>
             <div className="bg-amber-50 border border-amber-200 rounded-2xl p-4">
-              <p className="text-xs font-black text-amber-700">Promotion rules are configured by the school board. Contact admin to modify these values.</p>
+              <p className="text-xs font-black text-amber-700">When a new academic year is created, use promotion workflow to mark failed, RTE, and transfer certificate students.</p>
             </div>
-          </div>
+          </>
         )}
       </div>
     </div>

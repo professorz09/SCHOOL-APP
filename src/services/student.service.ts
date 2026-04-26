@@ -1,6 +1,12 @@
 import { Student, StudentAcademicRecord, FeeRecord, CreateStudentInput } from '../types/principal.types';
 import { PaymentStatus } from '../config/constants';
 
+const EXT = {
+  religion: 'Hindu', caste: 'General', penNumber: '', birthCertNo: '',
+  tcNumber: '', rte: false, fatherOccupation: 'Business', fatherIncome: '5-10 LPA',
+  fatherEmail: '', motherOccupation: 'Homemaker', guardianName: '', guardianPhone: '', guardianRelation: '',
+};
+
 export const MOCK_STUDENTS: Student[] = [
   {
     id: 'stu1', name: 'Aakash Sharma', rollNo: '01', admissionNo: 'ADM-2024-001',
@@ -11,7 +17,8 @@ export const MOCK_STUDENTS: Student[] = [
     motherName: 'Sunita Sharma', motherPhone: '+91 98001 30001',
     academicYearId: 'ay1', admissionDate: '2021-04-01',
     feeStatus: PaymentStatus.PAID, totalFee: 45000, paidFee: 45000,
-    attendancePercent: 94.2, docs: [],
+    attendancePercent: 94.2, docs: [], ...EXT,
+    religion: 'Hindu', caste: 'Brahmin', fatherEmail: 'ramesh.s@gmail.com',
   },
   {
     id: 'stu2', name: 'Priya Gupta', rollNo: '02', admissionNo: 'ADM-2024-002',
@@ -22,7 +29,8 @@ export const MOCK_STUDENTS: Student[] = [
     motherName: 'Kavita Gupta', motherPhone: '+91 98001 30002',
     academicYearId: 'ay1', admissionDate: '2022-04-01',
     feeStatus: PaymentStatus.PENDING, totalFee: 45000, paidFee: 22500,
-    attendancePercent: 87.5, docs: [],
+    attendancePercent: 87.5, docs: [], ...EXT,
+    rte: true,
   },
   {
     id: 'stu3', name: 'Mohammed Raza', rollNo: '03', admissionNo: 'ADM-2024-003',
@@ -33,7 +41,8 @@ export const MOCK_STUDENTS: Student[] = [
     motherName: 'Nasreen Raza', motherPhone: '+91 98001 30003',
     academicYearId: 'ay1', admissionDate: '2020-04-01',
     feeStatus: PaymentStatus.OVERDUE, totalFee: 45000, paidFee: 0,
-    attendancePercent: 72.3, docs: [],
+    attendancePercent: 72.3, docs: [], ...EXT,
+    religion: 'Islam', caste: 'OBC',
   },
   {
     id: 'stu4', name: 'Ananya Verma', rollNo: '01', admissionNo: 'ADM-2024-004',
@@ -44,7 +53,7 @@ export const MOCK_STUDENTS: Student[] = [
     motherName: 'Meera Verma', motherPhone: '+91 98001 30004',
     academicYearId: 'ay1', admissionDate: '2023-04-01',
     feeStatus: PaymentStatus.PAID, totalFee: 40000, paidFee: 40000,
-    attendancePercent: 98.1, docs: [],
+    attendancePercent: 98.1, docs: [], ...EXT,
   },
   {
     id: 'stu5', name: 'Rohit Mishra', rollNo: '04', admissionNo: 'ADM-2024-005',
@@ -55,7 +64,18 @@ export const MOCK_STUDENTS: Student[] = [
     motherName: 'Anita Mishra', motherPhone: '+91 98001 30005',
     academicYearId: 'ay1', admissionDate: '2021-06-15',
     feeStatus: PaymentStatus.PAID, totalFee: 45000, paidFee: 45000,
-    attendancePercent: 89.0, docs: [],
+    attendancePercent: 89.0, docs: [], ...EXT,
+  },
+  {
+    id: 'stu6', name: 'Divya Singh', rollNo: '01', admissionNo: 'ADM-2024-006',
+    className: 'Class 9', section: 'B', dob: '2009-02-14', gender: 'FEMALE',
+    bloodGroup: 'A-', aadhaarNo: '7890 1234 5678', phone: '+91 98001 10006',
+    email: 'divya@student.edu.in', address: '33, Saket, New Delhi 110017',
+    photo: '', fatherName: 'Ajay Singh', fatherPhone: '+91 98001 20006',
+    motherName: 'Rekha Singh', motherPhone: '+91 98001 30006',
+    academicYearId: 'ay1', admissionDate: '2023-04-01',
+    feeStatus: PaymentStatus.PAID, totalFee: 40000, paidFee: 40000,
+    attendancePercent: 95.0, docs: [], ...EXT,
   },
 ];
 
@@ -137,6 +157,9 @@ export const studentService = {
 
   async create(input: CreateStudentInput): Promise<Student> {
     const student: Student = {
+      religion: '', caste: '', penNumber: '', birthCertNo: '', tcNumber: '', rte: false,
+      fatherOccupation: '', fatherIncome: '', fatherEmail: '',
+      motherOccupation: '', guardianName: '', guardianPhone: '', guardianRelation: '',
       ...input,
       id: `stu${Date.now()}`,
       feeStatus: PaymentStatus.PENDING,

@@ -26,10 +26,25 @@ export interface Student {
   email: string;
   address: string;
   photo: string;
+  // Extended profile fields
+  religion: string;
+  caste: string;
+  penNumber: string;
+  birthCertNo: string;
+  tcNumber: string;
+  rte: boolean;
+  // Parent / Guardian details
   fatherName: string;
   fatherPhone: string;
+  fatherOccupation: string;
+  fatherIncome: string;
+  fatherEmail: string;
   motherName: string;
   motherPhone: string;
+  motherOccupation: string;
+  guardianName: string;
+  guardianPhone: string;
+  guardianRelation: string;
   academicYearId: string;
   admissionDate: string;
   feeStatus: PaymentStatus;
@@ -201,3 +216,12 @@ export interface ClassConfig {
 }
 
 export type CreateStudentInput = Omit<Student, 'id' | 'docs' | 'attendancePercent' | 'feeStatus' | 'paidFee'>;
+
+export interface ClassPermission {
+  className: string;
+  section: string;
+  teacherId: string;
+  teacherName: string;
+  canMarkAttendance: boolean;
+  canUploadResults: boolean;
+}
