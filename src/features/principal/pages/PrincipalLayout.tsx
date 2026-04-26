@@ -13,6 +13,7 @@ import { TimetableManager } from '../components/TimetableManager';
 import { FeeLedger } from '../components/FeeLedger';
 import { SalaryLedger } from '../components/SalaryLedger';
 import { YearClosingWizard } from '../components/YearClosingWizard';
+import { StaffAttendanceManager } from '../components/StaffAttendanceManager';
 
 export type PrincipalView =
   | 'DASHBOARD'
@@ -28,7 +29,8 @@ export type PrincipalView =
   | 'TIMETABLE'
   | 'FEE_LEDGER'
   | 'SALARY_LEDGER'
-  | 'YEAR_CLOSING';
+  | 'YEAR_CLOSING'
+  | 'STAFF_ATTENDANCE';
 
 export const PrincipalLayout: React.FC = () => {
   const [view, setView] = useState<PrincipalView>('DASHBOARD');
@@ -48,7 +50,8 @@ export const PrincipalLayout: React.FC = () => {
   if (view === 'TIMETABLE')     return <TimetableManager       onBack={goBack} />;
   if (view === 'FEE_LEDGER')    return <FeeLedger              onBack={goBack} />;
   if (view === 'SALARY_LEDGER') return <SalaryLedger           onBack={goBack} />;
-  if (view === 'YEAR_CLOSING')  return <YearClosingWizard      onBack={goBack} />;
+  if (view === 'YEAR_CLOSING')     return <YearClosingWizard      onBack={goBack} />;
+  if (view === 'STAFF_ATTENDANCE') return <StaffAttendanceManager onBack={goBack} />;
 
   return <PrincipalDashboard onNavigate={goTo} />;
 };

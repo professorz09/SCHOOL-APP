@@ -2,7 +2,7 @@ import React, { useEffect, useState } from 'react';
 import {
   Users, UserCheck, BookOpen, Receipt, Library, Bus, CircleAlert,
   Wallet, Bell, CheckSquare, Settings, TrendingUp, IndianRupee, Calendar,
-  CalendarDays, CreditCard, Banknote, Lock,
+  CalendarDays, CreditCard, Banknote, Lock, ClipboardCheck,
 } from 'lucide-react';
 import { studentService } from '../../../services/student.service';
 import { staffService } from '../../../services/staff.service';
@@ -47,6 +47,7 @@ export const PrincipalDashboard: React.FC<Props> = ({ onNavigate }) => {
   const modules = [
     { icon: Users,       label: 'Students',    view: 'STUDENTS'      as PrincipalView, color: 'bg-indigo-50 text-indigo-600',  badge: stats.totalStudents },
     { icon: UserCheck,   label: 'Staff',       view: 'STAFF'         as PrincipalView, color: 'bg-blue-50 text-blue-600',      badge: stats.totalStaff },
+    { icon: ClipboardCheck, label: 'Staff Attend',view: 'STAFF_ATTENDANCE' as PrincipalView, color: 'bg-cyan-50 text-cyan-600', badge: null },
     { icon: CalendarDays,label: 'Timetable',   view: 'TIMETABLE'     as PrincipalView, color: 'bg-sky-50 text-sky-600',        badge: null },
     { icon: CreditCard,  label: 'Fee Ledger',  view: 'FEE_LEDGER'    as PrincipalView, color: 'bg-emerald-50 text-emerald-600',badge: null },
     { icon: Banknote,    label: 'Salary',      view: 'SALARY_LEDGER' as PrincipalView, color: 'bg-teal-50 text-teal-600',      badge: null },
