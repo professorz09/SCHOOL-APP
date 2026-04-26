@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useMemo } from 'react';
 import { TimetableView } from '../components/TimetableView';
 import { ResultsView } from '../components/ResultsView';
 import { FeesView } from '../components/FeesView';
@@ -7,14 +7,38 @@ import { StudentNoticesView } from '../components/StudentNoticesView';
 import { StudentComplaintsView } from '../components/StudentComplaintsView';
 import {
   Calendar, Trophy, CreditCard, Bus, Bell, CircleAlert,
-  TrendingUp, BookOpen, CheckCircle2,
+  TrendingUp, BookOpen, CheckCircle2, Clock, MapPin,
 } from 'lucide-react';
+import { timetableService, PERIOD_SLOTS } from '../../../services/timetable.service';
+
+const MY_CLASS = '10-A';
+
+const getCurrentPeriod = () => {
+  const now = new Date();
+  const nowMins = now.getHours() * 60 + now.getMinutes();
+  const days = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
+  const todayName = days[now.getDay()];
+  const dayToUse = todayName === 'Sunday' ? 'Monday' : todayName;
+  const weeklyMap = timetableService.getClassWeeklyMap(MY_CLASS);
+  const todayEntries = (weeklyMap as Record<string, typeof weeklyMap[keyof typeof weeklyMap]>)[dayToUse] ?? [];
+  for (const entry of todayEntries) {
+    const slot = PERIOD_SLOTS.find(s => s.slotId === entry.slotId);
+    if (!slot) continue;
+    const [sh, sm] = slot.startTime.split(':').map(Number);
+    const [eh, em] = slot.endTime.split(':').map(Number);
+    if (nowMins >= sh * 60 + sm && nowMins < eh * 60 + em) {
+      return { entry, slot };
+    }
+  }
+  return null;
+};
 
 type StudentView = 'DASHBOARD' | 'TIMETABLE' | 'RESULTS' | 'FEES' | 'TRANSPORT' | 'NOTICES' | 'COMPLAINTS';
 
 export const StudentLayout: React.FC = () => {
   const [view, setView] = useState<StudentView>('DASHBOARD');
   const goBack = () => setView('DASHBOARD');
+  const currentPeriod = useMemo(() => getCurrentPeriod(), []);
 
   if (view === 'TIMETABLE')   return <TimetableView        onBack={goBack} />;
   if (view === 'RESULTS')     return <ResultsView          onBack={goBack} />;
@@ -55,20 +79,37 @@ export const StudentLayout: React.FC = () => {
         ))}
       </div>
 
-      {/* Today's first period highlight */}
-      <div className="bg-slate-900 rounded-2xl p-4 text-white">
-        <p className="text-[10px] font-black uppercase tracking-widest text-slate-400 mb-2">Now in Progress</p>
-        <div className="flex items-center justify-between">
-          <div>
-            <div className="font-black text-xl">Mathematics</div>
-            <div className="text-[11px] font-bold text-slate-400 mt-0.5">Aarti Desai · Room 12</div>
-          </div>
-          <div className="text-right">
-            <div className="text-sm font-black text-blue-400">10:15 – 11:00</div>
-            <div className="text-[9px] font-black text-emerald-400 bg-emerald-500/20 px-2 py-0.5 rounded-full mt-1 uppercase">Live</div>
-          </div>
+      {/* Current period – live from timetable service */}
+      <button onClick={() => setView('TIMETABLE')} className="w-full text-left active:scale-[0.98] transition-transform">
+        <div className="bg-slate-900 rounded-2xl p-4 text-white">
+          <p className="text-[10px] font-black uppercase tracking-widest text-slate-400 mb-2">Now in Progress</p>
+          {currentPeriod ? (
+            <div className="flex items-center justify-between">
+              <div>
+                <div className="font-black text-xl">{currentPeriod.entry.subject}</div>
+                <div className="flex items-center gap-2 text-[11px] font-bold text-slate-400 mt-0.5">
+                  <span>{currentPeriod.entry.teacherName}</span>
+                  {currentPeriod.entry.room && <span>· {currentPeriod.entry.room}</span>}
+                </div>
+              </div>
+              <div className="text-right">
+                <div className="text-sm font-black text-blue-400">
+                  {currentPeriod.slot.startTime} – {currentPeriod.slot.endTime}
+                </div>
+                <div className="text-[9px] font-black text-emerald-400 bg-emerald-500/20 px-2 py-0.5 rounded-full mt-1 uppercase">Live</div>
+              </div>
+            </div>
+          ) : (
+            <div className="flex items-center justify-between">
+              <div>
+                <div className="font-black text-lg text-slate-400">No class right now</div>
+                <div className="text-[11px] font-bold text-slate-500 mt-0.5">Tap to see full timetable</div>
+              </div>
+              <Calendar size={24} className="text-slate-600" />
+            </div>
+          )}
         </div>
-      </div>
+      </button>
 
       {/* Module grid */}
       <p className="text-[10px] font-black uppercase tracking-widest text-slate-400 -mb-1">My Modules</p>

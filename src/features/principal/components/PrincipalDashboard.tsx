@@ -2,17 +2,18 @@ import React, { useEffect, useState } from 'react';
 import {
   Users, UserCheck, BookOpen, Receipt, Library, Bus, CircleAlert,
   Wallet, Bell, CheckSquare, Settings, TrendingUp, IndianRupee, Calendar,
+  CalendarDays, CreditCard, Banknote, Lock,
 } from 'lucide-react';
 import { studentService } from '../../../services/student.service';
 import { staffService } from '../../../services/staff.service';
 import { principalService } from '../../../services/principal.service';
 import { PaymentStatus } from '../../../config/constants';
-
-type PrincipalView = 'DASHBOARD' | 'STUDENTS' | 'STAFF' | 'ASSETS' | 'COMPLAINTS' | 'EXPENSES' | 'NOTICES' | 'APPROVALS' | 'SETTINGS' | 'CLASS_MGMT';
+import { PrincipalView } from '../pages/PrincipalLayout';
 
 interface Props {
   onNavigate: (view: PrincipalView) => void;
 }
+
 
 export const PrincipalDashboard: React.FC<Props> = ({ onNavigate }) => {
   const [stats, setStats] = useState({
@@ -44,15 +45,19 @@ export const PrincipalDashboard: React.FC<Props> = ({ onNavigate }) => {
   const feePercent = stats.totalFees > 0 ? Math.round((stats.paidFees / stats.totalFees) * 100) : 0;
 
   const modules = [
-    { icon: Users, label: 'Students', view: 'STUDENTS' as PrincipalView, color: 'bg-indigo-50 text-indigo-600', badge: stats.totalStudents },
-    { icon: UserCheck, label: 'Staff', view: 'STAFF' as PrincipalView, color: 'bg-blue-50 text-blue-600', badge: stats.totalStaff },
-    { icon: Calendar, label: 'Class Mgmt', view: 'CLASS_MGMT' as PrincipalView, color: 'bg-violet-50 text-violet-600', badge: null },
-    { icon: Library, label: 'Assets', view: 'ASSETS' as PrincipalView, color: 'bg-amber-50 text-amber-600', badge: null },
-    { icon: Receipt, label: 'Expenses', view: 'EXPENSES' as PrincipalView, color: 'bg-rose-50 text-rose-600', badge: null },
-    { icon: Bell, label: 'Notices', view: 'NOTICES' as PrincipalView, color: 'bg-violet-50 text-violet-600', badge: null },
-    { icon: CircleAlert, label: 'Complaints', view: 'COMPLAINTS' as PrincipalView, color: 'bg-orange-50 text-orange-600', badge: stats.openComplaints || null },
-    { icon: CheckSquare, label: 'Approvals', view: 'APPROVALS' as PrincipalView, color: 'bg-emerald-50 text-emerald-600', badge: stats.pendingApprovals || null },
-    { icon: Settings, label: 'Settings', view: 'SETTINGS' as PrincipalView, color: 'bg-slate-100 text-slate-600', badge: null },
+    { icon: Users,       label: 'Students',    view: 'STUDENTS'      as PrincipalView, color: 'bg-indigo-50 text-indigo-600',  badge: stats.totalStudents },
+    { icon: UserCheck,   label: 'Staff',       view: 'STAFF'         as PrincipalView, color: 'bg-blue-50 text-blue-600',      badge: stats.totalStaff },
+    { icon: CalendarDays,label: 'Timetable',   view: 'TIMETABLE'     as PrincipalView, color: 'bg-sky-50 text-sky-600',        badge: null },
+    { icon: CreditCard,  label: 'Fee Ledger',  view: 'FEE_LEDGER'    as PrincipalView, color: 'bg-emerald-50 text-emerald-600',badge: null },
+    { icon: Banknote,    label: 'Salary',      view: 'SALARY_LEDGER' as PrincipalView, color: 'bg-teal-50 text-teal-600',      badge: null },
+    { icon: Calendar,    label: 'Class Mgmt',  view: 'CLASS_MGMT'    as PrincipalView, color: 'bg-violet-50 text-violet-600',  badge: null },
+    { icon: Library,     label: 'Assets',      view: 'ASSETS'        as PrincipalView, color: 'bg-amber-50 text-amber-600',    badge: null },
+    { icon: Receipt,     label: 'Expenses',    view: 'EXPENSES'      as PrincipalView, color: 'bg-rose-50 text-rose-600',      badge: null },
+    { icon: Bell,        label: 'Notices',     view: 'NOTICES'       as PrincipalView, color: 'bg-violet-50 text-violet-600',  badge: null },
+    { icon: CircleAlert, label: 'Complaints',  view: 'COMPLAINTS'    as PrincipalView, color: 'bg-orange-50 text-orange-600',  badge: stats.openComplaints || null },
+    { icon: CheckSquare, label: 'Approvals',   view: 'APPROVALS'     as PrincipalView, color: 'bg-emerald-50 text-emerald-600',badge: stats.pendingApprovals || null },
+    { icon: Lock,        label: 'Year Close',  view: 'YEAR_CLOSING'  as PrincipalView, color: 'bg-slate-100 text-slate-600',   badge: null },
+    { icon: Settings,    label: 'Settings',    view: 'SETTINGS'      as PrincipalView, color: 'bg-slate-100 text-slate-600',   badge: null },
   ];
 
   return (

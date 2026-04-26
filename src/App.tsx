@@ -5,7 +5,7 @@ import { PrincipalLayout } from './features/principal';
 import { SuperAdminLayout } from './features/super-admin';
 import { TeacherLayout } from './features/teacher';
 import { StudentLayout } from './features/student';
-import { DriverDashboard } from './views/DriverDashboard';
+import { DriverLayout } from './features/driver/DriverLayout';
 import { PaymentsView } from './views/PaymentsView';
 import { AcademicYearManager } from './views/AcademicYearManager';
 import { Settings2 } from 'lucide-react';
@@ -22,7 +22,7 @@ export default function App() {
       case 'PRINCIPAL': return <PrincipalLayout />;
       case 'TEACHER': return <TeacherLayout />;
       case 'STUDENT': return <StudentLayout />;
-      case 'DRIVER': return <DriverDashboard />;
+      case 'DRIVER': return <DriverLayout />;
       default: return null;
     }
   };

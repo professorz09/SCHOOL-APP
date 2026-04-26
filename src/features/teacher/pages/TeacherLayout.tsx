@@ -1,20 +1,34 @@
-import React, { useState } from 'react';
+import React, { useState, useMemo } from 'react';
 import {
   Users, FileCheck2, ClipboardList, ScrollText, CircleAlert,
-  TrendingUp, BookOpen, Calendar, IndianRupee, Bell,
+  TrendingUp, BookOpen, Calendar, IndianRupee, Bell, CalendarDays,
+  Clock, MapPin,
 } from 'lucide-react';
+import { timetableService } from '../../../services/timetable.service';
 import { AttendanceManager } from '../components/AttendanceManager';
 import { TestsManager } from '../components/TestsManager';
 import { HomeworkManager } from '../components/HomeworkManager';
 import { ExamPaperGeneratorView } from '../components/ExamPaperGenerator';
 import { TeacherComplaintsView } from '../components/TeacherComplaints';
 import { TeacherNoticesView } from '../components/TeacherNoticesView';
+import { TeacherTimetableView } from '../components/TeacherTimetableView';
 
-type TeacherView = 'DASHBOARD' | 'ATTENDANCE' | 'TESTS' | 'HOMEWORK' | 'EXAM_GEN' | 'COMPLAINTS' | 'NOTICES';
+type TeacherView = 'DASHBOARD' | 'ATTENDANCE' | 'TESTS' | 'HOMEWORK' | 'EXAM_GEN' | 'COMPLAINTS' | 'NOTICES' | 'TIMETABLE';
+
+const MY_TEACHER_ID = 'st1';
+
+const isCurrentPeriod = (startTime: string, endTime: string): boolean => {
+  const now = new Date();
+  const [sh, sm] = startTime.split(':').map(Number);
+  const [eh, em] = endTime.split(':').map(Number);
+  const nowMins = now.getHours() * 60 + now.getMinutes();
+  return nowMins >= sh * 60 + sm && nowMins < eh * 60 + em;
+};
 
 export const TeacherLayout: React.FC = () => {
   const [view, setView] = useState<TeacherView>('DASHBOARD');
   const goBack = () => setView('DASHBOARD');
+  const todayClasses = useMemo(() => timetableService.getTodayForTeacher(MY_TEACHER_ID), []);
 
   if (view === 'ATTENDANCE')  return <AttendanceManager      onBack={goBack} />;
   if (view === 'TESTS')       return <TestsManager           onBack={goBack} />;
@@ -22,14 +36,16 @@ export const TeacherLayout: React.FC = () => {
   if (view === 'EXAM_GEN')    return <ExamPaperGeneratorView onBack={goBack} />;
   if (view === 'COMPLAINTS')  return <TeacherComplaintsView  onBack={goBack} />;
   if (view === 'NOTICES')     return <TeacherNoticesView     onBack={goBack} />;
+  if (view === 'TIMETABLE')   return <TeacherTimetableView   onBack={goBack} />;
 
   const modules = [
-    { icon: FileCheck2, label: 'Attendance', view: 'ATTENDANCE' as TeacherView, color: 'bg-blue-50 text-blue-600', desc: 'Mark class attendance' },
-    { icon: ClipboardList, label: 'Tests', view: 'TESTS' as TeacherView, color: 'bg-indigo-50 text-indigo-600', desc: 'Schedule & manage tests' },
-    { icon: BookOpen, label: 'Homework', view: 'HOMEWORK' as TeacherView, color: 'bg-purple-50 text-purple-600', desc: 'Assign & track homework' },
-    { icon: Bell, label: 'Notices', view: 'NOTICES' as TeacherView, color: 'bg-violet-50 text-violet-600', desc: 'Send notices to your classes' },
-    { icon: ScrollText, label: 'AI Exam Gen', view: 'EXAM_GEN' as TeacherView, color: 'bg-amber-50 text-amber-600', desc: 'Generate with Gemini AI' },
-    { icon: CircleAlert, label: 'Complaints', view: 'COMPLAINTS' as TeacherView, color: 'bg-rose-50 text-rose-600', desc: 'Report to principal' },
+    { icon: CalendarDays,   label: 'My Timetable', view: 'TIMETABLE'   as TeacherView, color: 'bg-sky-50 text-sky-600',        desc: 'Weekly schedule & periods' },
+    { icon: FileCheck2,     label: 'Attendance',   view: 'ATTENDANCE'  as TeacherView, color: 'bg-blue-50 text-blue-600',      desc: 'Mark class attendance' },
+    { icon: ClipboardList,  label: 'Tests',        view: 'TESTS'       as TeacherView, color: 'bg-indigo-50 text-indigo-600',  desc: 'Schedule & manage tests' },
+    { icon: BookOpen,       label: 'Homework',     view: 'HOMEWORK'    as TeacherView, color: 'bg-purple-50 text-purple-600',  desc: 'Assign & track homework' },
+    { icon: Bell,           label: 'Notices',      view: 'NOTICES'     as TeacherView, color: 'bg-violet-50 text-violet-600',  desc: 'Send notices to your classes' },
+    { icon: ScrollText,     label: 'AI Exam Gen',  view: 'EXAM_GEN'    as TeacherView, color: 'bg-amber-50 text-amber-600',    desc: 'Generate with Gemini AI' },
+    { icon: CircleAlert,    label: 'Complaints',   view: 'COMPLAINTS'  as TeacherView, color: 'bg-rose-50 text-rose-600',      desc: 'Report to principal' },
   ];
 
   return (
@@ -44,7 +60,7 @@ export const TeacherLayout: React.FC = () => {
       {/* Today's summary */}
       <div className="grid grid-cols-3 gap-2">
         {[
-          { label: "Today's Classes", val: '3', color: 'text-blue-600' },
+          { label: "Today's Classes", val: String(todayClasses.length), color: 'text-blue-600' },
           { label: 'Total Students', val: '120', color: 'text-slate-900' },
           { label: 'Avg Attendance', val: '92%', color: 'text-emerald-600' },
         ].map(({ label, val, color }) => (
@@ -55,26 +71,42 @@ export const TeacherLayout: React.FC = () => {
         ))}
       </div>
 
-      {/* Today's timetable */}
+      {/* Today's timetable – live from timetable service */}
       <div className="bg-white rounded-2xl border border-slate-100 shadow-sm p-4">
-        <p className="text-[10px] font-black uppercase tracking-widest text-slate-400 mb-3">Today's Classes</p>
-        <div className="space-y-2.5">
-          {[
-            { time: '08:30–09:15', class: 'Class 10-A', subject: 'Mathematics', room: 'Room 12', status: 'done' },
-            { time: '10:15–11:00', class: 'Class 10-B', subject: 'Mathematics', room: 'Room 8', status: 'live' },
-            { time: '11:00–11:45', class: 'Class 9-A', subject: 'Mathematics', room: 'Room 15', status: 'upcoming' },
-          ].map(({ time, class: cls, subject, room, status }) => (
-            <div key={time} className={`flex items-center gap-3 p-3 rounded-xl ${status === 'live' ? 'bg-blue-50 border border-blue-200' : 'bg-slate-50'}`}>
-              <div className={`w-2 h-10 rounded-full shrink-0 ${status === 'done' ? 'bg-slate-200' : status === 'live' ? 'bg-blue-500' : 'bg-slate-300'}`} />
-              <div className="flex-1 min-w-0">
-                <div className="font-extrabold text-slate-900 text-xs">{cls} · {subject}</div>
-                <div className="text-[10px] font-bold text-slate-400 mt-0.5">{time} · {room}</div>
-              </div>
-              {status === 'live' && <span className="text-[9px] font-black bg-blue-500 text-white px-2 py-0.5 rounded-full uppercase animate-pulse">Live</span>}
-              {status === 'done' && <span className="text-[9px] font-black text-slate-400 uppercase">Done</span>}
-            </div>
-          ))}
+        <div className="flex items-center justify-between mb-3">
+          <p className="text-[10px] font-black uppercase tracking-widest text-slate-400">Today's Schedule</p>
+          <button onClick={() => setView('TIMETABLE')}
+            className="text-[9px] font-black text-blue-500 uppercase tracking-widest">
+            Full Week →
+          </button>
         </div>
+        {todayClasses.length === 0 ? (
+          <p className="text-xs font-bold text-slate-400 text-center py-4">No classes today</p>
+        ) : (
+          <div className="space-y-2.5">
+            {todayClasses.map(entry => {
+              const live = isCurrentPeriod(entry.slot.startTime, entry.slot.endTime);
+              const now = new Date();
+              const [eh, em] = entry.slot.endTime.split(':').map(Number);
+              const done = now.getHours() * 60 + now.getMinutes() > eh * 60 + em;
+              return (
+                <div key={entry.id}
+                  className={`flex items-center gap-3 p-3 rounded-xl ${live ? 'bg-blue-50 border border-blue-200' : 'bg-slate-50'}`}>
+                  <div className={`w-2 h-10 rounded-full shrink-0 ${done ? 'bg-slate-200' : live ? 'bg-blue-500' : 'bg-slate-300'}`} />
+                  <div className="flex-1 min-w-0">
+                    <div className="font-extrabold text-slate-900 text-xs">Class {entry.classId} · {entry.subject}</div>
+                    <div className="flex items-center gap-2 text-[10px] font-bold text-slate-400 mt-0.5">
+                      <Clock size={9} /> {entry.slot.startTime}–{entry.slot.endTime}
+                      {entry.room && <><MapPin size={9} /> {entry.room}</>}
+                    </div>
+                  </div>
+                  {live && <span className="text-[9px] font-black bg-blue-500 text-white px-2 py-0.5 rounded-full uppercase animate-pulse">Live</span>}
+                  {done && <span className="text-[9px] font-black text-slate-400 uppercase">Done</span>}
+                </div>
+              );
+            })}
+          </div>
+        )}
       </div>
 
       {/* Module grid */}
