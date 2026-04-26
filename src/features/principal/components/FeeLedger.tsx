@@ -1,6 +1,7 @@
-import React, { useState } from 'react';
-import { ArrowLeft, IndianRupee, CheckCircle2, AlertTriangle, Clock, X, Layers, ShieldCheck } from 'lucide-react';
+import React, { useState, useEffect } from 'react';
+import { ArrowLeft, IndianRupee, CheckCircle2, AlertTriangle, Clock, X, ShieldCheck, Search, Filter } from 'lucide-react';
 import { feeService, FeeInstallment, FeeStatus, FeeType } from '../../../services/fee.service';
+import { studentService } from '../../../services/student.service';
 import { useUIStore } from '../../../store/uiStore';
 
 interface StudentFeeProfile {
@@ -11,12 +12,6 @@ interface StudentFeeProfile {
   installments: FeeInstallment[];
   isRte: boolean;
 }
-
-const MOCK_STUDENTS: StudentFeeProfile[] = [
-  feeService.getStudentFeeProfile('student1', 'Aakash Sharma', '10-A', 'ADM-001', false),
-  feeService.getStudentFeeProfile('student2', 'Priya Mehta', '10-A', 'ADM-002', true),
-  feeService.getStudentFeeProfile('student3', 'Rahul Verma', '9-A', 'ADM-003', false),
-];
 
 const statusColor: Record<FeeStatus, string> = {
   PAID:    'bg-emerald-50 text-emerald-700 border-emerald-200',
@@ -59,7 +54,8 @@ interface Props { onBack: () => void; }
 
 export const FeeLedger: React.FC<Props> = ({ onBack }) => {
   const { showToast } = useUIStore();
-  const [students, setStudents] = useState<StudentFeeProfile[]>(MOCK_STUDENTS);
+  const [students, setStudents] = useState<StudentFeeProfile[]>([]);
+  const [loading, setLoading] = useState(true);
   const [selected, setSelected] = useState<StudentFeeProfile | null>(null);
   const [mainView, setMainView] = useState<'LIST' | 'DETAIL' | 'GOVT'>('LIST');
   const [payModal, setPayModal] = useState<boolean>(false);
@@ -72,11 +68,29 @@ export const FeeLedger: React.FC<Props> = ({ onBack }) => {
   const [govtRefNo, setGovtRefNo] = useState('');
   const [govtNote, setGovtNote] = useState('');
   const [search, setSearch] = useState('');
+  const [showOnlyDue, setShowOnlyDue] = useState(false);
 
-  const filtered = students.filter(s =>
-    s.name.toLowerCase().includes(search.toLowerCase()) ||
-    s.admissionNo.toLowerCase().includes(search.toLowerCase())
-  );
+  useEffect(() => {
+    studentService.getAll().then(all => {
+      const profiles = all.map(s =>
+        feeService.getStudentFeeProfile(s.id, s.name, `${s.className}-${s.section}`, s.admissionNo, s.rte)
+      );
+      setStudents(profiles);
+      setLoading(false);
+    });
+  }, []);
+
+  const filtered = students.filter(s => {
+    const matchSearch = s.name.toLowerCase().includes(search.toLowerCase()) ||
+      s.admissionNo.toLowerCase().includes(search.toLowerCase()) ||
+      s.className.toLowerCase().includes(search.toLowerCase());
+    if (showOnlyDue) {
+      const parentDue = feeService.getParentDueSummary(s.studentId).total;
+      const govtDue = s.isRte ? feeService.getGovernmentDueSummary(s.studentId).total : 0;
+      return matchSearch && (parentDue > 0 || govtDue > 0);
+    }
+    return matchSearch;
+  });
 
   const updateStudent = (updated: StudentFeeProfile) => {
     setStudents(prev => prev.map(s => s.studentId === updated.studentId ? updated : s));
@@ -125,7 +139,7 @@ export const FeeLedger: React.FC<Props> = ({ onBack }) => {
       return;
     }
     if (feeService.recordGovernmentPayment(rteStudents, amount, govtRefNo, govtNote)) {
-      const updated = MOCK_STUDENTS.map(s =>
+      const updated = students.map(s =>
         feeService.getStudentFeeProfile(s.studentId, s.name, s.className, s.admissionNo, s.isRte)
       );
       setStudents(updated);
@@ -344,72 +358,170 @@ export const FeeLedger: React.FC<Props> = ({ onBack }) => {
     );
   }
 
+  if (loading) return (
+    <div className="absolute inset-0 z-50 bg-slate-50 flex items-center justify-center">
+      <div className="w-8 h-8 border-2 border-slate-200 border-t-blue-600 rounded-full animate-spin" />
+    </div>
+  );
+
+  const dueStudents = students.filter(s => {
+    const p = feeService.getParentDueSummary(s.studentId).total;
+    const g = s.isRte ? feeService.getGovernmentDueSummary(s.studentId).total : 0;
+    return p > 0 || g > 0;
+  });
+  const totalParentDue = dueStudents.reduce((acc, s) => acc + feeService.getParentDueSummary(s.studentId).total, 0);
+  const totalGovtDue = dueStudents.filter(s => s.isRte).reduce((acc, s) => acc + feeService.getGovernmentDueSummary(s.studentId).total, 0);
+
   return (
     <div className="absolute inset-0 z-50 bg-slate-50 flex flex-col animate-in slide-in-from-right-8 duration-300">
-      <div className="bg-white border-b border-slate-100 px-4 pt-12 pb-4 shadow-sm">
-        <div className="flex items-center gap-3 mb-4">
+      <div className="bg-white border-b border-slate-100 px-4 pt-12 pb-3 shadow-sm">
+        <div className="flex items-center gap-3 mb-3">
           <button onClick={onBack} className="p-2 -ml-2 bg-slate-100 rounded-full">
             <ArrowLeft size={20} className="text-slate-600" />
           </button>
-          <div>
+          <div className="flex-1">
             <h2 className="text-xl font-black text-slate-900 uppercase tracking-tight">Fee Ledger</h2>
-            <p className="text-[10px] font-bold text-slate-400">Tuition · Transport · Allocation</p>
+            <p className="text-[10px] font-bold text-slate-400">{students.length} students · {dueStudents.length} with dues</p>
           </div>
         </div>
-        <input value={search} onChange={e => setSearch(e.target.value)}
-          placeholder="Search by name or admission no..."
-          className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-2 text-sm font-bold outline-none focus:border-blue-500" />
+        <div className="flex gap-2">
+          <div className="relative flex-1">
+            <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
+            <input value={search} onChange={e => setSearch(e.target.value)}
+              placeholder="Search by name, class, admission no..."
+              className="w-full bg-slate-50 border border-slate-200 rounded-xl pl-9 pr-4 py-2.5 text-sm font-bold outline-none focus:border-blue-500" />
+          </div>
+          <button onClick={() => setShowOnlyDue(d => !d)}
+            className={`flex items-center gap-1.5 px-3 py-2.5 rounded-xl text-[10px] font-black transition-colors border ${showOnlyDue ? 'bg-rose-600 text-white border-rose-600' : 'bg-white text-slate-500 border-slate-200'}`}>
+            <Filter size={12} /> Due Only
+          </button>
+        </div>
       </div>
 
-      <div className="flex-1 overflow-y-auto p-4 pb-28 space-y-2">
-        {filtered.map(student => {
-          const parentSummary = feeService.getParentDueSummary(student.studentId);
-          const govtSummary = student.isRte ? feeService.getGovernmentDueSummary(student.studentId) : { tuition: 0, total: 0 };
-          return (
-            <button key={student.studentId} onClick={() => { setSelected(student); setMainView('DETAIL'); }}
-              className="w-full text-left bg-white rounded-2xl border border-slate-100 shadow-sm p-4 active:scale-95 transition-transform">
-              <div className="flex items-start justify-between mb-2">
-                <div className="flex-1">
-                  <div className="flex items-center gap-2">
-                    <div className="font-extrabold text-slate-900">{student.name}</div>
-                    {student.isRte && <ShieldCheck size={12} className="text-emerald-600" />}
-                  </div>
-                  <div className="text-[10px] font-bold text-slate-400 mt-0.5">{student.className} · {student.admissionNo}</div>
-                </div>
-                <div className="text-right">
-                  <div className="font-black text-slate-900">₹{parentSummary.total.toLocaleString()}</div>
-                  <div className="text-[9px] font-bold text-rose-600">Parent Due</div>
-                  {student.isRte && govtSummary.total > 0 && (
-                    <>
-                      <div className="font-black text-slate-900 text-sm mt-1">₹{govtSummary.total.toLocaleString()}</div>
-                      <div className="text-[9px] font-bold text-emerald-600">Govt Due</div>
-                    </>
-                  )}
-                </div>
+      <div className="flex-1 overflow-y-auto p-4 pb-28 space-y-3">
+        {/* Summary banner — only when showing dues */}
+        {dueStudents.length > 0 && (
+          <div className="bg-[#0d1b3e] rounded-2xl p-4 text-white">
+            <p className="text-[9px] font-black uppercase tracking-widest text-blue-300 mb-2">Total Outstanding</p>
+            <div className="grid grid-cols-2 gap-3">
+              <div>
+                <div className="text-xl font-black">₹{totalParentDue.toLocaleString('en-IN')}</div>
+                <div className="text-[9px] font-bold text-blue-300 mt-0.5">{dueStudents.filter(s => feeService.getParentDueSummary(s.studentId).total > 0).length} students — Parent Due</div>
               </div>
-              <div className="flex gap-3 text-[10px] flex-wrap">
-                {parentSummary.tuition > 0 && (
-                  <div className="flex items-center gap-1 text-blue-600 font-bold">
-                    <div className="w-1.5 h-1.5 rounded-full bg-blue-600" />
-                    Tuition (P): ₹{parentSummary.tuition}
+              {totalGovtDue > 0 && (
+                <div>
+                  <div className="text-xl font-black text-emerald-400">₹{totalGovtDue.toLocaleString('en-IN')}</div>
+                  <div className="text-[9px] font-bold text-emerald-300 mt-0.5">{dueStudents.filter(s => s.isRte).length} RTE — Govt Due</div>
+                </div>
+              )}
+            </div>
+          </div>
+        )}
+
+        {/* Due students — prominent cards at top */}
+        {!showOnlyDue && dueStudents.length > 0 && (
+          <>
+            <p className="text-[10px] font-black uppercase tracking-widest text-rose-500">Pending Dues ({dueStudents.length})</p>
+            {dueStudents.filter(s =>
+              s.name.toLowerCase().includes(search.toLowerCase()) ||
+              s.admissionNo.toLowerCase().includes(search.toLowerCase()) ||
+              s.className.toLowerCase().includes(search.toLowerCase())
+            ).map(student => {
+              const parentSummary = feeService.getParentDueSummary(student.studentId);
+              const govtSummary = student.isRte ? feeService.getGovernmentDueSummary(student.studentId) : { tuition: 0, total: 0 };
+              return (
+                <button key={student.studentId} onClick={() => { setSelected(student); setMainView('DETAIL'); }}
+                  className="w-full text-left bg-white rounded-2xl border border-rose-200 shadow-sm p-4 active:scale-[0.98] transition-transform">
+                  <div className="flex items-start justify-between gap-2">
+                    <div className="flex-1 min-w-0">
+                      <div className="flex items-center gap-2">
+                        <div className="w-8 h-8 rounded-full bg-rose-100 text-rose-700 flex items-center justify-center font-black text-xs shrink-0">
+                          {student.name.split(' ').map(w => w[0]).join('').slice(0, 2)}
+                        </div>
+                        <div className="min-w-0">
+                          <div className="flex items-center gap-1.5">
+                            <div className="font-extrabold text-slate-900 text-sm truncate">{student.name}</div>
+                            {student.isRte && <ShieldCheck size={11} className="text-emerald-600 shrink-0" />}
+                          </div>
+                          <div className="text-[10px] font-bold text-slate-400">{student.className} · {student.admissionNo}</div>
+                        </div>
+                      </div>
+                    </div>
+                    <div className="text-right shrink-0">
+                      {parentSummary.total > 0 && (
+                        <div>
+                          <div className="font-black text-rose-600 text-base">₹{parentSummary.total.toLocaleString('en-IN')}</div>
+                          <div className="text-[9px] font-bold text-rose-400">Parent Due</div>
+                        </div>
+                      )}
+                      {govtSummary.total > 0 && (
+                        <div className="mt-1">
+                          <div className="font-black text-emerald-600 text-sm">₹{govtSummary.total.toLocaleString('en-IN')}</div>
+                          <div className="text-[9px] font-bold text-emerald-500">Govt Due</div>
+                        </div>
+                      )}
+                    </div>
                   </div>
-                )}
-                {parentSummary.transport > 0 && (
-                  <div className="flex items-center gap-1 text-orange-600 font-bold">
-                    <div className="w-1.5 h-1.5 rounded-full bg-orange-600" />
-                    Transport: ₹{parentSummary.transport}
+                  {/* Due breakdown pills */}
+                  <div className="flex gap-1.5 mt-2.5 flex-wrap">
+                    {parentSummary.tuition > 0 && (
+                      <span className="text-[9px] font-black bg-indigo-50 text-indigo-700 px-2 py-0.5 rounded-full">
+                        Tuition ₹{parentSummary.tuition.toLocaleString()}
+                      </span>
+                    )}
+                    {parentSummary.transport > 0 && (
+                      <span className="text-[9px] font-black bg-orange-50 text-orange-700 px-2 py-0.5 rounded-full">
+                        Transport ₹{parentSummary.transport.toLocaleString()}
+                      </span>
+                    )}
+                    {govtSummary.tuition > 0 && (
+                      <span className="text-[9px] font-black bg-emerald-50 text-emerald-700 px-2 py-0.5 rounded-full">
+                        RTE Tuition ₹{govtSummary.tuition.toLocaleString()}
+                      </span>
+                    )}
                   </div>
-                )}
-                {student.isRte && govtSummary.total > 0 && (
-                  <div className="flex items-center gap-1 text-emerald-600 font-bold">
-                    <div className="w-1.5 h-1.5 rounded-full bg-emerald-600" />
-                    Tuition (G): ₹{govtSummary.total}
+                </button>
+              );
+            })}
+            {search === '' && students.filter(s => feeService.getParentDueSummary(s.studentId).total === 0 && (!s.isRte || feeService.getGovernmentDueSummary(s.studentId).total === 0)).length > 0 && (
+              <p className="text-[10px] font-black uppercase tracking-widest text-emerald-600 mt-2">All Cleared</p>
+            )}
+          </>
+        )}
+
+        {/* All students (or filtered) */}
+        {filtered
+          .filter(s => showOnlyDue || feeService.getParentDueSummary(s.studentId).total === 0 && (!s.isRte || feeService.getGovernmentDueSummary(s.studentId).total === 0))
+          .map(student => {
+            const parentSummary = feeService.getParentDueSummary(student.studentId);
+            return (
+              <button key={student.studentId} onClick={() => { setSelected(student); setMainView('DETAIL'); }}
+                className="w-full text-left bg-white rounded-2xl border border-slate-100 shadow-sm p-3.5 active:scale-[0.98] transition-transform">
+                <div className="flex items-center gap-3">
+                  <div className="w-8 h-8 rounded-full bg-emerald-100 text-emerald-700 flex items-center justify-center font-black text-xs shrink-0">
+                    {student.name.split(' ').map(w => w[0]).join('').slice(0, 2)}
                   </div>
-                )}
-              </div>
-            </button>
-          );
-        })}
+                  <div className="flex-1 min-w-0">
+                    <div className="flex items-center gap-1.5">
+                      <span className="font-extrabold text-slate-900 text-sm truncate">{student.name}</span>
+                      {student.isRte && <ShieldCheck size={10} className="text-emerald-600 shrink-0" />}
+                    </div>
+                    <div className="text-[10px] font-bold text-slate-400">{student.className} · {student.admissionNo}</div>
+                  </div>
+                  <div className="flex items-center gap-1.5 text-[9px] font-black text-emerald-600 bg-emerald-50 px-2.5 py-1 rounded-full shrink-0">
+                    <CheckCircle2 size={10} /> Cleared
+                  </div>
+                </div>
+              </button>
+            );
+          })}
+
+        {filtered.length === 0 && (
+          <div className="flex flex-col items-center py-16 text-slate-400">
+            <IndianRupee size={32} className="mb-3 opacity-40" />
+            <p className="font-bold text-sm">No students found</p>
+          </div>
+        )}
       </div>
     </div>
   );

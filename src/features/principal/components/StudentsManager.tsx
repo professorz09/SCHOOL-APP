@@ -421,11 +421,6 @@ export const StudentsManager: React.FC<Props> = ({ onBack }) => {
       ? students.filter(s => s.className === selectedClass && s.section === selectedSection)
       : [];
 
-    // Mock teacher mapping per section
-    const SECTION_TEACHERS: Record<string, string> = {
-      A: 'Dr. R.K. Singh', B: 'Ms. A. Sharma', C: 'Mr. V. Verma', D: 'Mrs. P. Nair',
-    };
-
     // ── Student list in a section ──────────────────────────────────────────
     if (selectedClass && selectedSection) {
       return (
@@ -492,7 +487,6 @@ export const StudentsManager: React.FC<Props> = ({ onBack }) => {
             <div className="bg-white rounded-2xl border border-slate-100 shadow-sm overflow-hidden">
               {sections.map((section, idx) => {
                 const count = students.filter(s => s.className === selectedClass && s.section === section).length;
-                const teacher = SECTION_TEACHERS[section] || 'Teacher';
                 return (
                   <button key={section}
                     onClick={() => setSelectedSection(section)}
@@ -504,7 +498,7 @@ export const StudentsManager: React.FC<Props> = ({ onBack }) => {
                     {/* Details */}
                     <div className="flex-1">
                       <div className="font-extrabold text-slate-900 text-sm">{clsNum}-{section}</div>
-                      <div className="text-[10px] font-bold text-slate-400 mt-0.5 uppercase">{teacher}</div>
+                      <div className="text-[10px] font-bold text-slate-400 mt-0.5 uppercase">Section {section}</div>
                     </div>
                     {/* Count Badge */}
                     <div className="bg-indigo-50 text-indigo-700 text-[10px] font-black px-3 py-1 rounded-lg uppercase">
@@ -709,13 +703,9 @@ export const StudentsManager: React.FC<Props> = ({ onBack }) => {
                     <p className="text-[9px] font-black uppercase tracking-widest text-slate-400 flex items-center gap-1.5 mb-3">
                       <FileText size={10} /> Uploaded Documents
                     </p>
-                    <div className="grid grid-cols-2 gap-2">
-                      {['Birth Certificate', 'Transfer Certificate', 'Aadhaar Card'].map(d => (
-                        <div key={d} className="flex items-center gap-2 bg-indigo-50 border border-indigo-200 rounded-xl px-3 py-2">
-                          <CheckCircle2 size={14} className="text-indigo-600 shrink-0" />
-                          <span className="text-[10px] font-black text-indigo-700 truncate">{d}</span>
-                        </div>
-                      ))}
+                    <div className="flex flex-col items-center py-6 text-slate-400">
+                      <FolderOpen size={28} className="mb-2 opacity-40" />
+                      <p className="font-bold text-sm">No documents uploaded</p>
                     </div>
                   </div>
                 )}
