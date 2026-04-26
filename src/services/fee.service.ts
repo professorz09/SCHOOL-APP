@@ -2,6 +2,7 @@
 
 export type FeeType = 'TUITION' | 'TRANSPORT' | 'EXAM' | 'OTHER';
 export type FeeStatus = 'PAID' | 'PARTIAL' | 'UNPAID' | 'WAIVED';
+export type PayerType = 'PARENT' | 'GOVERNMENT';
 
 export interface FeeInstallment {
   id: string;
@@ -15,6 +16,7 @@ export interface FeeInstallment {
   writeOffAmount: number;
   writeOffReason: string;
   status: FeeStatus;
+  payerType: PayerType; // PARENT = parent pays, GOVERNMENT = RTE govt pays
   relatedId?: string; // For transport: vehicle assignment ID
 }
 
@@ -36,43 +38,68 @@ export interface StudentFeeProfile {
   admissionNo: string;
   academicYearId: string;
   installments: FeeInstallment[];
+  isRte: boolean;
+}
+
+export interface GovernmentPaymentRecord {
+  id: string;
+  amount: number;
+  date: string;
+  referenceNo: string;
+  note: string;
+  allocatedStudentIds: string[];
 }
 
 // ─── Seed Data ────────────────────────────────────────────────────────────────
 
 // Tuition fee schedule (all students, all months)
+// student2 = Priya Gupta (RTE) → payerType: GOVERNMENT for tuition
 const _tuitionSchedule: FeeInstallment[] = [
-  // Student 1: Aakash
-  { id: 'tui1', studentId: 'student1', academicYearId: 'ay1', month: 'April 2026', dueDate: '2026-04-10', feeType: 'TUITION', amount: 3500, paidAmount: 3500, writeOffAmount: 0, writeOffReason: '', status: 'PAID' },
-  { id: 'tui2', studentId: 'student1', academicYearId: 'ay1', month: 'May 2026', dueDate: '2026-05-10', feeType: 'TUITION', amount: 3500, paidAmount: 2000, writeOffAmount: 0, writeOffReason: '', status: 'PARTIAL' },
-  { id: 'tui3', studentId: 'student1', academicYearId: 'ay1', month: 'June 2026', dueDate: '2026-06-10', feeType: 'TUITION', amount: 3500, paidAmount: 0, writeOffAmount: 0, writeOffReason: '', status: 'UNPAID' },
-  { id: 'tui4', studentId: 'student1', academicYearId: 'ay1', month: 'July 2026', dueDate: '2026-07-10', feeType: 'TUITION', amount: 3500, paidAmount: 0, writeOffAmount: 0, writeOffReason: '', status: 'UNPAID' },
+  // Student 1: Aakash (Normal) → PARENT pays
+  { id: 'tui1', studentId: 'student1', academicYearId: 'ay1', month: 'April 2026', dueDate: '2026-04-10', feeType: 'TUITION', amount: 3500, paidAmount: 3500, writeOffAmount: 0, writeOffReason: '', status: 'PAID', payerType: 'PARENT' },
+  { id: 'tui2', studentId: 'student1', academicYearId: 'ay1', month: 'May 2026', dueDate: '2026-05-10', feeType: 'TUITION', amount: 3500, paidAmount: 2000, writeOffAmount: 0, writeOffReason: '', status: 'PARTIAL', payerType: 'PARENT' },
+  { id: 'tui3', studentId: 'student1', academicYearId: 'ay1', month: 'June 2026', dueDate: '2026-06-10', feeType: 'TUITION', amount: 3500, paidAmount: 0, writeOffAmount: 0, writeOffReason: '', status: 'UNPAID', payerType: 'PARENT' },
+  { id: 'tui4', studentId: 'student1', academicYearId: 'ay1', month: 'July 2026', dueDate: '2026-07-10', feeType: 'TUITION', amount: 3500, paidAmount: 0, writeOffAmount: 0, writeOffReason: '', status: 'UNPAID', payerType: 'PARENT' },
 
-  // Student 2: Priya
-  { id: 'tui5', studentId: 'student2', academicYearId: 'ay1', month: 'April 2026', dueDate: '2026-04-10', feeType: 'TUITION', amount: 3500, paidAmount: 3500, writeOffAmount: 0, writeOffReason: '', status: 'PAID' },
-  { id: 'tui6', studentId: 'student2', academicYearId: 'ay1', month: 'May 2026', dueDate: '2026-05-10', feeType: 'TUITION', amount: 3500, paidAmount: 3500, writeOffAmount: 0, writeOffReason: '', status: 'PAID' },
-  { id: 'tui7', studentId: 'student2', academicYearId: 'ay1', month: 'June 2026', dueDate: '2026-06-10', feeType: 'TUITION', amount: 3500, paidAmount: 0, writeOffAmount: 0, writeOffReason: '', status: 'UNPAID' },
+  // Student 2: Priya (RTE) → GOVERNMENT pays tuition
+  { id: 'tui5', studentId: 'student2', academicYearId: 'ay1', month: 'April 2026', dueDate: '2026-04-10', feeType: 'TUITION', amount: 3500, paidAmount: 3500, writeOffAmount: 0, writeOffReason: '', status: 'PAID', payerType: 'GOVERNMENT' },
+  { id: 'tui6', studentId: 'student2', academicYearId: 'ay1', month: 'May 2026', dueDate: '2026-05-10', feeType: 'TUITION', amount: 3500, paidAmount: 3500, writeOffAmount: 0, writeOffReason: '', status: 'PAID', payerType: 'GOVERNMENT' },
+  { id: 'tui7', studentId: 'student2', academicYearId: 'ay1', month: 'June 2026', dueDate: '2026-06-10', feeType: 'TUITION', amount: 3500, paidAmount: 0, writeOffAmount: 0, writeOffReason: '', status: 'UNPAID', payerType: 'GOVERNMENT' },
+  { id: 'tui8', studentId: 'student2', academicYearId: 'ay1', month: 'July 2026', dueDate: '2026-07-10', feeType: 'TUITION', amount: 3500, paidAmount: 0, writeOffAmount: 0, writeOffReason: '', status: 'UNPAID', payerType: 'GOVERNMENT' },
 
-  // Student 3: Rahul
-  { id: 'tui8', studentId: 'student3', academicYearId: 'ay1', month: 'April 2026', dueDate: '2026-04-10', feeType: 'TUITION', amount: 3000, paidAmount: 1000, writeOffAmount: 0, writeOffReason: '', status: 'PARTIAL' },
-  { id: 'tui9', studentId: 'student3', academicYearId: 'ay1', month: 'May 2026', dueDate: '2026-05-10', feeType: 'TUITION', amount: 3000, paidAmount: 0, writeOffAmount: 0, writeOffReason: '', status: 'UNPAID' },
+  // Student 3: Rahul (Normal) → PARENT pays
+  { id: 'tui9', studentId: 'student3', academicYearId: 'ay1', month: 'April 2026', dueDate: '2026-04-10', feeType: 'TUITION', amount: 3000, paidAmount: 1000, writeOffAmount: 0, writeOffReason: '', status: 'PARTIAL', payerType: 'PARENT' },
+  { id: 'tui10', studentId: 'student3', academicYearId: 'ay1', month: 'May 2026', dueDate: '2026-05-10', feeType: 'TUITION', amount: 3000, paidAmount: 0, writeOffAmount: 0, writeOffReason: '', status: 'UNPAID', payerType: 'PARENT' },
 ];
 
 // Transport fee schedule (auto-generated when vehicle assigned)
+// RTE student transport is PARENT responsibility (government only covers tuition)
 let _transportSchedule: FeeInstallment[] = [
-  // Student 1: Aakash assigned to Route A (₹500/month) from April onwards
-  { id: 'tra1', studentId: 'student1', academicYearId: 'ay1', month: 'April 2026', dueDate: '2026-04-10', feeType: 'TRANSPORT', amount: 500, paidAmount: 500, writeOffAmount: 0, writeOffReason: '', status: 'PAID', relatedId: 'ta1' },
-  { id: 'tra2', studentId: 'student1', academicYearId: 'ay1', month: 'May 2026', dueDate: '2026-05-10', feeType: 'TRANSPORT', amount: 500, paidAmount: 500, writeOffAmount: 0, writeOffReason: '', status: 'PAID', relatedId: 'ta1' },
-  { id: 'tra3', studentId: 'student1', academicYearId: 'ay1', month: 'June 2026', dueDate: '2026-06-10', feeType: 'TRANSPORT', amount: 500, paidAmount: 0, writeOffAmount: 0, writeOffReason: '', status: 'UNPAID', relatedId: 'ta1' },
+  // Student 1: Aakash assigned to Route A (₹500/month)
+  { id: 'tra1', studentId: 'student1', academicYearId: 'ay1', month: 'April 2026', dueDate: '2026-04-10', feeType: 'TRANSPORT', amount: 500, paidAmount: 500, writeOffAmount: 0, writeOffReason: '', status: 'PAID', payerType: 'PARENT', relatedId: 'ta1' },
+  { id: 'tra2', studentId: 'student1', academicYearId: 'ay1', month: 'May 2026', dueDate: '2026-05-10', feeType: 'TRANSPORT', amount: 500, paidAmount: 500, writeOffAmount: 0, writeOffReason: '', status: 'PAID', payerType: 'PARENT', relatedId: 'ta1' },
+  { id: 'tra3', studentId: 'student1', academicYearId: 'ay1', month: 'June 2026', dueDate: '2026-06-10', feeType: 'TRANSPORT', amount: 500, paidAmount: 0, writeOffAmount: 0, writeOffReason: '', status: 'UNPAID', payerType: 'PARENT', relatedId: 'ta1' },
 
-  // Student 2: Priya assigned to Route A (₹500/month) from April onwards
-  { id: 'tra4', studentId: 'student2', academicYearId: 'ay1', month: 'April 2026', dueDate: '2026-04-10', feeType: 'TRANSPORT', amount: 500, paidAmount: 500, writeOffAmount: 0, writeOffReason: '', status: 'PAID', relatedId: 'ta2' },
-  { id: 'tra5', studentId: 'student2', academicYearId: 'ay1', month: 'May 2026', dueDate: '2026-05-10', feeType: 'TRANSPORT', amount: 500, paidAmount: 500, writeOffAmount: 0, writeOffReason: '', status: 'PAID', relatedId: 'ta2' },
-  { id: 'tra6', studentId: 'student2', academicYearId: 'ay1', month: 'June 2026', dueDate: '2026-06-10', feeType: 'TRANSPORT', amount: 500, paidAmount: 0, writeOffAmount: 0, writeOffReason: '', status: 'UNPAID', relatedId: 'ta2' },
+  // Student 2: Priya (RTE) — transport still PARENT responsibility
+  { id: 'tra4', studentId: 'student2', academicYearId: 'ay1', month: 'April 2026', dueDate: '2026-04-10', feeType: 'TRANSPORT', amount: 500, paidAmount: 500, writeOffAmount: 0, writeOffReason: '', status: 'PAID', payerType: 'PARENT', relatedId: 'ta2' },
+  { id: 'tra5', studentId: 'student2', academicYearId: 'ay1', month: 'May 2026', dueDate: '2026-05-10', feeType: 'TRANSPORT', amount: 500, paidAmount: 500, writeOffAmount: 0, writeOffReason: '', status: 'PAID', payerType: 'PARENT', relatedId: 'ta2' },
+  { id: 'tra6', studentId: 'student2', academicYearId: 'ay1', month: 'June 2026', dueDate: '2026-06-10', feeType: 'TRANSPORT', amount: 500, paidAmount: 0, writeOffAmount: 0, writeOffReason: '', status: 'UNPAID', payerType: 'PARENT', relatedId: 'ta2' },
 
-  // Student 3: Rahul assigned to Route B (₹400/month) from April onwards
-  { id: 'tra7', studentId: 'student3', academicYearId: 'ay1', month: 'April 2026', dueDate: '2026-04-10', feeType: 'TRANSPORT', amount: 400, paidAmount: 400, writeOffAmount: 0, writeOffReason: '', status: 'PAID', relatedId: 'ta3' },
-  { id: 'tra8', studentId: 'student3', academicYearId: 'ay1', month: 'May 2026', dueDate: '2026-05-10', feeType: 'TRANSPORT', amount: 400, paidAmount: 0, writeOffAmount: 0, writeOffReason: '', status: 'UNPAID', relatedId: 'ta3' },
+  // Student 3: Rahul assigned to Route B (₹400/month)
+  { id: 'tra7', studentId: 'student3', academicYearId: 'ay1', month: 'April 2026', dueDate: '2026-04-10', feeType: 'TRANSPORT', amount: 400, paidAmount: 400, writeOffAmount: 0, writeOffReason: '', status: 'PAID', payerType: 'PARENT', relatedId: 'ta3' },
+  { id: 'tra8', studentId: 'student3', academicYearId: 'ay1', month: 'May 2026', dueDate: '2026-05-10', feeType: 'TRANSPORT', amount: 400, paidAmount: 0, writeOffAmount: 0, writeOffReason: '', status: 'UNPAID', payerType: 'PARENT', relatedId: 'ta3' },
+];
+
+// Government payment history
+let _governmentPayments: GovernmentPaymentRecord[] = [
+  {
+    id: 'gp1',
+    amount: 7000,
+    date: '2026-05-05',
+    referenceNo: 'RTE/2026/APR-MAY/001',
+    note: 'RTE reimbursement April-May 2026',
+    allocatedStudentIds: ['student2'],
+  },
 ];
 
 // ─── Service API ──────────────────────────────────────────────────────────────
@@ -88,7 +115,7 @@ export const feeService = {
     return feeService.getInstallments().filter(i => i.studentId === studentId);
   },
 
-  getStudentFeeProfile(studentId: string, name: string, className: string, admissionNo: string): StudentFeeProfile {
+  getStudentFeeProfile(studentId: string, name: string, className: string, admissionNo: string, isRte = false): StudentFeeProfile {
     return {
       studentId,
       name,
@@ -96,6 +123,7 @@ export const feeService = {
       admissionNo,
       academicYearId: 'ay1',
       installments: feeService.getStudentInstallments(studentId),
+      isRte,
     };
   },
 
@@ -103,14 +131,14 @@ export const feeService = {
   addTransportFeeSchedule(
     studentId: string,
     monthlyAmount: number,
-    startDate: string, // YYYY-MM-DD
-    endDate: string | null, // null if ongoing
+    startDate: string,
+    endDate: string | null,
     assignmentId: string,
+    isRte = false,
   ): void {
     const start = new Date(startDate);
-    const end = endDate ? new Date(endDate) : new Date('2026-12-31'); // Demo: end of year
+    const end = endDate ? new Date(endDate) : new Date('2026-12-31');
 
-    // Generate monthly entries from startDate to endDate
     const months = [
       { name: 'April 2026', date: '2026-04-10' },
       { name: 'May 2026', date: '2026-05-10' },
@@ -140,6 +168,8 @@ export const feeService = {
             writeOffAmount: 0,
             writeOffReason: '',
             status: 'UNPAID',
+            // Transport always stays PARENT even for RTE students (govt only covers tuition)
+            payerType: 'PARENT',
             relatedId: assignmentId,
           });
         }
@@ -152,18 +182,19 @@ export const feeService = {
     const now = new Date();
     _transportSchedule = _transportSchedule.filter(t => {
       if (t.relatedId !== assignmentId) return true;
-      // Keep paid/waived records, only remove future unpaid
       if (t.status === 'PAID' || t.status === 'WAIVED') return true;
       if (new Date(t.dueDate) < now) return true;
-      return false; // Remove future unpaid transport fees
+      return false;
     });
   },
 
-  // ── Record payment with oldest-due-first allocation ────────────────────
+  // ── Record payment (parent pays) — only allocates PARENT payer installments ──
   recordPayment(studentId: string, amount: number): boolean {
     if (amount <= 0) return false;
 
+    // Only allocate to parent-payer installments
     const installments = feeService.getStudentInstallments(studentId)
+      .filter(i => i.payerType === 'PARENT')
       .sort((a, b) => new Date(a.dueDate).getTime() - new Date(b.dueDate).getTime());
 
     let remaining = amount;
@@ -179,7 +210,6 @@ export const feeService = {
       inst.paidAmount += applying;
       remaining -= applying;
 
-      // Update status
       const total = inst.amount - inst.writeOffAmount;
       if (inst.paidAmount >= total) {
         inst.status = 'PAID';
@@ -189,6 +219,49 @@ export const feeService = {
     }
 
     return remaining < amount;
+  },
+
+  // ── Record government payment (bulk) — allocates GOVERNMENT payer installments ──
+  recordGovernmentPayment(
+    studentIds: string[],
+    totalAmount: number,
+    referenceNo: string,
+    note: string,
+  ): boolean {
+    if (totalAmount <= 0 || studentIds.length === 0) return false;
+
+    let remaining = totalAmount;
+
+    for (const studentId of studentIds) {
+      if (remaining <= 0) break;
+
+      const govtInstallments = feeService.getStudentInstallments(studentId)
+        .filter(i => i.payerType === 'GOVERNMENT' && (i.status === 'UNPAID' || i.status === 'PARTIAL'))
+        .sort((a, b) => new Date(a.dueDate).getTime() - new Date(b.dueDate).getTime());
+
+      for (const inst of govtInstallments) {
+        if (remaining <= 0) break;
+        const due = inst.amount - inst.paidAmount - inst.writeOffAmount;
+        if (due <= 0) continue;
+        const applying = Math.min(remaining, due);
+        inst.paidAmount += applying;
+        remaining -= applying;
+        const total = inst.amount - inst.writeOffAmount;
+        if (inst.paidAmount >= total) inst.status = 'PAID';
+        else if (inst.paidAmount > 0) inst.status = 'PARTIAL';
+      }
+    }
+
+    _governmentPayments.push({
+      id: `gp${Date.now()}`,
+      amount: totalAmount,
+      date: new Date().toISOString().split('T')[0],
+      referenceNo,
+      note,
+      allocatedStudentIds: studentIds,
+    });
+
+    return true;
   },
 
   // ── Write off installment ───────────────────────────────────────────────
@@ -214,15 +287,48 @@ export const feeService = {
     return true;
   },
 
-  // ── Get fee summary by type ─────────────────────────────────────────────
+  // ── Fee summary for PARENT-payer dues only (for student/parent view) ────
+  getParentDueSummary(studentId: string): { tuition: number; transport: number; total: number } {
+    const insts = feeService.getStudentInstallments(studentId).filter(i => i.payerType === 'PARENT');
+    const tuition = insts.filter(i => i.feeType === 'TUITION').reduce((sum, i) => sum + (i.amount - i.paidAmount - i.writeOffAmount), 0);
+    const transport = insts.filter(i => i.feeType === 'TRANSPORT').reduce((sum, i) => sum + (i.amount - i.paidAmount - i.writeOffAmount), 0);
+    return { tuition: Math.max(0, tuition), transport: Math.max(0, transport), total: Math.max(0, tuition + transport) };
+  },
+
+  // ── Fee summary for GOVERNMENT-payer dues (for principal RTE tracking) ─
+  getGovernmentDueSummary(studentId: string): { tuition: number; total: number } {
+    const insts = feeService.getStudentInstallments(studentId).filter(i => i.payerType === 'GOVERNMENT');
+    const tuition = insts.filter(i => i.feeType === 'TUITION').reduce((sum, i) => sum + (i.amount - i.paidAmount - i.writeOffAmount), 0);
+    return { tuition: Math.max(0, tuition), total: Math.max(0, tuition) };
+  },
+
+  // ── Combined summary (for principal all-in view) ────────────────────────
   getFeeTypeSummary(studentId: string): { tuition: number; transport: number; total: number } {
     const insts = feeService.getStudentInstallments(studentId);
-    const tuition = insts
-      .filter(i => i.feeType === 'TUITION')
+    const tuition = insts.filter(i => i.feeType === 'TUITION').reduce((sum, i) => sum + (i.amount - i.paidAmount - i.writeOffAmount), 0);
+    const transport = insts.filter(i => i.feeType === 'TRANSPORT').reduce((sum, i) => sum + (i.amount - i.paidAmount - i.writeOffAmount), 0);
+    return { tuition: Math.max(0, tuition), transport: Math.max(0, transport), total: Math.max(0, tuition + transport) };
+  },
+
+  // ── School-wide RTE pending (for principal dashboard) ─────────────────
+  getSchoolRtePending(): { totalGovtPending: number; totalParentPending: number; rteStudentCount: number } {
+    const allInsts = feeService.getInstallments();
+    const govtPending = allInsts
+      .filter(i => i.payerType === 'GOVERNMENT' && (i.status === 'UNPAID' || i.status === 'PARTIAL'))
       .reduce((sum, i) => sum + (i.amount - i.paidAmount - i.writeOffAmount), 0);
-    const transport = insts
-      .filter(i => i.feeType === 'TRANSPORT')
+    const parentPending = allInsts
+      .filter(i => i.payerType === 'PARENT' && (i.status === 'UNPAID' || i.status === 'PARTIAL'))
       .reduce((sum, i) => sum + (i.amount - i.paidAmount - i.writeOffAmount), 0);
-    return { tuition: Math.max(0, tuition), transport: Math.max(0, transport), total: tuition + transport };
+    const rteStudents = new Set(allInsts.filter(i => i.payerType === 'GOVERNMENT').map(i => i.studentId));
+    return {
+      totalGovtPending: Math.max(0, govtPending),
+      totalParentPending: Math.max(0, parentPending),
+      rteStudentCount: rteStudents.size,
+    };
+  },
+
+  // ── Get government payment history ─────────────────────────────────────
+  getGovernmentPayments(): GovernmentPaymentRecord[] {
+    return [..._governmentPayments].sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
   },
 };

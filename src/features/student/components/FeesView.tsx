@@ -1,9 +1,10 @@
 import React, { useEffect, useState } from 'react';
-import { ArrowLeft, CreditCard, Upload, CheckCircle2, Clock, QrCode, X, Layers } from 'lucide-react';
+import { ArrowLeft, CreditCard, Upload, CheckCircle2, Clock, QrCode, X, Layers, Zap } from 'lucide-react';
 import { studentDashboardService } from '../../../services/student.service2';
 import { FeePaymentUpload } from '../../../types/student.types';
 import { useUIStore } from '../../../store/uiStore';
 import { feeService } from '../../../services/fee.service';
+import { studentService } from '../../../services/student.service';
 
 type View = 'MAIN' | 'QR_PAY';
 
@@ -19,11 +20,18 @@ export const FeesView: React.FC<Props> = ({ onBack }) => {
   const [screenshotName, setScreenshotName] = useState('');
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [feeSummary, setFeeSummary] = useState({ tuition: 0, transport: 0, total: 0 });
+  const [isRte, setIsRte] = useState(false);
 
   useEffect(() => {
     studentDashboardService.getFeeUploads().then(setUploads);
-    const summary = feeService.getFeeTypeSummary(MY_STUDENT_ID);
+    // Get only parent-payer fees for student view
+    const summary = feeService.getParentDueSummary(MY_STUDENT_ID);
     setFeeSummary(summary);
+    // Check if student is RTE
+    const student = studentService.getAll().then(students => {
+      const found = students.find(s => s.id === MY_STUDENT_ID);
+      if (found) setIsRte(found.rte);
+    });
   }, []);
 
   const handleUpload = async () => {
@@ -103,14 +111,27 @@ export const FeesView: React.FC<Props> = ({ onBack }) => {
         <h2 className="text-xl font-black text-slate-900 uppercase tracking-tight">Fee Payments</h2>
       </div>
       <div className="flex-1 overflow-y-auto p-4 pb-28 space-y-4">
+        {/* RTE Badge */}
+        {isRte && (
+          <div className="bg-emerald-50 border border-emerald-200 rounded-2xl p-4 flex items-center gap-3">
+            <div className="bg-emerald-600 text-white rounded-full p-2 shrink-0">
+              <Zap size={18} />
+            </div>
+            <div>
+              <div className="font-black text-emerald-900">Covered Under RTE</div>
+              <div className="text-[11px] font-bold text-emerald-700">Your tuition fee is covered by government. Only transport fee is due.</div>
+            </div>
+          </div>
+        )}
+
         {/* Summary */}
         <div className="bg-slate-900 rounded-2xl p-4 text-white">
-          <p className="text-[10px] font-black uppercase tracking-widest text-slate-400 mb-3">Fee Summary — April 2026</p>
+          <p className="text-[10px] font-black uppercase tracking-widest text-slate-400 mb-3">Outstanding Balance — Your Payment Due</p>
           <div className="space-y-3">
             {feeSummary.tuition > 0 && (
               <div className="flex items-center justify-between pb-2 border-b border-white/10">
                 <div className="flex items-center gap-2">
-                  <div className="w-2 h-2 rounded-full bg-indigo-400" />
+                  <div className="w-2 h-2 rounded-full bg-blue-400" />
                   <span className="text-sm font-bold">Tuition Fee</span>
                 </div>
                 <div className="text-lg font-black">₹{feeSummary.tuition.toLocaleString()}</div>
