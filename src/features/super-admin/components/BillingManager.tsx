@@ -61,7 +61,7 @@ export const BillingManager: React.FC<Props> = ({ onBack }) => {
   };
 
   if (view === 'LIST') return (
-    <div className="absolute inset-0 z-40 bg-slate-50 flex flex-col animate-in slide-in-from-right-8 duration-300">
+    <div className="absolute inset-0 z-50 bg-slate-50 flex flex-col animate-in slide-in-from-right-8 duration-300">
       {renderHeader('Billing',  onBack,
         <button onClick={() => setView('HISTORY')} className="flex items-center gap-1.5 text-[10px] font-black text-blue-600 uppercase tracking-widest bg-blue-50 px-3 py-1.5 rounded-full">
           <History size={12} /> History
@@ -148,7 +148,7 @@ export const BillingManager: React.FC<Props> = ({ onBack }) => {
   );
 
   if (view === 'MARK_PAID' && selected) return (
-    <div className="absolute inset-0 z-40 bg-slate-50 flex flex-col animate-in slide-in-from-right-8 duration-300">
+    <div className="absolute inset-0 z-50 bg-slate-50 flex flex-col animate-in slide-in-from-right-8 duration-300">
       {renderHeader('Record Payment', () => setView('LIST'))}
       <div className="flex-1 overflow-y-auto p-4 pb-28 space-y-4">
         <div className="bg-white rounded-2xl border border-slate-100 shadow-sm p-4 space-y-3">
@@ -183,7 +183,7 @@ export const BillingManager: React.FC<Props> = ({ onBack }) => {
   );
 
   if (view === 'HISTORY') return (
-    <div className="absolute inset-0 z-40 bg-slate-50 flex flex-col animate-in slide-in-from-right-8 duration-300">
+    <div className="absolute inset-0 z-50 bg-slate-50 flex flex-col animate-in slide-in-from-right-8 duration-300">
       {renderHeader('Payment History', () => setView('LIST'))}
       <div className="flex-1 overflow-y-auto p-4 pb-28 space-y-3">
         {history.length === 0 && (

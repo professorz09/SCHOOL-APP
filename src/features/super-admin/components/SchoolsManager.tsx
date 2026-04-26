@@ -32,6 +32,7 @@ export const SchoolsManager: React.FC<Props> = ({ onBack }) => {
   const [search, setSearch] = useState('');
   const [activeAYIdx, setActiveAYIdx] = useState(0);
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [confirmDelete, setConfirmDelete] = useState<School | null>(null);
 
   const [form, setForm] = useState<Partial<CreateSchoolInput>>({
     name: '', code: '', location: '', address: '', phone: '',
@@ -67,6 +68,7 @@ export const SchoolsManager: React.FC<Props> = ({ onBack }) => {
   const handleDelete = async (school: School) => {
     await deleteSchool(school.id);
     showToast(`${school.name} removed`, 'info');
+    setConfirmDelete(null);
     if (view === 'DETAIL') setView('LIST');
   };
 
@@ -75,6 +77,32 @@ export const SchoolsManager: React.FC<Props> = ({ onBack }) => {
     await updateSchool(school.id, { status: next });
     showToast(`${school.name} marked ${next.toLowerCase()}`);
     if (selected?.id === school.id) setSelected(s => s ? { ...s, status: next } : null);
+  };
+
+  const handleEdit = (school: School) => {
+    setForm({
+      name: school.name, code: school.code, location: school.location,
+      address: school.address, phone: school.phone,
+      principalName: school.principalName, principalEmail: school.principalEmail,
+      principalPhone: school.principalPhone, status: school.status, plan: school.plan,
+      password: '',
+    });
+    setView('EDIT');
+  };
+
+  const handleUpdate = async () => {
+    if (!selected || !form.name || !form.code) {
+      showToast('Name and code required', 'error'); return;
+    }
+    setIsSubmitting(true);
+    try {
+      await updateSchool(selected.id, form as any);
+      setSelected(s => s ? { ...s, ...form } : null);
+      showToast(`${form.name} updated successfully!`);
+      setView('DETAIL');
+    } finally {
+      setIsSubmitting(false);
+    }
   };
 
   // ─── VIEWS ────────────────────────────────────────────────────────────────
@@ -92,7 +120,7 @@ export const SchoolsManager: React.FC<Props> = ({ onBack }) => {
   );
 
   if (view === 'LIST') return (
-    <div className="absolute inset-0 z-40 bg-slate-50 flex flex-col animate-in slide-in-from-right-8 duration-300">
+    <div className="absolute inset-0 z-50 bg-slate-50 flex flex-col animate-in slide-in-from-right-8 duration-300">
       {renderHeader('Schools', onBack,
         <button onClick={() => setView('CREATE')} className="p-2 bg-emerald-500 text-white rounded-full hover:bg-emerald-600 transition-colors shadow-md">
           <Plus size={18} />
@@ -178,7 +206,7 @@ export const SchoolsManager: React.FC<Props> = ({ onBack }) => {
   );
 
   if (view === 'CREATE') return (
-    <div className="absolute inset-0 z-40 bg-slate-50 flex flex-col animate-in slide-in-from-right-8 duration-300">
+    <div className="absolute inset-0 z-50 bg-slate-50 flex flex-col animate-in slide-in-from-right-8 duration-300">
       {renderHeader('Add School', () => setView('LIST'))}
       <div className="flex-1 overflow-y-auto p-4 pb-28 space-y-4">
         <div className="bg-white rounded-2xl p-4 border border-slate-100 shadow-sm space-y-4">
@@ -243,14 +271,17 @@ export const SchoolsManager: React.FC<Props> = ({ onBack }) => {
   if (view === 'DETAIL' && selected) {
     const ay = selected.academicYears[activeAYIdx];
     return (
-      <div className="absolute inset-0 z-40 bg-slate-50 flex flex-col animate-in slide-in-from-right-8 duration-300">
+      <div className="absolute inset-0 z-50 bg-slate-50 flex flex-col animate-in slide-in-from-right-8 duration-300">
         {renderHeader(selected.name, () => setView('LIST'),
           <div className="flex gap-2">
+            <button onClick={() => handleEdit(selected)} className="p-2 bg-blue-50 text-blue-600 rounded-full hover:bg-blue-100 transition-colors">
+              <Edit2 size={18} />
+            </button>
             <button onClick={() => handleStatusToggle(selected)}
               className={`p-2 rounded-full transition-colors ${selected.status === SchoolStatus.ACTIVE ? 'bg-rose-50 text-rose-600 hover:bg-rose-100' : 'bg-emerald-50 text-emerald-600 hover:bg-emerald-100'}`}>
               {selected.status === SchoolStatus.ACTIVE ? <XCircle size={18} /> : <CheckCircle2 size={18} />}
             </button>
-            <button onClick={() => handleDelete(selected)} className="p-2 bg-rose-50 text-rose-600 rounded-full hover:bg-rose-100 transition-colors">
+            <button onClick={() => setConfirmDelete(selected)} className="p-2 bg-rose-50 text-rose-600 rounded-full hover:bg-rose-100 transition-colors">
               <Trash2 size={18} />
             </button>
           </div>
@@ -352,7 +383,7 @@ export const SchoolsManager: React.FC<Props> = ({ onBack }) => {
   if (view === 'SECTIONS' && selected) {
     const ay = selected.academicYears[activeAYIdx];
     return (
-      <div className="absolute inset-0 z-40 bg-slate-50 flex flex-col animate-in slide-in-from-right-8 duration-300">
+      <div className="absolute inset-0 z-50 bg-slate-50 flex flex-col animate-in slide-in-from-right-8 duration-300">
         {renderHeader('Sections', () => setView('DETAIL'))}
         <div className="flex-1 overflow-y-auto p-4 pb-28 space-y-3">
           {ay?.sections.length === 0 && (
@@ -386,7 +417,7 @@ export const SchoolsManager: React.FC<Props> = ({ onBack }) => {
   if (view === 'STUDENTS' && selected) {
     const sec = selectedSection;
     return (
-      <div className="absolute inset-0 z-40 bg-slate-50 flex flex-col animate-in slide-in-from-right-8 duration-300">
+      <div className="absolute inset-0 z-50 bg-slate-50 flex flex-col animate-in slide-in-from-right-8 duration-300">
         {renderHeader(sec ? `${sec.className}-${sec.section} Students` : 'Students', () => setView(sec ? 'SECTIONS' : 'DETAIL'))}
         <div className="flex-1 overflow-y-auto p-4 pb-28">
           <div className="flex flex-col items-center py-16 text-slate-400">
@@ -401,7 +432,7 @@ export const SchoolsManager: React.FC<Props> = ({ onBack }) => {
 
   if (view === 'STAFF' && selected) {
     return (
-      <div className="absolute inset-0 z-40 bg-slate-50 flex flex-col animate-in slide-in-from-right-8 duration-300">
+      <div className="absolute inset-0 z-50 bg-slate-50 flex flex-col animate-in slide-in-from-right-8 duration-300">
         {renderHeader('Staff & Teachers', () => setView('DETAIL'))}
         <div className="flex-1 overflow-y-auto p-4 pb-28 space-y-3">
           {STAFF_MOCK.map(s => (
@@ -419,6 +450,90 @@ export const SchoolsManager: React.FC<Props> = ({ onBack }) => {
               </span>
             </div>
           ))}
+        </div>
+      </div>
+    );
+  }
+
+  if (view === 'EDIT' && selected) {
+    return (
+      <div className="absolute inset-0 z-50 bg-slate-50 flex flex-col animate-in slide-in-from-right-8 duration-300">
+        {renderHeader(`Edit: ${selected.name}`, () => setView('DETAIL'))}
+        <div className="flex-1 overflow-y-auto p-4 pb-28 space-y-4">
+          <div className="bg-white rounded-2xl p-4 border border-slate-100 shadow-sm space-y-4">
+            <p className="text-[10px] font-black uppercase tracking-widest text-slate-400 mb-1">School Info</p>
+            {[
+              { label: 'School Name *', key: 'name', placeholder: 'e.g. Delhi Public School' },
+              { label: 'School Code *', key: 'code', placeholder: 'e.g. DPS-01' },
+              { label: 'City / Location *', key: 'location', placeholder: 'e.g. New Delhi' },
+              { label: 'Full Address', key: 'address', placeholder: 'Street, Area, City, PIN' },
+              { label: 'Phone', key: 'phone', placeholder: '+91 XXXXX XXXXX' },
+            ].map(({ label, key, placeholder }) => (
+              <div key={key}>
+                <label className="block text-[10px] font-black uppercase tracking-widest text-slate-500 mb-1.5">{label}</label>
+                <input value={(form as any)[key] ?? ''} onChange={e => setForm(f => ({ ...f, [key]: e.target.value }))}
+                  placeholder={placeholder}
+                  className="w-full border border-slate-200 bg-slate-50 rounded-xl px-4 py-3 font-bold text-sm outline-none focus:border-blue-500 focus:bg-white transition-colors" />
+              </div>
+            ))}
+            <div className="grid grid-cols-2 gap-3">
+              <div>
+                <label className="block text-[10px] font-black uppercase tracking-widest text-slate-500 mb-1.5">Plan</label>
+                <select value={form.plan} onChange={e => setForm(f => ({ ...f, plan: e.target.value as BillingPlan }))}
+                  className="w-full border border-slate-200 bg-slate-50 rounded-xl px-3 py-3 font-bold text-sm outline-none focus:border-blue-500 focus:bg-white transition-colors">
+                  {Object.values(BillingPlan).map(p => <option key={p} value={p}>₹{PLAN_PRICES[p].toLocaleString('en-IN')} — {p}</option>)}
+                </select>
+              </div>
+              <div>
+                <label className="block text-[10px] font-black uppercase tracking-widest text-slate-500 mb-1.5">Status</label>
+                <select value={form.status} onChange={e => setForm(f => ({ ...f, status: e.target.value as SchoolStatus }))}
+                  className="w-full border border-slate-200 bg-slate-50 rounded-xl px-3 py-3 font-bold text-sm outline-none focus:border-blue-500 focus:bg-white transition-colors">
+                  {Object.values(SchoolStatus).map(s => <option key={s}>{s}</option>)}
+                </select>
+              </div>
+            </div>
+          </div>
+
+          <div className="bg-white rounded-2xl p-4 border border-slate-100 shadow-sm space-y-4">
+            <p className="text-[10px] font-black uppercase tracking-widest text-slate-400 mb-1">Principal Account</p>
+            {[
+              { label: 'Principal Name', key: 'principalName', placeholder: 'Dr. / Mr. / Ms.' },
+              { label: 'Email *', key: 'principalEmail', placeholder: 'principal@school.edu.in' },
+              { label: 'Phone', key: 'principalPhone', placeholder: '+91 XXXXX XXXXX' },
+            ].map(({ label, key, placeholder }) => (
+              <div key={key}>
+                <label className="block text-[10px] font-black uppercase tracking-widest text-slate-500 mb-1.5">{label}</label>
+                <input value={(form as any)[key] ?? ''} onChange={e => setForm(f => ({ ...f, [key]: e.target.value }))}
+                  placeholder={placeholder}
+                  className="w-full border border-slate-200 bg-slate-50 rounded-xl px-4 py-3 font-bold text-sm outline-none focus:border-blue-500 focus:bg-white transition-colors" />
+              </div>
+            ))}
+          </div>
+
+          <button onClick={handleUpdate} disabled={isSubmitting}
+            className="w-full flex items-center justify-center gap-2 bg-blue-600 text-white font-black text-xs uppercase tracking-widest py-4 rounded-2xl active:scale-95 transition-transform shadow-lg disabled:opacity-60">
+            {isSubmitting ? 'Updating…' : <><Save size={16} /> Update School</>}
+          </button>
+        </div>
+      </div>
+    );
+  }
+
+  // Confirmation dialog
+  if (confirmDelete) {
+    return (
+      <div className="absolute inset-0 z-60 bg-slate-900/60 flex items-end justify-center animate-in fade-in">
+        <div className="bg-white w-full rounded-t-3xl p-6 pb-10 animate-in slide-in-from-bottom-4">
+          <h3 className="font-black text-slate-900 text-lg mb-2">Delete School?</h3>
+          <p className="text-sm text-slate-500 mb-6">"{confirmDelete.name}" and all related data will be permanently removed.</p>
+          <div className="flex gap-3">
+            <button onClick={() => setConfirmDelete(null)} className="flex-1 py-3 rounded-2xl border border-slate-200 font-black text-slate-600 active:scale-95 transition-transform">
+              Cancel
+            </button>
+            <button onClick={() => handleDelete(confirmDelete)} className="flex-1 py-3 rounded-2xl bg-rose-600 text-white font-black active:scale-95 transition-transform">
+              Delete
+            </button>
+          </div>
         </div>
       </div>
     );
