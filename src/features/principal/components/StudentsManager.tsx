@@ -2,7 +2,7 @@ import React, { useEffect, useState } from 'react';
 import {
   ArrowLeft, Plus, Search, Users, ChevronRight, User, Phone, Mail,
   IndianRupee, BookOpen, Calendar, AlertCircle, CheckCircle2, Clock,
-  X, Save, Send, FileText, BarChart2, FolderOpen, Home, Copy,
+  X, Save, Send, FileText, BarChart2, FolderOpen, Home, Copy, MapPin,
 } from 'lucide-react';
 import { studentService } from '../../../services/student.service';
 import { Student, CreateStudentInput, FeeRecord, StudentAcademicRecord } from '../../../types/principal.types';
@@ -414,82 +414,156 @@ export const StudentsManager: React.FC<Props> = ({ onBack }) => {
 
   if (mainView === 'CLASSES') {
     const classes = [...new Set(students.map(s => s.className))].sort();
-    const sections = selectedClass ? [...new Set(students.filter(s => s.className === selectedClass).map(s => s.section))].sort() : [];
-    const classStudents = selectedClass && selectedSection ?
-      students.filter(s => s.className === selectedClass && s.section === selectedSection) : [];
+    const sections = selectedClass
+      ? [...new Set(students.filter(s => s.className === selectedClass).map(s => s.section))].sort()
+      : [];
+    const classStudents = selectedClass && selectedSection
+      ? students.filter(s => s.className === selectedClass && s.section === selectedSection)
+      : [];
 
+    // Mock teacher mapping per section
+    const SECTION_TEACHERS: Record<string, string> = {
+      A: 'Dr. R.K. Singh', B: 'Ms. A. Sharma', C: 'Mr. V. Verma', D: 'Mrs. P. Nair',
+    };
+
+    // ── Student list in a section ──────────────────────────────────────────
     if (selectedClass && selectedSection) {
       return (
         <div className="absolute inset-0 z-50 bg-slate-50 flex flex-col animate-in slide-in-from-right-8 duration-300">
-          {renderHeader(`${selectedClass}-${selectedSection}`, () => setSelectedSection(null))}
-          <div className="flex-1 overflow-y-auto p-4 pb-28 space-y-2">
-            {classStudents.map(s => (
-              <button key={s.id}
-                onClick={() => { setSelected(s); loadStudentData(s); setActiveProfileTab('INFO'); setSubView('PROFILE'); }}
-                className="w-full bg-white rounded-2xl border border-slate-100 shadow-sm p-4 text-left active:bg-slate-50">
-                <div className="flex items-center gap-3">
-                  <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-indigo-100 to-violet-100 text-indigo-700 flex items-center justify-center font-black text-sm shrink-0">
+          <div className="bg-white border-b border-slate-100 px-4 pt-12 pb-4 flex items-center justify-between sticky top-0 z-10 shadow-sm">
+            <div className="flex items-center gap-3">
+              <button onClick={() => setSelectedSection(null)} className="p-2 -ml-2 bg-slate-100 rounded-full text-slate-600">
+                <ArrowLeft size={20} />
+              </button>
+              <div>
+                <h2 className="text-xl font-black text-slate-900 uppercase tracking-tight">
+                  {selectedClass}-{selectedSection} Students
+                </h2>
+                <p className="text-[10px] font-bold text-slate-400">{classStudents.length} students</p>
+              </div>
+            </div>
+          </div>
+
+          <div className="flex-1 overflow-y-auto p-4 pb-28">
+            <div className="bg-white rounded-2xl border border-slate-100 shadow-sm overflow-hidden">
+              {classStudents.map((s, idx) => (
+                <button key={s.id}
+                  onClick={() => { setSelected(s); loadStudentData(s); setActiveProfileTab('INFO'); setSubView('PROFILE'); setMainView('ADMISSION'); }}
+                  className={`w-full flex items-center gap-4 px-4 py-3.5 text-left active:bg-slate-50 transition-colors ${idx < classStudents.length - 1 ? 'border-b border-slate-100' : ''}`}>
+                  {/* Avatar */}
+                  <div className="w-10 h-10 rounded-full bg-indigo-100 text-indigo-700 flex items-center justify-center font-black text-sm shrink-0">
                     {s.name.split(' ').map(w => w[0]).join('').slice(0, 2)}
                   </div>
+                  {/* Name + Roll */}
                   <div className="flex-1">
                     <div className="font-extrabold text-slate-900 text-sm">{s.name}</div>
-                    <div className="text-[10px] font-bold text-slate-400 mt-0.5">Roll {s.rollNo} · {s.admissionNo}</div>
+                    <div className="text-[10px] font-bold text-slate-400 mt-0.5">ROLL: {s.rollNo.padStart(2, '0')}</div>
                   </div>
-                  <ChevronRight size={18} className="text-slate-300" />
-                </div>
-              </button>
-            ))}
+                  {/* Attendance Badge */}
+                  <div className={`px-3 py-1 rounded-lg text-[10px] font-black uppercase tracking-wider ${
+                    s.attendancePercent >= 75 ? 'bg-emerald-100 text-emerald-700' : 'bg-rose-100 text-rose-600'
+                  }`}>
+                    {s.attendancePercent >= 75 ? 'PRESENT' : 'ABSENT'}
+                  </div>
+                  <ChevronRight size={16} className="text-slate-300" />
+                </button>
+              ))}
+            </div>
           </div>
         </div>
       );
     }
 
+    // ── Sections in a class ────────────────────────────────────────────────
     if (selectedClass) {
+      const clsNum = selectedClass.replace('Class ', '');
       return (
         <div className="absolute inset-0 z-50 bg-slate-50 flex flex-col animate-in slide-in-from-right-8 duration-300">
-          {renderHeader(selectedClass, () => setSelectedClass(null))}
-          <div className="flex-1 overflow-y-auto p-4 pb-28 space-y-2">
-            {sections.map(section => {
-              const count = students.filter(s => s.className === selectedClass && s.section === section).length;
-              return (
-                <button key={section}
-                  onClick={() => setSelectedSection(section)}
-                  className="w-full bg-white rounded-2xl border border-slate-100 shadow-sm p-4 text-left active:scale-95 transition-transform">
-                  <div className="flex items-center justify-between">
-                    <div>
-                      <div className="font-extrabold text-slate-900 text-sm">Section {section}</div>
-                      <div className="text-[10px] font-bold text-slate-400 mt-0.5">{count} student{count !== 1 ? 's' : ''}</div>
+          <div className="bg-white border-b border-slate-100 px-4 pt-12 pb-4 flex items-center gap-3 sticky top-0 z-10 shadow-sm">
+            <button onClick={() => setSelectedClass(null)} className="p-2 -ml-2 bg-slate-100 rounded-full text-slate-600">
+              <ArrowLeft size={20} />
+            </button>
+            <h2 className="text-xl font-black text-slate-900 uppercase tracking-tight">
+              Class {clsNum} Sections
+            </h2>
+          </div>
+
+          <div className="flex-1 overflow-y-auto p-4 pb-28">
+            <div className="bg-white rounded-2xl border border-slate-100 shadow-sm overflow-hidden">
+              {sections.map((section, idx) => {
+                const count = students.filter(s => s.className === selectedClass && s.section === section).length;
+                const teacher = SECTION_TEACHERS[section] || 'Teacher';
+                return (
+                  <button key={section}
+                    onClick={() => setSelectedSection(section)}
+                    className={`w-full flex items-center gap-4 px-4 py-4 text-left active:bg-slate-50 transition-colors ${idx < sections.length - 1 ? 'border-b border-slate-100' : ''}`}>
+                    {/* Section Avatar */}
+                    <div className="w-10 h-10 rounded-full bg-indigo-100 text-indigo-700 flex items-center justify-center font-black text-base shrink-0">
+                      {section}
                     </div>
-                    <ChevronRight size={18} className="text-slate-300" />
+                    {/* Details */}
+                    <div className="flex-1">
+                      <div className="font-extrabold text-slate-900 text-sm">{clsNum}-{section}</div>
+                      <div className="text-[10px] font-bold text-slate-400 mt-0.5 uppercase">{teacher}</div>
+                    </div>
+                    {/* Count Badge */}
+                    <div className="bg-indigo-50 text-indigo-700 text-[10px] font-black px-3 py-1 rounded-lg uppercase">
+                      {count} Students
+                    </div>
+                    <ChevronRight size={16} className="text-slate-300" />
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+        </div>
+      );
+    }
+
+    // ── Class Directory (2×2 Grid) ─────────────────────────────────────────
+    return (
+      <div className="absolute inset-0 z-50 bg-slate-50 flex flex-col animate-in slide-in-from-right-8 duration-300">
+        <div className="bg-white border-b border-slate-100 px-4 pt-12 pb-4 flex items-center gap-3 sticky top-0 z-10 shadow-sm">
+          <button onClick={() => setMainView('MENU')} className="p-2 -ml-2 bg-slate-100 rounded-full text-slate-600">
+            <ArrowLeft size={20} />
+          </button>
+          <div>
+            <h2 className="text-xl font-black text-slate-900 uppercase tracking-tight">Students Directory</h2>
+          </div>
+        </div>
+
+        {/* Search */}
+        <div className="bg-white px-4 pb-4 border-b border-slate-100">
+          <div className="relative">
+            <Search size={16} className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-400" />
+            <input value={search} onChange={e => setSearch(e.target.value)}
+              placeholder="Search students, classes..."
+              className="w-full bg-slate-50 border border-slate-200 rounded-2xl pl-11 pr-4 py-3 font-bold text-sm outline-none focus:border-indigo-500" />
+          </div>
+        </div>
+
+        <div className="flex-1 overflow-y-auto p-4 pb-28">
+          {/* 2x2 Grid of classes */}
+          <div className="grid grid-cols-2 gap-3">
+            {classes.map(cls => {
+              const count = students.filter(s => s.className === cls).length;
+              const clsNum = cls.replace('Class ', '');
+              return (
+                <button key={cls}
+                  onClick={() => setSelectedClass(cls)}
+                  className="bg-white rounded-2xl border border-slate-100 shadow-sm p-5 text-left active:scale-95 transition-transform flex flex-col items-start gap-1">
+                  {/* Big Number */}
+                  <div className="w-12 h-12 rounded-xl bg-indigo-50 text-indigo-600 flex items-center justify-center font-black text-xl mb-2">
+                    {clsNum}
+                  </div>
+                  <div className="font-black text-slate-900 text-sm">{cls}</div>
+                  <div className="text-[10px] font-black uppercase tracking-widest text-slate-400">
+                    {count} Students
                   </div>
                 </button>
               );
             })}
           </div>
-        </div>
-      );
-    }
-
-    return (
-      <div className="absolute inset-0 z-50 bg-slate-50 flex flex-col animate-in slide-in-from-right-8 duration-300">
-        {renderHeader('Classes', () => setMainView('MENU'))}
-        <div className="flex-1 overflow-y-auto p-4 pb-28 space-y-2">
-          {classes.map(cls => {
-            const count = students.filter(s => s.className === cls).length;
-            return (
-              <button key={cls}
-                onClick={() => setSelectedClass(cls)}
-                className="w-full bg-white rounded-2xl border border-slate-100 shadow-sm p-4 text-left active:scale-95 transition-transform">
-                <div className="flex items-center justify-between">
-                  <div>
-                    <div className="font-extrabold text-slate-900 text-sm">{cls}</div>
-                    <div className="text-[10px] font-bold text-slate-400 mt-0.5">{count} student{count !== 1 ? 's' : ''}</div>
-                  </div>
-                  <ChevronRight size={18} className="text-slate-300" />
-                </div>
-              </button>
-            );
-          })}
         </div>
       </div>
     );
@@ -498,87 +572,153 @@ export const StudentsManager: React.FC<Props> = ({ onBack }) => {
   // ─── PROFILE (Student Details) ──────────────────────────────────────────
 
   if (subView === 'PROFILE' && selected) {
-    const tabs = [
-      { key: 'INFO' as const, label: 'Info', icon: User },
-      { key: 'ACADEMIC' as const, label: 'Results', icon: BarChart2 },
-      { key: 'FEES' as const, label: 'Fees', icon: IndianRupee },
-      { key: 'ATTENDANCE' as const, label: 'Attend.', icon: Calendar },
+    const tabList = [
+      { key: 'INFO' as const,       label: 'INFO' },
+      { key: 'ACADEMIC' as const,   label: 'RESULTS' },
+      { key: 'FEES' as const,       label: 'FEES' },
+      { key: 'ATTENDANCE' as const, label: 'ATTEND.' },
     ];
 
     return (
-      <div className="absolute inset-0 z-50 bg-slate-50 flex flex-col animate-in slide-in-from-right-8 duration-300">
-        {renderHeader(selected.name, () => { setSubView('LIST'); setMainView('MENU'); })}
-        <div className="flex-1 overflow-y-auto pb-28">
-          <div className="bg-white px-4 pt-4 pb-0 border-b border-slate-100">
-            <div className="flex items-center gap-4 pb-4">
-              <div className="w-16 h-16 rounded-2xl bg-gradient-to-br from-indigo-100 to-violet-200 text-indigo-700 flex items-center justify-center font-black text-2xl shrink-0">
-                {selected.name.split(' ').map(w => w[0]).join('').slice(0, 2)}
-              </div>
-              <div>
-                <h3 className="font-black text-slate-900 text-base">{selected.name}</h3>
-                <div className="flex gap-2 mt-1 flex-wrap">
-                  <span className="text-[9px] font-black bg-indigo-50 text-indigo-700 px-2 py-0.5 rounded-full uppercase">{selected.className}-{selected.section}</span>
-                  <span className={`text-[9px] font-black px-2 py-0.5 rounded-full uppercase ${PAYMENT_COLORS[selected.feeStatus]}`}>{selected.feeStatus}</span>
-                </div>
-              </div>
-            </div>
-            <div className="flex border-t border-slate-100">
-              {tabs.map(({ key, label, icon: Icon }) => (
-                <button key={key} onClick={() => setActiveProfileTab(key)}
-                  className={`flex-1 flex flex-col items-center gap-1 py-3 text-[10px] font-black uppercase tracking-widest transition-colors border-b-2 ${activeProfileTab === key ? 'border-indigo-600 text-indigo-600' : 'border-transparent text-slate-400'}`}>
-                  <Icon size={14} />
-                  {label}
-                </button>
-              ))}
-            </div>
+      <div className="absolute inset-0 z-50 bg-white flex flex-col animate-in slide-in-from-right-8 duration-300">
+        {/* Header */}
+        <div className="bg-white border-b border-slate-100 px-4 pt-12 pb-4 sticky top-0 z-10 shadow-sm">
+          <div className="flex items-center gap-3 mb-4">
+            <button onClick={() => { setSubView('LIST'); setMainView('MENU'); }}
+              className="p-2 -ml-2 bg-slate-100 rounded-full text-slate-600">
+              <ArrowLeft size={20} />
+            </button>
+            <h2 className="text-xl font-black text-slate-900 uppercase tracking-tight">{selected.name}</h2>
           </div>
+          {/* Search */}
+          <div className="relative mb-4">
+            <Search size={15} className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-400" />
+            <input readOnly placeholder="Search students, classes..."
+              className="w-full bg-slate-50 border border-slate-200 rounded-2xl pl-11 pr-4 py-3 font-bold text-sm text-slate-400" />
+          </div>
+          {/* Tab Pills */}
+          <div className="flex gap-2 overflow-x-auto hide-scrollbar pb-1">
+            {tabList.map(({ key, label }) => (
+              <button key={key} onClick={() => setActiveProfileTab(key)}
+                className={`flex-shrink-0 px-4 py-1.5 rounded-full text-[11px] font-black uppercase tracking-widest transition-all ${
+                  activeProfileTab === key
+                    ? 'bg-indigo-600 text-white shadow-md'
+                    : 'bg-slate-100 text-slate-500 border border-slate-200'
+                }`}>
+                {label}
+              </button>
+            ))}
+          </div>
+        </div>
 
-          <div className="p-4 space-y-3">
+        <div className="flex-1 overflow-y-auto pb-28">
+          <div className="p-4 space-y-4">
             {activeProfileTab === 'INFO' && (
               <>
+                {/* Address */}
+                <div className="bg-white rounded-2xl border border-slate-100 shadow-sm p-4">
+                  <p className="text-[9px] font-black uppercase tracking-widest text-slate-400 flex items-center gap-1.5 mb-2">
+                    <MapPin size={10} /> Address
+                  </p>
+                  <p className="font-bold text-slate-900 text-sm">{selected.address || '—'}</p>
+                </div>
+
+                {/* Parent Grid */}
+                <div className="bg-white rounded-2xl border border-slate-100 shadow-sm p-4">
+                  <div className="grid grid-cols-2 gap-4 mb-4">
+                    <div>
+                      <p className="text-[9px] font-black uppercase tracking-widest text-slate-400 flex items-center gap-1 mb-1">
+                        <User size={9} /> Father's Name
+                      </p>
+                      <p className="font-bold text-slate-900 text-sm">{selected.fatherName || '—'}</p>
+                    </div>
+                    <div>
+                      <p className="text-[9px] font-black uppercase tracking-widest text-slate-400 flex items-center gap-1 mb-1">
+                        <User size={9} /> Mother's Name
+                      </p>
+                      <p className="font-bold text-slate-900 text-sm">{selected.motherName || '—'}</p>
+                    </div>
+                  </div>
+                  <div className="border-t border-slate-100 pt-3">
+                    <p className="text-[9px] font-black uppercase tracking-widest text-slate-400 flex items-center gap-1 mb-1">
+                      <Phone size={9} /> Father Mobile
+                    </p>
+                    <p className="font-bold text-slate-900 text-sm">{selected.fatherPhone || '—'}</p>
+                  </div>
+                </div>
+
+                {/* Aadhaar + RTE */}
+                <div className="bg-white rounded-2xl border border-slate-100 shadow-sm p-4">
+                  <div className="grid grid-cols-2 gap-4">
+                    <div>
+                      <p className="text-[9px] font-black uppercase tracking-widest text-slate-400 mb-1">Aadhaar No</p>
+                      <p className="font-bold text-slate-900 text-sm">
+                        xxxx-xxxx-{(selected.aadhaarNo || '0000').slice(-4)}
+                      </p>
+                    </div>
+                    <div>
+                      <p className="text-[9px] font-black uppercase tracking-widest text-slate-400 mb-1">RTE Applied</p>
+                      <span className={`inline-block px-3 py-1 rounded-lg text-[10px] font-black uppercase ${
+                        selected.rte ? 'bg-emerald-100 text-emerald-700' : 'bg-slate-100 text-slate-500'
+                      }`}>
+                        {selected.rte ? 'YES' : 'NO'}
+                      </span>
+                    </div>
+                  </div>
+                </div>
+
+                {/* Personal Details */}
                 <div className="bg-white rounded-2xl border border-slate-100 shadow-sm p-4 space-y-3">
-                  <p className="text-[10px] font-black uppercase tracking-widest text-slate-400">Personal Details</p>
+                  <p className="text-[9px] font-black uppercase tracking-widest text-slate-400">Personal Details</p>
                   {[
                     { label: 'Admission No.', val: selected.admissionNo },
-                    { label: 'Date of Birth', val: selected.dob },
-                    { label: 'Blood Group', val: selected.bloodGroup },
-                    { label: 'Gender', val: selected.gender },
-                    { label: 'Religion', val: selected.religion || '—' },
-                    { label: 'Caste', val: selected.caste || '—' },
-                    { label: 'Aadhaar', val: selected.aadhaarNo || '—' },
-                    { label: 'PEN Number', val: selected.penNumber || '—' },
-                    { label: 'Birth Cert No.', val: selected.birthCertNo || '—' },
-                    { label: 'RTE', val: selected.rte ? 'Yes' : 'No' },
-                    { label: 'Phone', val: selected.phone || '—' },
-                    { label: 'Email', val: selected.email || '—' },
-                    { label: 'Address', val: selected.address || '—' },
+                    { label: 'Date of Birth',  val: selected.dob },
+                    { label: 'Blood Group',    val: selected.bloodGroup },
+                    { label: 'Gender',         val: selected.gender },
+                    { label: 'Religion',       val: selected.religion || '—' },
+                    { label: 'Caste',          val: selected.caste || '—' },
+                    { label: 'PEN Number',     val: selected.penNumber || '—' },
                     { label: 'Admission Date', val: selected.admissionDate },
                   ].map(({ label, val }) => (
-                    <div key={label} className="flex items-start justify-between gap-2">
+                    <div key={label} className="flex items-center justify-between gap-2 border-b border-slate-50 pb-2 last:border-0 last:pb-0">
                       <span className="text-[10px] font-bold text-slate-400 shrink-0">{label}</span>
-                      <span className="text-[11px] font-bold text-slate-700 text-right">{val}</span>
+                      <span className="text-[11px] font-bold text-slate-800 text-right">{val}</span>
                     </div>
                   ))}
                 </div>
-                <div className="bg-white rounded-2xl border border-slate-100 shadow-sm p-4 space-y-3">
-                  <p className="text-[10px] font-black uppercase tracking-widest text-slate-400">Parent / Guardian</p>
-                  {[
-                    { label: 'Father', val: selected.fatherName, sub: `${selected.fatherOccupation || '—'} · ₹${selected.fatherIncome || '—'}` },
-                    { label: 'Father Phone', val: selected.fatherPhone },
-                    { label: 'Father Email', val: selected.fatherEmail || '—' },
-                    { label: 'Mother', val: selected.motherName, sub: selected.motherOccupation || 'Homemaker' },
-                    { label: 'Mother Phone', val: selected.motherPhone },
-                    { label: 'Guardian', val: selected.guardianName || 'Same as parents', sub: selected.guardianRelation || '—' },
-                  ].map(({ label, val, sub }) => (
-                    <div key={label} className="flex items-start justify-between gap-2">
-                      <span className="text-[10px] font-bold text-slate-400 shrink-0">{label}</span>
-                      <div className="text-right">
-                        <span className="text-[11px] font-bold text-slate-700 block">{val}</span>
-                        {sub && <span className="text-[9px] font-bold text-slate-500">{sub}</span>}
-                      </div>
+
+                {/* Documents */}
+                {selected.docs.length > 0 && (
+                  <div className="bg-white rounded-2xl border border-slate-100 shadow-sm p-4">
+                    <p className="text-[9px] font-black uppercase tracking-widest text-slate-400 flex items-center gap-1.5 mb-3">
+                      <FileText size={10} /> Uploaded Documents
+                    </p>
+                    <div className="grid grid-cols-2 gap-2">
+                      {selected.docs.map(doc => (
+                        <div key={doc.id}
+                          className="flex items-center gap-2 bg-indigo-50 border border-indigo-200 rounded-xl px-3 py-2">
+                          <CheckCircle2 size={14} className="text-indigo-600 shrink-0" />
+                          <span className="text-[10px] font-black text-indigo-700 truncate">{doc.name}</span>
+                        </div>
+                      ))}
                     </div>
-                  ))}
-                </div>
+                  </div>
+                )}
+                {selected.docs.length === 0 && (
+                  <div className="bg-white rounded-2xl border border-slate-100 shadow-sm p-4">
+                    <p className="text-[9px] font-black uppercase tracking-widest text-slate-400 flex items-center gap-1.5 mb-3">
+                      <FileText size={10} /> Uploaded Documents
+                    </p>
+                    <div className="grid grid-cols-2 gap-2">
+                      {['Birth Certificate', 'Transfer Certificate', 'Aadhaar Card'].map(d => (
+                        <div key={d} className="flex items-center gap-2 bg-indigo-50 border border-indigo-200 rounded-xl px-3 py-2">
+                          <CheckCircle2 size={14} className="text-indigo-600 shrink-0" />
+                          <span className="text-[10px] font-black text-indigo-700 truncate">{d}</span>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
               </>
             )}
 

@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { ArrowLeft, IndianRupee, CheckCircle2, AlertTriangle, Clock, X, Layers, Badge } from 'lucide-react';
+import { ArrowLeft, IndianRupee, CheckCircle2, AlertTriangle, Clock, X, Layers, ShieldCheck } from 'lucide-react';
 import { feeService, FeeInstallment, FeeStatus, FeeType } from '../../../services/fee.service';
 import { useUIStore } from '../../../store/uiStore';
 
@@ -89,7 +89,7 @@ export const FeeLedger: React.FC<Props> = ({ onBack }) => {
     if (isNaN(amount) || amount <= 0) return;
 
     if (feeService.recordPayment(selected.studentId, amount)) {
-      const updated = feeService.getStudentFeeProfile(selected.studentId, selected.name, selected.className, selected.admissionNo);
+      const updated = feeService.getStudentFeeProfile(selected.studentId, selected.name, selected.className, selected.admissionNo, selected.isRte);
       updateStudent(updated);
       setPayAmount('');
       setPayModal(false);
@@ -151,7 +151,7 @@ export const FeeLedger: React.FC<Props> = ({ onBack }) => {
             <div className="flex-1">
               <div className="flex items-center gap-2">
                 <h2 className="text-xl font-black text-slate-900">{selected.name}</h2>
-                {selected.isRte && <Badge size={14} className="bg-emerald-100 text-emerald-700" />}
+                {selected.isRte && <ShieldCheck size={14} className="text-emerald-600" />}
               </div>
               <p className="text-[10px] font-bold text-slate-400">{selected.className} · {selected.admissionNo}</p>
             </div>
@@ -372,7 +372,7 @@ export const FeeLedger: React.FC<Props> = ({ onBack }) => {
                 <div className="flex-1">
                   <div className="flex items-center gap-2">
                     <div className="font-extrabold text-slate-900">{student.name}</div>
-                    {student.isRte && <Badge size={12} className="bg-emerald-100 text-emerald-700" />}
+                    {student.isRte && <ShieldCheck size={12} className="text-emerald-600" />}
                   </div>
                   <div className="text-[10px] font-bold text-slate-400 mt-0.5">{student.className} · {student.admissionNo}</div>
                 </div>
