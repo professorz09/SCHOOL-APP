@@ -2,12 +2,13 @@ import React, { useEffect, useState } from 'react';
 import {
   ArrowLeft, Plus, Search, Users, ChevronRight, User, Phone, Mail,
   IndianRupee, BookOpen, Calendar, AlertCircle, CheckCircle2, Clock,
-  X, Save, Send, FileText, BarChart2, FolderOpen, Home,
+  X, Save, Send, FileText, BarChart2, FolderOpen, Home, Copy,
 } from 'lucide-react';
 import { studentService } from '../../../services/student.service';
 import { Student, CreateStudentInput, FeeRecord, StudentAcademicRecord } from '../../../types/principal.types';
 import { PaymentStatus, PAYMENT_COLORS } from '../../../config/constants';
 import { useUIStore } from '../../../store/uiStore';
+import { authService, ParentUser } from '../../../services/auth.service';
 
 type MainView = 'MENU' | 'ADMISSION' | 'FEES' | 'CLASSES';
 type SubView = 'LIST' | 'CREATE' | 'PROFILE' | 'CLASS_DETAIL' | 'SECTION_DETAIL';
@@ -28,6 +29,19 @@ const BLANK_FORM: CreateStudentInput = {
   guardianName: '', guardianPhone: '', guardianRelation: '',
 };
 
+interface FormWithParent extends CreateStudentInput {
+  parentMobileNumber: string;
+  parentName: string;
+  parentEmail: string;
+}
+
+const BLANK_FORM_WITH_PARENT: FormWithParent = {
+  ...BLANK_FORM,
+  parentMobileNumber: '',
+  parentName: '',
+  parentEmail: '',
+};
+
 export const StudentsManager: React.FC<Props> = ({ onBack }) => {
   const { showToast } = useUIStore();
   const [mainView, setMainView] = useState<MainView>('MENU');
@@ -38,11 +52,13 @@ export const StudentsManager: React.FC<Props> = ({ onBack }) => {
   const [selectedSection, setSelectedSection] = useState<string | null>(null);
   const [search, setSearch] = useState('');
   const [classFilter, setClassFilter] = useState<string>('ALL');
-  const [form, setForm] = useState<CreateStudentInput>(BLANK_FORM);
+  const [form, setForm] = useState<FormWithParent>(BLANK_FORM_WITH_PARENT);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [feeRecords, setFeeRecords] = useState<FeeRecord[]>([]);
   const [academicRecord, setAcademicRecord] = useState<StudentAcademicRecord | null>(null);
   const [activeProfileTab, setActiveProfileTab] = useState<'INFO' | 'ACADEMIC' | 'FEES' | 'ATTENDANCE'>('INFO');
+  const [createdParent, setCreatedParent] = useState<ParentUser | null>(null);
+  const [showParentModal, setShowParentModal] = useState(false);
 
   useEffect(() => { studentService.getAll().then(setStudents); }, []);
 
@@ -57,17 +73,47 @@ export const StudentsManager: React.FC<Props> = ({ onBack }) => {
 
   const handleCreate = async () => {
     if (!form.name || !form.admissionNo || !form.rollNo) {
-      showToast('Name, admission no. and roll no. required', 'error'); return;
+      showToast('Name, admission no. and roll no. required', 'error');
+      return;
     }
+    if (!form.parentMobileNumber.trim()) {
+      showToast('Parent mobile number required', 'error');
+      return;
+    }
+
     setIsSubmitting(true);
     try {
-      const student = await studentService.create(form);
+      // Create the student
+      const { parentMobileNumber, parentName, parentEmail, ...studentData } = form;
+      const student = await studentService.create(studentData);
+
+      // Check if parent exists by mobile number
+      let parent = authService.getParentByMobile(parentMobileNumber);
+
+      if (parent) {
+        // Link student to existing parent
+        authService.linkStudentToParent(parent.id, student.id);
+        showToast(`${student.name} admitted! Linked to existing parent account (${parentName})`);
+      } else {
+        // Create new parent account
+        parent = authService.createParentAccount(
+          parentMobileNumber,
+          parentName || form.fatherName,
+          parentEmail || form.fatherEmail || '',
+          'sch1',
+          student.id,
+        );
+        setCreatedParent(parent);
+        setShowParentModal(true);
+      }
+
       setStudents(prev => [...prev, student]);
-      showToast(`${student.name} admitted successfully!`);
-      setForm(BLANK_FORM);
+      setForm(BLANK_FORM_WITH_PARENT);
       setMainView('MENU');
       setSubView('LIST');
-    } finally { setIsSubmitting(false); }
+    } finally {
+      setIsSubmitting(false);
+    }
   };
 
   const handleMarkFeePaid = async (feeId: string) => {
@@ -195,6 +241,27 @@ export const StudentsManager: React.FC<Props> = ({ onBack }) => {
               { label: 'Phone', key: 'phone', placeholder: '+91 XXXXX XXXXX' },
               { label: 'Email', key: 'email', placeholder: 'student@school.edu.in' },
               { label: 'Address', key: 'address', placeholder: 'Full residential address' },
+            ].map(({ label, key, placeholder }) => (
+              <div key={key}>
+                <label className="block text-[10px] font-black uppercase tracking-widest text-slate-500 mb-1.5">{label}</label>
+                <input value={(form as any)[key]} onChange={e => setForm(f => ({ ...f, [key]: e.target.value }))}
+                  placeholder={placeholder}
+                  className="w-full border border-slate-200 bg-slate-50 rounded-xl px-4 py-3 font-bold text-sm outline-none focus:border-indigo-500" />
+              </div>
+            ))}
+          </div>
+
+          <div className="bg-white rounded-2xl border border-slate-100 shadow-sm p-4 space-y-4">
+            <p className="text-[10px] font-black uppercase tracking-widest text-slate-400">Parent Mobile & Login</p>
+            <div className="bg-blue-50 border border-blue-200 rounded-xl p-3 mb-3">
+              <p className="text-[10px] font-bold text-blue-700">
+                Parent mobile number is used for app login. A temporary password will be created.
+              </p>
+            </div>
+            {[
+              { label: 'Parent Mobile Number *', key: 'parentMobileNumber', placeholder: '10-digit mobile' },
+              { label: 'Parent Name *', key: 'parentName', placeholder: 'Mother or Father name' },
+              { label: 'Parent Email', key: 'parentEmail', placeholder: 'parent@email.com' },
             ].map(({ label, key, placeholder }) => (
               <div key={key}>
                 <label className="block text-[10px] font-black uppercase tracking-widest text-slate-500 mb-1.5">{label}</label>
@@ -610,6 +677,81 @@ export const StudentsManager: React.FC<Props> = ({ onBack }) => {
               </div>
             )}
           </div>
+        </div>
+      </div>
+    );
+  }
+
+  {/* Parent Account Creation Modal */}
+  if (showParentModal && createdParent) {
+    const tempPassword = authService.getTempPassword(form.parentMobileNumber);
+    return (
+      <div className="absolute inset-0 z-50 bg-slate-900/50 backdrop-blur-sm flex items-end">
+        <div className="w-full bg-white rounded-t-3xl p-6 pb-8 animate-in slide-in-from-bottom-8">
+          <div className="flex justify-between items-center mb-6">
+            <h3 className="text-lg font-black text-slate-900">Parent Account Created</h3>
+            <button onClick={() => setShowParentModal(false)} className="w-8 h-8 bg-slate-100 rounded-full flex items-center justify-center text-slate-500">✕</button>
+          </div>
+
+          <div className="bg-emerald-50 border border-emerald-200 rounded-xl p-4 mb-6 space-y-3">
+            <div className="flex items-start gap-2">
+              <CheckCircle2 size={20} className="text-emerald-600 shrink-0 mt-0.5" />
+              <div>
+                <p className="font-black text-emerald-900">Account Created</p>
+                <p className="text-sm font-bold text-emerald-700 mt-1">
+                  A new parent account has been created. Share these credentials with the parent.
+                </p>
+              </div>
+            </div>
+          </div>
+
+          <div className="space-y-4 mb-6">
+            <div>
+              <label className="block text-[10px] font-black uppercase tracking-widest text-slate-500 mb-2">Mobile Number</label>
+              <div className="flex gap-2">
+                <div className="flex-1 bg-slate-50 border border-slate-200 rounded-xl px-4 py-3 font-bold text-slate-900 text-sm">
+                  {createdParent.mobileNumber}
+                </div>
+                <button
+                  onClick={() => {
+                    navigator.clipboard.writeText(createdParent.mobileNumber);
+                    showToast('Mobile number copied!');
+                  }}
+                  className="px-4 py-3 bg-slate-100 rounded-xl hover:bg-slate-200 transition-colors"
+                >
+                  <Copy size={16} className="text-slate-600" />
+                </button>
+              </div>
+            </div>
+
+            <div>
+              <label className="block text-[10px] font-black uppercase tracking-widest text-slate-500 mb-2">Temporary Password</label>
+              <div className="flex gap-2">
+                <div className="flex-1 bg-slate-50 border border-slate-200 rounded-xl px-4 py-3 font-black text-slate-900 text-sm">
+                  {createdParent.password}
+                </div>
+                <button
+                  onClick={() => {
+                    navigator.clipboard.writeText(createdParent.password);
+                    showToast('Password copied!');
+                  }}
+                  className="px-4 py-3 bg-slate-100 rounded-xl hover:bg-slate-200 transition-colors"
+                >
+                  <Copy size={16} className="text-slate-600" />
+                </button>
+              </div>
+              <p className="text-[10px] font-bold text-slate-400 mt-2">
+                Parent should change password on first login
+              </p>
+            </div>
+          </div>
+
+          <button
+            onClick={() => setShowParentModal(false)}
+            className="w-full py-3 bg-emerald-600 text-white font-black rounded-xl"
+          >
+            Done
+          </button>
         </div>
       </div>
     );
