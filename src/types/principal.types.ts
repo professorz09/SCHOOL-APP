@@ -1,0 +1,203 @@
+import { PaymentStatus } from '../config/constants';
+
+export type BloodGroup = 'A+' | 'A-' | 'B+' | 'B-' | 'O+' | 'O-' | 'AB+' | 'AB-';
+export type Gender = 'MALE' | 'FEMALE' | 'OTHER';
+export type StaffRole = 'TEACHER' | 'VICE_PRINCIPAL' | 'ACCOUNTANT' | 'LIBRARIAN' | 'LAB_INCHARGE' | 'DRIVER' | 'PEON' | 'SECURITY';
+export type StaffStatus = 'ACTIVE' | 'ON_LEAVE' | 'SUSPENDED';
+export type ComplaintStatus = 'OPEN' | 'IN_PROGRESS' | 'RESOLVED';
+export type ComplaintFrom = 'STUDENT' | 'TEACHER' | 'PARENT';
+export type ApprovalType = 'LEAVE' | 'FEE_PAYMENT' | 'ATTENDANCE_CORRECTION';
+export type ApprovalStatus = 'PENDING' | 'APPROVED' | 'REJECTED';
+export type AssetCategory = 'BOOK' | 'LAB_EQUIPMENT' | 'VEHICLE';
+export type NoticeAudience = 'ALL' | 'STUDENTS' | 'TEACHERS' | 'PARENTS';
+
+export interface Student {
+  id: string;
+  name: string;
+  rollNo: string;
+  admissionNo: string;
+  className: string;
+  section: string;
+  dob: string;
+  gender: Gender;
+  bloodGroup: BloodGroup;
+  aadhaarNo: string;
+  phone: string;
+  email: string;
+  address: string;
+  photo: string;
+  fatherName: string;
+  fatherPhone: string;
+  motherName: string;
+  motherPhone: string;
+  academicYearId: string;
+  admissionDate: string;
+  feeStatus: PaymentStatus;
+  totalFee: number;
+  paidFee: number;
+  attendancePercent: number;
+  docs: StudentDoc[];
+}
+
+export interface StudentDoc {
+  id: string;
+  name: string;
+  type: 'BIRTH_CERT' | 'TRANSFER_CERT' | 'AADHAAR' | 'PHOTO' | 'OTHER';
+  uploadedAt: string;
+}
+
+export interface StudentAcademicRecord {
+  studentId: string;
+  academicYearId: string;
+  exams: ExamResult[];
+  feeRecords: FeeRecord[];
+  attendanceRecords: AttendanceMonth[];
+  complaints: Complaint[];
+}
+
+export interface ExamResult {
+  id: string;
+  examName: string;
+  subject: string;
+  maxMarks: number;
+  obtainedMarks: number;
+  grade: string;
+  date: string;
+}
+
+export interface FeeRecord {
+  id: string;
+  studentId: string;
+  studentName: string;
+  amount: number;
+  dueDate: string;
+  paidAt: string | null;
+  status: PaymentStatus;
+  transactionId: string | null;
+  screenshotUrl: string | null;
+  description: string;
+}
+
+export interface AttendanceMonth {
+  month: string;
+  present: number;
+  absent: number;
+  total: number;
+}
+
+export interface StaffMember {
+  id: string;
+  name: string;
+  role: StaffRole;
+  subject: string;
+  phone: string;
+  email: string;
+  aadhaarNo: string;
+  salary: number;
+  joiningDate: string;
+  status: StaffStatus;
+  assignedClasses: string[];
+  address: string;
+  photo: string;
+}
+
+export interface Complaint {
+  id: string;
+  from: ComplaintFrom;
+  fromName: string;
+  fromClass?: string;
+  subject: string;
+  description: string;
+  status: ComplaintStatus;
+  createdAt: string;
+  resolvedAt: string | null;
+  response: string | null;
+}
+
+export interface Expense {
+  id: string;
+  category: 'SALARY' | 'MAINTENANCE' | 'UTILITIES' | 'EVENTS' | 'SUPPLIES' | 'OTHER';
+  description: string;
+  amount: number;
+  date: string;
+  approvedBy: string;
+}
+
+export interface Notice {
+  id: string;
+  title: string;
+  body: string;
+  audience: NoticeAudience;
+  sentAt: string;
+  sentBy: string;
+  pinned: boolean;
+}
+
+export interface Approval {
+  id: string;
+  type: ApprovalType;
+  fromName: string;
+  fromRole: string;
+  subject: string;
+  description: string;
+  status: ApprovalStatus;
+  createdAt: string;
+  attachmentUrl: string | null;
+}
+
+export interface LibraryBook {
+  id: string;
+  title: string;
+  author: string;
+  isbn: string;
+  subject: string;
+  totalCopies: number;
+  availableCopies: number;
+  issuedTo: BookIssue[];
+}
+
+export interface BookIssue {
+  studentId: string;
+  studentName: string;
+  issuedAt: string;
+  dueDate: string;
+  returnedAt: string | null;
+}
+
+export interface LabEquipment {
+  id: string;
+  name: string;
+  labType: 'SCIENCE' | 'COMPUTER' | 'LANGUAGE';
+  quantity: number;
+  workingCount: number;
+  lastServiced: string;
+}
+
+export interface Vehicle {
+  id: string;
+  vehicleNo: string;
+  type: 'BUS' | 'VAN';
+  capacity: number;
+  driverName: string;
+  driverPhone: string;
+  route: string;
+  routeStops: string[];
+  studentsAssigned: number;
+}
+
+export interface AcademicYearConfig {
+  id: string;
+  label: string;
+  startDate: string;
+  endDate: string;
+  isActive: boolean;
+  board: string;
+  classes: ClassConfig[];
+}
+
+export interface ClassConfig {
+  name: string;
+  sections: string[];
+}
+
+export type CreateStudentInput = Omit<Student, 'id' | 'docs' | 'attendancePercent' | 'feeStatus' | 'paidFee'>;
