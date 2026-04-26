@@ -24,7 +24,7 @@ export interface TimetableEntry {
   academicYearId: string;
 }
 
-export const PERIOD_SLOTS: PeriodSlot[] = [
+export let PERIOD_SLOTS: PeriodSlot[] = [
   { slotId: 'assembly', label: 'Assembly', startTime: '08:00', endTime: '08:20', type: 'ASSEMBLY', isFixed: true },
   { slotId: 'p1', label: 'Period 1', startTime: '08:20', endTime: '09:05', type: 'CLASS', isFixed: false },
   { slotId: 'p2', label: 'Period 2', startTime: '09:05', endTime: '09:50', type: 'CLASS', isFixed: false },
@@ -137,6 +137,10 @@ export const timetableService = {
 
   deleteEntry(id: string): void {
     _entries = _entries.filter(e => e.id !== id);
+  },
+
+  updateSlotTime(slotId: string, startTime: string, endTime: string): void {
+    PERIOD_SLOTS = PERIOD_SLOTS.map(s => s.slotId === slotId ? { ...s, startTime, endTime } : s);
   },
 
   // Build a day-keyed map for a class (for student weekly view)

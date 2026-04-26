@@ -193,8 +193,34 @@ export const principalService = {
     return _books.find(b => b.id === bookId)!;
   },
 
+  async addBook(input: Omit<LibraryBook, 'id' | 'issuedTo' | 'availableCopies'>): Promise<LibraryBook> {
+    const book: LibraryBook = { ...input, id: `bk${Date.now()}`, availableCopies: input.totalCopies, issuedTo: [] };
+    _books = [..._books, book];
+    return book;
+  },
+  async deleteBook(id: string): Promise<void> { _books = _books.filter(b => b.id !== id); },
+  async returnBook(bookId: string, studentId: string): Promise<LibraryBook> {
+    _books = _books.map(b => b.id === bookId ? {
+      ...b,
+      availableCopies: b.availableCopies + 1,
+      issuedTo: b.issuedTo.map(i => i.studentId === studentId && !i.returnedAt
+        ? { ...i, returnedAt: new Date().toISOString().split('T')[0] } : i),
+    } : b);
+    return _books.find(b => b.id === bookId)!;
+  },
+
   // Equipment
   async getEquipment(): Promise<LabEquipment[]> { return [..._equipment]; },
+  async addEquipment(input: Omit<LabEquipment, 'id'>): Promise<LabEquipment> {
+    const eq: LabEquipment = { ...input, id: `eq${Date.now()}` };
+    _equipment = [..._equipment, eq];
+    return eq;
+  },
+  async deleteEquipment(id: string): Promise<void> { _equipment = _equipment.filter(e => e.id !== id); },
+  async updateEquipment(id: string, input: Partial<LabEquipment>): Promise<LabEquipment> {
+    _equipment = _equipment.map(e => e.id === id ? { ...e, ...input } : e);
+    return _equipment.find(e => e.id === id)!;
+  },
 
   // Vehicles
   async getVehicles(): Promise<Vehicle[]> { return [..._vehicles]; },
