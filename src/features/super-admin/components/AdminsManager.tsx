@@ -20,6 +20,7 @@ export const AdminsManager: React.FC<Props> = ({ onBack }) => {
   const [search, setSearch] = useState('');
   const [expandedId, setExpandedId] = useState<string | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [confirmDelete, setConfirmDelete] = useState<AdminUser | null>(null);
 
   const [form, setForm] = useState<CreateAdminInput>({
     name: '', email: '', phone: '', role: 'PRINCIPAL', schoolId: '', password: '',
@@ -50,14 +51,24 @@ export const AdminsManager: React.FC<Props> = ({ onBack }) => {
   };
 
   const handleToggleStatus = async (admin: AdminUser) => {
+    if (admin.role === 'SUPER_ADMIN') {
+      showToast('Cannot modify super admin accounts', 'error');
+      return;
+    }
     const next = admin.status === 'ACTIVE' ? 'INACTIVE' : 'ACTIVE';
     await updateStatus(admin.id, next);
     showToast(`${admin.name} marked ${next.toLowerCase()}`);
   };
 
   const handleDelete = async (admin: AdminUser) => {
+    if (admin.role === 'SUPER_ADMIN') {
+      showToast('Cannot delete super admin accounts', 'error');
+      setConfirmDelete(null);
+      return;
+    }
     await deleteAdmin(admin.id);
     showToast(`${admin.name} removed`, 'info');
+    setConfirmDelete(null);
     if (view === 'DETAIL') setView('LIST');
   };
 
@@ -77,7 +88,7 @@ export const AdminsManager: React.FC<Props> = ({ onBack }) => {
   const statusColor = (s: string) => s === 'ACTIVE' ? 'text-emerald-700 bg-emerald-50' : s === 'SUSPENDED' ? 'text-rose-700 bg-rose-50' : 'text-slate-500 bg-slate-100';
 
   if (view === 'LIST') return (
-    <div className="absolute inset-0 z-40 bg-slate-50 flex flex-col animate-in slide-in-from-right-8 duration-300">
+    <div className="absolute inset-0 z-50 bg-slate-50 flex flex-col animate-in slide-in-from-right-8 duration-300">
       {renderHeader('System Admins', onBack,
         <button onClick={() => setView('CREATE')} className="p-2 bg-rose-500 text-white rounded-full hover:bg-rose-600 transition-colors shadow-md">
           <Plus size={18} />
@@ -116,10 +127,10 @@ export const AdminsManager: React.FC<Props> = ({ onBack }) => {
                   <span className={`text-[9px] font-black px-2 py-0.5 rounded-full uppercase tracking-widest ${statusColor(admin.status)}`}>
                     {admin.status}
                   </span>
-                  <button onClick={() => handleToggleStatus(admin)} className="p-1 text-slate-400 hover:bg-slate-100 rounded-full">
+                  <button onClick={() => handleToggleStatus(admin)} disabled={admin.role === 'SUPER_ADMIN'} className={`p-1 rounded-full transition-colors ${admin.role === 'SUPER_ADMIN' ? 'opacity-40 cursor-not-allowed' : 'text-slate-400 hover:bg-slate-100'}`}>
                     {admin.status === 'ACTIVE' ? <XCircle size={14} className="text-rose-400" /> : <CheckCircle2 size={14} className="text-emerald-400" />}
                   </button>
-                  <button onClick={() => handleDelete(admin)} className="p-1 text-slate-400 hover:bg-slate-100 rounded-full">
+                  <button onClick={() => setConfirmDelete(admin)} disabled={admin.role === 'SUPER_ADMIN'} className={`p-1 rounded-full transition-colors ${admin.role === 'SUPER_ADMIN' ? 'opacity-40 cursor-not-allowed' : 'text-slate-400 hover:bg-slate-100'}`}>
                     <Trash2 size={14} className="text-rose-400" />
                   </button>
                 </div>
@@ -183,7 +194,7 @@ export const AdminsManager: React.FC<Props> = ({ onBack }) => {
   );
 
   if (view === 'CREATE') return (
-    <div className="absolute inset-0 z-40 bg-slate-50 flex flex-col animate-in slide-in-from-right-8 duration-300">
+    <div className="absolute inset-0 z-50 bg-slate-50 flex flex-col animate-in slide-in-from-right-8 duration-300">
       {renderHeader('Create Admin', () => setView('LIST'))}
       <div className="flex-1 overflow-y-auto p-4 pb-28 space-y-4">
         <div className="bg-white rounded-2xl border border-slate-100 shadow-sm p-4 space-y-4">
@@ -217,6 +228,26 @@ export const AdminsManager: React.FC<Props> = ({ onBack }) => {
       </div>
     </div>
   );
+
+  // Confirmation dialog
+  if (confirmDelete && confirmDelete.role !== 'SUPER_ADMIN') {
+    return (
+      <div className="absolute inset-0 z-60 bg-slate-900/60 flex items-end justify-center animate-in fade-in">
+        <div className="bg-white w-full rounded-t-3xl p-6 pb-10 animate-in slide-in-from-bottom-4">
+          <h3 className="font-black text-slate-900 text-lg mb-2">Delete Admin?</h3>
+          <p className="text-sm text-slate-500 mb-6">"{confirmDelete.name}" and their connected accounts will be removed.</p>
+          <div className="flex gap-3">
+            <button onClick={() => setConfirmDelete(null)} className="flex-1 py-3 rounded-2xl border border-slate-200 font-black text-slate-600 active:scale-95 transition-transform">
+              Cancel
+            </button>
+            <button onClick={() => handleDelete(confirmDelete)} className="flex-1 py-3 rounded-2xl bg-rose-600 text-white font-black active:scale-95 transition-transform">
+              Delete
+            </button>
+          </div>
+        </div>
+      </div>
+    );
+  }
 
   return null;
 };

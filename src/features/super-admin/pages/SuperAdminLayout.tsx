@@ -14,7 +14,7 @@ export const SuperAdminLayout: React.FC = () => {
   const [view, setView] = useState<ActiveView>('dashboard');
 
   return (
-    <div className="relative w-full h-full">
+    <div className="w-full h-full">
       <SADashboard onNavigate={(v) => setView(v as ActiveView)} />
 
       {view === 'schools' && <SchoolsManager onBack={() => setView('dashboard')} />}
