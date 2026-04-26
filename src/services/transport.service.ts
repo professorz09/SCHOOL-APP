@@ -87,6 +87,22 @@ let _assignments: StudentTransportAssignment[] = [
     id: 'ta3', studentId: 'student3', studentName: 'Rahul Verma', className: '9-A',
     vehicleId: 'v2', boardingStopId: 's2c', boardingStopName: 'Pitampura', academicYearId: 'ay1',
   },
+  {
+    id: 'ta4', studentId: 'student4', studentName: 'Ananya Singh', className: '9-B',
+    vehicleId: 'v1', boardingStopId: 's1b', boardingStopName: 'Janakpuri West', academicYearId: 'ay1',
+  },
+  {
+    id: 'ta5', studentId: 'student5', studentName: 'Vikram Rathore', className: '8-A',
+    vehicleId: 'v2', boardingStopId: 's2b', boardingStopName: 'Shalimar Bagh', academicYearId: 'ay1',
+  },
+  {
+    id: 'ta6', studentId: 'student6', studentName: 'Neha Gupta', className: '8-B',
+    vehicleId: 'v1', boardingStopId: 's1c', boardingStopName: 'Uttam Nagar', academicYearId: 'ay1',
+  },
+  {
+    id: 'ta7', studentId: 'student7', studentName: 'Arjun Patel', className: '10-B',
+    vehicleId: 'v2', boardingStopId: 's2d', boardingStopName: 'Rohini Sector 10', academicYearId: 'ay1',
+  },
 ];
 
 // ─── Mock students (for assignment picker) ────────────────────────────────────
