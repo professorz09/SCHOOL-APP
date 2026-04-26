@@ -1,7 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import {
   ArrowLeft, Plus, Search, Building2, MapPin, Phone, Users, ChevronRight,
-  Edit2, Trash2, CheckCircle2, XCircle, X, Save, Eye, BookOpen, UserCheck, IndianRupee,
+  Edit2, Trash2, CheckCircle2, XCircle, X, Save, Eye, BookOpen, UserCheck, IndianRupee, Copy,
 } from 'lucide-react';
 import { useSchoolStore } from '../../../store/schoolStore';
 import { useBillingStore } from '../../../store/billingStore';
@@ -37,6 +37,7 @@ export const SchoolsManager: React.FC<Props> = ({ onBack }) => {
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState<School | null>(null);
   const [confirmDeactivate, setConfirmDeactivate] = useState<School | null>(null);
+  const [createdCredentials, setCreatedCredentials] = useState<{ schoolName: string; mobile: string; password: string } | null>(null);
 
   const [form, setForm] = useState<Partial<CreateSchoolInput>>({
     name: '', code: '', location: '', address: '', phone: '',
@@ -58,6 +59,13 @@ export const SchoolsManager: React.FC<Props> = ({ onBack }) => {
     if (!form.name || !form.code || !form.principalEmail || !form.paymentStartDate) {
       showToast('Please fill all required fields', 'error'); return;
     }
+    if (!form.principalPhone || !form.password) {
+      showToast('Principal phone & login password required', 'error'); return;
+    }
+    const cleanPhone = form.principalPhone.replace(/\D/g, '').slice(-10);
+    if (cleanPhone.length !== 10) {
+      showToast('Principal phone must be a 10-digit number', 'error'); return;
+    }
     setIsSubmitting(true);
     try {
       const school = await schoolService.create(form as CreateSchoolInput);
@@ -70,7 +78,11 @@ export const SchoolsManager: React.FC<Props> = ({ onBack }) => {
         school.paymentStartDate,
       );
       await fetchBilling();
-      showToast(`${school.name} onboarded! 12 months billing scheduled.`);
+      setCreatedCredentials({
+        schoolName: school.name,
+        mobile: cleanPhone,
+        password: form.password as string,
+      });
       setForm({
         name: '', code: '', location: '', address: '', phone: '',
         principalName: '', principalEmail: '', principalPhone: '',
@@ -564,6 +576,59 @@ export const SchoolsManager: React.FC<Props> = ({ onBack }) => {
           <button onClick={handleUpdate} disabled={isSubmitting}
             className="w-full flex items-center justify-center gap-2 bg-blue-600 text-white font-black text-xs uppercase tracking-widest py-4 rounded-2xl active:scale-95 transition-transform shadow-lg disabled:opacity-60">
             {isSubmitting ? 'Updating…' : <><Save size={16} /> Update School</>}
+          </button>
+        </div>
+      </div>
+    );
+  }
+
+  // Principal credentials hand-off after creation
+  if (createdCredentials) {
+    return (
+      <div className="absolute inset-0 z-60 bg-slate-900/60 flex items-end justify-center animate-in fade-in">
+        <div className="bg-white w-full rounded-t-3xl p-6 pb-8 animate-in slide-in-from-bottom-4">
+          <div className="w-10 h-10 rounded-2xl bg-emerald-100 text-emerald-600 flex items-center justify-center mb-4">
+            <CheckCircle2 size={22} />
+          </div>
+          <h3 className="font-black text-slate-900 text-lg mb-1">School Onboarded</h3>
+          <p className="text-sm text-slate-500 mb-5">
+            "<span className="font-black text-slate-800">{createdCredentials.schoolName}</span>" is live. Share these login credentials with the principal.
+          </p>
+
+          <div className="space-y-3 mb-5">
+            <div>
+              <label className="block text-[10px] font-black uppercase tracking-widest text-slate-500 mb-1.5">Login Mobile</label>
+              <div className="flex gap-2">
+                <div className="flex-1 bg-slate-50 border border-slate-200 rounded-xl px-4 py-3 font-black text-slate-900 text-sm">
+                  {createdCredentials.mobile}
+                </div>
+                <button
+                  onClick={() => { navigator.clipboard.writeText(createdCredentials.mobile); showToast('Mobile copied!'); }}
+                  className="px-4 py-3 bg-slate-100 rounded-xl hover:bg-slate-200 transition-colors">
+                  <Copy size={16} className="text-slate-600" />
+                </button>
+              </div>
+            </div>
+            <div>
+              <label className="block text-[10px] font-black uppercase tracking-widest text-slate-500 mb-1.5">Temporary Password</label>
+              <div className="flex gap-2">
+                <div className="flex-1 bg-slate-50 border border-slate-200 rounded-xl px-4 py-3 font-black text-slate-900 text-sm">
+                  {createdCredentials.password}
+                </div>
+                <button
+                  onClick={() => { navigator.clipboard.writeText(createdCredentials.password); showToast('Password copied!'); }}
+                  className="px-4 py-3 bg-slate-100 rounded-xl hover:bg-slate-200 transition-colors">
+                  <Copy size={16} className="text-slate-600" />
+                </button>
+              </div>
+              <p className="text-[10px] font-bold text-slate-400 mt-2">Principal will be asked to change this on first login.</p>
+            </div>
+          </div>
+
+          <button
+            onClick={() => setCreatedCredentials(null)}
+            className="w-full py-3 bg-emerald-600 text-white font-black rounded-xl active:scale-95 transition-transform">
+            Done
           </button>
         </div>
       </div>

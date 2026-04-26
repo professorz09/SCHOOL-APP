@@ -34,6 +34,7 @@ export interface AuthSession {
   linkedStudentIds?: string[]; // For parents
   name: string;
   email: string;
+  mustChangePassword: boolean;
 }
 
 // ─── Seed Data ────────────────────────────────────────────────────────────────
@@ -97,6 +98,7 @@ export const authService = {
       linkedStudentIds: parent.linkedStudentIds,
       name: parent.name,
       email: parent.email,
+      mustChangePassword: !parent.firstLoginChanged,
     };
   },
 
@@ -114,7 +116,39 @@ export const authService = {
       schoolId: principal.schoolId,
       name: 'Principal',
       email: principal.email,
+      mustChangePassword: !principal.firstLoginChanged,
     };
+  },
+
+  // ── Create new principal account (called when Super Admin onboards a school)
+  createPrincipalAccount(
+    schoolId: string,
+    mobileNumber: string,
+    email: string,
+    password: string,
+  ): PrincipalUser {
+    const existing = _principalUsers.find(p => p.mobileNumber === mobileNumber);
+    if (existing) {
+      // Mobile is reused: refresh credentials for the new school assignment.
+      existing.schoolId = schoolId;
+      existing.email = email;
+      existing.password = password;
+      existing.firstLoginChanged = false;
+      return existing;
+    }
+
+    const principal: PrincipalUser = {
+      id: `principal${Date.now()}`,
+      schoolId,
+      mobileNumber,
+      password,
+      email,
+      createdAt: new Date().toISOString(),
+      lastLogin: null,
+      firstLoginChanged: false,
+    };
+    _principalUsers.push(principal);
+    return principal;
   },
 
   // ── Check if parent exists by mobile ────────────────────────────────────
