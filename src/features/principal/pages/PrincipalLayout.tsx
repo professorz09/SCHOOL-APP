@@ -14,6 +14,7 @@ import { FeeLedger } from '../components/FeeLedger';
 import { SalaryLedger } from '../components/SalaryLedger';
 import { YearClosingWizard } from '../components/YearClosingWizard';
 import { StaffAttendanceManager } from '../components/StaffAttendanceManager';
+import { TransportManager } from '../components/TransportManager';
 
 export type PrincipalView =
   | 'DASHBOARD'
@@ -30,7 +31,8 @@ export type PrincipalView =
   | 'FEE_LEDGER'
   | 'SALARY_LEDGER'
   | 'YEAR_CLOSING'
-  | 'STAFF_ATTENDANCE';
+  | 'STAFF_ATTENDANCE'
+  | 'TRANSPORT_MGMT';
 
 export const PrincipalLayout: React.FC = () => {
   const [view, setView] = useState<PrincipalView>('DASHBOARD');
@@ -52,6 +54,7 @@ export const PrincipalLayout: React.FC = () => {
   if (view === 'SALARY_LEDGER') return <SalaryLedger           onBack={goBack} />;
   if (view === 'YEAR_CLOSING')     return <YearClosingWizard      onBack={goBack} />;
   if (view === 'STAFF_ATTENDANCE') return <StaffAttendanceManager onBack={goBack} />;
+  if (view === 'TRANSPORT_MGMT')   return <TransportManager       onBack={goBack} />;
 
   return <PrincipalDashboard onNavigate={goTo} />;
 };

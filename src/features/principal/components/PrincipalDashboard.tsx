@@ -54,6 +54,7 @@ export const PrincipalDashboard: React.FC<Props> = ({ onNavigate }) => {
     { icon: Calendar,    label: 'Class Mgmt',  view: 'CLASS_MGMT'    as PrincipalView, color: 'bg-violet-50 text-violet-600',  badge: null },
     { icon: Library,     label: 'Assets',      view: 'ASSETS'        as PrincipalView, color: 'bg-amber-50 text-amber-600',    badge: null },
     { icon: Receipt,     label: 'Expenses',    view: 'EXPENSES'      as PrincipalView, color: 'bg-rose-50 text-rose-600',      badge: null },
+    { icon: Bus,         label: 'Transport',   view: 'TRANSPORT_MGMT' as PrincipalView, color: 'bg-orange-50 text-orange-600', badge: null },
     { icon: Bell,        label: 'Notices',     view: 'NOTICES'       as PrincipalView, color: 'bg-violet-50 text-violet-600',  badge: null },
     { icon: CircleAlert, label: 'Complaints',  view: 'COMPLAINTS'    as PrincipalView, color: 'bg-orange-50 text-orange-600',  badge: stats.openComplaints || null },
     { icon: CheckSquare, label: 'Approvals',   view: 'APPROVALS'     as PrincipalView, color: 'bg-emerald-50 text-emerald-600',badge: stats.pendingApprovals || null },
