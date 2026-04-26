@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { Building2, IndianRupee, BarChart3, Settings, ShieldCheck, MailPlus, History } from 'lucide-react';
+import { Database, Building2, IndianRupee, BarChart3, Settings, ShieldCheck, MailPlus, History } from 'lucide-react';
 import { ActionGrid, AppCard, SectionTitle } from '../components/SharedUI';
 import { ActionItem } from '../types';
 import { SchoolManager } from './SchoolManager';
@@ -18,10 +18,10 @@ export const SuperAdminDashboard: React.FC = () => {
   const [showLogs, setShowLogs] = useState(false);
 
   const actions: ActionItem[] = [
-    { title: 'Data', icon: <Building2 size={28} />, color: 'text-indigo-600', onClick: () => setShowSchools(true) },
-    { title: 'Schools', icon: <IndianRupee size={28} />, color: 'text-emerald-600', onClick: () => setShowBilling(true) },
-    { title: 'Reports', icon: <BarChart3 size={28} />, color: 'text-blue-600', onClick: () => setShowReports(true) },
+    { title: 'Schools', icon: <Building2 size={28} />, color: 'text-emerald-600', onClick: () => setShowBilling(true) },
     { title: 'Admins', icon: <ShieldCheck size={28} />, color: 'text-rose-500', onClick: () => setShowAdmins(true) },
+    { title: 'Data', icon: <Database size={28} />, color: 'text-indigo-600', onClick: () => setShowSchools(true) },
+    { title: 'Reports', icon: <BarChart3 size={28} />, color: 'text-blue-600', onClick: () => setShowReports(true) },
     { title: 'Broadcast', icon: <MailPlus size={28} />, color: 'text-amber-500', onClick: () => setShowBroadcast(true) },
     { title: 'Logs', icon: <History size={28} />, color: 'text-slate-600', onClick: () => setShowLogs(true) },
   ];

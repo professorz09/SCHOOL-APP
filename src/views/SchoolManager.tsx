@@ -13,9 +13,9 @@ export const SchoolManager: React.FC<SchoolManagerProps> = ({ onClose }) => {
   const [selectedStudent, setSelectedStudent] = useState<any>(null);
 
   const schools = [
-    { id: 1, name: 'Delhi Public School', code: 'DPS-01', location: 'New Delhi', status: 'ACTIVE', students: 2400, revenue: '1.2L' },
-    { id: 2, name: 'Greenwood High', code: 'GWH-02', location: 'Bangalore', status: 'ACTIVE', students: 800, revenue: '40k' },
-    { id: 3, name: 'Sunrise Valley', code: 'SRV-03', location: 'Mumbai', status: 'INACTIVE', students: 1200, revenue: '60k' },
+    { id: 1, name: 'Delhi Public School', code: 'DPS-01', location: 'New Delhi', status: 'ACTIVE', students: 2400, revenue: '1.2L', totalFees: '1,20,00,000', totalExpense: '45,00,000' },
+    { id: 2, name: 'Greenwood High', code: 'GWH-02', location: 'Bangalore', status: 'ACTIVE', students: 800, revenue: '40k', totalFees: '40,00,000', totalExpense: '12,00,000' },
+    { id: 3, name: 'Sunrise Valley', code: 'SRV-03', location: 'Mumbai', status: 'INACTIVE', students: 1200, revenue: '60k', totalFees: '60,00,000', totalExpense: '18,00,000' },
   ];
 
   const mockAcademicYears = [
@@ -134,8 +134,16 @@ export const SchoolManager: React.FC<SchoolManagerProps> = ({ onClose }) => {
                          )}
                        </div>
                        <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest">{school.code} • {school.location}</p>
-                       <div className="mt-3 inline-flex bg-slate-100 px-3 py-1 rounded-md text-[10px] font-black text-slate-600 uppercase tracking-widest">
-                         {school.students} Students
+                       <div className="mt-3 flex flex-wrap gap-2">
+                         <div className="inline-flex bg-slate-100 px-3 py-1 rounded-md text-[10px] font-black text-slate-600 uppercase tracking-widest border border-slate-200">
+                           {school.students} Students
+                         </div>
+                         <div className="inline-flex bg-emerald-50 px-3 py-1 rounded-md text-[10px] font-black text-emerald-600 uppercase tracking-widest border border-emerald-100">
+                           Fee: ₹{school.totalFees}
+                         </div>
+                         <div className="inline-flex bg-rose-50 px-3 py-1 rounded-md text-[10px] font-black text-rose-600 uppercase tracking-widest border border-rose-100">
+                           Exp: ₹{school.totalExpense}
+                         </div>
                        </div>
                      </div>
                      <button className="p-2 text-slate-400 hover:bg-slate-50 rounded-full">

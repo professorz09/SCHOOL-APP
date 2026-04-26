@@ -9,21 +9,17 @@ interface GlobalAdminsManagerProps {
 export const GlobalAdminsManager: React.FC<GlobalAdminsManagerProps> = ({ onClose }) => {
   const admins = [
     { 
-      id: 1, adminId: 'ADM-1001', name: 'Rahul Sharma', email: 'rahul@basikspro.com', role: 'SUPER_ADMIN', status: 'ACTIVE',
+      id: 2, adminId: 'PRN-DPS01', name: 'Dr. Rajesh Kumar', email: 'principal@dps.edu.in', role: 'PRINCIPAL', status: 'ACTIVE',
       createdAccounts: [
-        { id: 'PRN-902', name: 'Dr. Rajesh Kumar', role: 'Principal' },
-        { id: 'TCH-841', name: 'Aarti Desai', role: 'Teacher' }
+        { id: 'TCH-841', name: 'Aarti Desai', role: 'Teacher' },
+        { id: 'STF-102', name: 'Sanjay Gupta', role: 'Accountant' }
       ]
     },
     { 
-      id: 2, adminId: 'ADM-1002', name: 'Priya Patel', email: 'priya@basikspro.com', role: 'ADMIN', status: 'ACTIVE',
+      id: 3, adminId: 'PRN-GWH02', name: 'Vikram Singh', email: 'principal@greenwood.edu.in', role: 'PRINCIPAL', status: 'ACTIVE',
       createdAccounts: [
-        { id: 'TCH-722', name: 'Vikram Singh', role: 'Teacher' }
+        { id: 'TCH-722', name: 'Meera Reddy', role: 'Teacher' }
       ]
-    },
-    { 
-      id: 3, adminId: 'ADM-1003', name: 'Amit Kumar', email: 'amit@basikspro.com', role: 'SUPPORT', status: 'ACTIVE',
-      createdAccounts: []
     },
   ];
 
@@ -59,13 +55,13 @@ export const GlobalAdminsManager: React.FC<GlobalAdminsManagerProps> = ({ onClos
                </div>
                <div className="p-5 flex justify-between items-center">
                  <div className="flex items-center gap-3">
-                   <div className={`w-10 h-10 rounded-xl flex items-center justify-center font-bold ${admin.role === 'SUPER_ADMIN' ? 'bg-rose-100 text-rose-600' : 'bg-slate-100 text-slate-600'}`}>
+                   <div className={`w-10 h-10 rounded-xl flex items-center justify-center font-bold ${admin.role === 'PRINCIPAL' ? 'bg-rose-100 text-rose-600' : 'bg-slate-100 text-slate-600'}`}>
                      <UserCircle size={24} />
                    </div>
                    <div>
                      <div className="flex items-center gap-2 mb-0.5">
                        <h4 className="font-extrabold text-slate-900 text-sm uppercase tracking-tight">{admin.name}</h4>
-                       {admin.role === 'SUPER_ADMIN' && <Star size={12} className="text-rose-500 fill-rose-500" />}
+                       {admin.role === 'PRINCIPAL' && <Star size={12} className="text-rose-500 fill-rose-500" />}
                      </div>
                      <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest">{admin.email}</p>
                    </div>

@@ -10,7 +10,7 @@ interface BillingManagerProps {
 export const BillingManager: React.FC<BillingManagerProps> = ({ onClose }) => {
   const [view, setView] = useState<'OVERVIEW' | 'SETTINGS'>('OVERVIEW');
   const [showAddSchool, setShowAddSchool] = useState(false);
-  const [newSchool, setNewSchool] = useState({ name: '', principalId: '', agreedAmount: 0 });
+  const [newSchool, setNewSchool] = useState({ name: '', principalId: '', principalName: '', principalPassword: '', agreedAmount: 0 });
 
   const handleAddSchool = () => {
     if (!newSchool.name || !newSchool.principalId) return;
@@ -31,7 +31,7 @@ export const BillingManager: React.FC<BillingManagerProps> = ({ onClose }) => {
       }
     ]);
     setShowAddSchool(false);
-    setNewSchool({ name: '', principalId: '', agreedAmount: 0 });
+    setNewSchool({ name: '', principalId: '', principalName: '', principalPassword: '', agreedAmount: 0 });
   };
   const [selectedSchool, setSelectedSchool] = useState<any>(null);
 
@@ -303,13 +303,29 @@ export const BillingManager: React.FC<BillingManagerProps> = ({ onClose }) => {
                        />
                      </div>
                      <div>
-                       <label className="block text-[10px] font-black uppercase tracking-widest text-slate-500 mb-1">Principal ID / Admin Email</label>
-                       <input 
-                          value={newSchool.principalId} 
-                          onChange={(e) => setNewSchool({...newSchool, principalId: e.target.value})} 
-                          placeholder="e.g. principal@school.com"
-                          className="w-full border border-slate-200 bg-white rounded-xl px-4 py-3 font-bold text-sm text-slate-900 outline-none focus:border-emerald-500" 
-                       />
+                       <label className="block text-[10px] font-black uppercase tracking-widest text-slate-500 mb-1">Create Principal Account</label>
+                       <div className="grid grid-cols-2 gap-3">
+                         <input 
+                            value={newSchool.principalName} 
+                            onChange={(e) => setNewSchool({...newSchool, principalName: e.target.value})} 
+                            placeholder="Principal Name (e.g. Dr. Rajesh Kumar)"
+                            className="w-full border border-slate-200 bg-white rounded-xl px-4 py-3 font-bold text-sm text-slate-900 outline-none focus:border-emerald-500" 
+                         />
+                         <input 
+                            value={newSchool.principalId} 
+                            onChange={(e) => setNewSchool({...newSchool, principalId: e.target.value})} 
+                            placeholder="Email ID (principal@school.com)"
+                            className="w-full border border-slate-200 bg-white rounded-xl px-4 py-3 font-bold text-sm text-slate-900 outline-none focus:border-emerald-500" 
+                         />
+                         <input 
+                            type="password"
+                            value={newSchool.principalPassword} 
+                            onChange={(e) => setNewSchool({...newSchool, principalPassword: e.target.value})} 
+                            placeholder="Set Password"
+                            className="w-full border border-slate-200 bg-white rounded-xl px-4 py-3 font-bold text-sm text-slate-900 outline-none focus:border-emerald-500 col-span-2" 
+                         />
+                       </div>
+                       <p className="text-[10px] text-slate-400 font-bold mt-1.5 ml-1">This will automatically create a Principal (Admin) account for this school.</p>
                      </div>
                      <div>
                        <label className="block text-[10px] font-black uppercase tracking-widest text-slate-500 mb-1">Agreed Amount (₹)</label>
