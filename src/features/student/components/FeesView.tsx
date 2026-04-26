@@ -1,16 +1,16 @@
 import React, { useEffect, useState } from 'react';
-import { ArrowLeft, CreditCard, Upload, CheckCircle2, Clock, QrCode, X } from 'lucide-react';
+import { ArrowLeft, CreditCard, Upload, CheckCircle2, Clock, QrCode, X, Layers } from 'lucide-react';
 import { studentDashboardService } from '../../../services/student.service2';
 import { FeePaymentUpload } from '../../../types/student.types';
 import { useUIStore } from '../../../store/uiStore';
+import { feeService } from '../../../services/fee.service';
 
 type View = 'MAIN' | 'QR_PAY';
 
 interface Props { onBack: () => void; }
 
+const MY_STUDENT_ID = 'student1';
 const UPI_ID = 'school@upi';
-const FEE_AMOUNT = 15000;
-const FEE_DESC = 'Q3 Annual Fee — Class 10-A';
 
 export const FeesView: React.FC<Props> = ({ onBack }) => {
   const { showToast } = useUIStore();
@@ -18,14 +18,19 @@ export const FeesView: React.FC<Props> = ({ onBack }) => {
   const [uploads, setUploads] = useState<FeePaymentUpload[]>([]);
   const [screenshotName, setScreenshotName] = useState('');
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [feeSummary, setFeeSummary] = useState({ tuition: 0, transport: 0, total: 0 });
 
-  useEffect(() => { studentDashboardService.getFeeUploads().then(setUploads); }, []);
+  useEffect(() => {
+    studentDashboardService.getFeeUploads().then(setUploads);
+    const summary = feeService.getFeeTypeSummary(MY_STUDENT_ID);
+    setFeeSummary(summary);
+  }, []);
 
   const handleUpload = async () => {
     if (!screenshotName.trim()) { showToast('Enter screenshot file name / UTR number', 'error'); return; }
     setIsSubmitting(true);
     try {
-      const upload = await studentDashboardService.submitFeeScreenshot(FEE_AMOUNT, FEE_DESC, screenshotName);
+      const upload = await studentDashboardService.submitFeeScreenshot(feeSummary.total, 'Fee Payment', screenshotName);
       setUploads(prev => [upload, ...prev]);
       showToast('Screenshot submitted for principal approval');
       setScreenshotName('');
@@ -58,8 +63,13 @@ export const FeesView: React.FC<Props> = ({ onBack }) => {
             </div>
           </div>
           <div className="text-center">
-            <div className="font-black text-slate-900 text-2xl">₹{FEE_AMOUNT.toLocaleString('en-IN')}</div>
-            <div className="text-xs font-bold text-slate-400 mt-1">{FEE_DESC}</div>
+            <div className="font-black text-slate-900 text-2xl">₹{feeSummary.total.toLocaleString('en-IN')}</div>
+            <div className="text-xs font-bold text-slate-400 mt-1">Outstanding Fee Balance</div>
+            {feeSummary.tuition > 0 && feeSummary.transport > 0 && (
+              <div className="text-[10px] font-bold text-slate-400 mt-2">
+                Tuition: ₹{feeSummary.tuition} · Transport: ₹{feeSummary.transport}
+              </div>
+            )}
             <div className="flex items-center justify-center gap-2 mt-3">
               <QrCode size={14} className="text-slate-400" />
               <span className="text-[11px] font-black text-slate-500">{UPI_ID}</span>
@@ -95,31 +105,49 @@ export const FeesView: React.FC<Props> = ({ onBack }) => {
       <div className="flex-1 overflow-y-auto p-4 pb-28 space-y-4">
         {/* Summary */}
         <div className="bg-slate-900 rounded-2xl p-4 text-white">
-          <p className="text-[10px] font-black uppercase tracking-widest text-slate-400 mb-3">Annual Fee Summary</p>
-          <div className="flex gap-4">
-            <div>
-              <div className="text-2xl font-black text-emerald-400">₹45K</div>
-              <div className="text-[9px] font-black text-slate-400 uppercase mt-0.5">Total Fee</div>
+          <p className="text-[10px] font-black uppercase tracking-widest text-slate-400 mb-3">Fee Summary — April 2026</p>
+          <div className="space-y-3">
+            {feeSummary.tuition > 0 && (
+              <div className="flex items-center justify-between pb-2 border-b border-white/10">
+                <div className="flex items-center gap-2">
+                  <div className="w-2 h-2 rounded-full bg-indigo-400" />
+                  <span className="text-sm font-bold">Tuition Fee</span>
+                </div>
+                <div className="text-lg font-black">₹{feeSummary.tuition.toLocaleString()}</div>
+              </div>
+            )}
+            {feeSummary.transport > 0 && (
+              <div className="flex items-center justify-between pb-2 border-b border-white/10">
+                <div className="flex items-center gap-2">
+                  <div className="w-2 h-2 rounded-full bg-orange-400" />
+                  <span className="text-sm font-bold">Transport Fee</span>
+                </div>
+                <div className="text-lg font-black">₹{feeSummary.transport.toLocaleString()}</div>
+              </div>
+            )}
+            <div className="flex items-center justify-between pt-2">
+              <span className="text-white font-black text-sm">Total Outstanding</span>
+              <div className={`text-2xl font-black ${feeSummary.total > 0 ? 'text-rose-400' : 'text-emerald-400'}`}>
+                ₹{feeSummary.total.toLocaleString()}
+              </div>
             </div>
-            <div>
-              <div className="text-2xl font-black text-white">₹45K</div>
-              <div className="text-[9px] font-black text-slate-400 uppercase mt-0.5">Paid</div>
-            </div>
-            <div>
-              <div className="text-2xl font-black text-rose-400">₹0</div>
-              <div className="text-[9px] font-black text-slate-400 uppercase mt-0.5">Due</div>
-            </div>
-          </div>
-          <div className="mt-3 w-full bg-white/10 rounded-full h-1.5">
-            <div className="bg-emerald-400 h-1.5 rounded-full w-full" />
           </div>
         </div>
 
         {/* Pay Now */}
-        <button onClick={() => setView('QR_PAY')}
-          className="w-full flex items-center justify-center gap-3 bg-emerald-600 text-white font-black text-sm uppercase tracking-widest py-4 rounded-2xl active:scale-95 transition-transform shadow-lg">
-          <QrCode size={18} /> Pay via UPI QR Code
-        </button>
+        {feeSummary.total > 0 && (
+          <button onClick={() => setView('QR_PAY')}
+            className="w-full flex items-center justify-center gap-3 bg-emerald-600 text-white font-black text-sm uppercase tracking-widest py-4 rounded-2xl active:scale-95 transition-transform shadow-lg">
+            <QrCode size={18} /> Pay via UPI QR Code
+          </button>
+        )}
+        {feeSummary.total === 0 && (
+          <div className="bg-emerald-50 border border-emerald-200 rounded-2xl p-4 text-center">
+            <CheckCircle2 size={24} className="text-emerald-600 mx-auto mb-2" />
+            <div className="font-black text-emerald-900">All Fees Paid</div>
+            <div className="text-[11px] font-bold text-emerald-600 mt-1">No outstanding balance</div>
+          </div>
+        )}
 
         {/* Payment submissions */}
         {uploads.length > 0 && (
