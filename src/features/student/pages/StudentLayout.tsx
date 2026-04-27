@@ -8,88 +8,101 @@ import { StudentNoticesView } from '../components/StudentNoticesView';
 import { StudentComplaintsView } from '../components/StudentComplaintsView';
 import {
   Calendar, Trophy, CreditCard, Bus, Bell, CircleAlert,
-  ChevronRight, AlertTriangle, BookOpen, Clock, MapPin,
+  BookOpen, Library, HeadphonesIcon, Upload, Clock,
+  ChevronRight, FileText, CheckCircle2, AlertCircle,
 } from 'lucide-react';
 import { timetableService, PERIOD_SLOTS } from '../../../services/timetable.service';
-import { feeService } from '../../../services/fee.service';
 import { useAuthStore } from '../../../store/authStore';
 
 const MY_CLASS = '10-A';
 const SCHOOL_NAME = 'EduGrow School';
 
-const getCurrentPeriod = () => {
+type StudentView = 'DASHBOARD' | 'TIMETABLE' | 'RESULTS' | 'FEES' | 'TRANSPORT' | 'NOTICES' | 'COMPLAINTS';
+
+const getTodaySchedule = () => {
+  const days = ['Sunday','Monday','Tuesday','Wednesday','Thursday','Friday','Saturday'];
+  const todayName = days[new Date().getDay()];
+  const dayToUse = todayName === 'Sunday' || todayName === 'Saturday' ? 'Monday' : todayName;
+  const weeklyMap = timetableService.getClassWeeklyMap(MY_CLASS);
+  const entries = (weeklyMap as Record<string, typeof weeklyMap[keyof typeof weeklyMap]>)[dayToUse] ?? [];
+  return entries
+    .map(e => {
+      const slot = PERIOD_SLOTS.find(s => s.slotId === e.slotId);
+      return slot ? { ...e, slot } : null;
+    })
+    .filter(Boolean)
+    .sort((a, b) => a!.slot.startTime.localeCompare(b!.slot.startTime));
+};
+
+const isLive = (startTime: string, endTime: string) => {
   const now = new Date();
   const nowMins = now.getHours() * 60 + now.getMinutes();
-  const days = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
-  const todayName = days[now.getDay()];
-  const dayToUse = todayName === 'Sunday' ? 'Monday' : todayName;
-  const weeklyMap = timetableService.getClassWeeklyMap(MY_CLASS);
-  const todayEntries = (weeklyMap as Record<string, typeof weeklyMap[keyof typeof weeklyMap]>)[dayToUse] ?? [];
-  for (const entry of todayEntries) {
-    const slot = PERIOD_SLOTS.find(s => s.slotId === entry.slotId);
-    if (!slot) continue;
-    const [sh, sm] = slot.startTime.split(':').map(Number);
-    const [eh, em] = slot.endTime.split(':').map(Number);
-    if (nowMins >= sh * 60 + sm && nowMins < eh * 60 + em) return { entry, slot };
-  }
-  return null;
+  const [sh, sm] = startTime.split(':').map(Number);
+  const [eh, em] = endTime.split(':').map(Number);
+  return nowMins >= sh * 60 + sm && nowMins < eh * 60 + em;
 };
 
-const getDaysUntilDue = () => {
-  const today = new Date();
-  const dueDate = new Date('2026-07-10');
-  const diff = Math.ceil((dueDate.getTime() - today.getTime()) / (1000 * 60 * 60 * 24));
-  return Math.max(0, diff);
-};
+const PENDING_TASKS = [
+  { id: 't1', title: 'Algebra Worksheet', subject: 'Mathematics', dueLabel: 'Due Tomorrow', urgent: true },
+  { id: 't2', title: 'Science Project Report', subject: 'Science', dueLabel: 'Due in 3 Days', urgent: false },
+];
 
-type StudentView = 'DASHBOARD' | 'TIMETABLE' | 'RESULTS' | 'FEES' | 'TRANSPORT' | 'NOTICES' | 'COMPLAINTS';
+const LEAVE_APPS = [
+  { id: 'l1', title: 'Family Visit', date: '26 Apr', status: 'PENDING' as const },
+  { id: 'l2', title: 'Medical Leave', date: '10 Apr', status: 'APPROVED' as const },
+];
+
+const LEAVE_COLOR = {
+  PENDING:  'text-amber-600 bg-amber-50 border-amber-200',
+  APPROVED: 'text-emerald-600 bg-emerald-50 border-emerald-200',
+  REJECTED: 'text-rose-600 bg-rose-50 border-rose-200',
+};
 
 export const StudentLayout: React.FC = () => {
   const session = useAuthStore(state => state.session);
   const STUDENT_FULL = session?.name ?? 'Student';
   const STUDENT_NAME = STUDENT_FULL.split(' ')[0];
-  const MY_STUDENT_ID = session?.linkedStudentIds?.[0] ?? session?.userId ?? 'student1';
 
   const [view, setView] = useState<StudentView>('DASHBOARD');
-  const goBack = () => setView('DASHBOARD');
-  const currentPeriod = useMemo(() => getCurrentPeriod(), []);
-  const feeSummary = useMemo(() => feeService.getParentDueSummary(MY_STUDENT_ID), [MY_STUDENT_ID]);
-  const daysUntilDue = getDaysUntilDue();
+  const todaySchedule = useMemo(() => getTodaySchedule(), []);
 
-  if (view === 'TIMETABLE')   return <TimetableView        onBack={goBack} />;
-  if (view === 'RESULTS')     return <ResultsView          onBack={goBack} />;
-  if (view === 'FEES')        return <FeesView             onBack={goBack} />;
-  if (view === 'TRANSPORT')   return <TransportView        onBack={goBack} />;
-  if (view === 'NOTICES')     return <StudentNoticesView   onBack={goBack} />;
-  if (view === 'COMPLAINTS')  return <StudentComplaintsView onBack={goBack} />;
+  const initials = STUDENT_FULL.split(' ').map((w: string) => w[0]).join('').slice(0, 2).toUpperCase();
 
-  const modules = [
-    { icon: Calendar,     label: 'Timetable',  view: 'TIMETABLE'   as StudentView, color: 'bg-blue-50 text-blue-600',    border: 'border-blue-100' },
-    { icon: Trophy,       label: 'Results',    view: 'RESULTS'     as StudentView, color: 'bg-amber-50 text-amber-600',  border: 'border-amber-100' },
-    { icon: CreditCard,   label: 'Fees',       view: 'FEES'        as StudentView, color: 'bg-violet-50 text-violet-600', border: 'border-violet-100' },
-    { icon: Bus,          label: 'Transport',  view: 'TRANSPORT'   as StudentView, color: 'bg-orange-50 text-orange-600', border: 'border-orange-100' },
-    { icon: Bell,         label: 'Notices',    view: 'NOTICES'     as StudentView, color: 'bg-emerald-50 text-emerald-600', border: 'border-emerald-100' },
-    { icon: CircleAlert,  label: 'Complaints', view: 'COMPLAINTS'  as StudentView, color: 'bg-rose-50 text-rose-600',    border: 'border-rose-100' },
+  if (view === 'TIMETABLE')   return <TimetableView         onBack={() => setView('DASHBOARD')} />;
+  if (view === 'RESULTS')     return <ResultsView           onBack={() => setView('DASHBOARD')} />;
+  if (view === 'FEES')        return <FeesView              onBack={() => setView('DASHBOARD')} />;
+  if (view === 'TRANSPORT')   return <TransportView         onBack={() => setView('DASHBOARD')} />;
+  if (view === 'NOTICES')     return <StudentNoticesView    onBack={() => setView('DASHBOARD')} />;
+  if (view === 'COMPLAINTS')  return <StudentComplaintsView onBack={() => setView('DASHBOARD')} />;
+
+  const MODULES: { icon: React.ReactNode; label: string; view: StudentView; iconColor: string }[] = [
+    { icon: <Calendar    size={22} />, label: 'Timetable', view: 'TIMETABLE',   iconColor: 'text-blue-600' },
+    { icon: <BookOpen    size={22} />, label: 'Homework',  view: 'TIMETABLE',   iconColor: 'text-indigo-600' },
+    { icon: <CreditCard  size={22} />, label: 'Fees',      view: 'FEES',        iconColor: 'text-blue-500' },
+    { icon: <Trophy      size={22} />, label: 'Results',   view: 'RESULTS',     iconColor: 'text-amber-500' },
+    { icon: <Bus         size={22} />, label: 'Transport', view: 'TRANSPORT',   iconColor: 'text-orange-500' },
+    { icon: <Bell        size={22} />, label: 'Notices',   view: 'NOTICES',     iconColor: 'text-blue-500' },
+    { icon: <Library     size={22} />, label: 'Library',   view: 'NOTICES',     iconColor: 'text-blue-600' },
+    { icon: <HeadphonesIcon size={22} />, label: 'Helpdesk', view: 'COMPLAINTS', iconColor: 'text-rose-500' },
   ];
-
-  const initials = STUDENT_FULL.split(' ').map(w => w[0]).join('').slice(0, 2);
 
   return (
     <>
-    <div className="flex flex-col gap-5 animate-in slide-in-from-bottom-4 duration-300 fade-in pt-3 pb-6">
+    <div className="flex flex-col gap-5 pb-6 pt-3 animate-in fade-in duration-300">
 
-      {/* ── Top Greeting ─────────────────────────────────────────────── */}
+      {/* ── Header ───────────────────────────────────────────────────── */}
       <div className="flex items-center justify-between">
         <div className="flex items-center gap-3">
-          {/* Avatar */}
-          <div className="w-12 h-12 rounded-full bg-blue-600 text-white flex items-center justify-center font-black text-lg shadow-md">
+          <div className="w-11 h-11 rounded-full bg-blue-600 text-white flex items-center justify-center font-black text-base shadow-md shrink-0">
             {initials}
           </div>
           <div>
             <p className="text-[10px] font-black uppercase tracking-widest text-slate-400">
-              WELCOME TO {SCHOOL_NAME.toUpperCase()}
+              Welcome to {SCHOOL_NAME}
             </p>
-            <h2 className="text-2xl font-black text-slate-900 leading-tight">HI, {STUDENT_NAME.toUpperCase()}</h2>
+            <h2 className="text-2xl font-black text-slate-900 leading-tight">
+              Hi, {STUDENT_NAME}
+            </h2>
           </div>
         </div>
         <div className="relative">
@@ -102,148 +115,117 @@ export const StudentLayout: React.FC = () => {
         </div>
       </div>
 
-      {/* ── Fee Due Card ──────────────────────────────────────────────── */}
-      {feeSummary.total > 0 && (
-        <div className="bg-[#0d1b3e] rounded-3xl p-5 text-white shadow-xl">
-          <p className="text-[10px] font-black uppercase tracking-widest text-blue-300 mb-1">
-            TOTAL DUE • Q2 TERM
-          </p>
-          <div className="text-5xl font-black mb-2">
-            ₹{feeSummary.total.toLocaleString('en-IN')}
-          </div>
-          {daysUntilDue <= 30 && (
-            <div className="flex items-center gap-1.5 mb-4">
-              <AlertTriangle size={14} className="text-orange-400" />
-              <span className="text-sm font-bold text-orange-400">
-                Due in {daysUntilDue} Day{daysUntilDue !== 1 ? 's' : ''}
-              </span>
-            </div>
-          )}
-          <button
-            onClick={() => setView('FEES')}
-            className="w-full bg-blue-500 hover:bg-blue-400 text-white font-black text-sm uppercase tracking-widest py-4 rounded-2xl active:scale-95 transition-all shadow-lg"
-          >
-            PAY SECURELY VIA UPI
+      {/* ── 4-column Module Grid ──────────────────────────────────────── */}
+      <div className="grid grid-cols-4 gap-3">
+        {MODULES.map(({ icon, label, view: v, iconColor }) => (
+          <button key={label} onClick={() => setView(v)}
+            className="flex flex-col items-center gap-2 bg-white border border-slate-200 rounded-2xl py-4 px-1 shadow-sm active:scale-95 transition-transform">
+            <div className={`${iconColor}`}>{icon}</div>
+            <span className="text-[9px] font-black uppercase tracking-wide text-slate-500 text-center leading-tight">{label}</span>
           </button>
-        </div>
-      )}
-
-      {feeSummary.total === 0 && (
-        <div className="bg-[#0d1b3e] rounded-3xl p-5 text-white shadow-xl">
-          <p className="text-[10px] font-black uppercase tracking-widest text-blue-300 mb-2">FEE STATUS</p>
-          <div className="flex items-center gap-3">
-            <div className="w-10 h-10 bg-emerald-500 rounded-full flex items-center justify-center">
-              <Trophy size={20} />
-            </div>
-            <div>
-              <div className="font-black text-xl">All Clear!</div>
-              <div className="text-xs font-bold text-blue-200">No outstanding dues</div>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* ── Fee Breakdown ──────────────────────────────────────────────── */}
-      {feeSummary.total > 0 && (
-        <div>
-          <h3 className="text-base font-black text-slate-900 mb-3">FEE BREAKDOWN</h3>
-          <div className="space-y-2">
-            {feeSummary.tuition > 0 && (
-              <div className="bg-white rounded-2xl border border-slate-100 shadow-sm p-4 flex items-center justify-between">
-                <div>
-                  <div className="font-black text-slate-900 text-sm">TUITION FEE</div>
-                  <div className="text-xs font-bold text-slate-400 mt-0.5">July – September 2026</div>
-                </div>
-                <div className="font-black text-slate-900 text-base">₹{feeSummary.tuition.toLocaleString('en-IN')}</div>
-              </div>
-            )}
-            {feeSummary.transport > 0 && (
-              <div className="bg-white rounded-2xl border border-slate-100 shadow-sm p-4 flex items-center justify-between">
-                <div>
-                  <div className="font-black text-slate-900 text-sm">TRANSPORT FEE</div>
-                  <div className="text-xs font-bold text-slate-400 mt-0.5">Route #4</div>
-                </div>
-                <div className="font-black text-slate-900 text-base">₹{feeSummary.transport.toLocaleString('en-IN')}</div>
-              </div>
-            )}
-          </div>
-        </div>
-      )}
-
-      {/* ── Stats Row ─────────────────────────────────────────────────── */}
-      <div className="grid grid-cols-3 gap-2">
-        {[
-          { label: 'Attendance', val: '94.2%', color: 'text-emerald-600', bg: 'bg-emerald-50' },
-          { label: 'Fee Paid',   val: feeSummary.total === 0 ? '100%' : '67%', color: 'text-blue-600', bg: 'bg-blue-50' },
-          { label: 'Last Rank',  val: '#2',    color: 'text-amber-600',  bg: 'bg-amber-50' },
-        ].map(({ label, val, color, bg }) => (
-          <div key={label} className={`${bg} rounded-2xl p-3 text-center`}>
-            <div className={`text-lg font-black ${color}`}>{val}</div>
-            <div className="text-[9px] font-black uppercase tracking-widest text-slate-500 mt-0.5">{label}</div>
-          </div>
         ))}
       </div>
 
-      {/* ── Current Period ─────────────────────────────────────────────── */}
-      <button onClick={() => setView('TIMETABLE')} className="w-full text-left active:scale-[0.98] transition-transform">
-        <div className="bg-slate-900 rounded-2xl p-4 text-white">
-          <p className="text-[10px] font-black uppercase tracking-widest text-slate-400 mb-2">Now In Progress</p>
-          {currentPeriod ? (
-            <div className="flex items-center justify-between">
-              <div>
-                <div className="font-black text-xl">{currentPeriod.entry.subject}</div>
-                <div className="flex items-center gap-2 text-[11px] font-bold text-slate-400 mt-0.5">
-                  <span>{currentPeriod.entry.teacherName}</span>
-                  {currentPeriod.entry.room && <span>· {currentPeriod.entry.room}</span>}
-                </div>
-              </div>
-              <div className="text-right">
-                <div className="text-sm font-black text-blue-400">
-                  {currentPeriod.slot.startTime} – {currentPeriod.slot.endTime}
-                </div>
-                <div className="text-[9px] font-black text-emerald-400 bg-emerald-500/20 px-2 py-0.5 rounded-full mt-1 uppercase">Live</div>
-              </div>
+      {/* ── Today's Schedule ─────────────────────────────────────────── */}
+      <div>
+        <div className="flex items-center justify-between mb-3">
+          <h3 className="text-base font-black text-slate-900 uppercase tracking-tight">Today's Schedule</h3>
+          <button onClick={() => setView('TIMETABLE')}
+            className="text-xs font-black text-blue-600 uppercase tracking-wide">
+            View All
+          </button>
+        </div>
+        <div className="bg-white rounded-2xl border border-slate-100 shadow-sm overflow-hidden">
+          {todaySchedule.length === 0 ? (
+            <div className="p-6 text-center text-slate-400">
+              <Calendar size={28} className="mx-auto mb-2 opacity-30" />
+              <p className="text-sm font-bold">No classes today</p>
             </div>
           ) : (
-            <div className="flex items-center justify-between">
-              <div>
-                <div className="font-black text-lg text-slate-400">No class right now</div>
-                <div className="text-[11px] font-bold text-slate-500 mt-0.5">Tap to see full timetable</div>
-              </div>
-              <Calendar size={24} className="text-slate-600" />
-            </div>
+            todaySchedule.slice(0, 4).map((entry, idx) => {
+              const live = isLive(entry!.slot.startTime, entry!.slot.endTime);
+              return (
+                <div key={idx}
+                  className={`flex items-center gap-3 px-4 py-3.5 ${idx < Math.min(todaySchedule.length, 4) - 1 ? 'border-b border-slate-50' : ''}`}>
+                  <div className={`w-10 h-10 rounded-xl flex flex-col items-center justify-center shrink-0 font-black text-[10px] leading-tight ${live ? 'bg-indigo-600 text-white' : 'bg-slate-100 text-slate-500'}`}>
+                    <span>Per</span>
+                    <span>{idx + 1}</span>
+                  </div>
+                  <div className="flex-1 min-w-0">
+                    <div className={`font-extrabold text-sm ${live ? 'text-slate-900' : 'text-slate-400'}`}>
+                      {entry!.subject}
+                    </div>
+                    <div className="flex items-center gap-1 mt-0.5">
+                      <Clock size={10} className="text-slate-400" />
+                      <span className="text-[10px] font-bold text-slate-400">
+                        {entry!.slot.startTime} – {entry!.slot.endTime}
+                      </span>
+                    </div>
+                  </div>
+                  {live && (
+                    <span className="text-[9px] font-black text-emerald-600 bg-emerald-100 border border-emerald-200 px-2 py-0.5 rounded-full shrink-0">
+                      LIVE
+                    </span>
+                  )}
+                </div>
+              );
+            })
           )}
         </div>
-      </button>
+      </div>
 
-      {/* ── Module Grid ───────────────────────────────────────────────── */}
+      {/* ── Pending Tasks ─────────────────────────────────────────────── */}
       <div>
-        <p className="text-[10px] font-black uppercase tracking-widest text-slate-400 mb-3">My Modules</p>
-        <div className="grid grid-cols-3 gap-3">
-          {modules.map(({ icon: Icon, label, view: v, color, border }) => (
-            <button key={label} onClick={() => setView(v)}
-              className={`flex flex-col items-center gap-2 bg-white rounded-2xl border ${border} shadow-sm py-4 px-2 active:scale-95 transition-transform`}>
-              <div className={`w-11 h-11 rounded-xl flex items-center justify-center ${color}`}>
-                <Icon size={22} />
+        <h3 className="text-base font-black text-slate-900 uppercase tracking-tight mb-3">Pending Tasks</h3>
+        <div className="space-y-2">
+          {PENDING_TASKS.map(task => (
+            <div key={task.id}
+              className="bg-white rounded-2xl border border-slate-100 shadow-sm px-4 py-3.5 flex items-center gap-3">
+              <div className="flex-1 min-w-0">
+                <div className="font-extrabold text-slate-900 text-sm">{task.title}</div>
+                <div className="flex items-center gap-1.5 mt-0.5">
+                  {task.urgent
+                    ? <AlertCircle size={10} className="text-rose-500 shrink-0" />
+                    : <Clock size={10} className="text-amber-500 shrink-0" />}
+                  <span className={`text-[10px] font-black ${task.urgent ? 'text-rose-500' : 'text-amber-600'}`}>
+                    {task.dueLabel}
+                  </span>
+                </div>
               </div>
-              <span className="text-[10px] font-black uppercase tracking-widest text-slate-600 text-center leading-tight">{label}</span>
-            </button>
+              <button
+                className="flex items-center gap-1.5 bg-slate-900 text-white text-[10px] font-black px-3 py-2 rounded-full active:scale-95 transition-transform shrink-0">
+                <Upload size={11} /> Upload
+              </button>
+            </div>
           ))}
         </div>
       </div>
 
-      {/* ── Quick Notice ──────────────────────────────────────────────── */}
-      <button onClick={() => setView('NOTICES')}
-        className="w-full text-left bg-violet-50 border border-violet-200 rounded-2xl p-4 flex items-center gap-3 active:scale-[0.98] transition-transform">
-        <div className="w-8 h-8 bg-violet-100 rounded-xl flex items-center justify-center shrink-0">
-          <Bell size={15} className="text-violet-600" />
+      {/* ── My Leave Applications ─────────────────────────────────────── */}
+      <div>
+        <div className="flex items-center justify-between mb-3">
+          <h3 className="text-base font-black text-slate-900 uppercase tracking-tight">My Leave Applications</h3>
+          <button className="text-xs font-black text-blue-600 uppercase tracking-wide">Apply Leave</button>
         </div>
-        <div className="flex-1">
-          <div className="font-extrabold text-violet-900 text-sm">Mid-Term Exam Schedule</div>
-          <div className="text-[11px] font-bold text-violet-600 mt-0.5">Exams from 15–25 Nov. Carry admit card.</div>
+        <div className="space-y-2">
+          {LEAVE_APPS.map(app => (
+            <div key={app.id}
+              className="bg-white rounded-2xl border border-slate-100 shadow-sm px-4 py-3.5 flex items-center gap-3">
+              <div className="w-10 h-10 bg-slate-100 rounded-xl flex items-center justify-center shrink-0">
+                <FileText size={18} className="text-slate-500" />
+              </div>
+              <div className="flex-1 min-w-0">
+                <div className="font-extrabold text-slate-900 text-sm">{app.title}</div>
+                <div className="text-[10px] font-bold text-slate-400 mt-0.5">{app.date}</div>
+              </div>
+              <span className={`text-[9px] font-black px-2.5 py-1 rounded-full border ${LEAVE_COLOR[app.status]}`}>
+                {app.status}
+              </span>
+            </div>
+          ))}
         </div>
-        <ChevronRight size={16} className="text-violet-400" />
-      </button>
+      </div>
+
     </div>
     <ToastContainer />
     </>
