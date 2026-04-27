@@ -1,23 +1,85 @@
-import React, { useState } from 'react';
-import { Users, UserCheck, Receipt, BookOpen, CircleAlert, CheckCircle2, AlertTriangle, Wallet, MoreHorizontal, CalendarSync, IndianRupee, Bus, MapPin, CalendarOff, IdCard, Library, FlaskConical } from 'lucide-react';
+import React, { useState, useEffect } from 'react';
+import {
+  Users, UserCheck, Receipt, BookOpen, CircleAlert, CheckCircle2, AlertTriangle,
+  Wallet, MoreHorizontal, CalendarSync, IndianRupee, Bus, MapPin, CalendarOff,
+  IdCard, Library, FlaskConical, UserPlus, ChevronDown, ChevronRight,
+} from 'lucide-react';
 import { ActionGrid, AppCard, SectionTitle } from '../components/SharedUI';
 import { ActionItem } from '../types';
 import { AdmitCardManager } from './AdmitCardManager';
 import { LabInventoryManager } from './LabInventoryManager';
 import { PrincipalFeatureView } from './PrincipalFeatureView';
+import { StudentsManager } from '../features/principal/components/StudentsManager';
+import { studentService } from '../services/student.service';
+import { feeService, FeeInstallment } from '../services/fee.service';
+import { Student } from '../types/principal.types';
 
 export const PrincipalDashboard: React.FC = () => {
   const [showAdmitCards, setShowAdmitCards] = useState(false);
   const [showLabInventory, setShowLabInventory] = useState(false);
   const [featureView, setFeatureView] = useState<string | null>(null);
+  const [showAdmission, setShowAdmission] = useState(false);
+
+  // Fee section state
+  const [recentStudents, setRecentStudents] = useState<Student[]>([]);
+  const [pendingFeeStudents, setPendingFeeStudents] = useState<Student[]>([]);
+  const [expandedFeeId, setExpandedFeeId] = useState<string | null>(null);
+  const [feeInstMap, setFeeInstMap] = useState<Record<string, FeeInstallment[]>>({});
+  const [collectModal, setCollectModal] = useState<{ student: Student; installment: FeeInstallment } | null>(null);
+  const [collectAmount, setCollectAmount] = useState('');
+  const [collectMethod, setCollectMethod] = useState('Cash');
+
+  useEffect(() => {
+    studentService.getAll().then(all => {
+      const sorted = [...all].sort((a, b) =>
+        new Date(b.admissionDate ?? 0).getTime() - new Date(a.admissionDate ?? 0).getTime()
+      );
+      setRecentStudents(sorted.slice(0, 5));
+      setPendingFeeStudents(all.filter(s => s.feeStatus !== 'PAID').slice(0, 6));
+    });
+  }, []);
+
+  const handleExpandFee = (student: Student) => {
+    if (expandedFeeId === student.id) { setExpandedFeeId(null); return; }
+    setExpandedFeeId(student.id);
+    if (!feeInstMap[student.id]) {
+      const insts = feeService.getStudentInstallments(student.id);
+      setFeeInstMap(prev => ({ ...prev, [student.id]: insts }));
+    }
+  };
+
+  const handleCollect = () => {
+    if (!collectModal || !collectAmount) return;
+    const { student, installment } = collectModal;
+    const amt = parseFloat(collectAmount);
+    feeService.recordPayment(student.id, amt);
+    feeService.addPaymentRecord({
+      id: `pay${Date.now()}`,
+      studentId: student.id,
+      studentName: student.name,
+      className: student.className,
+      admissionNo: student.admissionNo,
+      amount: amt,
+      method: collectMethod,
+      date: new Date().toISOString().split('T')[0],
+      receiptNo: feeService.nextReceiptNo(),
+      installmentIds: [installment.id],
+      installmentDetails: [{ month: installment.month, feeType: installment.feeType, amount: amt }],
+      advanceAmount: 0,
+    });
+    const updated = feeService.getStudentInstallments(student.id);
+    setFeeInstMap(prev => ({ ...prev, [student.id]: updated }));
+    setCollectModal(null);
+    setCollectAmount('');
+  };
 
   const actions: ActionItem[] = [
     { title: 'Students', icon: <Users size={28} />, color: 'text-indigo-600', onClick: () => setFeatureView('STUDENTS') },
+    { title: 'Admission', icon: <UserPlus size={28} />, color: 'text-emerald-600', onClick: () => setShowAdmission(true) },
     { title: 'Staff', icon: <UserCheck size={28} />, color: 'text-blue-600', onClick: () => setFeatureView('STAFF') },
     { title: 'Classes', icon: <BookOpen size={28} />, color: 'text-purple-600', onClick: () => setFeatureView('CLASSES') },
-    { title: 'Fees Col.', icon: <Receipt size={28} />, color: 'text-emerald-600', onClick: () => setFeatureView('FEES') },
-    { title: 'Transport', icon: <Bus size={28} />, color: 'text-amber-500', onClick: () => setFeatureView('TRANSPORT') },
-    { title: 'Complaints', icon: <CircleAlert size={28} />, color: 'text-rose-500', onClick: () => setFeatureView('COMPLAINTS') },
+    { title: 'Fees Col.', icon: <Receipt size={28} />, color: 'text-amber-500', onClick: () => setFeatureView('FEES') },
+    { title: 'Transport', icon: <Bus size={28} />, color: 'text-rose-500', onClick: () => setFeatureView('TRANSPORT') },
     { title: 'Expenses', icon: <Wallet size={28} />, color: 'text-red-500', onClick: () => setFeatureView('EXPENSES') },
     { title: 'More', icon: <MoreHorizontal size={28} />, color: 'text-slate-600' },
   ];
@@ -48,6 +110,126 @@ export const PrincipalDashboard: React.FC = () => {
               85% Target
             </div>
          </AppCard>
+      </div>
+
+      {/* ── Recent Admissions ──────────────────────────────────────────────── */}
+      <div>
+        <SectionTitle title="Recent Admissions" action="Admit New" />
+        <AppCard noPadding>
+          {recentStudents.length === 0 && (
+            <div className="p-8 text-center text-slate-400">
+              <Users size={24} className="mx-auto mb-2 opacity-40" />
+              <p className="text-sm font-bold">No students yet</p>
+            </div>
+          )}
+          {recentStudents.map((s, idx) => (
+            <button
+              key={s.id}
+              onClick={() => setShowAdmission(true)}
+              className={`w-full flex items-center gap-3 px-4 py-3.5 text-left active:bg-slate-50 transition-colors ${idx < recentStudents.length - 1 ? 'border-b border-slate-100' : ''}`}
+            >
+              <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-indigo-100 to-violet-100 text-indigo-700 flex items-center justify-center font-black text-sm shrink-0">
+                {s.name.split(' ').map(w => w[0]).join('').slice(0, 2)}
+              </div>
+              <div className="flex-1 min-w-0">
+                <div className="font-extrabold text-slate-900 text-sm truncate">{s.name}</div>
+                <div className="text-[10px] font-bold text-slate-400 mt-0.5">{s.className}-{s.section} · {s.admissionNo}</div>
+              </div>
+              <div className="text-right shrink-0">
+                <div className="text-[9px] font-black text-slate-400 uppercase tracking-widest">
+                  {s.admissionDate ? new Date(s.admissionDate).toLocaleDateString('en-IN', { day: '2-digit', month: 'short' }) : '—'}
+                </div>
+                {s.rte && (
+                  <span className="text-[8px] font-black bg-blue-100 text-blue-700 px-1.5 py-0.5 rounded-full uppercase mt-0.5 inline-block">RTE</span>
+                )}
+              </div>
+            </button>
+          ))}
+        </AppCard>
+      </div>
+
+      {/* ── Pending Fees ──────────────────────────────────────────────────── */}
+      <div>
+        <SectionTitle title="Pending Fees" action="View All" />
+        <AppCard noPadding>
+          {pendingFeeStudents.length === 0 && (
+            <div className="p-8 text-center text-slate-400">
+              <CheckCircle2 size={24} className="mx-auto mb-2 opacity-40" />
+              <p className="text-sm font-bold">All fees cleared!</p>
+            </div>
+          )}
+          {pendingFeeStudents.map((s, idx) => {
+            const insts = feeInstMap[s.id] ?? [];
+            const totalDue = insts
+              .filter(i => i.status !== 'PAID' && i.status !== 'WAIVED' && i.payerType === 'PARENT')
+              .reduce((sum, i) => sum + (i.amount - i.paidAmount - i.writeOffAmount), 0);
+            const isExpanded = expandedFeeId === s.id;
+
+            return (
+              <div key={s.id} className={idx < pendingFeeStudents.length - 1 ? 'border-b border-slate-100' : ''}>
+                <button
+                  onClick={() => handleExpandFee(s)}
+                  className="w-full flex items-center gap-3 px-4 py-3.5 text-left active:bg-slate-50 transition-colors"
+                >
+                  <div className="w-10 h-10 rounded-xl bg-indigo-50 text-indigo-600 flex items-center justify-center font-black text-sm shrink-0">
+                    {s.name.split(' ').map(w => w[0]).join('').slice(0, 2)}
+                  </div>
+                  <div className="flex-1 min-w-0">
+                    <div className="font-extrabold text-slate-900 text-sm truncate">{s.name}</div>
+                    <div className="text-[10px] font-bold text-slate-400 mt-0.5">
+                      {s.className}-{s.section}
+                      {totalDue > 0 && ` · ₹${totalDue.toLocaleString()} due`}
+                    </div>
+                  </div>
+                  {s.rte && (
+                    <span className="text-[8px] font-black bg-blue-100 text-blue-700 px-1.5 py-0.5 rounded-full uppercase shrink-0">RTE</span>
+                  )}
+                  {isExpanded
+                    ? <ChevronDown size={16} className="text-slate-400 shrink-0" />
+                    : <ChevronRight size={16} className="text-slate-400 shrink-0" />
+                  }
+                </button>
+
+                {isExpanded && (
+                  <div className="px-4 pb-3 space-y-2">
+                    {insts.length === 0 && (
+                      <p className="text-[10px] font-bold text-slate-400 text-center py-2">No installments found</p>
+                    )}
+                    {insts.map(inst => (
+                      <div key={inst.id} className="bg-slate-50 rounded-xl p-3 flex items-center justify-between gap-2">
+                        <div className="min-w-0">
+                          <div className="text-sm font-extrabold text-slate-800 truncate">{inst.month}</div>
+                          <div className="text-[9px] font-black text-slate-400 uppercase tracking-widest">{inst.feeType}</div>
+                        </div>
+                        {inst.payerType === 'GOVERNMENT' ? (
+                          <span className="text-[9px] font-black bg-emerald-100 text-emerald-700 px-2 py-1 rounded-full uppercase shrink-0">Paid by Govt</span>
+                        ) : inst.status === 'PAID' ? (
+                          <span className="text-[9px] font-black bg-emerald-100 text-emerald-700 px-2 py-1 rounded-full uppercase shrink-0">Paid</span>
+                        ) : (
+                          <div className="flex items-center gap-2 shrink-0">
+                            <span className="text-sm font-black text-slate-900">
+                              ₹{(inst.amount - inst.paidAmount - inst.writeOffAmount).toLocaleString()}
+                            </span>
+                            <button
+                              onClick={e => {
+                                e.stopPropagation();
+                                setCollectModal({ student: s, installment: inst });
+                                setCollectAmount(String(inst.amount - inst.paidAmount - inst.writeOffAmount));
+                              }}
+                              className="bg-slate-900 text-white text-[9px] font-black px-3 py-1.5 rounded-full uppercase tracking-widest active:scale-95 transition-transform"
+                            >
+                              Collect
+                            </button>
+                          </div>
+                        )}
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            );
+          })}
+        </AppCard>
       </div>
 
       <div>
@@ -105,9 +287,7 @@ export const PrincipalDashboard: React.FC = () => {
                </div>
                <div className="flex-1">
                  <h4 className="font-extrabold text-slate-900 text-sm uppercase tracking-tight">Route #7 • DL 1C 7789</h4>
-                 <p className="text-xs font-bold text-slate-500 mt-1">
-                    Route Completed
-                 </p>
+                 <p className="text-xs font-bold text-slate-500 mt-1">Route Completed</p>
                  <p className="text-[10px] font-black text-slate-400 mt-1 uppercase tracking-widest">Driver: Suresh • Offline</p>
                </div>
              </div>
@@ -218,7 +398,7 @@ export const PrincipalDashboard: React.FC = () => {
                  <p className="text-xs text-slate-500 font-medium mt-1">Mid-Term Exams 2024</p>
                </div>
              </div>
-             <button 
+             <button
                onClick={() => setShowAdmitCards(true)}
                className="bg-slate-900 text-white text-[10px] font-black px-3 py-1.5 rounded-full uppercase tracking-widest leading-none active:scale-95 transition-transform"
              >
@@ -249,7 +429,7 @@ export const PrincipalDashboard: React.FC = () => {
                  <p className="text-xs text-slate-500 font-medium mt-1">Microscopes, Test tubes, etc.</p>
                </div>
              </div>
-             <button 
+             <button
                onClick={() => setShowLabInventory(true)}
                className="bg-slate-900 text-white text-[10px] font-black px-3 py-1.5 rounded-full uppercase tracking-widest leading-none active:scale-95 transition-transform"
              >
@@ -261,9 +441,49 @@ export const PrincipalDashboard: React.FC = () => {
 
       <div className="h-8"></div>
 
+      {/* ── Collect Fee Modal ─────────────────────────────────────────────── */}
+      {collectModal && (
+        <div className="absolute inset-0 bg-slate-900/50 backdrop-blur-sm z-50 flex items-end">
+          <div className="w-full bg-white rounded-t-3xl p-6 pb-8 animate-in slide-in-from-bottom-8">
+            <div className="flex justify-between items-center mb-4">
+              <h3 className="text-lg font-black text-slate-900">Collect Fee</h3>
+              <button onClick={() => setCollectModal(null)} className="w-8 h-8 bg-slate-100 rounded-full flex items-center justify-center text-slate-500 font-bold">✕</button>
+            </div>
+            <p className="text-[10px] font-bold text-slate-400 mb-4 uppercase tracking-widest">
+              {collectModal.student.name} · {collectModal.installment.month} · {collectModal.installment.feeType}
+            </p>
+            <div className="bg-slate-50 border border-slate-200 rounded-xl p-3 flex items-center gap-2 mb-3">
+              <IndianRupee size={16} className="text-slate-400" />
+              <input
+                type="number"
+                value={collectAmount}
+                onChange={e => setCollectAmount(e.target.value)}
+                className="flex-1 bg-transparent font-black text-slate-900 text-lg outline-none"
+              />
+            </div>
+            <div className="grid grid-cols-3 gap-2 mb-4">
+              {['Cash', 'UPI', 'Cheque'].map(m => (
+                <button key={m} onClick={() => setCollectMethod(m)}
+                  className={`py-2.5 rounded-xl text-[10px] font-black border transition-all ${collectMethod === m ? 'bg-slate-900 text-white border-slate-900' : 'bg-white text-slate-600 border-slate-200'}`}>
+                  {m}
+                </button>
+              ))}
+            </div>
+            <button
+              onClick={handleCollect}
+              disabled={!collectAmount}
+              className="w-full py-3 bg-emerald-600 text-white font-black rounded-xl disabled:opacity-40 active:scale-95 transition-transform"
+            >
+              Collect ₹{Number(collectAmount || 0).toLocaleString()}
+            </button>
+          </div>
+        </div>
+      )}
+
       {showAdmitCards && <AdmitCardManager onClose={() => setShowAdmitCards(false)} />}
       {showLabInventory && <LabInventoryManager onClose={() => setShowLabInventory(false)} />}
       {featureView && <PrincipalFeatureView feature={featureView} onClose={() => setFeatureView(null)} />}
+      {showAdmission && <StudentsManager onBack={() => setShowAdmission(false)} initialView="ADMISSION" />}
     </div>
   );
 };

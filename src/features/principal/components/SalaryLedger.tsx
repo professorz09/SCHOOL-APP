@@ -147,7 +147,10 @@ export const SalaryLedger: React.FC<Props> = ({ onBack }) => {
 
         <div className="flex-1 overflow-y-auto p-4 pb-28 space-y-3">
           <p className="text-[9px] font-black uppercase tracking-widest text-slate-400">Salary History</p>
-          {selected.schedule.map(row => (
+          {[...selected.schedule].sort((a, b) => {
+            const order = (s: string) => s === 'PAID' ? 1 : 0;
+            return order(a.status) - order(b.status);
+          }).map(row => (
             <div key={row.id} className="bg-white rounded-2xl border border-slate-100 shadow-sm p-4">
               <div className="flex items-start justify-between gap-3">
                 <div>
