@@ -5,6 +5,9 @@ import {
 } from 'lucide-react';
 import { useAcademicYear } from '../../../context/AcademicYearContext';
 import { yearClosingService, streamService } from '../../../services/yearClosing.service';
+import { billingService } from '../../../services/billing.service';
+import { useBillingStore } from '../../../store/billingStore';
+import { useAuthStore } from '../../../store/authStore';
 import type {
   PreClosingChecklist,
   YearClosingPreview,
@@ -20,6 +23,8 @@ interface Props {
 
 export const YearClosingWizard: React.FC<Props> = ({ onBack }) => {
   const { activeYear, lockYear, addAcademicYear } = useAcademicYear();
+  const { createNextYear } = useBillingStore();
+  const { session } = useAuthStore();
   const [step, setStep] = useState<WizardStep>('PRE_CHECKS');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
@@ -132,6 +137,16 @@ export const YearClosingWizard: React.FC<Props> = ({ onBack }) => {
         // Callback: lock old year
         (yearId) => lockYear(yearId)
       );
+
+      // Auto-create billing year for new academic year
+      if (session?.schoolId) {
+        const currentBilling = await billingService.getCurrentYear(session.schoolId);
+        const carriedForward = outstandingHandling === 'ARREARS'
+          ? (currentBilling?.outstanding ?? 0)
+          : 0;
+        await createNextYear(session.schoolId, carriedForward);
+      }
+
       setResult(closeResult);
       setStep('DONE');
     } catch (err) {

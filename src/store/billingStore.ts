@@ -25,6 +25,7 @@ interface BillingStore {
     startDate: string,
     customAmount?: number,
   ) => Promise<void>;
+  createNextYear: (schoolId: string, carriedForward: number) => Promise<BillingYear>;
 }
 
 export const useBillingStore = create<BillingStore>((set) => ({
@@ -58,5 +59,11 @@ export const useBillingStore = create<BillingStore>((set) => ({
       billingService.getBillingYears(),
     ]);
     set({ schoolBillings, billingYears });
+  },
+
+  createNextYear: async (schoolId, carriedForward) => {
+    const year = await billingService.createNextYear(schoolId, carriedForward);
+    set(s => ({ billingYears: [...s.billingYears, year] }));
+    return year;
   },
 }));

@@ -40,7 +40,7 @@ const DEMO_SESSIONS: { label: string; role: AppRole; display: string; session: A
     icon: GraduationCap,
     session: {
       userId: 'principal1', mobileNumber: '9000000001', role: 'PRINCIPAL',
-      schoolId: 'sch1', name: 'Dr. Rajesh Kumar', email: 'principal@school.edu', mustChangePassword: false,
+      schoolId: 's1', name: 'Dr. Rajesh Kumar', email: 'principal@school.edu', mustChangePassword: false,
     },
   },
   {
