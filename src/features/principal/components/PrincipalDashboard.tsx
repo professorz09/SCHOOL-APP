@@ -2,7 +2,8 @@ import React, { useEffect, useState } from 'react';
 import {
   Users, UserCheck, BookOpen, IndianRupee, Bus, CircleAlert,
   Wallet, MoreHorizontal, CircleCheckBig, MapPin, ChevronRight,
-  SlidersHorizontal,
+  Bell, ClipboardCheck, Clock, BanknoteIcon, Settings, ChevronUp,
+  UserCog,
 } from 'lucide-react';
 import { studentService } from '../../../services/student.service';
 import { staffService } from '../../../services/staff.service';
@@ -23,6 +24,7 @@ const LIVE_CLASSES = [
 
 export const PrincipalDashboard: React.FC<Props> = ({ onNavigate }) => {
   const session = useAuthStore(s => s.session);
+  const [showMore, setShowMore] = useState(false);
   const [stats, setStats] = useState({
     totalStudents: 0, avgAttendance: 0, paidFees: 0, totalFees: 0,
     totalStaff: 0, openComplaints: 0, pendingApprovals: 0,
@@ -63,7 +65,7 @@ export const PrincipalDashboard: React.FC<Props> = ({ onNavigate }) => {
 
   const feePercent = stats.totalFees > 0 ? Math.round((stats.paidFees / stats.totalFees) * 100) : 0;
 
-  const QUICK_ACTIONS: { icon: React.ReactNode; label: string; view: PrincipalView; color: string }[] = [
+  const MAIN_ACTIONS: { icon: React.ReactNode; label: string; view: PrincipalView; color: string }[] = [
     { icon: <Users size={22} />,       label: 'Students',   view: 'STUDENTS',       color: 'text-violet-600 bg-violet-50' },
     { icon: <UserCheck size={22} />,   label: 'Staff',      view: 'STAFF',          color: 'text-blue-600 bg-blue-50' },
     { icon: <BookOpen size={22} />,    label: 'Classes',    view: 'CLASS_MGMT',     color: 'text-purple-600 bg-purple-50' },
@@ -71,42 +73,63 @@ export const PrincipalDashboard: React.FC<Props> = ({ onNavigate }) => {
     { icon: <Bus size={22} />,         label: 'Transport',  view: 'TRANSPORT_MGMT', color: 'text-orange-500 bg-orange-50' },
     { icon: <CircleAlert size={22} />, label: 'Complaints', view: 'COMPLAINTS',     color: 'text-rose-600 bg-rose-50' },
     { icon: <Wallet size={22} />,      label: 'Expenses',   view: 'EXPENSES',       color: 'text-red-500 bg-red-50' },
-    { icon: <MoreHorizontal size={22} />, label: 'More',    view: 'SETTINGS',       color: 'text-slate-500 bg-slate-100' },
+  ];
+
+  const MORE_ACTIONS: { icon: React.ReactNode; label: string; view: PrincipalView; color: string }[] = [
+    { icon: <Bell size={22} />,           label: 'Notices',    view: 'NOTICES',          color: 'text-sky-600 bg-sky-50' },
+    { icon: <ClipboardCheck size={22} />, label: 'Approvals',  view: 'APPROVALS',        color: 'text-indigo-600 bg-indigo-50' },
+    { icon: <Clock size={22} />,          label: 'Timetable',  view: 'TIMETABLE',        color: 'text-fuchsia-600 bg-fuchsia-50' },
+    { icon: <BanknoteIcon size={22} />,   label: 'Salary',     view: 'SALARY_LEDGER',    color: 'text-lime-600 bg-lime-50' },
+    { icon: <UserCog size={22} />,        label: 'Attendance', view: 'ATTENDANCE',       color: 'text-teal-600 bg-teal-50' },
+    { icon: <Settings size={22} />,       label: 'Settings',   view: 'SETTINGS',         color: 'text-slate-600 bg-slate-100' },
   ];
 
   return (
     <div className="flex flex-col gap-5 pb-4">
 
       {/* ── Header: Attendance ──────────────────────────────────────────── */}
-      <div className="flex items-start justify-between pt-1">
-        <div>
-          <p className="text-[11px] font-black uppercase tracking-widest text-slate-400">Today's Attendance</p>
-          <h1 className="text-5xl font-black text-blue-600 mt-1 leading-none tabular-nums">
-            {stats.avgAttendance}<span className="text-3xl">%</span>
-          </h1>
-        </div>
-        <button
-          onClick={() => onNavigate('SETTINGS')}
-          className="w-11 h-11 rounded-full bg-slate-900 flex items-center justify-center shadow-md active:scale-90 transition-transform"
-        >
-          <SlidersHorizontal size={18} className="text-white" />
-        </button>
+      <div className="pt-1">
+        <p className="text-[11px] font-black uppercase tracking-widest text-slate-400">Today's Attendance</p>
+        <h1 className="text-5xl font-black text-blue-600 mt-1 leading-none tabular-nums">
+          {stats.avgAttendance}<span className="text-3xl">%</span>
+        </h1>
       </div>
 
       {/* ── Quick Actions Grid ──────────────────────────────────────────── */}
-      <div className="grid grid-cols-4 gap-3">
-        {QUICK_ACTIONS.map(({ icon, label, view, color }) => (
-          <button
-            key={label}
-            onClick={() => onNavigate(view)}
-            className="flex flex-col items-center gap-2 active:scale-95 transition-transform"
-          >
-            <div className={`w-14 h-14 rounded-2xl flex items-center justify-center ${color} shadow-sm`}>
-              {icon}
+      <div className="space-y-3">
+        {/* Main row — always visible */}
+        <div className="grid grid-cols-4 gap-3">
+          {MAIN_ACTIONS.map(({ icon, label, view, color }) => (
+            <button key={label} onClick={() => onNavigate(view)}
+              className="flex flex-col items-center gap-2 active:scale-95 transition-transform">
+              <div className={`w-14 h-14 rounded-2xl flex items-center justify-center ${color} shadow-sm`}>{icon}</div>
+              <span className="text-[10px] font-black text-slate-500 uppercase tracking-wide text-center leading-tight">{label}</span>
+            </button>
+          ))}
+          {/* More chip */}
+          <button onClick={() => setShowMore(p => !p)}
+            className="flex flex-col items-center gap-2 active:scale-95 transition-transform">
+            <div className={`w-14 h-14 rounded-2xl flex items-center justify-center shadow-sm transition-colors ${showMore ? 'bg-slate-800 text-white' : 'bg-slate-100 text-slate-500'}`}>
+              {showMore ? <ChevronUp size={22} /> : <MoreHorizontal size={22} />}
             </div>
-            <span className="text-[10px] font-black text-slate-500 uppercase tracking-wide text-center leading-tight">{label}</span>
+            <span className="text-[10px] font-black text-slate-500 uppercase tracking-wide text-center leading-tight">
+              {showMore ? 'Less' : 'More'}
+            </span>
           </button>
-        ))}
+        </div>
+
+        {/* Expanded More row */}
+        {showMore && (
+          <div className="grid grid-cols-4 gap-3 animate-in slide-in-from-top-2 duration-200">
+            {MORE_ACTIONS.map(({ icon, label, view, color }) => (
+              <button key={label} onClick={() => { onNavigate(view); setShowMore(false); }}
+                className="flex flex-col items-center gap-2 active:scale-95 transition-transform">
+                <div className={`w-14 h-14 rounded-2xl flex items-center justify-center ${color} shadow-sm`}>{icon}</div>
+                <span className="text-[10px] font-black text-slate-500 uppercase tracking-wide text-center leading-tight">{label}</span>
+              </button>
+            ))}
+          </div>
+        )}
       </div>
 
       {/* ── Stat Cards ─────────────────────────────────────────────────── */}
