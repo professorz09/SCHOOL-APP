@@ -11,6 +11,10 @@ export type ApprovalStatus = 'PENDING' | 'APPROVED' | 'REJECTED';
 export type AssetCategory = 'BOOK' | 'LAB_EQUIPMENT' | 'VEHICLE';
 export type NoticeAudience = 'ALL' | 'STUDENTS' | 'TEACHERS' | 'PARENTS';
 
+export type StudentStream = 'Science' | 'Commerce' | 'Arts';
+export const STREAMS: StudentStream[] = ['Science', 'Commerce', 'Arts'];
+export const STREAM_CLASSES = new Set(['Class 11', 'Class 12']);
+
 export interface Student {
   id: string;
   name: string;
@@ -18,6 +22,7 @@ export interface Student {
   admissionNo: string;
   className: string;
   section: string;
+  stream?: StudentStream;
   dob: string;
   gender: Gender;
   bloodGroup: BloodGroup;

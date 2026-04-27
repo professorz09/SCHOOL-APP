@@ -1,6 +1,6 @@
 import React, { useRef } from 'react';
 import { X, Printer } from 'lucide-react';
-import { Student } from '../types/principal.types';
+import { Student, STREAM_CLASSES } from '../types/principal.types';
 import { SchoolInfo } from '../services/schoolInfo.service';
 
 interface Props {
@@ -125,6 +125,14 @@ export const AdmissionFormPrint: React.FC<Props> = ({ student, schoolInfo, onClo
                   <div className="form-value">{student.section}</div>
                 </div>
               </div>
+              {STREAM_CLASSES.has(student.className) && (
+                <div className="form-row">
+                  <div className="form-group">
+                    <div className="form-label">Stream</div>
+                    <div className="form-value">{student.stream || '—'}</div>
+                  </div>
+                </div>
+              )}
               <div className="form-row">
                 <div className="form-group">
                   <div className="form-label">Roll Number</div>

@@ -1,7 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import { ArrowLeft, Plus, Trash2, ChevronDown, ChevronUp, Save, Calendar, Users, QrCode, CreditCard, CheckCircle2, Lock, Eye, EyeOff, ShieldCheck, IndianRupee, Edit2, Building2, BookOpen, Banknote } from 'lucide-react';
 import { principalService } from '../../../services/principal.service';
-import { AcademicYearConfig, ClassConfig, Student } from '../../../types/principal.types';
+import { AcademicYearConfig, ClassConfig, Student, STREAMS, STREAM_CLASSES } from '../../../types/principal.types';
 import { useUIStore } from '../../../store/uiStore';
 import { studentService } from '../../../services/student.service';
 import { authService } from '../../../services/auth.service';
@@ -49,6 +49,7 @@ export const SettingsManager: React.FC<Props> = ({ onBack }) => {
   const [feeStructures, setFeeStructures] = useState<FeeStructureItem[]>(DEFAULT_FEE_STRUCTURES);
   const [editingFs, setEditingFs] = useState<FeeStructureItem | null>(null);
   const [newFsClass, setNewFsClass] = useState('');
+  const [newFsStream, setNewFsStream] = useState('');
   const [newFsTuition, setNewFsTuition] = useState('');
   const [newFsAdmission, setNewFsAdmission] = useState('');
   const [newFsExam, setNewFsExam] = useState('');
@@ -172,16 +173,20 @@ export const SettingsManager: React.FC<Props> = ({ onBack }) => {
 
   const handleAddFeeStructure = () => {
     if (!newFsClass.trim() || !newFsTuition) { showToast('Class name and tuition fee required', 'error'); return; }
+    if (STREAM_CLASSES.has(newFsClass.trim()) && !newFsStream) { showToast('Stream required for Class 11 and 12', 'error'); return; }
+    const fullName = (STREAM_CLASSES.has(newFsClass.trim()) && newFsStream)
+      ? `${newFsClass.trim()} - ${newFsStream}`
+      : newFsClass.trim();
     const newFs: FeeStructureItem = {
       id: `fs${Date.now()}`,
-      className: newFsClass.trim(),
+      className: fullName,
       tuitionPerMonth: Number(newFsTuition),
       admissionFee: Number(newFsAdmission) || 0,
       examFeePerYear: Number(newFsExam) || 0,
       otherCharges: [],
     };
     setFeeStructures(prev => [...prev, newFs]);
-    setNewFsClass(''); setNewFsTuition(''); setNewFsAdmission(''); setNewFsExam('');
+    setNewFsClass(''); setNewFsStream(''); setNewFsTuition(''); setNewFsAdmission(''); setNewFsExam('');
     showToast(`Fee structure added for ${newFs.className}`);
   };
 
@@ -443,7 +448,27 @@ export const SettingsManager: React.FC<Props> = ({ onBack }) => {
 
         <div className="bg-white rounded-2xl border border-slate-100 shadow-sm p-4 space-y-3">
           <p className="text-[10px] font-black uppercase tracking-widest text-slate-400">Add Class Fee Structure</p>
-          <input value={newFsClass} onChange={e => setNewFsClass(e.target.value)} placeholder="Class name (e.g. Class 1, Class 10)" className="w-full border border-slate-200 bg-slate-50 rounded-xl px-4 py-3 font-bold text-sm outline-none focus:border-indigo-500" />
+          <select value={newFsClass} onChange={e => { setNewFsClass(e.target.value); setNewFsStream(''); }}
+            className="w-full border border-slate-200 bg-slate-50 rounded-xl px-3 py-3 font-bold text-sm outline-none focus:border-indigo-500">
+            <option value="">Select class…</option>
+            {['Class 1','Class 2','Class 3','Class 4','Class 5','Class 6','Class 7','Class 8','Class 9','Class 10','Class 11','Class 12'].map(c => (
+              <option key={c} value={c}>{c}</option>
+            ))}
+          </select>
+          {STREAM_CLASSES.has(newFsClass) && (
+            <div>
+              <label className="block text-[9px] font-black uppercase tracking-widest text-slate-400 mb-1.5">Stream *</label>
+              <div className="grid grid-cols-3 gap-2">
+                {STREAMS.map(s => (
+                  <button key={s} type="button"
+                    onClick={() => setNewFsStream(s)}
+                    className={`py-2.5 rounded-xl text-xs font-black border transition-all ${newFsStream === s ? 'bg-emerald-600 text-white border-emerald-600' : 'bg-slate-50 text-slate-600 border-slate-200'}`}>
+                    {s}
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
           <div className="grid grid-cols-3 gap-2">
             {[
               { label: 'Tuition/Month', key: 'FsTuition' },
