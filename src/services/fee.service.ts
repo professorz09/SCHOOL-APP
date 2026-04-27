@@ -4,6 +4,21 @@ export type FeeType = 'TUITION' | 'TRANSPORT' | 'EXAM' | 'OTHER';
 export type FeeStatus = 'PAID' | 'PARTIAL' | 'UNPAID' | 'WAIVED';
 export type PayerType = 'PARENT' | 'GOVERNMENT';
 
+export interface PaymentRecord {
+  id: string;
+  studentId: string;
+  studentName: string;
+  className: string;
+  admissionNo: string;
+  amount: number;
+  method: string;        // display label, e.g. "Cash", "UPI"
+  date: string;          // YYYY-MM-DD
+  receiptNo: string;
+  installmentIds: string[];
+  installmentDetails: { month: string; feeType: FeeType; amount: number }[];
+  advanceAmount: number;
+}
+
 export interface FeeInstallment {
   id: string;
   studentId: string;
@@ -90,6 +105,28 @@ let _transportSchedule: FeeInstallment[] = [
   { id: 'tra8', studentId: 'student3', academicYearId: 'ay1', month: 'May 2026', dueDate: '2026-05-10', feeType: 'TRANSPORT', amount: 400, paidAmount: 0, writeOffAmount: 0, writeOffReason: '', status: 'UNPAID', payerType: 'PARENT', relatedId: 'ta3' },
 ];
 
+// ─── localStorage helpers ─────────────────────────────────────────────────────
+
+const LS_ADVANCE = 'school_fee_advance_v1';
+const LS_HISTORY = 'school_fee_history_v1';
+
+function _lsLoad<T>(key: string, fallback: T): T {
+  try { return JSON.parse(localStorage.getItem(key) ?? 'null') ?? fallback; }
+  catch { return fallback; }
+}
+
+function _lsSave(key: string, data: unknown): void {
+  try { localStorage.setItem(key, JSON.stringify(data)); } catch { /* storage quota */ }
+}
+
+// ─── Runtime state ────────────────────────────────────────────────────────────
+
+// Advance balance per student — persisted to localStorage
+let _advanceBalances: Record<string, number> = _lsLoad(LS_ADVANCE, {});
+
+// Full payment allocation history — persisted to localStorage
+let _paymentHistory: PaymentRecord[] = _lsLoad(LS_HISTORY, []);
+
 // Government payment history
 let _governmentPayments: GovernmentPaymentRecord[] = [
   {
@@ -101,6 +138,37 @@ let _governmentPayments: GovernmentPaymentRecord[] = [
     allocatedStudentIds: ['student2'],
   },
 ];
+
+// ─── Private helpers ──────────────────────────────────────────────────────────
+
+// Drain existing advance balance into open PARENT dues (called when new dues arrive)
+function _applyAdvance(studentId: string): void {
+  const advance = _advanceBalances[studentId] ?? 0;
+  if (advance <= 0) return;
+
+  _advanceBalances[studentId] = 0;
+  let remaining = advance;
+
+  const all = [..._tuitionSchedule, ..._transportSchedule]
+    .filter(i => i.studentId === studentId && i.payerType === 'PARENT' &&
+                 (i.status === 'UNPAID' || i.status === 'PARTIAL'))
+    .sort((a, b) => new Date(a.dueDate).getTime() - new Date(b.dueDate).getTime());
+
+  for (const inst of all) {
+    if (remaining <= 0) break;
+    const due = inst.amount - inst.paidAmount - inst.writeOffAmount;
+    if (due <= 0) continue;
+    const applying = Math.min(remaining, due);
+    inst.paidAmount += applying;
+    remaining -= applying;
+    const total = inst.amount - inst.writeOffAmount;
+    if (inst.paidAmount >= total) inst.status = 'PAID';
+    else if (inst.paidAmount > 0) inst.status = 'PARTIAL';
+  }
+
+  if (remaining > 0) _advanceBalances[studentId] = remaining;
+  _lsSave(LS_ADVANCE, _advanceBalances);
+}
 
 // ─── Service API ──────────────────────────────────────────────────────────────
 
@@ -175,6 +243,9 @@ export const feeService = {
         }
       }
     }
+
+    // Auto-apply any existing advance balance to the newly created dues
+    _applyAdvance(studentId);
   },
 
   // ── Remove future unpaid transport fees when assignment ends ────────────
@@ -188,16 +259,20 @@ export const feeService = {
     });
   },
 
-  // ── Record payment (parent pays) — only allocates PARENT payer installments ──
-  recordPayment(studentId: string, amount: number): boolean {
-    if (amount <= 0) return false;
+  // ── Record payment (parent pays) — allocates oldest PARENT dues first; excess → advance ──
+  recordPayment(studentId: string, amount: number): { applied: number; advance: number } {
+    if (amount <= 0) return { applied: 0, advance: 0 };
 
-    // Only allocate to parent-payer installments
+    // Combine new payment with any existing advance balance
+    const existingAdvance = _advanceBalances[studentId] ?? 0;
+    let remaining = amount + existingAdvance;
+    _advanceBalances[studentId] = 0;
+
     const installments = feeService.getStudentInstallments(studentId)
       .filter(i => i.payerType === 'PARENT')
       .sort((a, b) => new Date(a.dueDate).getTime() - new Date(b.dueDate).getTime());
 
-    let remaining = amount;
+    const startRemaining = remaining;
 
     for (const inst of installments) {
       if (remaining <= 0) break;
@@ -218,7 +293,69 @@ export const feeService = {
       }
     }
 
-    return remaining < amount;
+    // Store excess as advance balance for future dues, then persist
+    if (remaining > 0) {
+      _advanceBalances[studentId] = remaining;
+    }
+    _lsSave(LS_ADVANCE, _advanceBalances);
+
+    return { applied: startRemaining - remaining, advance: remaining };
+  },
+
+  // ── Payment history ────────────────────────────────────────────────────
+  addPaymentRecord(record: PaymentRecord): void {
+    _paymentHistory.push(record);
+    _lsSave(LS_HISTORY, _paymentHistory);
+  },
+
+  getPaymentHistory(studentId?: string): PaymentRecord[] {
+    const all = [..._paymentHistory].sort((a, b) => b.date.localeCompare(a.date));
+    return studentId ? all.filter(r => r.studentId === studentId) : all;
+  },
+
+  getPaymentRecordByInstallmentId(installmentId: string): PaymentRecord | null {
+    return [..._paymentHistory].reverse().find(r => r.installmentIds.includes(installmentId)) ?? null;
+  },
+
+  nextReceiptNo(): string {
+    return `RCT-${new Date().getFullYear()}-${String(_paymentHistory.length + 1).padStart(4, '0')}`;
+  },
+
+  // ── Advance balance for a student ──────────────────────────────────────
+  getAdvanceBalance(studentId: string): number {
+    return _advanceBalances[studentId] ?? 0;
+  },
+
+  // ── Compute "paid till" month (all installments cleared consecutively) ──
+  getPaidTillMonth(studentId: string): { lastClearedMonth: string | null; allCleared: boolean } {
+    const installments = feeService.getStudentInstallments(studentId)
+      .filter(i => i.payerType === 'PARENT');
+
+    if (installments.length === 0) return { lastClearedMonth: null, allCleared: false };
+
+    // Build sorted unique months
+    const monthDueMap = new Map<string, string>();
+    for (const inst of installments) {
+      if (!monthDueMap.has(inst.month)) monthDueMap.set(inst.month, inst.dueDate);
+    }
+    const months = [...monthDueMap.entries()]
+      .sort((a, b) => new Date(a[1]).getTime() - new Date(b[1]).getTime())
+      .map(([month]) => month);
+
+    let lastClearedMonth: string | null = null;
+    for (const month of months) {
+      const allPaid = installments
+        .filter(i => i.month === month)
+        .every(i => i.status === 'PAID' || i.status === 'WAIVED');
+      if (allPaid) {
+        lastClearedMonth = month;
+      } else {
+        break;
+      }
+    }
+
+    const allCleared = lastClearedMonth === months[months.length - 1] && months.length > 0;
+    return { lastClearedMonth, allCleared };
   },
 
   // ── Record government payment (bulk) — allocates GOVERNMENT payer installments ──

@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import {
-  ArrowLeft, Upload, CheckCircle2, QrCode, Zap, AlertTriangle, ChevronRight,
+  ArrowLeft, Upload, CheckCircle2, QrCode, Zap, AlertTriangle, Wallet,
 } from 'lucide-react';
 import { studentDashboardService } from '../../../services/student.service2';
 import { FeePaymentUpload } from '../../../types/student.types';
@@ -41,6 +41,8 @@ export const FeesView: React.FC<Props> = ({ onBack }) => {
   const [feeSummary, setFeeSummary] = useState({ tuition: 0, transport: 0, total: 0 });
   const [isRte, setIsRte] = useState(false);
   const [installments, setInstallments] = useState<FeeInstallment[]>([]);
+  const [advanceBalance, setAdvanceBalance] = useState(0);
+  const [paidTill, setPaidTill] = useState<{ lastClearedMonth: string | null; allCleared: boolean }>({ lastClearedMonth: null, allCleared: false });
   const daysUntilDue = getDaysUntilDue();
 
   useEffect(() => {
@@ -49,6 +51,8 @@ export const FeesView: React.FC<Props> = ({ onBack }) => {
     setInstallments(
       feeService.getStudentInstallments(MY_STUDENT_ID).filter(i => i.payerType === 'PARENT')
     );
+    setAdvanceBalance(feeService.getAdvanceBalance(MY_STUDENT_ID));
+    setPaidTill(feeService.getPaidTillMonth(MY_STUDENT_ID));
     studentService.getAll().then(students => {
       const found = students.find(s => s.id === MY_STUDENT_ID);
       if (found) setIsRte(found.rte);
@@ -145,7 +149,7 @@ export const FeesView: React.FC<Props> = ({ onBack }) => {
         <div className="mx-4 mt-4">
           <div className="bg-[#0d1b3e] rounded-3xl p-5 text-white shadow-xl">
             <p className="text-[10px] font-black uppercase tracking-widest text-blue-300 mb-1">
-              TOTAL DUE • Q2 TERM
+              TOTAL DUE • CURRENT TERM
             </p>
             <div className="text-5xl font-black mb-2">
               ₹{feeSummary.total.toLocaleString('en-IN')}
@@ -158,10 +162,21 @@ export const FeesView: React.FC<Props> = ({ onBack }) => {
                 </span>
               </div>
             )}
+            {/* Paid-till status */}
+            {paidTill.lastClearedMonth && (
+              <div className="flex items-center gap-2 mb-3">
+                <CheckCircle2 size={14} className="text-emerald-400 shrink-0" />
+                <span className="text-sm font-bold text-emerald-300">
+                  {paidTill.allCleared ? 'All dues cleared' : `Paid till ${paidTill.lastClearedMonth}`}
+                </span>
+              </div>
+            )}
             {feeSummary.total === 0 ? (
               <div className="flex items-center gap-3 mt-2">
                 <CheckCircle2 size={20} className="text-emerald-400" />
-                <span className="font-black text-emerald-300">All fees paid!</span>
+                <span className="font-black text-emerald-300">
+                  {paidTill.allCleared ? `All fees paid till ${paidTill.lastClearedMonth}` : 'All fees paid!'}
+                </span>
               </div>
             ) : (
               <button
@@ -173,6 +188,25 @@ export const FeesView: React.FC<Props> = ({ onBack }) => {
             )}
           </div>
         </div>
+
+        {/* ── Advance Balance Card ───────────────────────────────────────── */}
+        {advanceBalance > 0 && (
+          <div className="mx-4 mt-3">
+            <div className="bg-violet-50 border border-violet-200 rounded-2xl p-4 flex items-center gap-3">
+              <div className="bg-violet-600 text-white rounded-full p-2 shrink-0">
+                <Wallet size={16} />
+              </div>
+              <div className="flex-1">
+                <div className="font-black text-violet-900 text-sm">
+                  ₹{advanceBalance.toLocaleString('en-IN')} Advance Credit
+                </div>
+                <div className="text-[11px] font-bold text-violet-600 mt-0.5">
+                  Will be auto-applied to your next due
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
 
         {/* ── Fee Breakdown ──────────────────────────────────────────────── */}
         {feeSummary.total > 0 && (

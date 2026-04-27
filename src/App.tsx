@@ -8,12 +8,20 @@ import { SuperAdminLayout } from './features/super-admin';
 import { TeacherLayout } from './features/teacher';
 import { StudentLayout } from './features/student';
 import { DriverLayout } from './features/driver/DriverLayout';
-import { PaymentsView } from './views/PaymentsView';
 import { ProfileView } from './views/ProfileView';
 import { useAuthStore, restoreAuthSession } from './store/authStore';
 import { studentService } from './services/student.service';
 import { Student } from './types/principal.types';
 import { Settings2, LogOut } from 'lucide-react';
+// Tab-specific views (lazy imports keep the route definitions explicit)
+import { FeesView }            from './features/student/components/FeesView';
+import { StudentNoticesView }  from './features/student/components/StudentNoticesView';
+import { StudentsManager }     from './features/principal/components/StudentsManager';
+import { FeeLedger }           from './features/principal/components/FeeLedger';
+import { SchoolsManager }      from './features/super-admin/components/SchoolsManager';
+import { BillingManager }      from './features/super-admin/components/BillingManager';
+import { AttendanceManager }   from './features/teacher/components/AttendanceManager';
+import { TeacherNoticesView }  from './features/teacher/components/TeacherNoticesView';
 
 export default function App() {
   const { session, logout } = useAuthStore();
@@ -96,17 +104,32 @@ export default function App() {
     }
   };
 
+  const goHome = () => setTab('HOME');
+
   const renderTabContent = () => {
-    if (tab === 'HOME') {
-      return renderDashboard();
-    }
-    if (tab === 'PAYMENTS') {
-      return <PaymentsView role={role} />;
-    }
-    if (tab === 'PROFILE' || tab === 'DISCOVER') {
-      return <ProfileView />;
-    }
-    return null;
+    if (tab === 'HOME')    return renderDashboard();
+    if (tab === 'PROFILE') return <ProfileView />;
+
+    // ── Student tabs ──────────────────────────────────────────────────────
+    if (tab === 'FEES'    && role === 'STUDENT')    return <FeesView           onBack={goHome} />;
+    if (tab === 'NOTICES' && role === 'STUDENT')    return <StudentNoticesView onBack={goHome} />;
+
+    // ── Principal tabs ────────────────────────────────────────────────────
+    if (tab === 'STUDENTS'    && role === 'PRINCIPAL') return <StudentsManager onBack={goHome} />;
+    if (tab === 'FEE_LEDGER'  && role === 'PRINCIPAL') return <FeeLedger       onBack={goHome} />;
+
+    // ── Super Admin tabs ──────────────────────────────────────────────────
+    if (tab === 'SCHOOLS'  && role === 'SUPER_ADMIN') return <SchoolsManager onBack={goHome} />;
+    if (tab === 'BILLING'  && role === 'SUPER_ADMIN') return <BillingManager  onBack={goHome} />;
+
+    // ── Teacher tabs ──────────────────────────────────────────────────────
+    if (tab === 'ATTENDANCE' && role === 'TEACHER') return <AttendanceManager  onBack={goHome} />;
+    if (tab === 'NOTICES'    && role === 'TEACHER') return <TeacherNoticesView onBack={goHome} />;
+
+    // ── Driver tabs (handled inside DriverLayout itself) ──────────────────
+    if (role === 'DRIVER') return <DriverLayout />;
+
+    return renderDashboard();
   };
 
   return (
@@ -122,7 +145,7 @@ export default function App() {
         </main>
 
         {/* Bottom Navigation */}
-        <BottomNav currentTab={tab} setTab={setTab} />
+        <BottomNav role={role} currentTab={tab} setTab={setTab} />
 
         {/* Logout & Dev Role Switcher Overlay */}
         {showRoleSelector && (

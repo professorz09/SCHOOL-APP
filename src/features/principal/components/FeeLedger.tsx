@@ -1,24 +1,11 @@
 import React, { useState, useEffect } from 'react';
 import { ArrowLeft, IndianRupee, CheckCircle2, AlertTriangle, Clock, X, ShieldCheck, Search, Filter, Printer, Banknote, Smartphone, CreditCard, Building2, FileCheck } from 'lucide-react';
-import { feeService, FeeInstallment, FeeStatus, FeeType } from '../../../services/fee.service';
+import { feeService, FeeInstallment, FeeStatus, FeeType, PaymentRecord } from '../../../services/fee.service';
 import { studentService } from '../../../services/student.service';
 import { useUIStore } from '../../../store/uiStore';
 
 type PaymentMethod = 'CASH' | 'UPI' | 'NET_BANKING' | 'CHEQUE' | 'ONLINE';
 
-interface PaymentTransaction {
-  id: string;
-  studentId: string;
-  studentName: string;
-  className: string;
-  admissionNo: string;
-  amount: number;
-  method: PaymentMethod;
-  date: string;
-  receiptNo: string;
-  installmentIds: string[];
-  installmentDetails: { month: string; feeType: FeeType; amount: number }[];
-}
 
 const METHOD_LABEL: Record<PaymentMethod, string> = {
   CASH: 'Cash',
@@ -102,8 +89,8 @@ export const FeeLedger: React.FC<Props> = ({ onBack }) => {
   const [search, setSearch] = useState('');
   const [showOnlyDue, setShowOnlyDue] = useState(false);
   const [paymentMethod, setPaymentMethod] = useState<PaymentMethod>('CASH');
-  const [paymentTransactions, setPaymentTransactions] = useState<PaymentTransaction[]>([]);
-  const [receiptModal, setReceiptModal] = useState<PaymentTransaction | null>(null);
+  const [paymentTransactions, setPaymentTransactions] = useState<PaymentRecord[]>(() => feeService.getPaymentHistory());
+  const [receiptModal, setReceiptModal] = useState<PaymentRecord | null>(null);
 
   useEffect(() => {
     studentService.getAll().then(all => {
@@ -139,7 +126,8 @@ export const FeeLedger: React.FC<Props> = ({ onBack }) => {
 
     const prevInstallments = feeService.getStudentInstallments(selected.studentId).map(i => ({ ...i }));
 
-    if (feeService.recordPayment(selected.studentId, amount)) {
+    const result = feeService.recordPayment(selected.studentId, amount);
+    if (result.applied > 0 || result.advance > 0) {
       const updated = feeService.getStudentFeeProfile(selected.studentId, selected.name, selected.className, selected.admissionNo, selected.isRte);
       updateStudent(updated);
 
@@ -155,22 +143,23 @@ export const FeeLedger: React.FC<Props> = ({ onBack }) => {
         }
       }
 
-      const receiptNo = `RCT-${new Date().getFullYear()}-${String(paymentTransactions.length + 1).padStart(4, '0')}`;
-      const tx: PaymentTransaction = {
+      const record: PaymentRecord = {
         id: `tx${Date.now()}`,
         studentId: selected.studentId,
         studentName: selected.name,
         className: selected.className,
         admissionNo: selected.admissionNo,
         amount,
-        method: paymentMethod,
+        method: METHOD_LABEL[paymentMethod],
         date: new Date().toISOString().split('T')[0],
-        receiptNo,
+        receiptNo: feeService.nextReceiptNo(),
         installmentIds: changedIds,
         installmentDetails: changedDetails,
+        advanceAmount: result.advance,
       };
-      setPaymentTransactions(prev => [...prev, tx]);
-      setReceiptModal(tx);
+      feeService.addPaymentRecord(record);
+      setPaymentTransactions(feeService.getPaymentHistory());
+      setReceiptModal(record);
       setPayAmount('');
       setPayModal(false);
     }
@@ -218,7 +207,7 @@ export const FeeLedger: React.FC<Props> = ({ onBack }) => {
   };
 
   const getInstallmentReceipt = (installmentId: string) =>
-    paymentTransactions.slice().reverse().find(tx => tx.installmentIds.includes(installmentId)) ?? null;
+    feeService.getPaymentRecordByInstallmentId(installmentId);
 
   if (selected && mainView === 'DETAIL') {
     const parentSummary = feeService.getParentDueSummary(selected.studentId);
@@ -255,6 +244,18 @@ export const FeeLedger: React.FC<Props> = ({ onBack }) => {
                 </div>
               ))}
             </div>
+            {/* Advance Balance */}
+            {feeService.getAdvanceBalance(selected.studentId) > 0 && (
+              <div className="bg-violet-50 border border-violet-200 rounded-xl p-3 flex items-center justify-between">
+                <div>
+                  <div className="text-[9px] font-black uppercase tracking-widest text-violet-500">Advance Credit</div>
+                  <div className="text-[10px] font-bold text-violet-700 mt-0.5">Will auto-adjust to next due</div>
+                </div>
+                <div className="text-base font-black text-violet-700">
+                  ₹{feeService.getAdvanceBalance(selected.studentId).toLocaleString()}
+                </div>
+              </div>
+            )}
             {/* Government Due (RTE only) */}
             {selected.isRte && (
               <div className="grid grid-cols-2 gap-2">
@@ -375,8 +376,14 @@ export const FeeLedger: React.FC<Props> = ({ onBack }) => {
                   placeholder="Enter amount received"
                   className="flex-1 bg-transparent font-black text-slate-900 text-lg outline-none" />
               </div>
+              {feeService.getAdvanceBalance(selected?.studentId ?? '') > 0 && (
+                <div className="bg-violet-50 border border-violet-200 rounded-xl px-3 py-2 flex items-center justify-between mb-3">
+                  <span className="text-[10px] font-black text-violet-600 uppercase tracking-wide">Existing Advance Credit</span>
+                  <span className="text-sm font-black text-violet-700">₹{feeService.getAdvanceBalance(selected?.studentId ?? '').toLocaleString()}</span>
+                </div>
+              )}
               <p className="text-[11px] font-bold text-slate-400 mb-4">
-                Amount will be allocated oldest dues first across Tuition and Transport fees.
+                Allocated oldest dues first. Any excess is stored as advance credit for future months.
               </p>
               <button onClick={handlePayment}
                 disabled={!payAmount}
@@ -446,7 +453,7 @@ export const FeeLedger: React.FC<Props> = ({ onBack }) => {
                     { label: 'Student', val: receiptModal.studentName },
                     { label: 'Class', val: receiptModal.className },
                     { label: 'Admission No.', val: receiptModal.admissionNo },
-                    { label: 'Payment Method', val: METHOD_LABEL[receiptModal.method] },
+                    { label: 'Payment Method', val: receiptModal.method },
                   ].map(({ label, val }) => (
                     <div key={label} className="flex justify-between gap-2">
                       <span className="text-[10px] font-bold text-slate-400">{label}</span>
@@ -465,6 +472,12 @@ export const FeeLedger: React.FC<Props> = ({ onBack }) => {
                         <span className="text-[11px] font-black text-slate-900">₹{d.amount.toLocaleString('en-IN')}</span>
                       </div>
                     ))}
+                    {receiptModal.advanceAmount > 0 && (
+                      <div className="flex justify-between gap-2 py-1.5 mt-1 bg-violet-50 rounded-lg px-2">
+                        <span className="text-[11px] font-bold text-violet-600">Advance Credit Added</span>
+                        <span className="text-[11px] font-black text-violet-700">₹{receiptModal.advanceAmount.toLocaleString('en-IN')}</span>
+                      </div>
+                    )}
                   </div>
                 )}
 
