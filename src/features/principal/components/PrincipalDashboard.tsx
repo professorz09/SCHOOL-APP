@@ -28,6 +28,13 @@ const todayLabel = new Date().toLocaleDateString('en-IN', {
   weekday: 'long', day: 'numeric', month: 'long', year: 'numeric',
 });
 
+const getGreeting = () => {
+  const h = new Date().getHours();
+  if (h < 12) return 'Good Morning';
+  if (h < 17) return 'Good Afternoon';
+  return 'Good Evening';
+};
+
 export const PrincipalDashboard: React.FC<Props> = ({ onNavigate }) => {
   const session = useAuthStore(state => state.session);
   const [stats, setStats] = useState({
@@ -62,96 +69,86 @@ export const PrincipalDashboard: React.FC<Props> = ({ onNavigate }) => {
   const feePending = Math.max(0, stats.totalFees - stats.paidFees);
   const firstName = session?.name?.split(' ')[0] ?? 'Principal';
 
-  const sections: { title: string; items: Module[] }[] = [
-    {
-      title: 'People',
-      items: [
-        { icon: UserCheck,      label: 'Staff',        view: 'STAFF',            iconBg: 'bg-blue-50',     iconFg: 'text-blue-600',     badge: stats.totalStaff },
-        { icon: ClipboardCheck, label: 'Attendance',   view: 'ATTENDANCE',       iconBg: 'bg-cyan-50',     iconFg: 'text-cyan-600' },
-      ],
-    },
-    {
-      title: 'Academics',
-      items: [
-        { icon: CalendarDays, label: 'Timetable',  view: 'TIMETABLE',  iconBg: 'bg-sky-50',     iconFg: 'text-sky-600' },
-        { icon: Calendar,     label: 'Classes',    view: 'CLASS_MGMT', iconBg: 'bg-violet-50',  iconFg: 'text-violet-600' },
-        { icon: Lock,         label: 'Year Close', view: 'YEAR_CLOSING', iconBg: 'bg-slate-100',iconFg: 'text-slate-700' },
-      ],
-    },
-    {
-      title: 'Finance',
-      items: [
-        { icon: CreditCard, label: 'Fee Ledger', view: 'FEE_LEDGER',    iconBg: 'bg-emerald-50', iconFg: 'text-emerald-600' },
-        { icon: Banknote,   label: 'Salary',     view: 'SALARY_LEDGER', iconBg: 'bg-teal-50',    iconFg: 'text-teal-600' },
-        { icon: Receipt,    label: 'Expenses',   view: 'EXPENSES',      iconBg: 'bg-rose-50',    iconFg: 'text-rose-600' },
-      ],
-    },
-    {
-      title: 'Operations',
-      items: [
-        { icon: Library,     label: 'Assets',     view: 'ASSETS',         iconBg: 'bg-amber-50',  iconFg: 'text-amber-600' },
-        { icon: Bus,         label: 'Transport',  view: 'TRANSPORT_MGMT', iconBg: 'bg-orange-50', iconFg: 'text-orange-600' },
-        { icon: Bell,        label: 'Notices',    view: 'NOTICES',        iconBg: 'bg-fuchsia-50', iconFg: 'text-fuchsia-600' },
-        { icon: CircleAlert, label: 'Complaints', view: 'COMPLAINTS',     iconBg: 'bg-orange-50', iconFg: 'text-orange-600',   badge: stats.openComplaints || null },
-        { icon: CheckSquare, label: 'Approvals',  view: 'APPROVALS',      iconBg: 'bg-emerald-50',iconFg: 'text-emerald-600',  badge: stats.pendingApprovals || null },
-        { icon: Settings,    label: 'Settings',   view: 'SETTINGS',       iconBg: 'bg-slate-100', iconFg: 'text-slate-700' },
-      ],
-    },
+  const allModules: Module[] = [
+    { icon: UserPlus,       label: 'Admission',    view: 'ADMISSION',        iconBg: 'bg-emerald-50',  iconFg: 'text-emerald-600' },
+    { icon: UserCheck,      label: 'Staff',        view: 'STAFF',            iconBg: 'bg-blue-50',     iconFg: 'text-blue-600',     badge: stats.totalStaff },
+    { icon: ClipboardCheck, label: 'Attendance',   view: 'ATTENDANCE',       iconBg: 'bg-cyan-50',     iconFg: 'text-cyan-600' },
+    { icon: CalendarDays,   label: 'Timetable',    view: 'TIMETABLE',        iconBg: 'bg-sky-50',      iconFg: 'text-sky-600' },
+    { icon: Calendar,       label: 'Classes',      view: 'CLASS_MGMT',       iconBg: 'bg-violet-50',   iconFg: 'text-violet-600' },
+    { icon: CreditCard,     label: 'Fee Ledger',   view: 'FEE_LEDGER',       iconBg: 'bg-emerald-50',  iconFg: 'text-emerald-600' },
+    { icon: Banknote,       label: 'Salary',       view: 'SALARY_LEDGER',    iconBg: 'bg-teal-50',     iconFg: 'text-teal-600' },
+    { icon: Receipt,        label: 'Expenses',     view: 'EXPENSES',         iconBg: 'bg-rose-50',     iconFg: 'text-rose-600' },
+    { icon: Library,        label: 'Assets',       view: 'ASSETS',           iconBg: 'bg-amber-50',    iconFg: 'text-amber-600' },
+    { icon: Bus,            label: 'Transport',    view: 'TRANSPORT_MGMT',   iconBg: 'bg-orange-50',   iconFg: 'text-orange-600' },
+    { icon: Bell,           label: 'Notices',      view: 'NOTICES',          iconBg: 'bg-fuchsia-50',  iconFg: 'text-fuchsia-600' },
+    { icon: CircleAlert,    label: 'Complaints',   view: 'COMPLAINTS',       iconBg: 'bg-orange-50',   iconFg: 'text-orange-600',  badge: stats.openComplaints || null },
+    { icon: CheckSquare,    label: 'Approvals',    view: 'APPROVALS',        iconBg: 'bg-emerald-50',  iconFg: 'text-emerald-600', badge: stats.pendingApprovals || null },
+    { icon: Lock,           label: 'Year Close',   view: 'YEAR_CLOSING',     iconBg: 'bg-slate-100',   iconFg: 'text-slate-700' },
+    { icon: Settings,       label: 'Settings',     view: 'SETTINGS',         iconBg: 'bg-slate-100',   iconFg: 'text-slate-700' },
   ];
 
   return (
-    <div className="flex flex-col gap-5 animate-in slide-in-from-bottom-4 duration-300 fade-in pt-2 pb-4">
-      {/* Hero card — greeting + date */}
+    <div className="flex flex-col gap-4 animate-in slide-in-from-bottom-4 duration-300 fade-in pt-2 pb-4">
+
+      {/* ── Dark Hero Card ── */}
       <div className="relative overflow-hidden rounded-3xl bg-gradient-to-br from-slate-900 via-slate-800 to-indigo-900 p-5 text-white shadow-lg">
         <div className="absolute -top-16 -right-16 w-48 h-48 rounded-full bg-indigo-500/20 blur-3xl" />
         <div className="absolute -bottom-12 -left-12 w-40 h-40 rounded-full bg-emerald-400/10 blur-3xl" />
         <div className="relative">
           <p className="text-[10px] font-black uppercase tracking-[0.2em] text-indigo-200/80">{todayLabel}</p>
-          <h2 className="text-2xl font-black mt-1 leading-tight">Namaskar, {firstName}</h2>
-          <p className="text-xs font-bold text-slate-300/80 mt-1">Here's what's happening at school today.</p>
+          <p className="text-xs font-bold text-slate-300/70 mt-0.5">{getGreeting()}, Namaskar</p>
+          <h2 className="text-2xl font-black mt-0.5 leading-tight">{firstName} Ji 🙏</h2>
+
+          <div className="mt-4 grid grid-cols-2 gap-3">
+            <div className="rounded-2xl bg-white/10 backdrop-blur border border-white/10 p-3">
+              <p className="text-[9px] font-black uppercase tracking-widest text-slate-300/80">Today's Attendance</p>
+              <div className="text-3xl font-black mt-0.5">
+                {stats.presentToday}<span className="text-lg text-slate-300/80">%</span>
+              </div>
+              <p className="text-[10px] font-bold text-slate-300/70 mt-0.5">{stats.totalStudents.toLocaleString('en-IN')} students</p>
+            </div>
+            <div className="rounded-2xl bg-white/10 backdrop-blur border border-white/10 p-3">
+              <p className="text-[9px] font-black uppercase tracking-widest text-slate-300/80">Fee Collection</p>
+              <div className="text-3xl font-black mt-0.5 text-emerald-300">
+                {feePercent}<span className="text-lg text-slate-300/80">%</span>
+              </div>
+              <div className="mt-1.5 w-full h-1 bg-white/10 rounded-full overflow-hidden">
+                <div className="h-full bg-emerald-400 rounded-full transition-all" style={{ width: `${feePercent}%` }} />
+              </div>
+            </div>
+          </div>
         </div>
       </div>
 
-      {/* 3 Primary Action Cards */}
-      <div className="grid grid-cols-3 gap-3">
+      {/* ── 2 Main Wide Cards ── */}
+      <div className="grid grid-cols-2 gap-3">
         {/* Students */}
         <button
           onClick={() => onNavigate('STUDENTS')}
           className="relative bg-indigo-600 rounded-2xl p-4 text-white shadow-md active:scale-[0.97] transition-transform text-left">
           <div className="w-10 h-10 rounded-xl bg-white/20 flex items-center justify-center mb-3">
-            <Users size={20} />
+            <Users size={22} />
           </div>
-          <div className="text-2xl font-black leading-none">{stats.totalStudents}</div>
-          <div className="text-[10px] font-black uppercase tracking-widest mt-1 text-indigo-200">Students</div>
+          <div className="text-3xl font-black leading-none">{stats.totalStudents}</div>
+          <div className="text-[11px] font-black uppercase tracking-widest mt-1.5 text-indigo-200">Total Students</div>
         </button>
 
-        {/* Admission */}
-        <button
-          onClick={() => onNavigate('ADMISSION')}
-          className="relative bg-emerald-600 rounded-2xl p-4 text-white shadow-md active:scale-[0.97] transition-transform text-left">
-          <div className="w-10 h-10 rounded-xl bg-white/20 flex items-center justify-center mb-3">
-            <UserPlus size={20} />
-          </div>
-          <div className="text-2xl font-black leading-none">+</div>
-          <div className="text-[10px] font-black uppercase tracking-widest mt-1 text-emerald-200">Admission</div>
-        </button>
-
-        {/* Fee Collection */}
+        {/* Fees */}
         <button
           onClick={() => onNavigate('FEE_LEDGER')}
           className="relative bg-amber-500 rounded-2xl p-4 text-white shadow-md active:scale-[0.97] transition-transform text-left">
           <div className="w-10 h-10 rounded-xl bg-white/20 flex items-center justify-center mb-3">
-            <IndianRupee size={20} />
+            <IndianRupee size={22} />
           </div>
-          <div className="text-xl font-black leading-none">{feePercent}%</div>
-          <div className="text-[10px] font-black uppercase tracking-widest mt-1 text-amber-100">Fees</div>
-          <div className="mt-2 w-full h-1 bg-white/20 rounded-full overflow-hidden">
+          <div className="text-3xl font-black leading-none">{feePercent}<span className="text-lg">%</span></div>
+          <div className="text-[11px] font-black uppercase tracking-widest mt-1 text-amber-100">Fee Collected</div>
+          <div className="mt-2 w-full h-1.5 bg-white/20 rounded-full overflow-hidden">
             <div className="h-full bg-white rounded-full transition-all" style={{ width: `${feePercent}%` }} />
           </div>
         </button>
       </div>
 
-      {/* Inline alert if there are open complaints */}
+      {/* ── Complaints alert ── */}
       {stats.openComplaints > 0 && (
         <button
           onClick={() => onNavigate('COMPLAINTS')}
@@ -169,43 +166,38 @@ export const PrincipalDashboard: React.FC<Props> = ({ onNavigate }) => {
         </button>
       )}
 
-      {/* Module sections */}
-      {sections.map(({ title, items }) => (
-        <div key={title}>
-          <p className="text-[10px] font-black uppercase tracking-[0.2em] text-slate-400 mb-3 px-1">{title}</p>
-          <div className="grid grid-cols-3 gap-3">
-            {items.map(({ icon: Icon, label, view, iconBg, iconFg, badge }) => (
-              <button
-                key={label}
-                onClick={() => onNavigate(view)}
-                className="relative flex flex-col items-start gap-3 bg-white rounded-2xl border border-slate-100 shadow-sm p-3.5 active:scale-[0.97] transition-transform hover:border-slate-200 hover:shadow-md">
-                {badge !== null && badge !== undefined && badge !== 0 && (
-                  <div className="absolute top-2 right-2 min-w-[18px] h-[18px] px-1.5 bg-rose-500 text-white text-[9px] font-black rounded-full flex items-center justify-center shadow-sm">
-                    {badge > 99 ? '99+' : badge}
-                  </div>
-                )}
-                <div className={`w-11 h-11 rounded-2xl flex items-center justify-center ${iconBg} ${iconFg}`}>
-                  <Icon size={22} />
+      {/* ── All modules — single flat grid ── */}
+      <div>
+        <p className="text-[10px] font-black uppercase tracking-[0.2em] text-slate-400 mb-3 px-1">Quick Access</p>
+        <div className="grid grid-cols-3 gap-3">
+          {allModules.map(({ icon: Icon, label, view, iconBg, iconFg, badge }) => (
+            <button
+              key={label}
+              onClick={() => onNavigate(view)}
+              className="relative flex flex-col items-start gap-3 bg-white rounded-2xl border border-slate-100 shadow-sm p-3.5 active:scale-[0.97] transition-transform hover:border-slate-200 hover:shadow-md">
+              {badge !== null && badge !== undefined && badge !== 0 && (
+                <div className="absolute top-2 right-2 min-w-[18px] h-[18px] px-1.5 bg-rose-500 text-white text-[9px] font-black rounded-full flex items-center justify-center shadow-sm">
+                  {badge > 99 ? '99+' : badge}
                 </div>
-                <span className="text-[11px] font-black text-slate-800 text-left leading-tight">{label}</span>
-              </button>
-            ))}
-          </div>
+              )}
+              <div className={`w-11 h-11 rounded-2xl flex items-center justify-center ${iconBg} ${iconFg}`}>
+                <Icon size={22} />
+              </div>
+              <span className="text-[11px] font-black text-slate-800 text-left leading-tight">{label}</span>
+            </button>
+          ))}
         </div>
-      ))}
+      </div>
 
-      {/* Quick stats */}
+      {/* ── Quick stats strip ── */}
       <div className="bg-white rounded-2xl border border-slate-100 shadow-sm p-4">
-        <div className="flex items-center justify-between mb-3">
-          <p className="text-[10px] font-black uppercase tracking-[0.2em] text-slate-400">At a glance</p>
-          <span className="text-[10px] font-bold text-slate-400">Today</span>
-        </div>
+        <p className="text-[10px] font-black uppercase tracking-[0.2em] text-slate-400 mb-3">At a Glance</p>
         <div className="divide-y divide-slate-100">
           {[
-            { label: 'Active Staff',    val: `${stats.totalStaff} members`,               icon: UserCheck,  color: 'text-blue-500',    bg: 'bg-blue-50' },
-            { label: 'Fee Pending',     val: `₹${(feePending / 1000).toFixed(0)}K`,       icon: IndianRupee,color: 'text-rose-500',    bg: 'bg-rose-50' },
-            { label: 'Avg Attendance',  val: `${stats.presentToday}%`,                    icon: TrendingUp, color: 'text-emerald-500', bg: 'bg-emerald-50' },
-            { label: 'Pending Approvals', val: `${stats.pendingApprovals}`,               icon: CheckSquare,color: 'text-violet-500',  bg: 'bg-violet-50' },
+            { label: 'Active Staff',      val: `${stats.totalStaff} members`,          icon: UserCheck,   color: 'text-blue-500',    bg: 'bg-blue-50' },
+            { label: 'Fee Pending',       val: `₹${(feePending / 1000).toFixed(0)}K`,  icon: IndianRupee, color: 'text-rose-500',    bg: 'bg-rose-50' },
+            { label: 'Avg Attendance',    val: `${stats.presentToday}%`,               icon: TrendingUp,  color: 'text-emerald-500', bg: 'bg-emerald-50' },
+            { label: 'Pending Approvals', val: `${stats.pendingApprovals}`,             icon: CheckSquare, color: 'text-violet-500',  bg: 'bg-violet-50' },
           ].map(({ label, val, icon: Icon, color, bg }) => (
             <div key={label} className="flex items-center justify-between py-2.5 first:pt-0 last:pb-0">
               <div className="flex items-center gap-3">

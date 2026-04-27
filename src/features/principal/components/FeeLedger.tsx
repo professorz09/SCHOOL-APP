@@ -77,7 +77,7 @@ export const FeeLedger: React.FC<Props> = ({ onBack }) => {
   const [loading, setLoading] = useState(true);
   const [selected, setSelected] = useState<StudentFeeProfile | null>(null);
   const [mainView, setMainView] = useState<'LIST' | 'DETAIL' | 'GOVT'>('LIST');
-  const [payModal, setPayModal] = useState<boolean>(false);
+  const [payModal, setPayModal] = useState<FeeInstallment | null>(null);
   const [writeOffModal, setWriteOffModal] = useState<FeeInstallment | null>(null);
   const [govtPayModal, setGovtPayModal] = useState<boolean>(false);
   const [payAmount, setPayAmount] = useState('');
@@ -122,7 +122,7 @@ export const FeeLedger: React.FC<Props> = ({ onBack }) => {
   };
 
   const handlePayment = () => {
-    if (!selected || !payAmount) return;
+    if (!selected || !payModal || !payAmount) return;
     const amount = Number(payAmount);
     if (isNaN(amount) || amount <= 0) return;
 
@@ -165,7 +165,7 @@ export const FeeLedger: React.FC<Props> = ({ onBack }) => {
       setReceiptModal(record);
       setPayAmount('');
       setPaymentNote('');
-      setPayModal(false);
+      setPayModal(null);
     }
   };
 
@@ -288,24 +288,17 @@ export const FeeLedger: React.FC<Props> = ({ onBack }) => {
               className={`py-3 text-[10px] font-black uppercase tracking-widest border-b-2 transition-colors ${studentDetailTab === 'HISTORY' ? 'border-emerald-600 text-emerald-600' : 'border-transparent text-slate-400'}`}>
               Payment History
             </button>
+            {selected.isRte && (
+              <button onClick={() => setGovtPayModal(true)}
+                className="ml-auto my-2 flex items-center gap-1 bg-blue-600 text-white text-[9px] font-black px-2.5 py-1.5 rounded-full">
+                <IndianRupee size={9} /> Govt Pay
+              </button>
+            )}
           </div>
 
           {/* Fee Schedule Tab */}
           {studentDetailTab === 'SCHEDULE' && (
           <div className="space-y-3">
-            <div className="flex gap-2 flex-wrap">
-              <button onClick={() => setPayModal(true)}
-                className="flex items-center gap-1.5 bg-emerald-600 text-white text-[10px] font-black px-3 py-1.5 rounded-full">
-                <IndianRupee size={11} /> Parent Pay
-              </button>
-              {selected.isRte && (
-                <button onClick={() => setGovtPayModal(true)}
-                  className="flex items-center gap-1.5 bg-blue-600 text-white text-[10px] font-black px-3 py-1.5 rounded-full">
-                  <IndianRupee size={11} /> Govt Pay
-                </button>
-              )}
-            </div>
-
             {selected.installments
             .sort((a, b) => new Date(a.dueDate).getTime() - new Date(b.dueDate).getTime())
             .map(inst => {
@@ -331,7 +324,7 @@ export const FeeLedger: React.FC<Props> = ({ onBack }) => {
                       {inst.writeOffAmount > 0 && <div className="text-[10px] font-bold text-slate-400">Waived: ₹{inst.writeOffAmount.toLocaleString()}</div>}
                     </div>
                   </div>
-                  <div className="flex items-center gap-2 px-3.5 pb-3 flex-wrap">
+                  <div className="flex items-center gap-2 px-3.5 pb-2 flex-wrap">
                     <div className={`flex items-center gap-1.5 text-[10px] font-black px-2.5 py-1 rounded-full border ${statusColor[inst.status]}`}>
                       {statusIcon(inst.status)} {inst.status}
                     </div>
@@ -356,6 +349,16 @@ export const FeeLedger: React.FC<Props> = ({ onBack }) => {
                       </span>
                     )}
                   </div>
+                  {/* Make Payment button — like salary ledger */}
+                  {inst.status !== 'PAID' && inst.status !== 'WAIVED' && inst.payerType === 'PARENT' && due > 0 && (
+                    <div className="px-3.5 pb-3">
+                      <button
+                        onClick={() => { setPayModal(inst); setPayAmount(String(due)); setPaymentMethod('CASH'); setPaymentNote(''); }}
+                        className="w-full py-2 bg-slate-900 text-white text-[10px] font-black rounded-xl tracking-wide">
+                        Make Payment — ₹{due.toLocaleString('en-IN')}
+                      </button>
+                    </div>
+                  )}
                 </div>
               );
             })}
@@ -403,10 +406,13 @@ export const FeeLedger: React.FC<Props> = ({ onBack }) => {
         {payModal && (
           <div className="absolute inset-0 bg-slate-900/50 backdrop-blur-sm z-50 flex items-end">
             <div className="w-full bg-white rounded-t-3xl p-6 pb-8 animate-in slide-in-from-bottom-8">
-              <div className="flex justify-between items-center mb-4">
+              <div className="flex justify-between items-center mb-1">
                 <h3 className="text-lg font-black text-slate-900">Collect Payment</h3>
-                <button onClick={() => { setPayModal(false); setPayAmount(''); }} className="w-8 h-8 bg-slate-100 rounded-full flex items-center justify-center text-slate-500">✕</button>
+                <button onClick={() => { setPayModal(null); setPayAmount(''); }} className="w-8 h-8 bg-slate-100 rounded-full flex items-center justify-center text-slate-500">✕</button>
               </div>
+              <p className="text-[10px] font-bold text-slate-400 mb-4">
+                {payModal.month} · {feeTypeLabel(payModal.feeType)} · {selected?.name}
+              </p>
 
               {/* Payment Method Selection */}
               <p className="text-[10px] font-black uppercase tracking-widest text-slate-400 mb-2">Payment Method</p>
