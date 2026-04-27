@@ -22,11 +22,14 @@ export interface StudentExamResult {
   examName: string;
   testType: string;
   subject: string;
+  teacherName: string;
   maxMarks: number;
   obtainedMarks: number;
   grade: string;
   date: string;
   rank: number | null;
+  totalStudents: number;
+  teacherNote?: string;
 }
 
 export interface StudentFeeQR {

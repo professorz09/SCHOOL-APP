@@ -28,13 +28,29 @@ const MOCK_TIMETABLE: TimetableDay[] = [
 ];
 
 const MOCK_RESULTS: StudentExamResult[] = [
-  { id: 'r1', examName: 'Unit Test 1', testType: 'UNIT_TEST', subject: 'Mathematics', maxMarks: 25, obtainedMarks: 23, grade: 'A+', date: '2024-05-10', rank: 2 },
-  { id: 'r2', examName: 'Unit Test 1', testType: 'UNIT_TEST', subject: 'Science', maxMarks: 25, obtainedMarks: 21, grade: 'A', date: '2024-05-12', rank: 4 },
-  { id: 'r3', examName: 'Unit Test 1', testType: 'UNIT_TEST', subject: 'English', maxMarks: 25, obtainedMarks: 22, grade: 'A+', date: '2024-05-14', rank: 3 },
-  { id: 'r4', examName: 'Mid Term', testType: 'MID_TERM', subject: 'Mathematics', maxMarks: 100, obtainedMarks: 92, grade: 'A+', date: '2024-08-15', rank: 1 },
-  { id: 'r5', examName: 'Mid Term', testType: 'MID_TERM', subject: 'Science', maxMarks: 100, obtainedMarks: 88, grade: 'A', date: '2024-08-16', rank: 3 },
-  { id: 'r6', examName: 'Mid Term', testType: 'MID_TERM', subject: 'English', maxMarks: 100, obtainedMarks: 85, grade: 'A', date: '2024-08-18', rank: 5 },
-  { id: 'r7', examName: 'Quiz 1', testType: 'QUIZ', subject: 'Mathematics', maxMarks: 10, obtainedMarks: 9, grade: 'A+', date: '2024-09-05', rank: null },
+  // ── Unit Test 1 ──
+  { id: 'r1',  examName: 'Unit Test 1', testType: 'UNIT_TEST', subject: 'Mathematics',    teacherName: 'Aarti Desai',   maxMarks: 25, obtainedMarks: 23, grade: 'A+', date: '2025-04-10', rank: 2,  totalStudents: 42, teacherNote: 'Excellent problem-solving. Keep practicing geometry.' },
+  { id: 'r2',  examName: 'Unit Test 1', testType: 'UNIT_TEST', subject: 'Science',         teacherName: 'Sanjay Mehta',  maxMarks: 25, obtainedMarks: 21, grade: 'A',  date: '2025-04-12', rank: 4,  totalStudents: 42, teacherNote: 'Good understanding of concepts. Revise chemical equations.' },
+  { id: 'r3',  examName: 'Unit Test 1', testType: 'UNIT_TEST', subject: 'English',         teacherName: 'Priya Singh',   maxMarks: 25, obtainedMarks: 22, grade: 'A+', date: '2025-04-14', rank: 3,  totalStudents: 42 },
+  { id: 'r4',  examName: 'Unit Test 1', testType: 'UNIT_TEST', subject: 'Hindi',           teacherName: 'Meera Jha',     maxMarks: 25, obtainedMarks: 19, grade: 'A',  date: '2025-04-15', rank: 6,  totalStudents: 42, teacherNote: 'Handwriting needs improvement. Content is good.' },
+  { id: 'r5',  examName: 'Unit Test 1', testType: 'UNIT_TEST', subject: 'Social Studies',  teacherName: 'Rao Kumar',     maxMarks: 25, obtainedMarks: 20, grade: 'A',  date: '2025-04-16', rank: 5,  totalStudents: 42 },
+  // ── Unit Test 2 ──
+  { id: 'r6',  examName: 'Unit Test 2', testType: 'UNIT_TEST', subject: 'Mathematics',    teacherName: 'Aarti Desai',   maxMarks: 25, obtainedMarks: 24, grade: 'A+', date: '2025-09-08', rank: 1,  totalStudents: 42, teacherNote: 'Outstanding! Best in class. Well done.' },
+  { id: 'r7',  examName: 'Unit Test 2', testType: 'UNIT_TEST', subject: 'Science',         teacherName: 'Sanjay Mehta',  maxMarks: 25, obtainedMarks: 22, grade: 'A+', date: '2025-09-10', rank: 2,  totalStudents: 42 },
+  { id: 'r8',  examName: 'Unit Test 2', testType: 'UNIT_TEST', subject: 'English',         teacherName: 'Priya Singh',   maxMarks: 25, obtainedMarks: 20, grade: 'A',  date: '2025-09-11', rank: 5,  totalStudents: 42, teacherNote: 'Essay writing is improving. Focus on grammar.' },
+  { id: 'r9',  examName: 'Unit Test 2', testType: 'UNIT_TEST', subject: 'Hindi',           teacherName: 'Meera Jha',     maxMarks: 25, obtainedMarks: 21, grade: 'A',  date: '2025-09-12', rank: 4,  totalStudents: 42 },
+  // ── Mid Term ──
+  { id: 'r10', examName: 'Mid Term Exam', testType: 'MID_TERM', subject: 'Mathematics',   teacherName: 'Aarti Desai',   maxMarks: 100, obtainedMarks: 92, grade: 'A+', date: '2025-10-15', rank: 1, totalStudents: 42, teacherNote: 'Exceptional performance. Top scorer in class!' },
+  { id: 'r11', examName: 'Mid Term Exam', testType: 'MID_TERM', subject: 'Science',        teacherName: 'Sanjay Mehta',  maxMarks: 100, obtainedMarks: 88, grade: 'A',  date: '2025-10-16', rank: 3, totalStudents: 42 },
+  { id: 'r12', examName: 'Mid Term Exam', testType: 'MID_TERM', subject: 'English',        teacherName: 'Priya Singh',   maxMarks: 100, obtainedMarks: 85, grade: 'A',  date: '2025-10-17', rank: 5, totalStudents: 42, teacherNote: 'Reading comprehension is strong. Work on creative writing.' },
+  { id: 'r13', examName: 'Mid Term Exam', testType: 'MID_TERM', subject: 'Hindi',          teacherName: 'Meera Jha',     maxMarks: 100, obtainedMarks: 79, grade: 'B+', date: '2025-10-18', rank: 8, totalStudents: 42 },
+  { id: 'r14', examName: 'Mid Term Exam', testType: 'MID_TERM', subject: 'Social Studies', teacherName: 'Rao Kumar',     maxMarks: 100, obtainedMarks: 83, grade: 'A',  date: '2025-10-19', rank: 4, totalStudents: 42 },
+  // ── Final Exam ──
+  { id: 'r15', examName: 'Final Exam',    testType: 'FINAL',    subject: 'Mathematics',   teacherName: 'Aarti Desai',   maxMarks: 100, obtainedMarks: 96, grade: 'A+', date: '2026-03-10', rank: 1, totalStudents: 42, teacherNote: 'Perfect performance. Proud of your consistency!' },
+  { id: 'r16', examName: 'Final Exam',    testType: 'FINAL',    subject: 'Science',        teacherName: 'Sanjay Mehta',  maxMarks: 100, obtainedMarks: 91, grade: 'A+', date: '2026-03-11', rank: 2, totalStudents: 42, teacherNote: 'Excellent across all chapters. Great lab work too.' },
+  { id: 'r17', examName: 'Final Exam',    testType: 'FINAL',    subject: 'English',        teacherName: 'Priya Singh',   maxMarks: 100, obtainedMarks: 88, grade: 'A',  date: '2026-03-12', rank: 4, totalStudents: 42 },
+  { id: 'r18', examName: 'Final Exam',    testType: 'FINAL',    subject: 'Hindi',          teacherName: 'Meera Jha',     maxMarks: 100, obtainedMarks: 82, grade: 'A',  date: '2026-03-13', rank: 7, totalStudents: 42, teacherNote: 'Consistent improvement throughout the year.' },
+  { id: 'r19', examName: 'Final Exam',    testType: 'FINAL',    subject: 'Social Studies', teacherName: 'Rao Kumar',     maxMarks: 100, obtainedMarks: 87, grade: 'A',  date: '2026-03-14', rank: 3, totalStudents: 42 },
 ];
 
 const MOCK_TRANSPORT: TransportStop[] = [
