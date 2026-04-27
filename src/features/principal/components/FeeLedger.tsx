@@ -4,7 +4,7 @@ import {
   ShieldCheck, Search, Printer, Banknote, Smartphone, CreditCard,
   Building2, FileCheck, ChevronRight, Receipt, TrendingDown, Users, Filter,
 } from 'lucide-react';
-import { feeService, FeeInstallment, FeeStatus, FeeType, PaymentRecord } from '../../../services/fee.service';
+import { feeService, FeeInstallment, FeeStatus, FeeType, PaymentRecord, GovernmentPaymentRecord } from '../../../services/fee.service';
 import { studentService } from '../../../services/student.service';
 import { useUIStore } from '../../../store/uiStore';
 
@@ -83,6 +83,7 @@ export const FeeLedger: React.FC<Props> = ({ onBack }) => {
   const [govtRefNo, setGovtRefNo]           = useState('');
   const [govtNote, setGovtNote]             = useState('');
   const [paymentTransactions, setPaymentTransactions] = useState<PaymentRecord[]>(() => feeService.getPaymentHistory());
+  const [govtTransactions, setGovtTransactions] = useState<GovernmentPaymentRecord[]>(() => feeService.getGovernmentPayments());
 
   useEffect(() => {
     studentService.getAll().then(all => {
@@ -163,6 +164,7 @@ export const FeeLedger: React.FC<Props> = ({ onBack }) => {
     if (rteStudents.length === 0) { showToast('No RTE students found', 'error'); return; }
     if (feeService.recordGovernmentPayment(rteStudents, amount, govtRefNo, govtNote)) {
       setStudents(students.map(s => feeService.getStudentFeeProfile(s.studentId, s.name, s.className, s.admissionNo, s.isRte)));
+      setGovtTransactions(feeService.getGovernmentPayments());
       setGovtPayModal(false);
       setGovtPayAmount('');
       setGovtRefNo('');
@@ -231,11 +233,6 @@ export const FeeLedger: React.FC<Props> = ({ onBack }) => {
               </div>
               <p className="text-[10px] font-bold text-slate-400">{selected.className} · {selected.admissionNo}</p>
             </div>
-            {/* Collect button */}
-            <button onClick={() => setPayModal(true)}
-              className="flex items-center gap-1.5 bg-emerald-600 text-white text-[10px] font-black px-3 py-2 rounded-xl shadow-sm active:scale-95 transition-transform">
-              <IndianRupee size={12} /> Collect
-            </button>
           </div>
 
           {/* Summary tiles */}
@@ -292,6 +289,14 @@ export const FeeLedger: React.FC<Props> = ({ onBack }) => {
         </div>
 
         <div className="flex-1 overflow-y-auto p-4 pb-28 space-y-3">
+
+          {/* ── COLLECT BUTTON (inside schedule tab) ──────────────────────── */}
+          {detailTab === 'SCHEDULE' && (
+            <button onClick={() => setPayModal(true)}
+              className="w-full flex items-center justify-center gap-2 bg-emerald-600 text-white font-black text-sm py-3.5 rounded-2xl shadow-md active:scale-[0.98] transition-transform">
+              <IndianRupee size={16} /> Collect Payment
+            </button>
+          )}
 
           {/* ── FEE SCHEDULE ─────────────────────────────────────────────── */}
           {detailTab === 'SCHEDULE' && selected.installments
@@ -359,32 +364,63 @@ export const FeeLedger: React.FC<Props> = ({ onBack }) => {
           {detailTab === 'HISTORY' && (() => {
             const txns = paymentTransactions.filter(t => t.studentId === selected.studentId)
               .sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
-            if (txns.length === 0) return (
+            const govtTxns = govtTransactions.filter(g => g.allocatedStudentIds.includes(selected.studentId))
+              .sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
+            const hasAny = txns.length > 0 || govtTxns.length > 0;
+            if (!hasAny) return (
               <div className="flex flex-col items-center py-16 text-slate-400">
                 <Receipt size={32} className="mb-3 opacity-40" />
                 <p className="font-bold text-sm">No payments yet</p>
               </div>
             );
-            return txns.map(txn => (
-              <button key={txn.id} onClick={() => setReceiptModal(txn)}
-                className="w-full text-left bg-white rounded-2xl border border-slate-100 shadow-sm p-4 active:scale-[0.98] transition-transform">
-                <div className="flex items-center justify-between mb-1">
-                  <div>
-                    <div className="font-extrabold text-slate-900 text-sm">{txn.date}</div>
-                    <div className="text-[10px] font-bold text-slate-400">{txn.method} · #{txn.receiptNo}</div>
+            return (
+              <>
+                {txns.map(txn => (
+                  <button key={txn.id} onClick={() => setReceiptModal(txn)}
+                    className="w-full text-left bg-white rounded-2xl border border-slate-100 shadow-sm p-4 active:scale-[0.98] transition-transform">
+                    <div className="flex items-center justify-between mb-1">
+                      <div>
+                        <div className="font-extrabold text-slate-900 text-sm">{txn.date}</div>
+                        <div className="text-[10px] font-bold text-slate-400">{txn.method} · #{txn.receiptNo}</div>
+                      </div>
+                      <div className="text-right">
+                        <div className="font-black text-emerald-600 text-base">₹{txn.amount.toLocaleString('en-IN')}</div>
+                        {txn.note && <div className="text-[9px] font-bold text-slate-400 truncate max-w-[120px]">{txn.note}</div>}
+                      </div>
+                    </div>
+                    {txn.installmentDetails.length > 0 && (
+                      <div className="text-[9px] font-bold text-slate-400 mt-1.5">
+                        → {txn.installmentDetails.map(d => d.month).join(', ')}
+                      </div>
+                    )}
+                  </button>
+                ))}
+
+                {govtTxns.map(g => (
+                  <div key={g.id}
+                    className="bg-white rounded-2xl border border-emerald-100 shadow-sm p-4">
+                    <div className="flex items-center justify-between mb-1">
+                      <div>
+                        <div className="flex items-center gap-2 mb-0.5">
+                          <span className="font-extrabold text-slate-900 text-sm">{g.date}</span>
+                          <span className="flex items-center gap-0.5 text-[8px] font-black bg-emerald-100 text-emerald-700 px-2 py-0.5 rounded-full">
+                            <ShieldCheck size={8} /> Govt Transfer
+                          </span>
+                        </div>
+                        <div className="text-[10px] font-bold text-slate-400">Ref: {g.referenceNo}</div>
+                      </div>
+                      <div className="text-right">
+                        <div className="font-black text-emerald-600 text-base">₹{g.amount.toLocaleString('en-IN')}</div>
+                        <div className="text-[9px] font-bold text-slate-400">RTE / Total batch</div>
+                      </div>
+                    </div>
+                    {g.note && (
+                      <div className="text-[9px] font-bold text-slate-400 mt-1.5 italic">{g.note}</div>
+                    )}
                   </div>
-                  <div className="text-right">
-                    <div className="font-black text-emerald-600 text-base">₹{txn.amount.toLocaleString('en-IN')}</div>
-                    {txn.note && <div className="text-[9px] font-bold text-slate-400 truncate max-w-[120px]">{txn.note}</div>}
-                  </div>
-                </div>
-                {txn.installmentDetails.length > 0 && (
-                  <div className="text-[9px] font-bold text-slate-400 mt-1.5">
-                    → {txn.installmentDetails.map(d => d.month).join(', ')}
-                  </div>
-                )}
-              </button>
-            ));
+                ))}
+              </>
+            );
           })()}
         </div>
 
