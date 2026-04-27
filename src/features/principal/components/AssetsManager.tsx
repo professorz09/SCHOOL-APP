@@ -1,7 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import {
   ArrowLeft, Library, FlaskConical, BookOpen, Wrench, Plus, Search,
-  Trash2, X, Save, RotateCcw, UserCheck, ChevronRight,
+  Trash2, X, Save, RotateCcw, UserCheck, ChevronRight, History as HistoryIcon,
 } from 'lucide-react';
 import { principalService } from '../../../services/principal.service';
 import { LibraryBook, LabEquipment } from '../../../types/principal.types';
@@ -10,6 +10,17 @@ import { Student } from '../../../types/principal.types';
 import { useUIStore } from '../../../store/uiStore';
 
 type Tab = 'LIBRARY' | 'LAB';
+type LibrarySubTab = 'BOOKS' | 'HISTORY';
+type LabSubTab = 'EQUIPMENT' | 'HISTORY';
+
+interface AssetLog {
+  id: string;
+  timestamp: string;
+  type: 'ADD' | 'DELETE' | 'ISSUE' | 'RETURN' | 'UPDATE' | 'SERVICE';
+  category: 'BOOK' | 'EQUIPMENT';
+  itemName: string;
+  details: string;
+}
 
 interface Props { onBack: () => void; }
 
@@ -20,11 +31,14 @@ const labTypeColor = (t: string) =>
 export const AssetsManager: React.FC<Props> = ({ onBack }) => {
   const { showToast } = useUIStore();
   const [tab, setTab] = useState<Tab>('LIBRARY');
+  const [librarySubTab, setLibrarySubTab] = useState<LibrarySubTab>('BOOKS');
+  const [labSubTab, setLabSubTab] = useState<LabSubTab>('EQUIPMENT');
   const [books, setBooks] = useState<LibraryBook[]>([]);
   const [equipment, setEquipment] = useState<LabEquipment[]>([]);
   const [students, setStudents] = useState<Student[]>([]);
   const [bookSearch, setBookSearch] = useState('');
   const [eqSearch, setEqSearch] = useState('');
+  const [logs, setLogs] = useState<AssetLog[]>([]);
 
   // Book modals
   const [addBookModal, setAddBookModal] = useState(false);
@@ -37,6 +51,18 @@ export const AssetsManager: React.FC<Props> = ({ onBack }) => {
   const [eqForm, setEqForm] = useState({ name: '', labType: 'SCIENCE' as LabEquipment['labType'], quantity: 1, workingCount: 1, lastServiced: new Date().toISOString().split('T')[0] });
 
   const [isSubmitting, setIsSubmitting] = useState(false);
+
+  const addLog = (type: AssetLog['type'], category: AssetLog['category'], itemName: string, details: string) => {
+    const log: AssetLog = {
+      id: `log${Date.now()}`,
+      timestamp: new Date().toLocaleString('en-IN'),
+      type,
+      category,
+      itemName,
+      details,
+    };
+    setLogs(prev => [log, ...prev].slice(0, 10));
+  };
 
   useEffect(() => {
     Promise.all([
@@ -64,6 +90,7 @@ export const AssetsManager: React.FC<Props> = ({ onBack }) => {
     try {
       const book = await principalService.addBook(bookForm);
       setBooks(prev => [...prev, book]);
+      addLog('ADD', 'BOOK', book.title, `${book.totalCopies} copies added by ${bookForm.author}`);
       showToast(`"${book.title}" added`);
       setBookForm({ title: '', author: '', isbn: '', subject: '', totalCopies: 1 });
       setAddBookModal(false);
@@ -73,6 +100,7 @@ export const AssetsManager: React.FC<Props> = ({ onBack }) => {
   const handleDeleteBook = async (id: string, title: string) => {
     await principalService.deleteBook(id);
     setBooks(prev => prev.filter(b => b.id !== id));
+    addLog('DELETE', 'BOOK', title, 'Book removed from library');
     showToast(`"${title}" deleted`);
   };
 
@@ -84,6 +112,7 @@ export const AssetsManager: React.FC<Props> = ({ onBack }) => {
     try {
       const updated = await principalService.issueBook(issueModal.id, student.id, student.name);
       setBooks(prev => prev.map(b => b.id === updated.id ? updated : b));
+      addLog('ISSUE', 'BOOK', issueModal.title, `Issued to ${student.name} (${student.className}-${student.section})`);
       showToast(`Book issued to ${student.name}`);
       setIssueModal(null);
       setSelectedStudentId('');
@@ -91,8 +120,10 @@ export const AssetsManager: React.FC<Props> = ({ onBack }) => {
   };
 
   const handleReturnBook = async (bookId: string, studentId: string, studentName: string) => {
+    const book = books.find(b => b.id === bookId);
     const updated = await principalService.returnBook(bookId, studentId);
     setBooks(prev => prev.map(b => b.id === updated.id ? updated : b));
+    addLog('RETURN', 'BOOK', book?.title || 'Book', `Returned by ${studentName}`);
     showToast(`Book returned by ${studentName}`);
   };
 
@@ -102,6 +133,7 @@ export const AssetsManager: React.FC<Props> = ({ onBack }) => {
     try {
       const eq = await principalService.addEquipment(eqForm);
       setEquipment(prev => [...prev, eq]);
+      addLog('ADD', 'EQUIPMENT', eq.name, `${eq.quantity} units added to ${eq.labType} Lab`);
       showToast(`"${eq.name}" added`);
       setEqForm({ name: '', labType: 'SCIENCE', quantity: 1, workingCount: 1, lastServiced: new Date().toISOString().split('T')[0] });
       setAddEqModal(false);
@@ -111,6 +143,7 @@ export const AssetsManager: React.FC<Props> = ({ onBack }) => {
   const handleDeleteEq = async (id: string, name: string) => {
     await principalService.deleteEquipment(id);
     setEquipment(prev => prev.filter(e => e.id !== id));
+    addLog('DELETE', 'EQUIPMENT', name, 'Equipment removed from lab');
     showToast(`"${name}" deleted`);
   };
 
@@ -118,6 +151,8 @@ export const AssetsManager: React.FC<Props> = ({ onBack }) => {
     const newCount = Math.max(0, Math.min(eq.quantity, eq.workingCount + delta));
     const updated = await principalService.updateEquipment(eq.id, { workingCount: newCount });
     setEquipment(prev => prev.map(e => e.id === updated.id ? updated : e));
+    const status = newCount < eq.quantity ? 'faulty' : 'working';
+    addLog('UPDATE', 'EQUIPMENT', eq.name, `Working units: ${newCount}/${eq.quantity} (${status})`);
   };
 
   const tabs = [
@@ -147,12 +182,40 @@ export const AssetsManager: React.FC<Props> = ({ onBack }) => {
             </button>
           ))}
         </div>
+
+        {/* Subtabs for Library */}
+        {tab === 'LIBRARY' && (
+          <div className="flex border-t border-slate-100 px-4">
+            <button onClick={() => setLibrarySubTab('BOOKS')}
+              className={`flex-1 py-3 text-[10px] font-black uppercase tracking-widest border-b-2 transition-colors ${librarySubTab === 'BOOKS' ? 'border-amber-500 text-amber-600' : 'border-transparent text-slate-400'}`}>
+              Books
+            </button>
+            <button onClick={() => setLibrarySubTab('HISTORY')}
+              className={`flex-1 py-3 text-[10px] font-black uppercase tracking-widest border-b-2 transition-colors ${librarySubTab === 'HISTORY' ? 'border-emerald-500 text-emerald-600' : 'border-transparent text-slate-400'}`}>
+              History
+            </button>
+          </div>
+        )}
+
+        {/* Subtabs for Lab */}
+        {tab === 'LAB' && (
+          <div className="flex border-t border-slate-100 px-4">
+            <button onClick={() => setLabSubTab('EQUIPMENT')}
+              className={`flex-1 py-3 text-[10px] font-black uppercase tracking-widest border-b-2 transition-colors ${labSubTab === 'EQUIPMENT' ? 'border-amber-500 text-amber-600' : 'border-transparent text-slate-400'}`}>
+              Equipment
+            </button>
+            <button onClick={() => setLabSubTab('HISTORY')}
+              className={`flex-1 py-3 text-[10px] font-black uppercase tracking-widest border-b-2 transition-colors ${labSubTab === 'HISTORY' ? 'border-emerald-500 text-emerald-600' : 'border-transparent text-slate-400'}`}>
+              History
+            </button>
+          </div>
+        )}
       </div>
 
       <div className="flex-1 overflow-y-auto p-4 pb-28 space-y-3">
 
         {/* LIBRARY */}
-        {tab === 'LIBRARY' && (
+        {tab === 'LIBRARY' && librarySubTab === 'BOOKS' && (
           <>
             {/* Stats */}
             <div className="grid grid-cols-3 gap-2">
@@ -233,8 +296,35 @@ export const AssetsManager: React.FC<Props> = ({ onBack }) => {
           </>
         )}
 
+        {/* LIBRARY HISTORY */}
+        {tab === 'LIBRARY' && librarySubTab === 'HISTORY' && (
+          <>
+            {logs.filter(l => l.category === 'BOOK').length === 0 ? (
+              <div className="flex flex-col items-center py-16 text-slate-400">
+                <HistoryIcon size={32} className="mb-3 opacity-40" />
+                <p className="font-bold text-sm">No history yet</p>
+              </div>
+            ) : (
+              logs.filter(l => l.category === 'BOOK').map(log => (
+                <div key={log.id} className="bg-white rounded-2xl border border-slate-100 shadow-sm p-4">
+                  <div className="flex items-start justify-between gap-2">
+                    <div className="flex-1">
+                      <div className="font-extrabold text-slate-900 text-sm">{log.itemName}</div>
+                      <div className="text-[10px] font-bold text-slate-400 mt-1">{log.details}</div>
+                    </div>
+                    <div className="text-right shrink-0">
+                      <div className="text-[9px] font-black px-2 py-1 rounded-full bg-slate-100 text-slate-600">{log.type}</div>
+                      <div className="text-[9px] font-bold text-slate-400 mt-2">{log.timestamp}</div>
+                    </div>
+                  </div>
+                </div>
+              ))
+            )}
+          </>
+        )}
+
         {/* LAB */}
-        {tab === 'LAB' && (
+        {tab === 'LAB' && labSubTab === 'EQUIPMENT' && (
           <>
             {/* Stats */}
             <div className="grid grid-cols-3 gap-2">
@@ -307,6 +397,33 @@ export const AssetsManager: React.FC<Props> = ({ onBack }) => {
                 <FlaskConical size={32} className="mb-3 opacity-40" />
                 <p className="font-bold text-sm">{eqSearch ? 'No equipment found' : 'No equipment added yet'}</p>
               </div>
+            )}
+          </>
+        )}
+
+        {/* LAB HISTORY */}
+        {tab === 'LAB' && labSubTab === 'HISTORY' && (
+          <>
+            {logs.filter(l => l.category === 'EQUIPMENT').length === 0 ? (
+              <div className="flex flex-col items-center py-16 text-slate-400">
+                <HistoryIcon size={32} className="mb-3 opacity-40" />
+                <p className="font-bold text-sm">No history yet</p>
+              </div>
+            ) : (
+              logs.filter(l => l.category === 'EQUIPMENT').map(log => (
+                <div key={log.id} className="bg-white rounded-2xl border border-slate-100 shadow-sm p-4">
+                  <div className="flex items-start justify-between gap-2">
+                    <div className="flex-1">
+                      <div className="font-extrabold text-slate-900 text-sm">{log.itemName}</div>
+                      <div className="text-[10px] font-bold text-slate-400 mt-1">{log.details}</div>
+                    </div>
+                    <div className="text-right shrink-0">
+                      <div className="text-[9px] font-black px-2 py-1 rounded-full bg-slate-100 text-slate-600">{log.type}</div>
+                      <div className="text-[9px] font-bold text-slate-400 mt-2">{log.timestamp}</div>
+                    </div>
+                  </div>
+                </div>
+              ))
             )}
           </>
         )}

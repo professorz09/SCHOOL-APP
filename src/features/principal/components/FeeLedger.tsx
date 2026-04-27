@@ -89,8 +89,10 @@ export const FeeLedger: React.FC<Props> = ({ onBack }) => {
   const [search, setSearch] = useState('');
   const [showOnlyDue, setShowOnlyDue] = useState(false);
   const [paymentMethod, setPaymentMethod] = useState<PaymentMethod>('CASH');
+  const [paymentNote, setPaymentNote] = useState('');
   const [paymentTransactions, setPaymentTransactions] = useState<PaymentRecord[]>(() => feeService.getPaymentHistory());
   const [receiptModal, setReceiptModal] = useState<PaymentRecord | null>(null);
+  const [studentDetailTab, setStudentDetailTab] = useState<'SCHEDULE' | 'HISTORY'>('SCHEDULE');
 
   useEffect(() => {
     studentService.getAll().then(all => {
@@ -156,11 +158,13 @@ export const FeeLedger: React.FC<Props> = ({ onBack }) => {
         installmentIds: changedIds,
         installmentDetails: changedDetails,
         advanceAmount: result.advance,
+        note: paymentNote || undefined,
       };
       feeService.addPaymentRecord(record);
       setPaymentTransactions(feeService.getPaymentHistory());
       setReceiptModal(record);
       setPayAmount('');
+      setPaymentNote('');
       setPayModal(false);
     }
   };
@@ -274,9 +278,22 @@ export const FeeLedger: React.FC<Props> = ({ onBack }) => {
         </div>
 
         <div className="flex-1 overflow-y-auto p-4 pb-28 space-y-3">
-          <div className="flex items-center justify-between flex-wrap gap-2">
-            <p className="text-[9px] font-black uppercase tracking-widest text-slate-400">Fee Schedule</p>
-            <div className="flex gap-2">
+          {/* Tabs */}
+          <div className="flex border-b border-slate-200 gap-4">
+            <button onClick={() => setStudentDetailTab('SCHEDULE')}
+              className={`py-3 text-[10px] font-black uppercase tracking-widest border-b-2 transition-colors ${studentDetailTab === 'SCHEDULE' ? 'border-blue-600 text-blue-600' : 'border-transparent text-slate-400'}`}>
+              Fee Schedule
+            </button>
+            <button onClick={() => setStudentDetailTab('HISTORY')}
+              className={`py-3 text-[10px] font-black uppercase tracking-widest border-b-2 transition-colors ${studentDetailTab === 'HISTORY' ? 'border-emerald-600 text-emerald-600' : 'border-transparent text-slate-400'}`}>
+              Payment History
+            </button>
+          </div>
+
+          {/* Fee Schedule Tab */}
+          {studentDetailTab === 'SCHEDULE' && (
+          <div className="space-y-3">
+            <div className="flex gap-2 flex-wrap">
               <button onClick={() => setPayModal(true)}
                 className="flex items-center gap-1.5 bg-emerald-600 text-white text-[10px] font-black px-3 py-1.5 rounded-full">
                 <IndianRupee size={11} /> Parent Pay
@@ -288,9 +305,8 @@ export const FeeLedger: React.FC<Props> = ({ onBack }) => {
                 </button>
               )}
             </div>
-          </div>
 
-          {selected.installments
+            {selected.installments
             .sort((a, b) => new Date(a.dueDate).getTime() - new Date(b.dueDate).getTime())
             .map(inst => {
               const due = inst.amount - inst.paidAmount - inst.writeOffAmount;
@@ -343,6 +359,44 @@ export const FeeLedger: React.FC<Props> = ({ onBack }) => {
                 </div>
               );
             })}
+          </div>
+          )}
+
+          {/* Payment History Tab */}
+          {studentDetailTab === 'HISTORY' && (
+            <div className="space-y-3">
+              {paymentTransactions.filter(t => t.studentId === selected.studentId).length === 0 ? (
+                <div className="flex flex-col items-center py-8 text-slate-400">
+                  <Receipt size={32} className="mb-3 opacity-40" />
+                  <p className="font-bold text-sm">No payment history</p>
+                </div>
+              ) : (
+                paymentTransactions
+                  .filter(t => t.studentId === selected.studentId)
+                  .sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime())
+                  .map(txn => (
+                    <button key={txn.id} onClick={() => setReceiptModal(txn)}
+                      className="w-full text-left bg-white rounded-2xl border border-slate-100 shadow-sm p-4 active:scale-[0.98] transition-transform">
+                      <div className="flex items-center justify-between mb-2">
+                        <div>
+                          <div className="font-extrabold text-slate-900 text-sm">{txn.date}</div>
+                          <div className="text-[10px] font-bold text-slate-400 mt-0.5">{txn.method} · Receipt: {txn.receiptNo}</div>
+                        </div>
+                        <div className="text-right">
+                          <div className="font-black text-emerald-600 text-base">₹{txn.amount.toLocaleString('en-IN')}</div>
+                          {txn.note && <div className="text-[9px] font-bold text-slate-400 mt-0.5 truncate max-w-[120px]">{txn.note}</div>}
+                        </div>
+                      </div>
+                      {txn.installmentDetails.length > 0 && (
+                        <div className="text-[9px] font-bold text-slate-500 mt-2">
+                          Applied to: {txn.installmentDetails.map(d => d.month).join(', ')}
+                        </div>
+                      )}
+                    </button>
+                  ))
+              )}
+            </div>
+          )}
         </div>
 
         {/* Pay Modal */}
@@ -385,6 +439,9 @@ export const FeeLedger: React.FC<Props> = ({ onBack }) => {
               <p className="text-[11px] font-bold text-slate-400 mb-4">
                 Allocated oldest dues first. Any excess is stored as advance credit for future months.
               </p>
+              <textarea value={paymentNote} onChange={e => setPaymentNote(e.target.value)}
+                rows={2} placeholder="Optional note (e.g. reminder to submit docs, special arrangement)…"
+                className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-3 text-sm font-bold text-slate-900 outline-none focus:border-blue-500 resize-none mb-4" />
               <button onClick={handlePayment}
                 disabled={!payAmount}
                 className="w-full py-3 bg-emerald-600 text-white font-black rounded-xl disabled:opacity-40">
@@ -482,16 +539,30 @@ export const FeeLedger: React.FC<Props> = ({ onBack }) => {
                 )}
 
                 {/* Total */}
-                <div className="flex justify-between items-center bg-slate-900 rounded-xl px-4 py-3">
+                <div className="flex justify-between items-center bg-slate-900 rounded-xl px-4 py-3 mb-3">
                   <span className="text-xs font-black text-white uppercase">Total Paid</span>
                   <span className="text-lg font-black text-white">₹{receiptModal.amount.toLocaleString('en-IN')}</span>
                 </div>
+
+                {/* Note if present */}
+                {receiptModal.note && (
+                  <div className="bg-slate-50 rounded-xl px-4 py-3 mb-3 border border-slate-200">
+                    <p className="text-[9px] font-black uppercase tracking-widest text-slate-400 mb-1">Note</p>
+                    <p className="text-sm font-bold text-slate-700">{receiptModal.note}</p>
+                  </div>
+                )}
               </div>
 
-              <button onClick={() => setReceiptModal(null)}
-                className="w-full py-3 bg-indigo-600 text-white font-black rounded-xl">
-                Close
-              </button>
+              <div className="flex gap-3">
+                <button onClick={() => window.print()}
+                  className="flex-1 py-3 bg-slate-100 text-slate-900 font-black rounded-xl hover:bg-slate-200 transition-colors">
+                  Print PDF
+                </button>
+                <button onClick={() => setReceiptModal(null)}
+                  className="flex-1 py-3 bg-indigo-600 text-white font-black rounded-xl">
+                  Close
+                </button>
+              </div>
             </div>
           </div>
         )}

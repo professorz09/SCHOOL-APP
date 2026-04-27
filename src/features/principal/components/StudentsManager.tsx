@@ -37,6 +37,12 @@ interface FormWithParent extends CreateStudentInput {
   parentEmail: string;
 }
 
+interface DocumentUpload {
+  type: 'BIRTH_CERT' | 'TRANSFER_CERT' | 'AADHAAR' | 'PHOTO' | 'OTHER';
+  name: string;
+  uploaded: boolean;
+}
+
 const BLANK_FORM_WITH_PARENT: FormWithParent = {
   ...BLANK_FORM,
   parentMobileNumber: '',
@@ -62,6 +68,13 @@ export const StudentsManager: React.FC<Props> = ({ onBack, initialView }) => {
   const [createdParent, setCreatedParent] = useState<ParentUser | null>(null);
   const [showParentModal, setShowParentModal] = useState(false);
   const [showAdmissionForm, setShowAdmissionForm] = useState(false);
+  const [documents, setDocuments] = useState<DocumentUpload[]>([
+    { type: 'BIRTH_CERT', name: 'Birth Certificate', uploaded: false },
+    { type: 'TRANSFER_CERT', name: 'Transfer Certificate', uploaded: false },
+    { type: 'AADHAAR', name: 'Aadhaar Card', uploaded: false },
+    { type: 'PHOTO', name: 'Student Photo', uploaded: false },
+    { type: 'OTHER', name: 'Other Documents', uploaded: false },
+  ]);
 
   useEffect(() => { studentService.getAll().then(setStudents); }, []);
 
@@ -128,6 +141,22 @@ export const StudentsManager: React.FC<Props> = ({ onBack, initialView }) => {
     const updated = await studentService.getFeeRecords(selected!.id);
     setFeeRecords(updated);
     showToast('Payment marked as paid');
+  };
+
+  const handleDocumentUpload = (e: React.ChangeEvent<HTMLInputElement>, docType: DocumentUpload['type']) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    const maxSizeMB = 2;
+    const maxSizeBytes = maxSizeMB * 1024 * 1024;
+
+    if (file.size > maxSizeBytes) {
+      showToast(`File must be less than ${maxSizeMB}MB. Current: ${(file.size / 1024 / 1024).toFixed(1)}MB`, 'error');
+      return;
+    }
+
+    setDocuments(prev => prev.map(d => d.type === docType ? { ...d, uploaded: true } : d));
+    showToast(`${file.name} uploaded (${(file.size / 1024).toFixed(0)}KB)`);
   };
 
   const renderHeader = (title: string, back: () => void, action?: React.ReactNode) => (
@@ -324,6 +353,27 @@ export const StudentsManager: React.FC<Props> = ({ onBack, initialView }) => {
               <input type="checkbox" id="rte" checked={form.rte} onChange={e => setForm(f => ({ ...f, rte: e.target.checked }))}
                 className="w-4 h-4 rounded" />
               <label htmlFor="rte" className="text-xs font-bold text-slate-600">RTE (Right to Free Education)</label>
+            </div>
+          </div>
+
+          <div className="bg-white rounded-2xl border border-slate-100 shadow-sm p-4 space-y-4">
+            <p className="text-[10px] font-black uppercase tracking-widest text-slate-400">Documents Checklist</p>
+            <p className="text-[10px] font-bold text-slate-500 mb-3">Upload required documents. Max 2MB per file.</p>
+            <div className="space-y-2">
+              {documents.map(doc => (
+                <div key={doc.type} className="flex items-center justify-between bg-slate-50 rounded-xl p-3 border border-slate-200">
+                  <label className="flex items-center gap-3 flex-1 cursor-pointer">
+                    <input type="checkbox" checked={doc.uploaded} readOnly className="w-4 h-4 rounded" />
+                    <span className="text-sm font-bold text-slate-700">{doc.name}</span>
+                  </label>
+                  <label className="cursor-pointer">
+                    <input type="file" onChange={(e) => handleDocumentUpload(e, doc.type)} className="hidden" accept="image/*,.pdf,.doc,.docx" />
+                    <span className={`text-[10px] font-black px-3 py-1.5 rounded-full ${doc.uploaded ? 'bg-emerald-100 text-emerald-700' : 'bg-slate-100 text-slate-600 hover:bg-slate-200'} transition-colors`}>
+                      {doc.uploaded ? '✓ Done' : 'Upload'}
+                    </span>
+                  </label>
+                </div>
+              ))}
             </div>
           </div>
 
