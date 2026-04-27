@@ -2,7 +2,7 @@ import React, { useEffect } from 'react';
 import { Building2, ShieldCheck, IndianRupee, BarChart3, MailPlus, History, AlertCircle, TrendingUp, Users } from 'lucide-react';
 import { useSchoolStore } from '../../../store/schoolStore';
 import { useBillingStore } from '../../../store/billingStore';
-import { SchoolStatus, PaymentStatus, PLAN_PRICES } from '../../../config/constants';
+import { SchoolStatus } from '../../../config/constants';
 
 interface SADashboardProps {
   onNavigate: (view: string) => void;
@@ -10,7 +10,7 @@ interface SADashboardProps {
 
 export const SADashboard: React.FC<SADashboardProps> = ({ onNavigate }) => {
   const { schools, fetchSchools } = useSchoolStore();
-  const { records, fetchAll } = useBillingStore();
+  const { billingYears, fetchAll } = useBillingStore();
 
   useEffect(() => {
     fetchSchools();
@@ -20,9 +20,18 @@ export const SADashboard: React.FC<SADashboardProps> = ({ onNavigate }) => {
   const activeSchools = schools.filter(s => s.status === SchoolStatus.ACTIVE).length;
   const trialSchools = schools.filter(s => s.status === SchoolStatus.TRIAL).length;
   const totalUsers = schools.reduce((acc, s) => acc + s.studentCount + s.teacherCount, 0);
-  const overdueCount = records.filter(r => r.status === PaymentStatus.OVERDUE).length;
-  const paidCount = records.filter(r => r.status === PaymentStatus.PAID).length;
-  const monthlyRevenue = records.reduce((acc, r) => acc + (r.status === PaymentStatus.PAID ? r.amount : 0), 0);
+
+  // Latest billing year per school
+  const latestYears = Object.values(
+    billingYears.reduce<Record<string, typeof billingYears[0]>>((acc, y) => {
+      const prev = acc[y.schoolId];
+      if (!prev || y.startDate > prev.startDate) acc[y.schoolId] = y;
+      return acc;
+    }, {})
+  );
+  const overdueCount   = latestYears.filter(y => y.outstanding > 0).length;
+  const settledCount   = latestYears.filter(y => y.outstanding === 0).length;
+  const totalCollected = billingYears.reduce((s, y) => s + y.totalPaid, 0);
 
   const actions = [
     { label: 'Schools', icon: Building2, color: 'bg-emerald-50 text-emerald-600', view: 'schools' },
@@ -109,25 +118,25 @@ export const SADashboard: React.FC<SADashboardProps> = ({ onNavigate }) => {
         <div className="flex items-center justify-between mb-4">
           <div className="flex items-center gap-2">
             <IndianRupee size={16} className="text-emerald-400" />
-            <span className="text-[10px] font-black uppercase tracking-widest text-slate-400">This Month's Revenue</span>
+            <span className="text-[10px] font-black uppercase tracking-widest text-slate-400">Total Collected</span>
           </div>
           <div className="flex items-center gap-1 bg-emerald-500/20 text-emerald-400 text-[10px] font-black px-2 py-0.5 rounded-full">
-            <TrendingUp size={10} /> +18%
+            <TrendingUp size={10} /> All Time
           </div>
         </div>
         <div className="text-3xl font-black">
-          ₹{monthlyRevenue.toLocaleString('en-IN')}
+          ₹{totalCollected.toLocaleString('en-IN')}
         </div>
         <div className="flex gap-3 mt-4">
           <div>
-            <div className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">Paid</div>
-            <div className="text-sm font-black text-emerald-400">{paidCount} schools</div>
+            <div className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">Settled</div>
+            <div className="text-sm font-black text-emerald-400">{settledCount} schools</div>
           </div>
           <div className="w-px bg-slate-700"></div>
           <div>
             <div className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">Outstanding</div>
             <div className="text-sm font-black text-rose-400">
-              {overdueCount > 0 ? `${overdueCount} overdue` : 'All clear'}
+              {overdueCount > 0 ? `${overdueCount} schools` : 'All clear'}
             </div>
           </div>
         </div>

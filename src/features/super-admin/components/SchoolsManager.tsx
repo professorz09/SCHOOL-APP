@@ -7,9 +7,9 @@ import { useSchoolStore } from '../../../store/schoolStore';
 import { useBillingStore } from '../../../store/billingStore';
 import { useUIStore } from '../../../store/uiStore';
 import { School, CreateSchoolInput } from '../../../types/school.types';
-import { SchoolStatus, BillingPlan, PaymentStatus, STATUS_COLORS, PLAN_COLORS, PAYMENT_COLORS, PLAN_PRICES } from '../../../config/constants';
+import { SchoolStatus, BillingPlan, STATUS_COLORS, PLAN_COLORS } from '../../../config/constants';
 import { schoolService } from '../../../services/school.service';
-import { billingService } from '../../../services/billing.service';
+import { billingService, ANNUAL_PLAN_PRICES } from '../../../services/billing.service';
 
 type View = 'LIST' | 'CREATE' | 'DETAIL' | 'EDIT' | 'SECTIONS' | 'STUDENTS' | 'STAFF';
 
@@ -70,8 +70,8 @@ export const SchoolsManager: React.FC<Props> = ({ onBack }) => {
     try {
       const school = await schoolService.create(form as CreateSchoolInput);
       addSchool(school);
-      // Auto-generate 12 months of billing schedule from payment start date
-      await billingService.generateScheduleForSchool(
+      // Setup annual billing for new school
+      await billingService.setupSchoolBilling(
         school.id,
         school.name,
         school.plan,
@@ -138,9 +138,9 @@ export const SchoolsManager: React.FC<Props> = ({ onBack }) => {
       await updateSchool(selected.id, form as any);
       setSelected(s => s ? { ...s, ...form } : null);
       if (planChanged) {
-        const { updated, unchanged } = await billingService.updatePlan(selected.id, form.plan!);
+        await billingService.updatePlan(selected.id, form.plan!);
         await fetchBilling();
-        showToast(`Plan updated! ${updated} upcoming payments repriced, ${unchanged} paid records unchanged.`);
+        showToast(`Plan updated to ${form.plan}`);
       } else {
         showToast(`${form.name} updated successfully!`);
       }
@@ -184,7 +184,7 @@ export const SchoolsManager: React.FC<Props> = ({ onBack }) => {
             { label: 'Total', val: schools.length, color: 'bg-slate-900 text-white' },
             { label: 'Active', val: schools.filter(s => s.status === SchoolStatus.ACTIVE).length, color: 'bg-emerald-50 text-emerald-700' },
             { label: 'Trial', val: schools.filter(s => s.status === SchoolStatus.TRIAL).length, color: 'bg-violet-50 text-violet-700' },
-            { label: 'Overdue', val: schools.filter(s => s.paymentStatus === PaymentStatus.OVERDUE).length, color: 'bg-rose-50 text-rose-700' },
+            { label: 'Suspended', val: schools.filter(s => s.status === SchoolStatus.SUSPENDED).length, color: 'bg-rose-50 text-rose-700' },
           ].map(({ label, val, color }) => (
             <div key={label} className={`flex-shrink-0 px-3 py-1.5 rounded-xl text-[10px] font-black uppercase tracking-widest ${color}`}>
               {val} {label}
@@ -232,8 +232,8 @@ export const SchoolsManager: React.FC<Props> = ({ onBack }) => {
                     <UserCheck size={12} className="text-emerald-500" />
                     <span className="text-[10px] font-black text-slate-600">{school.teacherCount} teachers</span>
                   </div>
-                  <div className={`ml-auto text-[9px] font-black px-2 py-0.5 rounded-full uppercase tracking-widest ${PAYMENT_COLORS[school.paymentStatus]}`}>
-                    {school.paymentStatus}
+                  <div className={`ml-auto text-[9px] font-black px-2 py-0.5 rounded-full uppercase tracking-widest ${STATUS_COLORS[school.status]}`}>
+                    {school.status}
                   </div>
                 </div>
               </button>
@@ -275,7 +275,7 @@ export const SchoolsManager: React.FC<Props> = ({ onBack }) => {
               <label className="block text-[10px] font-black uppercase tracking-widest text-slate-500 mb-1.5">Plan</label>
               <select value={form.plan} onChange={e => setForm(f => ({ ...f, plan: e.target.value as BillingPlan }))}
                 className="w-full border border-slate-200 bg-slate-50 rounded-xl px-3 py-3 font-bold text-sm outline-none focus:border-blue-500 focus:bg-white transition-colors">
-                {Object.values(BillingPlan).map(p => <option key={p} value={p}>₹{PLAN_PRICES[p].toLocaleString('en-IN')} — {p}</option>)}
+                {Object.values(BillingPlan).map(p => <option key={p} value={p}>₹{ANNUAL_PLAN_PRICES[p].toLocaleString('en-IN')}/yr — {p}</option>)}
               </select>
             </div>
             <div>
@@ -544,7 +544,7 @@ export const SchoolsManager: React.FC<Props> = ({ onBack }) => {
                 <label className="block text-[10px] font-black uppercase tracking-widest text-slate-500 mb-1.5">Plan</label>
                 <select value={form.plan} onChange={e => setForm(f => ({ ...f, plan: e.target.value as BillingPlan }))}
                   className="w-full border border-slate-200 bg-slate-50 rounded-xl px-3 py-3 font-bold text-sm outline-none focus:border-blue-500 focus:bg-white transition-colors">
-                  {Object.values(BillingPlan).map(p => <option key={p} value={p}>₹{PLAN_PRICES[p].toLocaleString('en-IN')} — {p}</option>)}
+                  {Object.values(BillingPlan).map(p => <option key={p} value={p}>₹{ANNUAL_PLAN_PRICES[p].toLocaleString('en-IN')}/yr — {p}</option>)}
                 </select>
               </div>
               <div>

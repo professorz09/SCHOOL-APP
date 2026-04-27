@@ -1,43 +1,62 @@
 import { create } from 'zustand';
-import { BillingRecord, PaymentHistoryEntry } from '../types/billing.types';
+import { SchoolBilling, BillingYear, Payment } from '../types/billing.types';
 import { billingService } from '../services/billing.service';
+import { BillingPlan } from '../config/constants';
 
 interface BillingStore {
-  records: BillingRecord[];
-  history: PaymentHistoryEntry[];
+  schoolBillings: SchoolBilling[];
+  billingYears: BillingYear[];
   isLoading: boolean;
 
   fetchAll: () => Promise<void>;
-  markPaid: (id: string, txnId: string) => Promise<void>;
-  addRecord: (record: BillingRecord) => void;
-  deleteRecord: (id: string) => Promise<void>;
+  recordPayment: (
+    schoolId: string,
+    yearId: string,
+    amount: number,
+    txnId: string,
+    method: Payment['method'],
+    notes: string,
+  ) => Promise<{ year: BillingYear; payment: Payment }>;
+  getSchoolPayments: (schoolId: string) => Promise<Payment[]>;
+  setupSchoolBilling: (
+    schoolId: string,
+    schoolName: string,
+    plan: BillingPlan,
+    startDate: string,
+    customAmount?: number,
+  ) => Promise<void>;
 }
 
 export const useBillingStore = create<BillingStore>((set) => ({
-  records: [],
-  history: [],
+  schoolBillings: [],
+  billingYears: [],
   isLoading: false,
 
   fetchAll: async () => {
     set({ isLoading: true });
-    const [records, history] = await Promise.all([
-      billingService.getAll(),
-      billingService.getPaymentHistory(),
+    const [schoolBillings, billingYears] = await Promise.all([
+      billingService.getSchoolBillings(),
+      billingService.getBillingYears(),
     ]);
-    set({ records, history, isLoading: false });
+    set({ schoolBillings, billingYears, isLoading: false });
   },
 
-  markPaid: async (id, txnId) => {
-    const updated = await billingService.markPaid(id, txnId);
+  recordPayment: async (schoolId, yearId, amount, txnId, method, notes) => {
+    const result = await billingService.recordPayment(schoolId, yearId, amount, txnId, method, notes);
     set(s => ({
-      records: s.records.map(r => r.id === id ? updated : r),
+      billingYears: s.billingYears.map(y => y.id === yearId ? result.year : y),
     }));
+    return result;
   },
 
-  addRecord: (record) => set(s => ({ records: [...s.records, record] })),
+  getSchoolPayments: (schoolId) => billingService.getPaymentsForSchool(schoolId),
 
-  deleteRecord: async (id) => {
-    await billingService.delete(id);
-    set(s => ({ records: s.records.filter(r => r.id !== id) }));
+  setupSchoolBilling: async (schoolId, schoolName, plan, startDate, customAmount) => {
+    await billingService.setupSchoolBilling(schoolId, schoolName, plan, startDate, customAmount);
+    const [schoolBillings, billingYears] = await Promise.all([
+      billingService.getSchoolBillings(),
+      billingService.getBillingYears(),
+    ]);
+    set({ schoolBillings, billingYears });
   },
 }));

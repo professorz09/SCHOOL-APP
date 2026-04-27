@@ -2,7 +2,7 @@ import React, { useEffect } from 'react';
 import { ArrowLeft, TrendingUp, Users, Activity, IndianRupee, Building2, Award } from 'lucide-react';
 import { useSchoolStore } from '../../../store/schoolStore';
 import { useBillingStore } from '../../../store/billingStore';
-import { SchoolStatus, BillingPlan, PaymentStatus, PLAN_COLORS } from '../../../config/constants';
+import { SchoolStatus, BillingPlan, PLAN_COLORS } from '../../../config/constants';
 
 interface Props {
   onBack: () => void;
@@ -10,14 +10,14 @@ interface Props {
 
 export const ReportsView: React.FC<Props> = ({ onBack }) => {
   const { schools, fetchSchools } = useSchoolStore();
-  const { records, fetchAll } = useBillingStore();
+  const { billingYears, fetchAll } = useBillingStore();
 
   useEffect(() => {
     fetchSchools();
     fetchAll();
   }, []);
 
-  const totalRevenue = records.filter(r => r.status === PaymentStatus.PAID).reduce((a, r) => a + r.amount, 0);
+  const totalRevenue = billingYears.reduce((a, y) => a + y.totalPaid, 0);
   const totalStudents = schools.reduce((a, s) => a + s.studentCount, 0);
   const totalTeachers = schools.reduce((a, s) => a + s.teacherCount, 0);
   const activeSchools = schools.filter(s => s.status === SchoolStatus.ACTIVE).length;

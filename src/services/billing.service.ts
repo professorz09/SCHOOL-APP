@@ -1,175 +1,216 @@
-import { BillingRecord, CreateBillingInput, PaymentHistoryEntry } from '../types/billing.types';
-import { BillingPlan, PaymentStatus, PLAN_PRICES } from '../config/constants';
+import { SchoolBilling, BillingYear, Payment } from '../types/billing.types';
+import { BillingPlan } from '../config/constants';
 
-const MOCK_BILLING: BillingRecord[] = [
-  // DPS — 12 months, 4 paid (Apr/May/Jun/Jul) + 8 upcoming
-  ...generateMonthlySchedule('s1', 'Delhi Public School', BillingPlan.PREMIUM, '2024-04-01', 4),
-  ...generateMonthlySchedule('s2', 'Greenwood High School', BillingPlan.STANDARD, '2024-04-01', 3),
-  ...generateMonthlySchedule('s3', 'Sunrise Valley Academy', BillingPlan.BASIC, '2024-04-01', 2),
-  ...generateMonthlySchedule('s4', "St. Mary's Convent", BillingPlan.PREMIUM, '2024-04-01', 4),
-  ...generateMonthlySchedule('s5', 'Heritage International School', BillingPlan.STANDARD, '2024-04-01', 0),
-  ...generateMonthlySchedule('s6', 'Oakridge International', BillingPlan.PREMIUM, '2025-02-01', 0),
+export const ANNUAL_PLAN_PRICES: Record<BillingPlan, number> = {
+  [BillingPlan.BASIC]:    36_000,
+  [BillingPlan.STANDARD]: 72_000,
+  [BillingPlan.PREMIUM]: 1_20_000,
+};
+
+// ─── Mock School Billings ──────────────────────────────────────────────────────
+
+let _schoolBillings: SchoolBilling[] = [
+  { schoolId: 's1', schoolName: 'Delhi Public School',        plan: BillingPlan.PREMIUM,  annualAmount: 1_20_000, billingStartDate: '2024-04-01' },
+  { schoolId: 's2', schoolName: 'Greenwood High School',      plan: BillingPlan.STANDARD, annualAmount:  72_000, billingStartDate: '2024-04-01' },
+  { schoolId: 's3', schoolName: 'Sunrise Valley Academy',     plan: BillingPlan.BASIC,    annualAmount:  36_000, billingStartDate: '2024-04-01' },
+  { schoolId: 's4', schoolName: "St. Mary's Convent",         plan: BillingPlan.PREMIUM,  annualAmount: 1_20_000, billingStartDate: '2024-04-01' },
+  { schoolId: 's5', schoolName: 'Heritage International',     plan: BillingPlan.STANDARD, annualAmount:  72_000, billingStartDate: '2024-04-01' },
+  { schoolId: 's6', schoolName: 'Oakridge International',     plan: BillingPlan.PREMIUM,  annualAmount: 1_20_000, billingStartDate: '2025-02-01' },
 ];
 
-function generateMonthlySchedule(
-  schoolId: string,
-  schoolName: string,
-  plan: BillingPlan,
-  startDate: string,
-  paidCount: number,
-): BillingRecord[] {
-  const records: BillingRecord[] = [];
-  const start = new Date(startDate);
-  const amount = PLAN_PRICES[plan];
+// ─── Mock Billing Years ────────────────────────────────────────────────────────
 
-  for (let i = 0; i < 12; i++) {
-    const due = new Date(start);
-    due.setMonth(due.getMonth() + i);
-    const dueDate = `${due.getFullYear()}-${String(due.getMonth() + 1).padStart(2, '0')}-01`;
+let _billingYears: BillingYear[] = [
+  // s1 – Delhi Public School 2024-25: paid ₹80,000 / due ₹1,20,000
+  { id: 'by-s1-2024', schoolId: 's1', schoolName: 'Delhi Public School',    yearLabel: '2024-25', startDate: '2024-04-01', endDate: '2025-03-31', annualAmount: 1_20_000, carriedForward: 0, totalDue: 1_20_000, totalPaid: 80_000, outstanding: 40_000 },
+  // s2 – Greenwood 2024-25: fully paid
+  { id: 'by-s2-2024', schoolId: 's2', schoolName: 'Greenwood High School',  yearLabel: '2024-25', startDate: '2024-04-01', endDate: '2025-03-31', annualAmount:  72_000, carriedForward: 0, totalDue:  72_000, totalPaid: 72_000, outstanding:      0 },
+  // s3 – Sunrise 2024-25: paid ₹20,000 / due ₹36,000
+  { id: 'by-s3-2024', schoolId: 's3', schoolName: 'Sunrise Valley Academy', yearLabel: '2024-25', startDate: '2024-04-01', endDate: '2025-03-31', annualAmount:  36_000, carriedForward: 0, totalDue:  36_000, totalPaid: 20_000, outstanding: 16_000 },
+  // s4 – St. Mary's 2024-25: paid ₹60,000 / due ₹1,20,000
+  { id: 'by-s4-2024', schoolId: 's4', schoolName: "St. Mary's Convent",     yearLabel: '2024-25', startDate: '2024-04-01', endDate: '2025-03-31', annualAmount: 1_20_000, carriedForward: 0, totalDue: 1_20_000, totalPaid: 60_000, outstanding: 60_000 },
+  // s5 – Heritage 2024-25: no payments
+  { id: 'by-s5-2024', schoolId: 's5', schoolName: 'Heritage International', yearLabel: '2024-25', startDate: '2024-04-01', endDate: '2025-03-31', annualAmount:  72_000, carriedForward: 0, totalDue:  72_000, totalPaid:      0, outstanding: 72_000 },
+  // s6 – Oakridge 2025-26 (billing since Feb 2025): paid ₹40,000 / due ₹1,20,000
+  { id: 'by-s6-2025', schoolId: 's6', schoolName: 'Oakridge International', yearLabel: '2025-26', startDate: '2025-02-01', endDate: '2026-01-31', annualAmount: 1_20_000, carriedForward: 0, totalDue: 1_20_000, totalPaid: 40_000, outstanding: 80_000 },
+];
 
-    let status: PaymentStatus;
-    let paidAt: string | null = null;
-    let txnId: string | null = null;
+// ─── Mock Payments ─────────────────────────────────────────────────────────────
 
-    if (i < paidCount) {
-      status = PaymentStatus.PAID;
-      paidAt = dueDate;
-      txnId = `TXN-${due.getFullYear()}${String(due.getMonth() + 1).padStart(2, '0')}-${schoolId.toUpperCase()}-001`;
-    } else if (i === paidCount && new Date() > due) {
-      status = PaymentStatus.OVERDUE;
-    } else if (i === paidCount) {
-      status = PaymentStatus.PENDING;
-    } else {
-      status = PaymentStatus.PENDING;
-    }
+let _payments: Payment[] = [
+  // DPS (s1)
+  { id: 'p-s1-1', schoolId: 's1', yearId: 'by-s1-2024', amount: 30_000, paidAt: '2024-06-10', txnId: 'TXN-2406-S1-001', method: 'NEFT',   notes: '' },
+  { id: 'p-s1-2', schoolId: 's1', yearId: 'by-s1-2024', amount: 25_000, paidAt: '2024-09-05', txnId: 'TXN-2409-S1-001', method: 'UPI',    notes: '' },
+  { id: 'p-s1-3', schoolId: 's1', yearId: 'by-s1-2024', amount: 25_000, paidAt: '2025-01-15', txnId: 'TXN-2501-S1-001', method: 'UPI',    notes: '' },
+  // Greenwood (s2)
+  { id: 'p-s2-1', schoolId: 's2', yearId: 'by-s2-2024', amount: 36_000, paidAt: '2024-07-01', txnId: 'TXN-2407-S2-001', method: 'NEFT',   notes: '' },
+  { id: 'p-s2-2', schoolId: 's2', yearId: 'by-s2-2024', amount: 36_000, paidAt: '2024-12-20', txnId: 'TXN-2412-S2-001', method: 'NEFT',   notes: '' },
+  // Sunrise (s3)
+  { id: 'p-s3-1', schoolId: 's3', yearId: 'by-s3-2024', amount: 20_000, paidAt: '2024-08-10', txnId: 'TXN-2408-S3-001', method: 'UPI',    notes: '' },
+  // St. Mary's (s4)
+  { id: 'p-s4-1', schoolId: 's4', yearId: 'by-s4-2024', amount: 30_000, paidAt: '2024-05-15', txnId: 'TXN-2405-S4-001', method: 'CHEQUE', notes: '' },
+  { id: 'p-s4-2', schoolId: 's4', yearId: 'by-s4-2024', amount: 30_000, paidAt: '2024-10-20', txnId: 'TXN-2410-S4-001', method: 'CHEQUE', notes: '' },
+  // Heritage (s5): no payments
+  // Oakridge (s6)
+  { id: 'p-s6-1', schoolId: 's6', yearId: 'by-s6-2025', amount: 40_000, paidAt: '2025-03-10', txnId: 'TXN-2503-S6-001', method: 'NEFT',   notes: '' },
+];
 
-    records.push({
-      id: `b-${schoolId}-${i}`,
-      schoolId,
-      schoolName,
-      plan,
-      amount,
-      cycleType: 'MONTHLY',
-      dueDate,
-      paidAt,
-      status,
-      transactionId: txnId,
-      notes: '',
-    });
-  }
-  return records;
+// ─── Helpers ───────────────────────────────────────────────────────────────────
+
+function buildYearLabel(startDate: string): string {
+  const d = new Date(startDate);
+  const y = d.getFullYear();
+  return `${y}-${String(y + 1).slice(-2)}`;
 }
 
-const MOCK_PAYMENT_HISTORY: PaymentHistoryEntry[] = MOCK_BILLING
-  .filter(b => b.status === PaymentStatus.PAID)
-  .map(b => ({
-    id: `ph-${b.id}`,
-    schoolId: b.schoolId,
-    schoolName: b.schoolName,
-    amount: b.amount,
-    paidAt: b.paidAt!,
-    method: 'NEFT',
-    transactionId: b.transactionId!,
-    plan: b.plan,
-  }));
+function yearEndDate(startDate: string): string {
+  const d = new Date(startDate);
+  d.setFullYear(d.getFullYear() + 1);
+  d.setDate(d.getDate() - 1);
+  return d.toISOString().split('T')[0];
+}
 
-let _billingDb: BillingRecord[] = [...MOCK_BILLING];
-const _historyDb: PaymentHistoryEntry[] = [...MOCK_PAYMENT_HISTORY];
+// ─── Service ───────────────────────────────────────────────────────────────────
 
 export const billingService = {
-  async getAll(): Promise<BillingRecord[]> {
-    return [..._billingDb];
+  // All school billings
+  async getSchoolBillings(): Promise<SchoolBilling[]> {
+    return [..._schoolBillings];
   },
 
-  async getBySchool(schoolId: string): Promise<BillingRecord[]> {
-    return _billingDb.filter(b => b.schoolId === schoolId);
+  // All billing years
+  async getBillingYears(): Promise<BillingYear[]> {
+    return [..._billingYears];
   },
 
-  async getPaymentHistory(): Promise<PaymentHistoryEntry[]> {
-    return [..._historyDb];
+  // Payments for a specific school (newest first)
+  async getPaymentsForSchool(schoolId: string): Promise<Payment[]> {
+    return _payments
+      .filter(p => p.schoolId === schoolId)
+      .sort((a, b) => b.paidAt.localeCompare(a.paidAt));
   },
 
-  async generateScheduleForSchool(schoolId: string, schoolName: string, plan: BillingPlan, startDate: string): Promise<BillingRecord[]> {
-    const records = generateMonthlySchedule(schoolId, schoolName, plan, startDate, 0);
-    _billingDb = [..._billingDb, ...records];
-    return records;
+  // All payments (newest first) — for global history if needed
+  async getAllPayments(): Promise<Payment[]> {
+    return [..._payments].sort((a, b) => b.paidAt.localeCompare(a.paidAt));
   },
 
-  async create(input: CreateBillingInput): Promise<BillingRecord> {
-    const record: BillingRecord = {
-      ...input,
-      id: `b${Date.now()}`,
-      paidAt: null,
-      transactionId: null,
-    };
-    _billingDb = [..._billingDb, record];
-    return record;
+  // Current (latest) billing year for a school
+  async getCurrentYear(schoolId: string): Promise<BillingYear | null> {
+    const years = _billingYears
+      .filter(y => y.schoolId === schoolId)
+      .sort((a, b) => b.startDate.localeCompare(a.startDate));
+    return years[0] ?? null;
   },
 
-  async markPaid(id: string, transactionId: string): Promise<BillingRecord> {
-    const record = _billingDb.find(b => b.id === id);
-    if (!record) throw new Error('Billing record not found');
-    const updated: BillingRecord = {
-      ...record,
-      status: PaymentStatus.PAID,
+  // Record a payment (any amount)
+  async recordPayment(
+    schoolId: string,
+    yearId: string,
+    amount: number,
+    txnId: string,
+    method: Payment['method'],
+    notes: string,
+  ): Promise<{ year: BillingYear; payment: Payment }> {
+    const payment: Payment = {
+      id: `p-${Date.now()}`,
+      schoolId,
+      yearId,
+      amount,
       paidAt: new Date().toISOString().split('T')[0],
-      transactionId,
+      txnId,
+      method,
+      notes,
     };
-    _billingDb = _billingDb.map(b => b.id === id ? updated : b);
-    _historyDb.unshift({
-      id: `ph${Date.now()}`,
-      schoolId: updated.schoolId,
-      schoolName: updated.schoolName,
-      amount: updated.amount,
-      paidAt: updated.paidAt!,
-      method: 'NEFT',
-      transactionId,
-      plan: updated.plan,
+    _payments = [payment, ..._payments];
+
+    // Update billing year totals
+    _billingYears = _billingYears.map(y => {
+      if (y.id !== yearId) return y;
+      const newPaid = y.totalPaid + amount;
+      return { ...y, totalPaid: newPaid, outstanding: Math.max(0, y.totalDue - newPaid) };
     });
 
-    // Auto-schedule next 12 months if all current 12 months are paid
-    const schoolRecords = _billingDb.filter(b => b.schoolId === record.schoolId);
-    const allPaid = schoolRecords.length >= 12 && schoolRecords.slice(0, 12).every(r => r.status === PaymentStatus.PAID);
-    if (allPaid) {
-      const lastRecord = schoolRecords[11];
-      const nextStart = new Date(lastRecord.dueDate);
-      nextStart.setMonth(nextStart.getMonth() + 1);
-      const nextSchedule = generateMonthlySchedule(
-        record.schoolId,
-        record.schoolName,
-        record.plan,
-        nextStart.toISOString().split('T')[0],
-        0
-      );
-      _billingDb = [..._billingDb, ...nextSchedule];
+    const year = _billingYears.find(y => y.id === yearId)!;
+    return { year, payment };
+  },
+
+  // Create a new billing year (rollover or fresh for new school)
+  async createNextYear(
+    schoolId: string,
+    carriedForward: number,
+  ): Promise<BillingYear> {
+    const billing = _schoolBillings.find(b => b.schoolId === schoolId);
+    if (!billing) throw new Error('School billing not found');
+
+    const existingYears = _billingYears
+      .filter(y => y.schoolId === schoolId)
+      .sort((a, b) => b.startDate.localeCompare(a.startDate));
+
+    let newStart: string;
+    if (existingYears.length > 0) {
+      const lastEnd = new Date(existingYears[0].endDate);
+      lastEnd.setDate(lastEnd.getDate() + 1);
+      newStart = lastEnd.toISOString().split('T')[0];
+    } else {
+      newStart = billing.billingStartDate;
     }
 
-    return updated;
+    const totalDue = billing.annualAmount + carriedForward;
+    const year: BillingYear = {
+      id: `by-${schoolId}-${Date.now()}`,
+      schoolId,
+      schoolName: billing.schoolName,
+      yearLabel: buildYearLabel(newStart),
+      startDate: newStart,
+      endDate: yearEndDate(newStart),
+      annualAmount: billing.annualAmount,
+      carriedForward,
+      totalDue,
+      totalPaid: 0,
+      outstanding: totalDue,
+    };
+    _billingYears = [..._billingYears, year];
+    return year;
   },
 
-  // CHANGE PLAN: Only updates amount of UNPAID future schedules.
-  // Already-paid records remain unchanged (historical accuracy).
-  async updatePlan(schoolId: string, plan: BillingPlan): Promise<{ updated: number; unchanged: number }> {
-    let updated = 0;
-    let unchanged = 0;
-    const newAmount = PLAN_PRICES[plan];
-    _billingDb = _billingDb.map(b => {
-      if (b.schoolId !== schoolId) return b;
-      if (b.status === PaymentStatus.PAID) {
-        unchanged++;
-        return b;
-      }
-      updated++;
-      return { ...b, plan, amount: newAmount };
-    });
-    return { updated, unchanged };
+  // Setup billing when a school is onboarded
+  async setupSchoolBilling(
+    schoolId: string,
+    schoolName: string,
+    plan: BillingPlan,
+    billingStartDate: string,
+    customAmount?: number,
+  ): Promise<SchoolBilling> {
+    const annualAmount = customAmount ?? ANNUAL_PLAN_PRICES[plan];
+    const billing: SchoolBilling = { schoolId, schoolName, plan, annualAmount, billingStartDate };
+    _schoolBillings = _schoolBillings.filter(b => b.schoolId !== schoolId);
+    _schoolBillings = [..._schoolBillings, billing];
+
+    // Create first billing year
+    const totalDue = annualAmount;
+    const year: BillingYear = {
+      id: `by-${schoolId}-${Date.now()}`,
+      schoolId,
+      schoolName,
+      yearLabel: buildYearLabel(billingStartDate),
+      startDate: billingStartDate,
+      endDate: yearEndDate(billingStartDate),
+      annualAmount,
+      carriedForward: 0,
+      totalDue,
+      totalPaid: 0,
+      outstanding: totalDue,
+    };
+    _billingYears = [..._billingYears, year];
+    return billing;
   },
 
-  async deleteBySchool(schoolId: string): Promise<void> {
-    _billingDb = _billingDb.filter(b => b.schoolId !== schoolId);
-  },
-
-  async delete(id: string): Promise<void> {
-    _billingDb = _billingDb.filter(b => b.id !== id);
+  // Update plan for a school (affects future billing, not past)
+  async updatePlan(schoolId: string, plan: BillingPlan, customAmount?: number): Promise<void> {
+    const annualAmount = customAmount ?? ANNUAL_PLAN_PRICES[plan];
+    _schoolBillings = _schoolBillings.map(b =>
+      b.schoolId === schoolId ? { ...b, plan, annualAmount } : b
+    );
   },
 };
