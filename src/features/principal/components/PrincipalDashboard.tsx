@@ -66,8 +66,6 @@ export const PrincipalDashboard: React.FC<Props> = ({ onNavigate }) => {
     {
       title: 'People',
       items: [
-        { icon: Users,          label: 'Students',     view: 'STUDENTS',         iconBg: 'bg-indigo-50',   iconFg: 'text-indigo-600',   badge: stats.totalStudents },
-        { icon: UserPlus,       label: 'Admission',    view: 'ADMISSION',        iconBg: 'bg-emerald-50',  iconFg: 'text-emerald-600' },
         { icon: UserCheck,      label: 'Staff',        view: 'STAFF',            iconBg: 'bg-blue-50',     iconFg: 'text-blue-600',     badge: stats.totalStaff },
         { icon: ClipboardCheck, label: 'Attendance',   view: 'ATTENDANCE',       iconBg: 'bg-cyan-50',     iconFg: 'text-cyan-600' },
       ],
@@ -103,61 +101,52 @@ export const PrincipalDashboard: React.FC<Props> = ({ onNavigate }) => {
 
   return (
     <div className="flex flex-col gap-5 animate-in slide-in-from-bottom-4 duration-300 fade-in pt-2 pb-4">
-      {/* Hero card — greeting + headline KPI */}
+      {/* Hero card — greeting + date */}
       <div className="relative overflow-hidden rounded-3xl bg-gradient-to-br from-slate-900 via-slate-800 to-indigo-900 p-5 text-white shadow-lg">
         <div className="absolute -top-16 -right-16 w-48 h-48 rounded-full bg-indigo-500/20 blur-3xl" />
         <div className="absolute -bottom-12 -left-12 w-40 h-40 rounded-full bg-emerald-400/10 blur-3xl" />
         <div className="relative">
           <p className="text-[10px] font-black uppercase tracking-[0.2em] text-indigo-200/80">{todayLabel}</p>
-          <h2 className="text-2xl font-black mt-1 leading-tight">Good morning, {firstName}</h2>
+          <h2 className="text-2xl font-black mt-1 leading-tight">Namaskar, {firstName}</h2>
           <p className="text-xs font-bold text-slate-300/80 mt-1">Here's what's happening at school today.</p>
-
-          <div className="mt-5 grid grid-cols-2 gap-3">
-            <div className="rounded-2xl bg-white/10 backdrop-blur border border-white/10 p-3">
-              <p className="text-[9px] font-black uppercase tracking-widest text-slate-300/80">Attendance</p>
-              <div className="text-3xl font-black mt-0.5">{stats.presentToday}<span className="text-lg text-slate-300/80">%</span></div>
-              <p className="text-[10px] font-bold text-slate-300/70 mt-0.5">{stats.totalStudents.toLocaleString('en-IN')} students</p>
-            </div>
-            <div className="rounded-2xl bg-white/10 backdrop-blur border border-white/10 p-3">
-              <p className="text-[9px] font-black uppercase tracking-widest text-slate-300/80">Fee Collection</p>
-              <div className="text-3xl font-black mt-0.5 text-emerald-300">{feePercent}<span className="text-lg text-slate-300/80">%</span></div>
-              <div className="mt-1.5 w-full h-1 bg-white/10 rounded-full overflow-hidden">
-                <div className="h-full bg-emerald-400 rounded-full transition-all" style={{ width: `${feePercent}%` }} />
-              </div>
-            </div>
-          </div>
         </div>
       </div>
 
-      {/* Action chips: alerts + finance summary */}
-      <div className="grid grid-cols-2 gap-3">
+      {/* 3 Primary Action Cards */}
+      <div className="grid grid-cols-3 gap-3">
+        {/* Students */}
         <button
-          onClick={() => onNavigate('FEE_LEDGER')}
-          className="bg-white border border-slate-100 rounded-2xl p-4 shadow-sm text-left active:scale-[0.98] transition-transform">
-          <div className="flex items-center justify-between mb-2">
-            <div className="w-9 h-9 rounded-xl bg-rose-50 text-rose-600 flex items-center justify-center">
-              <IndianRupee size={18} />
-            </div>
-            <ArrowUpRight size={16} className="text-slate-300" />
+          onClick={() => onNavigate('STUDENTS')}
+          className="relative bg-indigo-600 rounded-2xl p-4 text-white shadow-md active:scale-[0.97] transition-transform text-left">
+          <div className="w-10 h-10 rounded-xl bg-white/20 flex items-center justify-center mb-3">
+            <Users size={20} />
           </div>
-          <div className="text-[10px] font-black uppercase tracking-widest text-slate-400">Pending Fees</div>
-          <div className="text-xl font-black text-slate-900 mt-0.5">
-            ₹{(feePending / 100000).toFixed(1)}<span className="text-sm text-slate-500">L</span>
-          </div>
+          <div className="text-2xl font-black leading-none">{stats.totalStudents}</div>
+          <div className="text-[10px] font-black uppercase tracking-widest mt-1 text-indigo-200">Students</div>
         </button>
 
+        {/* Admission */}
         <button
-          onClick={() => onNavigate('APPROVALS')}
-          className="bg-white border border-slate-100 rounded-2xl p-4 shadow-sm text-left active:scale-[0.98] transition-transform">
-          <div className="flex items-center justify-between mb-2">
-            <div className="w-9 h-9 rounded-xl bg-emerald-50 text-emerald-600 flex items-center justify-center">
-              <CheckSquare size={18} />
-            </div>
-            <ArrowUpRight size={16} className="text-slate-300" />
+          onClick={() => onNavigate('ADMISSION')}
+          className="relative bg-emerald-600 rounded-2xl p-4 text-white shadow-md active:scale-[0.97] transition-transform text-left">
+          <div className="w-10 h-10 rounded-xl bg-white/20 flex items-center justify-center mb-3">
+            <UserPlus size={20} />
           </div>
-          <div className="text-[10px] font-black uppercase tracking-widest text-slate-400">Approvals</div>
-          <div className="text-xl font-black text-slate-900 mt-0.5">
-            {stats.pendingApprovals}<span className="text-sm text-slate-500"> pending</span>
+          <div className="text-2xl font-black leading-none">+</div>
+          <div className="text-[10px] font-black uppercase tracking-widest mt-1 text-emerald-200">Admission</div>
+        </button>
+
+        {/* Fee Collection */}
+        <button
+          onClick={() => onNavigate('FEE_LEDGER')}
+          className="relative bg-amber-500 rounded-2xl p-4 text-white shadow-md active:scale-[0.97] transition-transform text-left">
+          <div className="w-10 h-10 rounded-xl bg-white/20 flex items-center justify-center mb-3">
+            <IndianRupee size={20} />
+          </div>
+          <div className="text-xl font-black leading-none">{feePercent}%</div>
+          <div className="text-[10px] font-black uppercase tracking-widest mt-1 text-amber-100">Fees</div>
+          <div className="mt-2 w-full h-1 bg-white/20 rounded-full overflow-hidden">
+            <div className="h-full bg-white rounded-full transition-all" style={{ width: `${feePercent}%` }} />
           </div>
         </button>
       </div>
@@ -213,9 +202,10 @@ export const PrincipalDashboard: React.FC<Props> = ({ onNavigate }) => {
         </div>
         <div className="divide-y divide-slate-100">
           {[
-            { label: 'Active Staff',   val: `${stats.totalStaff} members`,                                      icon: UserCheck,  color: 'text-blue-500',    bg: 'bg-blue-50' },
-            { label: 'Fee Pending',    val: `₹${(feePending / 1000).toFixed(0)}K`,                              icon: IndianRupee,color: 'text-rose-500',    bg: 'bg-rose-50' },
-            { label: 'Avg Attendance', val: `${stats.presentToday}%`,                                           icon: TrendingUp, color: 'text-emerald-500', bg: 'bg-emerald-50' },
+            { label: 'Active Staff',    val: `${stats.totalStaff} members`,               icon: UserCheck,  color: 'text-blue-500',    bg: 'bg-blue-50' },
+            { label: 'Fee Pending',     val: `₹${(feePending / 1000).toFixed(0)}K`,       icon: IndianRupee,color: 'text-rose-500',    bg: 'bg-rose-50' },
+            { label: 'Avg Attendance',  val: `${stats.presentToday}%`,                    icon: TrendingUp, color: 'text-emerald-500', bg: 'bg-emerald-50' },
+            { label: 'Pending Approvals', val: `${stats.pendingApprovals}`,               icon: CheckSquare,color: 'text-violet-500',  bg: 'bg-violet-50' },
           ].map(({ label, val, icon: Icon, color, bg }) => (
             <div key={label} className="flex items-center justify-between py-2.5 first:pt-0 last:pb-0">
               <div className="flex items-center gap-3">

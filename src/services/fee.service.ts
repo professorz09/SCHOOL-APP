@@ -17,6 +17,7 @@ export interface PaymentRecord {
   installmentIds: string[];
   installmentDetails: { month: string; feeType: FeeType; amount: number }[];
   advanceAmount: number;
+  note?: string;         // Optional note added at time of payment
 }
 
 export interface FeeInstallment {
