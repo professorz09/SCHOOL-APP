@@ -9,6 +9,7 @@ import { TeacherLayout } from './features/teacher';
 import { StudentLayout } from './features/student';
 import { DriverLayout } from './features/driver/DriverLayout';
 import { PaymentsView } from './views/PaymentsView';
+import { ProfileView } from './views/ProfileView';
 import { useAuthStore, restoreAuthSession } from './store/authStore';
 import { studentService } from './services/student.service';
 import { Student } from './types/principal.types';
@@ -102,12 +103,10 @@ export default function App() {
     if (tab === 'PAYMENTS') {
       return <PaymentsView role={role} />;
     }
-    return (
-      <div className="flex flex-col items-center justify-center h-64 opacity-50 mt-10">
-        <div className="w-16 h-16 bg-slate-200 rounded-full mb-4 animate-pulse"></div>
-        <p className="font-semibold text-slate-500">Coming Soon</p>
-      </div>
-    );
+    if (tab === 'PROFILE' || tab === 'DISCOVER') {
+      return <ProfileView />;
+    }
+    return null;
   };
 
   return (

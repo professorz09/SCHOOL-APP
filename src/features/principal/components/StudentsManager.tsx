@@ -2,13 +2,15 @@ import React, { useEffect, useState } from 'react';
 import {
   ArrowLeft, Plus, Search, Users, ChevronRight, User, Phone, Mail,
   IndianRupee, BookOpen, Calendar, AlertCircle, CheckCircle2, Clock,
-  X, Save, Send, FileText, BarChart2, FolderOpen, Home, Copy, MapPin,
+  X, Save, Send, FileText, BarChart2, FolderOpen, Home, Copy, MapPin, FileCheck,
 } from 'lucide-react';
 import { studentService } from '../../../services/student.service';
 import { Student, CreateStudentInput, FeeRecord, StudentAcademicRecord } from '../../../types/principal.types';
 import { PaymentStatus, PAYMENT_COLORS } from '../../../config/constants';
 import { useUIStore } from '../../../store/uiStore';
 import { authService, ParentUser } from '../../../services/auth.service';
+import { schoolInfoService } from '../../../services/schoolInfo.service';
+import { AdmissionFormPrint } from '../../../components/AdmissionFormPrint';
 
 type MainView = 'MENU' | 'ADMISSION' | 'FEES' | 'CLASSES';
 type SubView = 'LIST' | 'CREATE' | 'PROFILE' | 'CLASS_DETAIL' | 'SECTION_DETAIL';
@@ -59,6 +61,7 @@ export const StudentsManager: React.FC<Props> = ({ onBack }) => {
   const [activeProfileTab, setActiveProfileTab] = useState<'INFO' | 'ACADEMIC' | 'FEES' | 'ATTENDANCE'>('INFO');
   const [createdParent, setCreatedParent] = useState<ParentUser | null>(null);
   const [showParentModal, setShowParentModal] = useState(false);
+  const [showAdmissionForm, setShowAdmissionForm] = useState(false);
 
   useEffect(() => { studentService.getAll().then(setStudents); }, []);
 
@@ -108,9 +111,9 @@ export const StudentsManager: React.FC<Props> = ({ onBack }) => {
       }
 
       setStudents(prev => [...prev, student]);
+      setSelected(student);
       setForm(BLANK_FORM_WITH_PARENT);
-      setMainView('MENU');
-      setSubView('LIST');
+      setShowAdmissionForm(true);
     } finally {
       setIsSubmitting(false);
     }
@@ -152,7 +155,6 @@ export const StudentsManager: React.FC<Props> = ({ onBack }) => {
         <div className="grid grid-cols-1 gap-3">
           {[
             { icon: FileText, label: 'Admission', desc: 'Add new students & update records', action: () => { setMainView('ADMISSION'); setSubView('LIST'); } },
-            { icon: IndianRupee, label: 'Fee Collection', desc: 'View & manage student fees', action: () => { setMainView('FEES'); setSubView('LIST'); } },
             { icon: BookOpen, label: 'Classes', desc: 'Browse by class & section', action: () => { setMainView('CLASSES'); setSubView('LIST'); } },
           ].map(({ icon: Icon, label, desc, action }) => (
             <button key={label} onClick={action}
@@ -585,12 +587,21 @@ export const StudentsManager: React.FC<Props> = ({ onBack }) => {
       <div className="absolute inset-0 z-50 bg-white flex flex-col animate-in slide-in-from-right-8 duration-300">
         {/* Header */}
         <div className="bg-white border-b border-slate-100 px-4 pt-12 pb-4 sticky top-0 z-10 shadow-sm">
-          <div className="flex items-center gap-3 mb-4">
-            <button onClick={() => { setSubView('LIST'); setMainView('MENU'); }}
-              className="p-2 -ml-2 bg-slate-100 rounded-full text-slate-600">
-              <ArrowLeft size={20} />
+          <div className="flex items-center justify-between gap-3 mb-4">
+            <div className="flex items-center gap-3">
+              <button onClick={() => { setSubView('LIST'); setMainView('MENU'); }}
+                className="p-2 -ml-2 bg-slate-100 rounded-full text-slate-600">
+                <ArrowLeft size={20} />
+              </button>
+              <h2 className="text-xl font-black text-slate-900 uppercase tracking-tight">{selected.name}</h2>
+            </div>
+            <button
+              onClick={() => setShowAdmissionForm(true)}
+              className="p-2 bg-blue-50 text-blue-600 rounded-full flex items-center justify-center active:scale-90 transition-transform"
+              title="View Admission Form"
+            >
+              <FileCheck size={20} />
             </button>
-            <h2 className="text-xl font-black text-slate-900 uppercase tracking-tight">{selected.name}</h2>
           </div>
           {/* Search */}
           <div className="relative mb-4">
@@ -893,6 +904,11 @@ export const StudentsManager: React.FC<Props> = ({ onBack }) => {
         </div>
       </div>
     );
+  }
+
+  {/* Admission Form Print Modal */}
+  if (showAdmissionForm && selected) {
+    return <AdmissionFormPrint student={selected} schoolInfo={schoolInfoService.get()} onClose={() => setShowAdmissionForm(false)} />;
   }
 
   return null;
