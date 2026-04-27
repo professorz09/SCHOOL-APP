@@ -1,15 +1,15 @@
 import React, { useEffect, useState } from 'react';
-import { ArrowLeft, Plus, Trash2, ChevronDown, ChevronUp, Save, Calendar, Users, QrCode, CreditCard, CheckCircle2, Lock, Eye, EyeOff, ShieldCheck, IndianRupee, Edit2, Building2, BookOpen, Banknote } from 'lucide-react';
+import { ArrowLeft, Plus, Trash2, ChevronDown, ChevronUp, Save, Calendar, QrCode, CreditCard, CheckCircle2, Lock, Eye, EyeOff, ShieldCheck, IndianRupee, Edit2, Building2, BookOpen } from 'lucide-react';
 import { principalService } from '../../../services/principal.service';
-import { AcademicYearConfig, ClassConfig, Student, STREAMS, STREAM_CLASSES } from '../../../types/principal.types';
+import { AcademicYearConfig, ClassConfig } from '../../../types/principal.types';
 import { useUIStore } from '../../../store/uiStore';
-import { studentService } from '../../../services/student.service';
 import { authService } from '../../../services/auth.service';
 import { useAuthStore } from '../../../store/authStore';
 import { schoolInfoService, SchoolInfo } from '../../../services/schoolInfo.service';
+import { useAcademicYear } from '../../../context/AcademicYearContext';
 import { FeeStructureForm, FeeStructureItem } from './FeeStructureForm';
 
-type View = 'MENU' | 'SCHOOL_INFO' | 'ACADEMIC' | 'CREATE_AY' | 'CLASSES' | 'FEE_STRUCT' | 'FEE_STRUCT_EDIT' | 'PROMOTION' | 'PROMOTION_WIZARD' | 'PAYMENTS' | 'SECURITY';
+type View = 'MENU' | 'SCHOOL_INFO' | 'ACADEMIC' | 'CLASSES' | 'FEE_STRUCT' | 'FEE_STRUCT_EDIT' | 'PAYMENTS' | 'SECURITY';
 
 const DEFAULT_FEE_STRUCTURES: FeeStructureItem[] = [
   {
@@ -38,10 +38,10 @@ const DEFAULT_FEE_STRUCTURES: FeeStructureItem[] = [
 
 interface Props { onBack: () => void; }
 
-const BOARDS = ['CBSE', 'ICSE', 'State Board', 'IB', 'Cambridge'];
 
 export const SettingsManager: React.FC<Props> = ({ onBack }) => {
   const { showToast } = useUIStore();
+  const { academicYears, isYearLocked } = useAcademicYear();
   const [view, setView] = useState<View>('MENU');
   const [configs, setConfigs] = useState<AcademicYearConfig[]>([]);
   const [activeConfig, setActiveConfig] = useState<AcademicYearConfig | null>(null);
@@ -49,11 +49,6 @@ export const SettingsManager: React.FC<Props> = ({ onBack }) => {
   const [isSaving, setIsSaving] = useState(false);
   const [newClassName, setNewClassName] = useState('');
   const [newSection, setNewSection] = useState('');
-  const [students, setStudents] = useState<Student[]>([]);
-  const [failedStudents, setFailedStudents] = useState<Set<string>>(new Set());
-  const [rteStudents, setRteStudents] = useState<Set<string>>(new Set());
-  const [tcStudents, setTcStudents] = useState<Set<string>>(new Set());
-  const [newAY, setNewAY] = useState({ label: '', startDate: '', endDate: '', board: 'CBSE' });
   const [upiId, setUpiId] = useState('school@upi');
   const [upiSaved, setUpiSaved] = useState(false);
   const [qrFileName, setQrFileName] = useState('');
@@ -74,7 +69,6 @@ export const SettingsManager: React.FC<Props> = ({ onBack }) => {
       setConfigs(data);
       setActiveConfig(data.find(c => c.isActive) ?? data[0] ?? null);
     });
-    studentService.getAll().then(setStudents);
   }, []);
 
   const handleChangePassword = () => {
@@ -93,16 +87,6 @@ export const SettingsManager: React.FC<Props> = ({ onBack }) => {
     showToast('Password changed successfully');
   };
 
-  const handleSaveBoard = async (board: string) => {
-    if (!activeConfig) return;
-    setIsSaving(true);
-    try {
-      const updated = await principalService.updateAYConfig(activeConfig.id, { board });
-      setActiveConfig(updated);
-      setConfigs(prev => prev.map(c => c.id === updated.id ? updated : c));
-      showToast('Board updated');
-    } finally { setIsSaving(false); }
-  };
 
   const handleAddClass = async () => {
     if (!activeConfig || !newClassName.trim()) { showToast('Class name required', 'error'); return; }
@@ -141,38 +125,6 @@ export const SettingsManager: React.FC<Props> = ({ onBack }) => {
     showToast(`${className} removed`);
   };
 
-  const handleCreateAY = async () => {
-    if (!newAY.label || !newAY.startDate || !newAY.endDate) { showToast('All fields required', 'error'); return; }
-    setIsSaving(true);
-    try {
-      const ayConfig: AcademicYearConfig = {
-        id: `ay${Date.now()}`,
-        label: newAY.label,
-        startDate: newAY.startDate,
-        endDate: newAY.endDate,
-        isActive: false,
-        board: newAY.board,
-        classes: activeConfig?.classes || [],
-      };
-      setConfigs(prev => [...prev, ayConfig]);
-      showToast(`Academic Year ${newAY.label} created!`);
-      setNewAY({ label: '', startDate: '', endDate: '', board: 'CBSE' });
-      setView('ACADEMIC');
-    } finally { setIsSaving(false); }
-  };
-
-  const handlePromoteStudents = async () => {
-    setIsSaving(true);
-    try {
-      const promoted = students.filter(s => !failedStudents.has(s.id) && !tcStudents.has(s.id));
-      const rte = students.filter(s => rteStudents.has(s.id));
-      showToast(`${promoted.length} students promoted, ${rte.length} RTE marked, ${failedStudents.size} retained`);
-      setFailedStudents(new Set());
-      setRteStudents(new Set());
-      setTcStudents(new Set());
-      setView('PROMOTION');
-    } finally { setIsSaving(false); }
-  };
 
   const handleDeleteFs = (id: string) => {
     setFeeStructures(prev => prev.filter(f => f.id !== id));
@@ -216,10 +168,9 @@ export const SettingsManager: React.FC<Props> = ({ onBack }) => {
         <div className="grid grid-cols-2 gap-3">
           {[
             { icon: Building2, title: 'School Info', desc: 'School details & contact', color: 'bg-blue-50 text-blue-600', action: () => setView('SCHOOL_INFO') },
-            { icon: Calendar, title: 'Academic Year', desc: 'Years & board setup', color: 'bg-indigo-50 text-indigo-600', action: () => setView('ACADEMIC') },
+            { icon: Calendar, title: 'Academic Year', desc: 'View active & locked years', color: 'bg-indigo-50 text-indigo-600', action: () => setView('ACADEMIC') },
             { icon: BookOpen, title: 'Classes', desc: 'Class & section setup', color: 'bg-violet-50 text-violet-600', action: () => setView('CLASSES') },
             { icon: IndianRupee, title: 'Fee Structure', desc: 'Class-wise fee config', color: 'bg-emerald-50 text-emerald-600', action: () => setView('FEE_STRUCT') },
-            { icon: Users, title: 'Promotion', desc: 'Year-end promotions', color: 'bg-amber-50 text-amber-600', action: () => setView('PROMOTION') },
             { icon: CreditCard, title: 'Payments', desc: 'UPI & QR code setup', color: 'bg-orange-50 text-orange-600', action: () => setView('PAYMENTS') },
             { icon: Lock, title: 'Security', desc: 'Password & security', color: 'bg-rose-50 text-rose-600', action: () => setView('SECURITY') },
           ].map(({ icon: Icon, title, desc, color, action }) => (
@@ -279,90 +230,64 @@ export const SettingsManager: React.FC<Props> = ({ onBack }) => {
     </div>
   );
 
-  // ACADEMIC VIEW
+  // ACADEMIC VIEW — read-only, sirf year cards + active/locked status
   if (view === 'ACADEMIC') return (
     <div className="absolute inset-0 z-50 bg-slate-50 flex flex-col animate-in slide-in-from-right-8 duration-300">
       {renderHeader('Academic Year')}
       <div className="flex-1 overflow-y-auto p-4 pb-28 space-y-4">
-        <button onClick={() => setView('CREATE_AY')} className="w-full flex items-center justify-center gap-2 bg-indigo-600 text-white font-black text-xs uppercase tracking-widest py-3 rounded-2xl active:scale-95 transition-transform">
-          <Calendar size={14} /> Create New Academic Year
-        </button>
-        {activeConfig && (
-          <>
-            <div className="bg-white rounded-2xl border border-slate-100 shadow-sm p-4 space-y-3">
-              <p className="text-[10px] font-black uppercase tracking-widest text-slate-400">Active Year</p>
-              <div className="flex gap-2 overflow-x-auto pb-1 hide-scrollbar">
-                {configs.map(c => (
-                  <button key={c.id} onClick={() => setActiveConfig(c)} className={`flex-shrink-0 px-3 py-1.5 rounded-xl text-[10px] font-black uppercase tracking-widest transition-colors ${activeConfig.id === c.id ? 'bg-slate-900 text-white' : 'bg-white text-slate-500 border border-slate-200'}`}>
-                    {c.label} {c.isActive && '●'}
-                  </button>
-                ))}
-              </div>
-              {[
-                { label: 'Label', val: activeConfig.label },
-                { label: 'Start Date', val: activeConfig.startDate },
-                { label: 'End Date', val: activeConfig.endDate },
-                { label: 'Status', val: activeConfig.isActive ? '● Active' : 'Inactive' },
-              ].map(({ label, val }) => (
-                <div key={label} className="flex justify-between">
-                  <span className="text-[10px] font-bold text-slate-400">{label}</span>
-                  <span className={`text-xs font-black ${label === 'Status' && activeConfig.isActive ? 'text-emerald-600' : 'text-slate-700'}`}>{val}</span>
-                </div>
-              ))}
-              <div className="flex flex-wrap gap-2 pt-2">
-                {BOARDS.map(board => (
-                  <button key={board} onClick={() => handleSaveBoard(board)} className={`px-3 py-2 rounded-xl text-xs font-black transition-colors ${activeConfig.board === board ? 'bg-slate-900 text-white' : 'bg-slate-50 border border-slate-200 text-slate-600'}`}>
-                    {board}
-                  </button>
-                ))}
-              </div>
-            </div>
-          </>
-        )}
-      </div>
-    </div>
-  );
-
-  // CREATE AY VIEW
-  if (view === 'CREATE_AY') return (
-    <div className="absolute inset-0 z-50 bg-slate-50 flex flex-col animate-in slide-in-from-right-8 duration-300">
-      {renderHeader('New Academic Year')}
-      <div className="flex-1 overflow-y-auto p-4 pb-28 space-y-4">
-        <div className="bg-white rounded-2xl border border-slate-100 shadow-sm p-4 space-y-4">
-          <p className="text-[10px] font-black uppercase tracking-widest text-slate-400">Year Details</p>
-          {[
-            { label: 'Label (e.g., 2024-25) *', key: 'label' },
-          ].map(({ label, key }) => (
-            <div key={key}>
-              <label className="block text-[10px] font-black uppercase tracking-widest text-slate-500 mb-1.5">{label}</label>
-              <input value={(newAY as any)[key]} onChange={e => setNewAY(s => ({ ...s, [key]: e.target.value }))} className="w-full border border-slate-200 bg-slate-50 rounded-xl px-4 py-3 font-bold text-sm outline-none focus:border-slate-900" />
-            </div>
-          ))}
-          <div className="grid grid-cols-2 gap-3">
-            {[
-              { label: 'Start Date *', key: 'startDate', type: 'date' },
-              { label: 'End Date *', key: 'endDate', type: 'date' },
-            ].map(({ label, key, type }) => (
-              <div key={key}>
-                <label className="block text-[10px] font-black uppercase tracking-widest text-slate-500 mb-1.5">{label}</label>
-                <input type={type} value={(newAY as any)[key]} onChange={e => setNewAY(s => ({ ...s, [key]: e.target.value }))} className="w-full border border-slate-200 bg-slate-50 rounded-xl px-3 py-3 font-bold text-sm outline-none focus:border-slate-900" />
-              </div>
-            ))}
-          </div>
-          <div>
-            <label className="block text-[10px] font-black uppercase tracking-widest text-slate-500 mb-1.5">Board</label>
-            <div className="flex flex-wrap gap-2">
-              {BOARDS.map(board => (
-                <button key={board} onClick={() => setNewAY(s => ({ ...s, board }))} className={`px-3 py-2 rounded-xl text-xs font-black transition-colors ${newAY.board === board ? 'bg-slate-900 text-white' : 'bg-slate-50 border border-slate-200 text-slate-600'}`}>
-                  {board}
-                </button>
-              ))}
-            </div>
-          </div>
+        <div className="bg-indigo-50 border border-indigo-200 rounded-2xl p-3">
+          <p className="text-xs font-bold text-indigo-700">
+            Naya academic year create karne ke liye "Year Closing Wizard" use karein.
+          </p>
         </div>
-        <button onClick={handleCreateAY} disabled={isSaving} className="w-full flex items-center justify-center gap-2 bg-slate-900 text-white font-black text-xs uppercase tracking-widest py-4 rounded-2xl active:scale-95 transition-transform shadow-lg disabled:opacity-60">
-          {isSaving ? 'Creating…' : <><Plus size={16} /> Create Academic Year</>}
-        </button>
+        <div className="space-y-3">
+          {academicYears.map(year => {
+            const locked = isYearLocked(year.id);
+            const isActive = year.isActive;
+            return (
+              <div
+                key={year.id}
+                className={`bg-white rounded-2xl border shadow-sm p-4 ${
+                  isActive ? 'border-emerald-300' : locked ? 'border-slate-200' : 'border-slate-100'
+                }`}
+              >
+                <div className="flex items-center justify-between">
+                  <div>
+                    <div className="flex items-center gap-2">
+                      <span className="font-black text-slate-900">{year.name}</span>
+                      {isActive && (
+                        <span className="text-[9px] font-black uppercase tracking-widest px-2 py-0.5 rounded-full bg-emerald-100 text-emerald-700">
+                          Active
+                        </span>
+                      )}
+                      {locked && !isActive && (
+                        <span className="text-[9px] font-black uppercase tracking-widest px-2 py-0.5 rounded-full bg-slate-100 text-slate-500 flex items-center gap-1">
+                          <Lock size={9} /> Locked
+                        </span>
+                      )}
+                    </div>
+                    <div className="text-[10px] font-bold text-slate-400 mt-1">
+                      {year.startDate} → {year.endDate} · {year.board}
+                    </div>
+                    {year.closedDate && (
+                      <div className="text-[10px] font-bold text-slate-400">
+                        Closed: {year.closedDate}
+                      </div>
+                    )}
+                  </div>
+                  {/* Status indicator */}
+                  <div
+                    className={`w-10 h-6 rounded-full flex items-center transition-all duration-300 ${
+                      isActive ? 'bg-emerald-500 justify-end' : 'bg-slate-200 justify-start'
+                    } px-1`}
+                  >
+                    <div className="w-4 h-4 bg-white rounded-full shadow-sm" />
+                  </div>
+                </div>
+              </div>
+            );
+          })}
+        </div>
       </div>
     </div>
   );
@@ -494,76 +419,6 @@ export const SettingsManager: React.FC<Props> = ({ onBack }) => {
       onSave={handleSaveFs}
       onBack={() => setView('FEE_STRUCT')}
     />
-  );
-
-  // PROMOTION VIEWS
-  if (view === 'PROMOTION') return (
-    <div className="absolute inset-0 z-50 bg-slate-50 flex flex-col animate-in slide-in-from-right-8 duration-300">
-      {renderHeader('Promotion')}
-      <div className="flex-1 overflow-y-auto p-4 pb-28 space-y-4">
-        <button onClick={() => setView('PROMOTION_WIZARD')} className="w-full flex items-center justify-center gap-2 bg-amber-600 text-white font-black text-xs uppercase tracking-widest py-3 rounded-2xl active:scale-95 transition-transform">
-          <Users size={14} /> Process Promotions
-        </button>
-        <div className="bg-amber-50 border border-amber-200 rounded-2xl p-4">
-          <p className="text-xs font-black text-amber-700">When a new academic year is created, use promotion workflow to mark failed, RTE, and transfer certificate students.</p>
-        </div>
-      </div>
-    </div>
-  );
-
-  if (view === 'PROMOTION_WIZARD') return (
-    <div className="absolute inset-0 z-50 bg-slate-50 flex flex-col animate-in slide-in-from-right-8 duration-300">
-      {renderHeader('Promotion Logic')}
-      <div className="flex-1 overflow-y-auto p-4 pb-28 space-y-4">
-        <div className="bg-white rounded-2xl border border-slate-100 shadow-sm p-4">
-          <p className="text-[10px] font-black uppercase tracking-widest text-slate-400 mb-3">System Rules</p>
-          {[
-            { label: 'Minimum Attendance for Promotion', val: '75%' },
-            { label: 'Minimum Pass Percentage', val: '33%' },
-            { label: 'Grace Marks', val: 'Up to 5 marks per subject' },
-            { label: 'Compartmental Policy', val: 'Max 2 subjects allowed' },
-          ].map(({ label, val }) => (
-            <div key={label} className="flex items-start justify-between gap-2 mb-3">
-              <span className="text-[11px] font-bold text-slate-500 flex-1">{label}</span>
-              <span className="text-[11px] font-black text-slate-900 text-right">{val}</span>
-            </div>
-          ))}
-        </div>
-
-        <div className="bg-white rounded-2xl border border-slate-100 shadow-sm p-4">
-          <p className="text-[10px] font-black uppercase tracking-widest text-slate-400 mb-4">Mark Student Status</p>
-          <div className="space-y-3">
-            {students.map(student => (
-              <div key={student.id} className="flex items-center justify-between p-3 bg-slate-50 rounded-xl">
-                <div>
-                  <div className="font-bold text-slate-800 text-sm">{student.name}</div>
-                  <div className="text-[10px] font-bold text-slate-400 mt-0.5">{student.className}-{student.section} · {student.attendancePercent}% attendance</div>
-                </div>
-                <div className="flex gap-1">
-                  {[
-                    { label: 'Failed', set: failedStudents, setSet: setFailedStudents },
-                    { label: 'RTE', set: rteStudents, setSet: setRteStudents },
-                    { label: 'TC', set: tcStudents, setSet: setTcStudents },
-                  ].map(({ label, set, setSet }) => (
-                    <button key={label} onClick={() => {
-                      const newSet = new Set(set);
-                      newSet.has(student.id) ? newSet.delete(student.id) : newSet.add(student.id);
-                      setSet(newSet);
-                    }} className={`px-2 py-1 rounded text-[9px] font-black uppercase ${set.has(student.id) ? 'bg-rose-600 text-white' : 'bg-slate-100 text-slate-600'}`}>
-                      {label}
-                    </button>
-                  ))}
-                </div>
-              </div>
-            ))}
-          </div>
-        </div>
-
-        <button onClick={handlePromoteStudents} disabled={isSaving} className="w-full flex items-center justify-center gap-2 bg-emerald-600 text-white font-black text-xs uppercase tracking-widest py-4 rounded-2xl active:scale-95 transition-transform shadow-lg disabled:opacity-60">
-          {isSaving ? 'Processing…' : <><Save size={16} /> Confirm Promotions</>}
-        </button>
-      </div>
-    </div>
   );
 
   // PAYMENTS VIEW
