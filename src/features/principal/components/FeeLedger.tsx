@@ -1,25 +1,11 @@
 import React, { useState, useEffect } from 'react';
 import { ArrowLeft, IndianRupee, CheckCircle2, AlertTriangle, Clock, X, ShieldCheck, Search, Filter, Printer, Banknote, Smartphone, CreditCard, Building2, FileCheck } from 'lucide-react';
-import { feeService, FeeInstallment, FeeStatus, FeeType } from '../../../services/fee.service';
+import { feeService, FeeInstallment, FeeStatus, FeeType, PaymentRecord } from '../../../services/fee.service';
 import { studentService } from '../../../services/student.service';
 import { useUIStore } from '../../../store/uiStore';
 
 type PaymentMethod = 'CASH' | 'UPI' | 'NET_BANKING' | 'CHEQUE' | 'ONLINE';
 
-interface PaymentTransaction {
-  id: string;
-  studentId: string;
-  studentName: string;
-  className: string;
-  admissionNo: string;
-  amount: number;
-  method: PaymentMethod;
-  date: string;
-  receiptNo: string;
-  installmentIds: string[];
-  installmentDetails: { month: string; feeType: FeeType; amount: number }[];
-  advanceAmount: number;
-}
 
 const METHOD_LABEL: Record<PaymentMethod, string> = {
   CASH: 'Cash',
@@ -103,8 +89,8 @@ export const FeeLedger: React.FC<Props> = ({ onBack }) => {
   const [search, setSearch] = useState('');
   const [showOnlyDue, setShowOnlyDue] = useState(false);
   const [paymentMethod, setPaymentMethod] = useState<PaymentMethod>('CASH');
-  const [paymentTransactions, setPaymentTransactions] = useState<PaymentTransaction[]>([]);
-  const [receiptModal, setReceiptModal] = useState<PaymentTransaction | null>(null);
+  const [paymentTransactions, setPaymentTransactions] = useState<PaymentRecord[]>(() => feeService.getPaymentHistory());
+  const [receiptModal, setReceiptModal] = useState<PaymentRecord | null>(null);
 
   useEffect(() => {
     studentService.getAll().then(all => {
@@ -157,23 +143,23 @@ export const FeeLedger: React.FC<Props> = ({ onBack }) => {
         }
       }
 
-      const receiptNo = `RCT-${new Date().getFullYear()}-${String(paymentTransactions.length + 1).padStart(4, '0')}`;
-      const tx: PaymentTransaction = {
+      const record: PaymentRecord = {
         id: `tx${Date.now()}`,
         studentId: selected.studentId,
         studentName: selected.name,
         className: selected.className,
         admissionNo: selected.admissionNo,
         amount,
-        method: paymentMethod,
+        method: METHOD_LABEL[paymentMethod],
         date: new Date().toISOString().split('T')[0],
-        receiptNo,
+        receiptNo: feeService.nextReceiptNo(),
         installmentIds: changedIds,
         installmentDetails: changedDetails,
         advanceAmount: result.advance,
       };
-      setPaymentTransactions(prev => [...prev, tx]);
-      setReceiptModal(tx);
+      feeService.addPaymentRecord(record);
+      setPaymentTransactions(feeService.getPaymentHistory());
+      setReceiptModal(record);
       setPayAmount('');
       setPayModal(false);
     }
@@ -221,7 +207,7 @@ export const FeeLedger: React.FC<Props> = ({ onBack }) => {
   };
 
   const getInstallmentReceipt = (installmentId: string) =>
-    paymentTransactions.slice().reverse().find(tx => tx.installmentIds.includes(installmentId)) ?? null;
+    feeService.getPaymentRecordByInstallmentId(installmentId);
 
   if (selected && mainView === 'DETAIL') {
     const parentSummary = feeService.getParentDueSummary(selected.studentId);
@@ -467,7 +453,7 @@ export const FeeLedger: React.FC<Props> = ({ onBack }) => {
                     { label: 'Student', val: receiptModal.studentName },
                     { label: 'Class', val: receiptModal.className },
                     { label: 'Admission No.', val: receiptModal.admissionNo },
-                    { label: 'Payment Method', val: METHOD_LABEL[receiptModal.method] },
+                    { label: 'Payment Method', val: receiptModal.method },
                   ].map(({ label, val }) => (
                     <div key={label} className="flex justify-between gap-2">
                       <span className="text-[10px] font-bold text-slate-400">{label}</span>
