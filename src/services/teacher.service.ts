@@ -1,4 +1,5 @@
 import { TeacherClass, AttendanceRecord, TestSchedule, TestResult, HomeworkItem, TeacherComplaint, ExamPaperRequest, GeneratedExamPaper } from '../types/teacher.types';
+import { sharedExamResults, PublishResultsInput } from './sharedExamResults';
 
 const MOCK_CLASSES: TeacherClass[] = [
   {
@@ -96,6 +97,11 @@ export const teacherService = {
     const test: TestSchedule = { ...input, id: `test${Date.now()}`, resultsUploaded: false };
     _tests = [test, ..._tests];
     return test;
+  },
+
+  async publishResults(payload: PublishResultsInput): Promise<void> {
+    sharedExamResults.publish(payload);
+    _tests = _tests.map(t => t.id === payload.testId ? { ...t, resultsUploaded: true } : t);
   },
 
   async getHomework(): Promise<HomeworkItem[]> {

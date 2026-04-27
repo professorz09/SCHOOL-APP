@@ -1,4 +1,5 @@
 import { TimetableDay, StudentExamResult, FeePaymentUpload, TransportStop, StudentNotice, StudentComplaint } from '../types/student.types';
+import { sharedExamResults } from './sharedExamResults';
 
 const TODAY = new Date().toISOString().split('T')[0];
 
@@ -81,6 +82,12 @@ export const studentDashboardService = {
   },
 
   async getResults(): Promise<StudentExamResult[]> {
+    const published = sharedExamResults.getForStudent('stu1');
+    if (published.length > 0) {
+      const publishedKeys = new Set(published.map(r => `${r.examName}_${r.subject}`));
+      const remaining = MOCK_RESULTS.filter(r => !publishedKeys.has(`${r.examName}_${r.subject}`));
+      return [...published, ...remaining];
+    }
     return [...MOCK_RESULTS];
   },
 
