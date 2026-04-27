@@ -1,4 +1,5 @@
 import React, { useState, useMemo, useEffect } from 'react';
+import { ToastContainer } from '../../../components/ui/Toast';
 import {
   Users, FileCheck2, ClipboardList, ScrollText, CircleAlert,
   TrendingUp, BookOpen, Calendar, IndianRupee, Bell, CalendarDays,
@@ -141,5 +142,6 @@ export const TeacherLayout: React.FC = () => {
         ))}
       </div>
     </div>
+    <ToastContainer />
   );
 };

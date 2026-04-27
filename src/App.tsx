@@ -7,7 +7,7 @@ import { PrincipalLayout } from './features/principal';
 import { SuperAdminLayout } from './features/super-admin';
 import { TeacherLayout } from './features/teacher';
 import { StudentLayout } from './features/student';
-import { DriverLayout } from './features/driver/DriverLayout';
+import { DriverLayout } from './features/driver';
 import { ProfileView } from './views/ProfileView';
 import { useAuthStore, restoreAuthSession } from './store/authStore';
 import { studentService } from './services/student.service';

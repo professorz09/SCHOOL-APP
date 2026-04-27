@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import { ArrowLeft, Trophy, TrendingUp } from 'lucide-react';
-import { studentDashboardService } from '../../../services/student.service2';
+import { studentDashboardService } from '../../../services/studentDashboard.service';
 import { StudentExamResult } from '../../../types/student.types';
 
 interface Props { onBack: () => void; }

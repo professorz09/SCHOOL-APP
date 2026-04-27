@@ -1,4 +1,5 @@
 import React, { useState, useMemo } from 'react';
+import { ToastContainer } from '../../../components/ui/Toast';
 import { TimetableView } from '../components/TimetableView';
 import { ResultsView } from '../components/ResultsView';
 import { FeesView } from '../components/FeesView';
@@ -243,5 +244,6 @@ export const StudentLayout: React.FC = () => {
         <ChevronRight size={16} className="text-violet-400" />
       </button>
     </div>
+    <ToastContainer />
   );
 };

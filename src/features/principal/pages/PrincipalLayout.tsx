@@ -1,4 +1,5 @@
 import React, { useState } from 'react';
+import { ToastContainer } from '../../../components/ui/Toast';
 import { PrincipalDashboard } from '../components/PrincipalDashboard';
 import { StudentsManager } from '../components/StudentsManager';
 import { StaffManager } from '../components/StaffManager';
@@ -61,5 +62,10 @@ export const PrincipalLayout: React.FC = () => {
   if (view === 'ATTENDANCE')       return <AttendanceHub          onBack={goBack} />;
   if (view === 'TRANSPORT_MGMT')   return <TransportManager       onBack={goBack} />;
 
-  return <PrincipalDashboard onNavigate={goTo} />;
+  return (
+    <>
+      <PrincipalDashboard onNavigate={goTo} />
+      <ToastContainer />
+    </>
+  );
 };
