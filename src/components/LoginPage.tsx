@@ -49,18 +49,16 @@ export const LoginPage: React.FC<Props> = ({ onLoginSuccess }) => {
   };
 
   return (
-    <div className="min-h-screen bg-gradient-to-br from-blue-600 to-blue-800 flex items-center justify-center sm:py-8 sm:px-4">
-      <div className="w-full h-screen sm:h-[850px] sm:max-w-[400px] bg-slate-50 relative sm:rounded-[40px] sm:border-[8px] border-slate-800 shadow-2xl flex flex-col overflow-hidden">
+    <div className="min-h-screen bg-gradient-to-br from-blue-600 to-blue-800 flex items-center justify-center p-4">
+      <div className="w-full max-w-sm bg-white rounded-2xl shadow-2xl overflow-hidden">
         {/* Header */}
-        <div className="bg-gradient-to-r from-blue-600 to-blue-700 px-6 pt-12 pb-8 text-white">
-          <div className="mb-2">
-            <div className="text-3xl font-black">SchoolApp</div>
-            <div className="text-xs font-bold text-blue-100">School Management System</div>
-          </div>
+        <div className="bg-gradient-to-r from-blue-600 to-blue-700 px-8 pt-10 pb-8 text-white">
+          <div className="text-3xl font-black">SchoolApp</div>
+          <div className="text-xs font-bold text-blue-100 mt-1">School Management System</div>
         </div>
 
         {/* Content */}
-        <div className="flex-1 overflow-y-auto flex flex-col p-6 pb-28 justify-center">
+        <div className="p-8">
           {/* Error Message */}
           {(localError || authError) && (
             <div className="bg-rose-50 border border-rose-200 rounded-xl p-3 mb-6 flex gap-2 items-start">
@@ -127,12 +125,11 @@ export const LoginPage: React.FC<Props> = ({ onLoginSuccess }) => {
               'Login'
             )}
           </button>
-
         </div>
 
         {/* Footer */}
-        <div className="bg-slate-100 px-6 py-4 text-center">
-          <div className="text-[10px] font-bold text-slate-500">
+        <div className="bg-slate-50 border-t border-slate-100 px-8 py-4 text-center">
+          <div className="text-[10px] font-bold text-slate-400">
             School Management System v1.0
           </div>
         </div>
