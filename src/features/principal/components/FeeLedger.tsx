@@ -156,6 +156,64 @@ export const FeeLedger: React.FC<Props> = ({ onBack }) => {
     }
   };
 
+  const handlePrintReceipt = (r: PaymentRecord) => {
+    const breakdown = r.installmentDetails.length > 0
+      ? `<table style="width:100%;border-collapse:collapse;margin:12px 0;">
+          <thead><tr><th style="text-align:left;font-size:10px;color:#64748b;padding:4px 0;border-bottom:1px solid #e2e8f0;">Month / Type</th><th style="text-align:right;font-size:10px;color:#64748b;padding:4px 0;border-bottom:1px solid #e2e8f0;">Amount</th></tr></thead>
+          <tbody>
+            ${r.installmentDetails.map(d => `<tr><td style="font-size:12px;padding:5px 0;border-bottom:1px solid #f1f5f9;">${d.month} · ${FEE_TYPE_LABEL[d.feeType]}</td><td style="text-align:right;font-size:12px;font-weight:700;padding:5px 0;border-bottom:1px solid #f1f5f9;">₹${d.amount.toLocaleString('en-IN')}</td></tr>`).join('')}
+            ${r.advanceAmount > 0 ? `<tr><td style="font-size:12px;color:#7c3aed;padding:5px 0;">Advance Credit</td><td style="text-align:right;font-size:12px;color:#7c3aed;font-weight:700;padding:5px 0;">₹${r.advanceAmount.toLocaleString('en-IN')}</td></tr>` : ''}
+          </tbody>
+        </table>`
+      : '';
+    const note = r.note ? `<div style="margin-top:12px;padding:10px 12px;background:#f8fafc;border:1px solid #e2e8f0;border-radius:8px;"><p style="font-size:10px;color:#94a3b8;font-weight:700;text-transform:uppercase;letter-spacing:.06em;margin:0 0 4px;">Note</p><p style="font-size:13px;color:#475569;margin:0;">${r.note}</p></div>` : '';
+    const html = `<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8"/>
+  <title>Fee Receipt – ${r.receiptNo}</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; font-family: 'Segoe UI', Arial, sans-serif; }
+    body { background: #fff; padding: 32px; max-width: 420px; margin: auto; color: #1e293b; }
+    .school { text-align: center; margin-bottom: 20px; padding-bottom: 16px; border-bottom: 2px dashed #e2e8f0; }
+    .school h1 { font-size: 18px; font-weight: 900; letter-spacing: .04em; text-transform: uppercase; }
+    .school p { font-size: 10px; color: #94a3b8; font-weight: 700; letter-spacing: .1em; text-transform: uppercase; margin-top: 4px; }
+    .badge { display: inline-block; margin-top: 8px; background: #d1fae5; color: #065f46; font-size: 11px; font-weight: 900; padding: 3px 14px; border-radius: 999px; }
+    .row { display: flex; justify-content: space-between; align-items: center; padding: 5px 0; border-bottom: 1px solid #f1f5f9; }
+    .row span:first-child { font-size: 11px; color: #64748b; font-weight: 600; }
+    .row span:last-child { font-size: 12px; font-weight: 800; color: #1e293b; }
+    .total { display: flex; justify-content: space-between; align-items: center; background: #1e293b; color: #fff; padding: 12px 16px; border-radius: 10px; margin-top: 14px; }
+    .total span:first-child { font-size: 12px; font-weight: 900; text-transform: uppercase; letter-spacing: .06em; }
+    .total span:last-child { font-size: 20px; font-weight: 900; }
+    .footer { margin-top: 24px; text-align: center; font-size: 10px; color: #94a3b8; border-top: 1px dashed #e2e8f0; padding-top: 12px; }
+  </style>
+</head>
+<body>
+  <div class="school">
+    <h1>EduGrow School</h1>
+    <p>Fee Receipt</p>
+    <div class="badge">PAID ✓</div>
+  </div>
+  <div class="row"><span>Receipt No.</span><span>${r.receiptNo}</span></div>
+  <div class="row"><span>Date</span><span>${r.date}</span></div>
+  <div class="row"><span>Student</span><span>${r.studentName}</span></div>
+  <div class="row"><span>Class</span><span>${r.className}</span></div>
+  <div class="row"><span>Adm. No.</span><span>${r.admissionNo}</span></div>
+  <div class="row"><span>Method</span><span>${r.method}</span></div>
+  ${breakdown}
+  <div class="total"><span>Total Paid</span><span>₹${r.amount.toLocaleString('en-IN')}</span></div>
+  ${note}
+  <div class="footer">EduGrow School Management System · Thank you</div>
+</body>
+</html>`;
+    const popup = window.open('', '_blank', 'width=500,height=700');
+    if (!popup) { showToast('Allow popups to print receipt', 'error'); return; }
+    popup.document.write(html);
+    popup.document.close();
+    popup.focus();
+    setTimeout(() => { popup.print(); popup.close(); }, 400);
+  };
+
   const handleGovtPayment = () => {
     if (!govtPayAmount || !govtRefNo.trim()) { showToast('Amount and reference number required', 'error'); return; }
     const amount = Number(govtPayAmount);
@@ -605,7 +663,7 @@ export const FeeLedger: React.FC<Props> = ({ onBack }) => {
               </div>
 
               <div className="flex gap-3">
-                <button onClick={() => window.print()} className="flex-1 py-3 bg-slate-100 text-slate-900 font-black rounded-xl">Print PDF</button>
+                <button onClick={() => handlePrintReceipt(receiptModal)} className="flex-1 py-3 bg-slate-100 text-slate-900 font-black rounded-xl flex items-center justify-center gap-2"><Printer size={15} /> Print PDF</button>
                 <button onClick={() => setReceiptModal(null)} className="flex-1 py-3 bg-indigo-600 text-white font-black rounded-xl">Close</button>
               </div>
             </div>
