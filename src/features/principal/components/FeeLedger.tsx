@@ -1,26 +1,25 @@
 import React, { useState, useEffect } from 'react';
-import { ArrowLeft, IndianRupee, CheckCircle2, AlertTriangle, Clock, X, ShieldCheck, Search, Filter, Printer, Banknote, Smartphone, CreditCard, Building2, FileCheck } from 'lucide-react';
+import {
+  ArrowLeft, IndianRupee, CheckCircle2, AlertTriangle, Clock, X,
+  ShieldCheck, Search, Printer, Banknote, Smartphone, CreditCard,
+  Building2, FileCheck, ChevronRight, Receipt, TrendingDown, Users, Filter,
+} from 'lucide-react';
 import { feeService, FeeInstallment, FeeStatus, FeeType, PaymentRecord } from '../../../services/fee.service';
 import { studentService } from '../../../services/student.service';
 import { useUIStore } from '../../../store/uiStore';
 
 type PaymentMethod = 'CASH' | 'UPI' | 'NET_BANKING' | 'CHEQUE' | 'ONLINE';
-
+type ListTab = 'ALL' | 'DUE' | 'CLEARED';
 
 const METHOD_LABEL: Record<PaymentMethod, string> = {
-  CASH: 'Cash',
-  UPI: 'UPI',
-  NET_BANKING: 'Net Banking',
-  CHEQUE: 'Cheque',
-  ONLINE: 'Online',
+  CASH: 'Cash', UPI: 'UPI', NET_BANKING: 'Net Banking', CHEQUE: 'Cheque', ONLINE: 'Online',
 };
-
 const METHOD_ICON: Record<PaymentMethod, React.ReactNode> = {
-  CASH: <Banknote size={16} />,
-  UPI: <Smartphone size={16} />,
-  NET_BANKING: <Building2 size={16} />,
-  CHEQUE: <FileCheck size={16} />,
-  ONLINE: <CreditCard size={16} />,
+  CASH:        <Banknote size={14} />,
+  UPI:         <Smartphone size={14} />,
+  NET_BANKING: <Building2 size={14} />,
+  CHEQUE:      <FileCheck size={14} />,
+  ONLINE:      <CreditCard size={14} />,
 };
 
 interface StudentFeeProfile {
@@ -32,67 +31,58 @@ interface StudentFeeProfile {
   isRte: boolean;
 }
 
-const statusColor: Record<FeeStatus, string> = {
+const STATUS_COLOR: Record<FeeStatus, string> = {
   PAID:    'bg-emerald-50 text-emerald-700 border-emerald-200',
   PARTIAL: 'bg-amber-50 text-amber-700 border-amber-200',
   UNPAID:  'bg-rose-50 text-rose-700 border-rose-200',
-  WAIVED:  'bg-slate-50 text-slate-500 border-slate-200',
+  WAIVED:  'bg-slate-100 text-slate-500 border-slate-200',
 };
-
-const statusIcon = (s: FeeStatus) => {
-  if (s === 'PAID')    return <CheckCircle2 size={12} className="text-emerald-500" />;
-  if (s === 'PARTIAL') return <AlertTriangle size={12} className="text-amber-500" />;
-  if (s === 'UNPAID')  return <Clock size={12} className="text-rose-500" />;
-  return <X size={12} className="text-slate-400" />;
+const STATUS_BAR: Record<FeeStatus, string> = {
+  PAID: 'bg-emerald-500', PARTIAL: 'bg-amber-400', UNPAID: 'bg-rose-400', WAIVED: 'bg-slate-300',
 };
-
-const feeTypeLabel = (type: FeeType) => {
-  if (type === 'TUITION') return 'Tuition Fee';
-  if (type === 'TRANSPORT') return 'Transport Fee';
-  if (type === 'EXAM') return 'Exam Fee';
-  return 'Other Fee';
+const STATUS_ICON = (s: FeeStatus) => {
+  if (s === 'PAID')    return <CheckCircle2 size={11} className="text-emerald-500" />;
+  if (s === 'PARTIAL') return <AlertTriangle size={11} className="text-amber-500" />;
+  if (s === 'UNPAID')  return <Clock size={11} className="text-rose-500" />;
+  return <X size={11} className="text-slate-400" />;
 };
-
-const feeTypeBadge = (type: FeeType) => {
-  if (type === 'TUITION') return 'bg-indigo-50 text-indigo-700';
-  if (type === 'TRANSPORT') return 'bg-orange-50 text-orange-700';
-  if (type === 'EXAM') return 'bg-violet-50 text-violet-700';
-  return 'bg-slate-50 text-slate-700';
+const FEE_TYPE_COLOR: Record<FeeType, string> = {
+  TUITION:   'bg-indigo-100 text-indigo-700',
+  TRANSPORT: 'bg-orange-100 text-orange-700',
+  EXAM:      'bg-violet-100 text-violet-700',
+  OTHER:     'bg-slate-100 text-slate-600',
 };
-
-const payerBadge = (payer: 'PARENT' | 'GOVERNMENT') => {
-  if (payer === 'GOVERNMENT') return 'bg-emerald-50 text-emerald-700 border-emerald-200';
-  return 'bg-blue-50 text-blue-700 border-blue-200';
-};
-
-const payerLabel = (payer: 'PARENT' | 'GOVERNMENT') => {
-  return payer === 'GOVERNMENT' ? 'RTE (Govt)' : 'Parent';
+const FEE_TYPE_LABEL: Record<FeeType, string> = {
+  TUITION: 'Tuition', TRANSPORT: 'Transport', EXAM: 'Exam', OTHER: 'Other',
 };
 
 interface Props { onBack: () => void; }
 
 export const FeeLedger: React.FC<Props> = ({ onBack }) => {
   const { showToast } = useUIStore();
-  const [students, setStudents] = useState<StudentFeeProfile[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [selected, setSelected] = useState<StudentFeeProfile | null>(null);
-  const [mainView, setMainView] = useState<'LIST' | 'DETAIL' | 'GOVT'>('LIST');
-  const [payModal, setPayModal] = useState<boolean>(false);
-  const [writeOffModal, setWriteOffModal] = useState<FeeInstallment | null>(null);
-  const [govtPayModal, setGovtPayModal] = useState<boolean>(false);
-  const [payAmount, setPayAmount] = useState('');
+  const [students, setStudents]       = useState<StudentFeeProfile[]>([]);
+  const [loading, setLoading]         = useState(true);
+  const [selected, setSelected]       = useState<StudentFeeProfile | null>(null);
+  const [listTab, setListTab]         = useState<ListTab>('ALL');
+  const [search, setSearch]           = useState('');
+  const [detailTab, setDetailTab]     = useState<'SCHEDULE' | 'HISTORY'>('SCHEDULE');
+
+  // Modal states
+  const [payModal, setPayModal]             = useState(false);
+  const [writeOffModal, setWriteOffModal]   = useState<FeeInstallment | null>(null);
+  const [govtPayModal, setGovtPayModal]     = useState(false);
+  const [receiptModal, setReceiptModal]     = useState<PaymentRecord | null>(null);
+
+  // Form states
+  const [payAmount, setPayAmount]           = useState('');
+  const [paymentMethod, setPaymentMethod]   = useState<PaymentMethod>('CASH');
+  const [paymentNote, setPaymentNote]       = useState('');
   const [writeOffAmount, setWriteOffAmount] = useState('');
   const [writeOffReason, setWriteOffReason] = useState('');
-  const [govtPayAmount, setGovtPayAmount] = useState('');
-  const [govtRefNo, setGovtRefNo] = useState('');
-  const [govtNote, setGovtNote] = useState('');
-  const [search, setSearch] = useState('');
-  const [showOnlyDue, setShowOnlyDue] = useState(false);
-  const [paymentMethod, setPaymentMethod] = useState<PaymentMethod>('CASH');
-  const [paymentNote, setPaymentNote] = useState('');
+  const [govtPayAmount, setGovtPayAmount]   = useState('');
+  const [govtRefNo, setGovtRefNo]           = useState('');
+  const [govtNote, setGovtNote]             = useState('');
   const [paymentTransactions, setPaymentTransactions] = useState<PaymentRecord[]>(() => feeService.getPaymentHistory());
-  const [receiptModal, setReceiptModal] = useState<PaymentRecord | null>(null);
-  const [studentDetailTab, setStudentDetailTab] = useState<'SCHEDULE' | 'HISTORY'>('SCHEDULE');
 
   useEffect(() => {
     studentService.getAll().then(all => {
@@ -104,18 +94,6 @@ export const FeeLedger: React.FC<Props> = ({ onBack }) => {
     });
   }, []);
 
-  const filtered = students.filter(s => {
-    const matchSearch = s.name.toLowerCase().includes(search.toLowerCase()) ||
-      s.admissionNo.toLowerCase().includes(search.toLowerCase()) ||
-      s.className.toLowerCase().includes(search.toLowerCase());
-    if (showOnlyDue) {
-      const parentDue = feeService.getParentDueSummary(s.studentId).total;
-      const govtDue = s.isRte ? feeService.getGovernmentDueSummary(s.studentId).total : 0;
-      return matchSearch && (parentDue > 0 || govtDue > 0);
-    }
-    return matchSearch;
-  });
-
   const updateStudent = (updated: StudentFeeProfile) => {
     setStudents(prev => prev.map(s => s.studentId === updated.studentId ? updated : s));
     setSelected(updated);
@@ -125,15 +103,11 @@ export const FeeLedger: React.FC<Props> = ({ onBack }) => {
     if (!selected || !payAmount) return;
     const amount = Number(payAmount);
     if (isNaN(amount) || amount <= 0) return;
-
     const prevInstallments = feeService.getStudentInstallments(selected.studentId).map(i => ({ ...i }));
-
     const result = feeService.recordPayment(selected.studentId, amount);
     if (result.applied > 0 || result.advance > 0) {
       const updated = feeService.getStudentFeeProfile(selected.studentId, selected.name, selected.className, selected.admissionNo, selected.isRte);
       updateStudent(updated);
-
-      // Determine which installments changed to PAID/PARTIAL
       const newInstallments = feeService.getStudentInstallments(selected.studentId);
       const changedIds: string[] = [];
       const changedDetails: { month: string; feeType: FeeType; amount: number }[] = [];
@@ -144,7 +118,6 @@ export const FeeLedger: React.FC<Props> = ({ onBack }) => {
           changedDetails.push({ month: newInst.month, feeType: newInst.feeType, amount: newInst.paidAmount - prev.paidAmount });
         }
       }
-
       const record: PaymentRecord = {
         id: `tx${Date.now()}`,
         studentId: selected.studentId,
@@ -183,354 +156,399 @@ export const FeeLedger: React.FC<Props> = ({ onBack }) => {
   };
 
   const handleGovtPayment = () => {
-    if (!govtPayAmount || !govtRefNo.trim()) {
-      showToast('Amount and reference number required', 'error');
-      return;
-    }
+    if (!govtPayAmount || !govtRefNo.trim()) { showToast('Amount and reference number required', 'error'); return; }
     const amount = Number(govtPayAmount);
-    if (isNaN(amount) || amount <= 0) {
-      showToast('Invalid amount', 'error');
-      return;
-    }
+    if (isNaN(amount) || amount <= 0) { showToast('Invalid amount', 'error'); return; }
     const rteStudents = students.filter(s => s.isRte).map(s => s.studentId);
-    if (rteStudents.length === 0) {
-      showToast('No RTE students found', 'error');
-      return;
-    }
+    if (rteStudents.length === 0) { showToast('No RTE students found', 'error'); return; }
     if (feeService.recordGovernmentPayment(rteStudents, amount, govtRefNo, govtNote)) {
-      const updated = students.map(s =>
-        feeService.getStudentFeeProfile(s.studentId, s.name, s.className, s.admissionNo, s.isRte)
-      );
-      setStudents(updated);
+      setStudents(students.map(s => feeService.getStudentFeeProfile(s.studentId, s.name, s.className, s.admissionNo, s.isRte)));
       setGovtPayModal(false);
       setGovtPayAmount('');
       setGovtRefNo('');
       setGovtNote('');
-      showToast('Government payment recorded successfully');
+      showToast('Government payment recorded');
     }
   };
 
-  const getInstallmentReceipt = (installmentId: string) =>
-    feeService.getPaymentRecordByInstallmentId(installmentId);
+  // ─── Loading ─────────────────────────────────────────────────────────────────
+  if (loading) return (
+    <div className="absolute inset-0 z-50 bg-slate-50 flex items-center justify-center">
+      <div className="w-8 h-8 border-2 border-slate-200 border-t-blue-600 rounded-full animate-spin" />
+    </div>
+  );
 
-  if (selected && mainView === 'DETAIL') {
-    const parentSummary = feeService.getParentDueSummary(selected.studentId);
-    const govtSummary = selected.isRte ? feeService.getGovernmentDueSummary(selected.studentId) : { tuition: 0, total: 0 };
+  // ─── Derived data ─────────────────────────────────────────────────────────────
+  const getParentDue  = (id: string) => feeService.getParentDueSummary(id);
+  const getGovtDue    = (id: string) => feeService.getGovernmentDueSummary(id);
+  const hasDue = (s: StudentFeeProfile) => {
+    const pd = getParentDue(s.studentId).total;
+    const gd = s.isRte ? getGovtDue(s.studentId).total : 0;
+    return pd > 0 || gd > 0;
+  };
+
+  const searchMatch = (s: StudentFeeProfile) =>
+    s.name.toLowerCase().includes(search.toLowerCase()) ||
+    s.admissionNo.toLowerCase().includes(search.toLowerCase()) ||
+    s.className.toLowerCase().includes(search.toLowerCase());
+
+  const dueStudents     = students.filter(s => hasDue(s));
+  const clearedStudents = students.filter(s => !hasDue(s));
+  const totalParentDue  = dueStudents.reduce((a, s) => a + getParentDue(s.studentId).total, 0);
+  const totalGovtDue    = dueStudents.filter(s => s.isRte).reduce((a, s) => a + getGovtDue(s.studentId).total, 0);
+  const totalCollected  = students.reduce((a, s) => {
+    return a + s.installments.reduce((b, i) => b + i.paidAmount, 0);
+  }, 0);
+
+  const visibleStudents = students.filter(s => {
+    if (!searchMatch(s)) return false;
+    if (listTab === 'DUE')     return hasDue(s);
+    if (listTab === 'CLEARED') return !hasDue(s);
+    return true;
+  });
+
+  // ─── DETAIL VIEW ─────────────────────────────────────────────────────────────
+  if (selected) {
+    const parentSummary = getParentDue(selected.studentId);
+    const govtSummary   = selected.isRte ? getGovtDue(selected.studentId) : { tuition: 0, total: 0 };
+    const advance       = feeService.getAdvanceBalance(selected.studentId);
+    const totalDue      = selected.installments.reduce((a, i) => a + i.amount, 0);
+    const totalPaid     = selected.installments.reduce((a, i) => a + i.paidAmount, 0);
+    const pct           = totalDue > 0 ? Math.round((totalPaid / totalDue) * 100) : 100;
 
     return (
       <div className="absolute inset-0 z-50 bg-slate-50 flex flex-col animate-in slide-in-from-right-8 duration-300">
-        <div className="bg-white border-b border-slate-100 px-4 pt-4 pb-4 shadow-sm">
-          <div className="flex items-center gap-3 mb-3">
-            <button onClick={() => { setSelected(null); setMainView('LIST'); }} className="p-2 -ml-2 bg-slate-100 rounded-full">
-              <ArrowLeft size={20} className="text-slate-600" />
+        {/* Header */}
+        <div className="bg-white border-b border-slate-100 px-4 pt-4 pb-4 shadow-sm sticky top-0 z-10">
+          <div className="flex items-center gap-3 mb-4">
+            <button onClick={() => setSelected(null)} className="p-2 -ml-2 bg-slate-100 rounded-full text-slate-600">
+              <ArrowLeft size={20} />
             </button>
-            <div className="flex-1">
+            <div className="flex-1 min-w-0">
               <div className="flex items-center gap-2">
-                <h2 className="text-xl font-black text-slate-900">{selected.name}</h2>
-                {selected.isRte && <ShieldCheck size={14} className="text-emerald-600" />}
+                <span className="font-black text-slate-900 text-lg truncate">{selected.name}</span>
+                {selected.isRte && <span className="flex items-center gap-0.5 text-[9px] font-black bg-emerald-100 text-emerald-700 px-2 py-0.5 rounded-full"><ShieldCheck size={9} /> RTE</span>}
               </div>
               <p className="text-[10px] font-bold text-slate-400">{selected.className} · {selected.admissionNo}</p>
             </div>
+            {/* Collect button */}
+            <button onClick={() => setPayModal(true)}
+              className="flex items-center gap-1.5 bg-emerald-600 text-white text-[10px] font-black px-3 py-2 rounded-xl shadow-sm active:scale-95 transition-transform">
+              <IndianRupee size={12} /> Collect
+            </button>
           </div>
 
-          {/* Summary split: Parent vs Government */}
-          <div className="space-y-2">
-            {/* Parent Due */}
-            <div className="grid grid-cols-3 gap-2">
-              {[
-                { label: 'Tuition (Parent)', val: `₹${parentSummary.tuition.toLocaleString()}`, color: 'text-blue-600' },
-                { label: 'Transport', val: `₹${parentSummary.transport.toLocaleString()}`, color: 'text-orange-600' },
-                { label: 'Parent Total', val: `₹${parentSummary.total.toLocaleString()}`, color: parentSummary.total > 0 ? 'text-rose-600' : 'text-emerald-600' },
-              ].map(({ label, val, color }) => (
-                <div key={label} className="bg-slate-50 rounded-xl p-3 text-center">
-                  <div className={`text-base font-black ${color}`}>{val}</div>
-                  <div className="text-[9px] font-black uppercase tracking-widest text-slate-400 mt-0.5">{label}</div>
-                </div>
-              ))}
+          {/* Summary tiles */}
+          <div className="grid grid-cols-3 gap-2 mb-3">
+            <div className="bg-slate-50 rounded-xl p-2.5 text-center">
+              <div className="text-base font-black text-slate-900">₹{totalPaid.toLocaleString('en-IN')}</div>
+              <div className="text-[9px] font-black text-slate-400 uppercase tracking-widest mt-0.5">Collected</div>
             </div>
-            {/* Advance Balance */}
-            {feeService.getAdvanceBalance(selected.studentId) > 0 && (
-              <div className="bg-violet-50 border border-violet-200 rounded-xl p-3 flex items-center justify-between">
-                <div>
-                  <div className="text-[9px] font-black uppercase tracking-widest text-violet-500">Advance Credit</div>
-                  <div className="text-[10px] font-bold text-violet-700 mt-0.5">Will auto-adjust to next due</div>
-                </div>
-                <div className="text-base font-black text-violet-700">
-                  ₹{feeService.getAdvanceBalance(selected.studentId).toLocaleString()}
-                </div>
+            <div className="bg-rose-50 rounded-xl p-2.5 text-center">
+              <div className="text-base font-black text-rose-600">₹{parentSummary.total.toLocaleString('en-IN')}</div>
+              <div className="text-[9px] font-black text-slate-400 uppercase tracking-widest mt-0.5">Parent Due</div>
+            </div>
+            {selected.isRte ? (
+              <div className="bg-emerald-50 rounded-xl p-2.5 text-center">
+                <div className="text-base font-black text-emerald-600">₹{govtSummary.total.toLocaleString('en-IN')}</div>
+                <div className="text-[9px] font-black text-slate-400 uppercase tracking-widest mt-0.5">Govt Due</div>
               </div>
-            )}
-            {/* Government Due (RTE only) */}
-            {selected.isRte && (
-              <div className="grid grid-cols-2 gap-2">
-                {[
-                  { label: 'Tuition (Govt)', val: `₹${govtSummary.tuition.toLocaleString()}`, color: 'text-emerald-600' },
-                  { label: 'Govt Total', val: `₹${govtSummary.total.toLocaleString()}`, color: govtSummary.total > 0 ? 'text-amber-600' : 'text-slate-600' },
-                ].map(({ label, val, color }) => (
-                  <div key={label} className="bg-emerald-50 rounded-xl p-3 text-center border border-emerald-100">
-                    <div className={`text-base font-black ${color}`}>{val}</div>
-                    <div className="text-[9px] font-black uppercase tracking-widest text-slate-400 mt-0.5">{label}</div>
-                  </div>
-                ))}
+            ) : (
+              <div className="bg-indigo-50 rounded-xl p-2.5 text-center">
+                <div className="text-base font-black text-indigo-600">{pct}%</div>
+                <div className="text-[9px] font-black text-slate-400 uppercase tracking-widest mt-0.5">Paid</div>
               </div>
             )}
           </div>
+
+          {/* Progress bar */}
+          <div className="h-2 bg-slate-100 rounded-full overflow-hidden">
+            <div className={`h-full rounded-full transition-all ${pct === 100 ? 'bg-emerald-500' : 'bg-blue-500'}`} style={{ width: `${pct}%` }} />
+          </div>
+
+          {/* Advance credit */}
+          {advance > 0 && (
+            <div className="mt-2 flex items-center justify-between bg-violet-50 border border-violet-200 rounded-xl px-3 py-2">
+              <span className="text-[10px] font-black text-violet-600">Advance Credit</span>
+              <span className="text-sm font-black text-violet-700">₹{advance.toLocaleString('en-IN')}</span>
+            </div>
+          )}
+        </div>
+
+        {/* Tab bar */}
+        <div className="bg-white border-b border-slate-100 px-4 flex gap-5">
+          {(['SCHEDULE', 'HISTORY'] as const).map(t => (
+            <button key={t} onClick={() => setDetailTab(t)}
+              className={`py-3 text-[10px] font-black uppercase tracking-widest border-b-2 transition-colors ${detailTab === t ? 'border-blue-600 text-blue-600' : 'border-transparent text-slate-400'}`}>
+              {t === 'SCHEDULE' ? 'Fee Schedule' : 'Payment History'}
+            </button>
+          ))}
+          {selected.isRte && (
+            <button onClick={() => setGovtPayModal(true)}
+              className="ml-auto my-2 flex items-center gap-1 bg-blue-50 text-blue-700 text-[10px] font-black px-3 py-1.5 rounded-xl border border-blue-200 active:scale-95 transition-transform">
+              <ShieldCheck size={11} /> Govt Pay
+            </button>
+          )}
         </div>
 
         <div className="flex-1 overflow-y-auto p-4 pb-28 space-y-3">
-          {/* Tabs */}
-          <div className="flex border-b border-slate-200 gap-4">
-            <button onClick={() => setStudentDetailTab('SCHEDULE')}
-              className={`py-3 text-[10px] font-black uppercase tracking-widest border-b-2 transition-colors ${studentDetailTab === 'SCHEDULE' ? 'border-blue-600 text-blue-600' : 'border-transparent text-slate-400'}`}>
-              Fee Schedule
-            </button>
-            <button onClick={() => setStudentDetailTab('HISTORY')}
-              className={`py-3 text-[10px] font-black uppercase tracking-widest border-b-2 transition-colors ${studentDetailTab === 'HISTORY' ? 'border-emerald-600 text-emerald-600' : 'border-transparent text-slate-400'}`}>
-              Payment History
-            </button>
-          </div>
 
-          {/* Fee Schedule Tab */}
-          {studentDetailTab === 'SCHEDULE' && (
-          <div className="space-y-3">
-            <div className="flex gap-2 flex-wrap">
-              <button onClick={() => setPayModal(true)}
-                className="flex items-center gap-1.5 bg-emerald-600 text-white text-[10px] font-black px-3 py-1.5 rounded-full">
-                <IndianRupee size={11} /> Parent Pay
-              </button>
-              {selected.isRte && (
-                <button onClick={() => setGovtPayModal(true)}
-                  className="flex items-center gap-1.5 bg-blue-600 text-white text-[10px] font-black px-3 py-1.5 rounded-full">
-                  <IndianRupee size={11} /> Govt Pay
-                </button>
-              )}
-            </div>
-
-            {selected.installments
+          {/* ── FEE SCHEDULE ─────────────────────────────────────────────── */}
+          {detailTab === 'SCHEDULE' && selected.installments
             .sort((a, b) => new Date(a.dueDate).getTime() - new Date(b.dueDate).getTime())
             .map(inst => {
               const due = inst.amount - inst.paidAmount - inst.writeOffAmount;
+              const receipt = feeService.getPaymentRecordByInstallmentId(inst.id);
               return (
                 <div key={inst.id} className="bg-white rounded-2xl border border-slate-100 shadow-sm overflow-hidden">
-                  <div className="flex items-center gap-3 p-3.5">
-                    <div className="flex-1">
-                      <div className="flex items-center gap-2 mb-1">
-                        <div className="font-extrabold text-slate-900 text-sm">{inst.month}</div>
-                        <div className={`text-[8px] font-black px-2 py-0.5 rounded-full ${feeTypeBadge(inst.feeType)}`}>
-                          {feeTypeLabel(inst.feeType).split(' ')[0]}
+                  {/* Status left strip */}
+                  <div className="flex">
+                    <div className={`w-1 shrink-0 ${STATUS_BAR[inst.status]}`} />
+                    <div className="flex-1 p-4">
+                      <div className="flex items-start justify-between gap-2">
+                        <div className="flex-1">
+                          <div className="flex items-center gap-2 mb-1 flex-wrap">
+                            <span className="font-extrabold text-slate-900 text-sm">{inst.month}</span>
+                            <span className={`text-[8px] font-black px-2 py-0.5 rounded-full ${FEE_TYPE_COLOR[inst.feeType]}`}>
+                              {FEE_TYPE_LABEL[inst.feeType]}
+                            </span>
+                            {inst.payerType === 'GOVERNMENT' && (
+                              <span className="text-[8px] font-black px-2 py-0.5 rounded-full bg-emerald-50 text-emerald-700">
+                                RTE
+                              </span>
+                            )}
+                          </div>
+                          <div className="text-[10px] font-bold text-slate-400">Due: {inst.dueDate}</div>
+                          {inst.writeOffReason && (
+                            <div className="text-[9px] font-bold text-slate-400 mt-0.5 italic">Waived: {inst.writeOffReason}</div>
+                          )}
                         </div>
-                        <div className={`text-[8px] font-black px-2 py-0.5 rounded border ${payerBadge(inst.payerType)}`}>
-                          {payerLabel(inst.payerType)}
+                        <div className="text-right shrink-0">
+                          <div className="font-black text-slate-900">₹{inst.amount.toLocaleString('en-IN')}</div>
+                          {inst.paidAmount > 0 && <div className="text-[10px] font-bold text-emerald-600">Paid ₹{inst.paidAmount.toLocaleString('en-IN')}</div>}
+                          {inst.writeOffAmount > 0 && <div className="text-[10px] font-bold text-slate-400">Waived ₹{inst.writeOffAmount.toLocaleString('en-IN')}</div>}
+                          {due > 0 && <div className="text-[10px] font-bold text-rose-500">Due ₹{due.toLocaleString('en-IN')}</div>}
                         </div>
                       </div>
-                      <div className="text-[10px] font-bold text-slate-400">Due: {inst.dueDate}</div>
+
+                      <div className="flex items-center gap-2 mt-2 flex-wrap">
+                        <span className={`flex items-center gap-1 text-[9px] font-black px-2 py-0.5 rounded-full border ${STATUS_COLOR[inst.status]}`}>
+                          {STATUS_ICON(inst.status)} {inst.status}
+                        </span>
+                        {receipt && (
+                          <button onClick={() => setReceiptModal(receipt)}
+                            className="flex items-center gap-1 text-[9px] font-black text-indigo-600 px-2 py-0.5 rounded-full border border-indigo-200 bg-indigo-50">
+                            <Printer size={9} /> Receipt
+                          </button>
+                        )}
+                        {inst.status !== 'PAID' && inst.status !== 'WAIVED' && due > 0 && (
+                          <button onClick={() => setWriteOffModal(inst)}
+                            className="flex items-center gap-1 text-[9px] font-black text-slate-400 px-2 py-0.5 rounded-full border border-slate-200">
+                            <TrendingDown size={9} /> Write-off
+                          </button>
+                        )}
+                      </div>
                     </div>
-                    <div className="text-right">
-                      <div className="font-black text-slate-900">₹{inst.amount.toLocaleString()}</div>
-                      {inst.paidAmount > 0 && <div className="text-[10px] font-bold text-emerald-600">Paid: ₹{inst.paidAmount.toLocaleString()}</div>}
-                      {inst.writeOffAmount > 0 && <div className="text-[10px] font-bold text-slate-400">Waived: ₹{inst.writeOffAmount.toLocaleString()}</div>}
-                    </div>
-                  </div>
-                  <div className="flex items-center gap-2 px-3.5 pb-3 flex-wrap">
-                    <div className={`flex items-center gap-1.5 text-[10px] font-black px-2.5 py-1 rounded-full border ${statusColor[inst.status]}`}>
-                      {statusIcon(inst.status)} {inst.status}
-                    </div>
-                    {inst.status === 'PAID' && (() => {
-                      const receipt = getInstallmentReceipt(inst.id);
-                      return receipt ? (
-                        <button onClick={() => setReceiptModal(receipt)}
-                          className="flex items-center gap-1 text-[9px] font-black text-indigo-600 px-2.5 py-1 rounded-full border border-indigo-200 bg-indigo-50">
-                          <Printer size={10} /> Receipt
-                        </button>
-                      ) : null;
-                    })()}
-                    {inst.status !== 'PAID' && inst.status !== 'WAIVED' && due > 0 && (
-                      <button onClick={() => setWriteOffModal(inst)}
-                        className="flex items-center gap-1 text-[9px] font-black text-slate-400 px-2.5 py-1 rounded-full border border-slate-200 hover:border-slate-300">
-                        Write-off
-                      </button>
-                    )}
-                    {inst.writeOffReason && (
-                      <span className="text-[9px] font-bold text-slate-400 truncate max-w-[150px]">
-                        {inst.writeOffReason}
-                      </span>
-                    )}
                   </div>
                 </div>
               );
-            })}
-          </div>
-          )}
+            })
+          }
 
-          {/* Payment History Tab */}
-          {studentDetailTab === 'HISTORY' && (
-            <div className="space-y-3">
-              {paymentTransactions.filter(t => t.studentId === selected.studentId).length === 0 ? (
-                <div className="flex flex-col items-center py-8 text-slate-400">
-                  <Receipt size={32} className="mb-3 opacity-40" />
-                  <p className="font-bold text-sm">No payment history</p>
+          {/* ── PAYMENT HISTORY ───────────────────────────────────────────── */}
+          {detailTab === 'HISTORY' && (() => {
+            const txns = paymentTransactions.filter(t => t.studentId === selected.studentId)
+              .sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
+            if (txns.length === 0) return (
+              <div className="flex flex-col items-center py-16 text-slate-400">
+                <Receipt size={32} className="mb-3 opacity-40" />
+                <p className="font-bold text-sm">No payments yet</p>
+              </div>
+            );
+            return txns.map(txn => (
+              <button key={txn.id} onClick={() => setReceiptModal(txn)}
+                className="w-full text-left bg-white rounded-2xl border border-slate-100 shadow-sm p-4 active:scale-[0.98] transition-transform">
+                <div className="flex items-center justify-between mb-1">
+                  <div>
+                    <div className="font-extrabold text-slate-900 text-sm">{txn.date}</div>
+                    <div className="text-[10px] font-bold text-slate-400">{txn.method} · #{txn.receiptNo}</div>
+                  </div>
+                  <div className="text-right">
+                    <div className="font-black text-emerald-600 text-base">₹{txn.amount.toLocaleString('en-IN')}</div>
+                    {txn.note && <div className="text-[9px] font-bold text-slate-400 truncate max-w-[120px]">{txn.note}</div>}
+                  </div>
                 </div>
-              ) : (
-                paymentTransactions
-                  .filter(t => t.studentId === selected.studentId)
-                  .sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime())
-                  .map(txn => (
-                    <button key={txn.id} onClick={() => setReceiptModal(txn)}
-                      className="w-full text-left bg-white rounded-2xl border border-slate-100 shadow-sm p-4 active:scale-[0.98] transition-transform">
-                      <div className="flex items-center justify-between mb-2">
-                        <div>
-                          <div className="font-extrabold text-slate-900 text-sm">{txn.date}</div>
-                          <div className="text-[10px] font-bold text-slate-400 mt-0.5">{txn.method} · Receipt: {txn.receiptNo}</div>
-                        </div>
-                        <div className="text-right">
-                          <div className="font-black text-emerald-600 text-base">₹{txn.amount.toLocaleString('en-IN')}</div>
-                          {txn.note && <div className="text-[9px] font-bold text-slate-400 mt-0.5 truncate max-w-[120px]">{txn.note}</div>}
-                        </div>
-                      </div>
-                      {txn.installmentDetails.length > 0 && (
-                        <div className="text-[9px] font-bold text-slate-500 mt-2">
-                          Applied to: {txn.installmentDetails.map(d => d.month).join(', ')}
-                        </div>
-                      )}
-                    </button>
-                  ))
-              )}
-            </div>
-          )}
+                {txn.installmentDetails.length > 0 && (
+                  <div className="text-[9px] font-bold text-slate-400 mt-1.5">
+                    → {txn.installmentDetails.map(d => d.month).join(', ')}
+                  </div>
+                )}
+              </button>
+            ));
+          })()}
         </div>
 
-        {/* Pay Modal */}
+        {/* ── PAY MODAL ────────────────────────────────────────────────────── */}
         {payModal && (
-          <div className="absolute inset-0 bg-slate-900/50 backdrop-blur-sm z-50 flex items-end">
+          <div className="absolute inset-0 bg-slate-900/60 backdrop-blur-sm z-50 flex items-end">
             <div className="w-full bg-white rounded-t-3xl p-6 pb-8 animate-in slide-in-from-bottom-8">
-              <div className="flex justify-between items-center mb-4">
-                <h3 className="text-lg font-black text-slate-900">Collect Payment</h3>
-                <button onClick={() => { setPayModal(false); setPayAmount(''); }} className="w-8 h-8 bg-slate-100 rounded-full flex items-center justify-center text-slate-500">✕</button>
+              <div className="flex justify-between items-center mb-5">
+                <div>
+                  <h3 className="text-lg font-black text-slate-900">Collect Payment</h3>
+                  <p className="text-[10px] font-bold text-slate-400">{selected.name} · {selected.className}</p>
+                </div>
+                <button onClick={() => { setPayModal(false); setPayAmount(''); }}
+                  className="w-8 h-8 bg-slate-100 rounded-full flex items-center justify-center text-slate-500">
+                  <X size={16} />
+                </button>
               </div>
 
-              {/* Payment Method Selection */}
-              <p className="text-[10px] font-black uppercase tracking-widest text-slate-400 mb-2">Payment Method</p>
+              {/* Method pills */}
+              <p className="text-[10px] font-black uppercase tracking-widest text-slate-400 mb-2">Method</p>
               <div className="flex gap-2 flex-wrap mb-4">
-                {(Object.keys(METHOD_LABEL) as PaymentMethod[]).map(method => (
-                  <button key={method} onClick={() => setPaymentMethod(method)}
-                    className={`flex items-center gap-1.5 px-3 py-2 rounded-xl text-[10px] font-black uppercase tracking-wider border transition-colors ${
-                      paymentMethod === method
-                        ? 'bg-indigo-600 text-white border-indigo-600'
-                        : 'bg-slate-50 text-slate-600 border-slate-200'
-                    }`}>
-                    {METHOD_ICON[method]} {METHOD_LABEL[method]}
+                {(Object.keys(METHOD_LABEL) as PaymentMethod[]).map(m => (
+                  <button key={m} onClick={() => setPaymentMethod(m)}
+                    className={`flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-[10px] font-black border transition-colors ${paymentMethod === m ? 'bg-indigo-600 text-white border-indigo-600' : 'bg-slate-50 text-slate-600 border-slate-200'}`}>
+                    {METHOD_ICON[m]} {METHOD_LABEL[m]}
                   </button>
                 ))}
               </div>
 
+              {/* Amount */}
               <p className="text-[10px] font-black uppercase tracking-widest text-slate-400 mb-2">Amount Received</p>
-              <div className="bg-slate-50 border border-slate-200 rounded-xl p-3 flex items-center gap-2 mb-4">
-                <IndianRupee size={16} className="text-slate-400" />
+              <div className="bg-slate-50 border border-slate-200 rounded-xl p-3 flex items-center gap-2 mb-1">
+                <IndianRupee size={20} className="text-slate-400 shrink-0" />
                 <input type="number" value={payAmount} onChange={e => setPayAmount(e.target.value)}
-                  placeholder="Enter amount received"
-                  className="flex-1 bg-transparent font-black text-slate-900 text-lg outline-none" />
+                  placeholder="0" className="flex-1 bg-transparent font-black text-slate-900 text-2xl outline-none" />
               </div>
-              {feeService.getAdvanceBalance(selected?.studentId ?? '') > 0 && (
-                <div className="bg-violet-50 border border-violet-200 rounded-xl px-3 py-2 flex items-center justify-between mb-3">
-                  <span className="text-[10px] font-black text-violet-600 uppercase tracking-wide">Existing Advance Credit</span>
-                  <span className="text-sm font-black text-violet-700">₹{feeService.getAdvanceBalance(selected?.studentId ?? '').toLocaleString()}</span>
+              {advance > 0 && (
+                <div className="flex items-center justify-between bg-violet-50 border border-violet-200 rounded-xl px-3 py-2 mb-3">
+                  <span className="text-[10px] font-black text-violet-600">Advance Credit</span>
+                  <span className="text-sm font-black text-violet-700">₹{advance.toLocaleString('en-IN')}</span>
                 </div>
               )}
-              <p className="text-[11px] font-bold text-slate-400 mb-4">
-                Allocated oldest dues first. Any excess is stored as advance credit for future months.
-              </p>
+              <p className="text-[10px] font-bold text-slate-400 mb-3">Auto-allocated to oldest dues first. Excess stored as advance credit.</p>
+
               <textarea value={paymentNote} onChange={e => setPaymentNote(e.target.value)}
-                rows={2} placeholder="Optional note (e.g. reminder to submit docs, special arrangement)…"
-                className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-3 text-sm font-bold text-slate-900 outline-none focus:border-blue-500 resize-none mb-4" />
-              <button onClick={handlePayment}
-                disabled={!payAmount}
-                className="w-full py-3 bg-emerald-600 text-white font-black rounded-xl disabled:opacity-40">
-                Collect & Generate Receipt
+                rows={2} placeholder="Note (optional)…"
+                className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-2.5 text-sm font-bold text-slate-900 outline-none focus:border-blue-500 resize-none mb-4" />
+              <button onClick={handlePayment} disabled={!payAmount}
+                className="w-full py-3.5 bg-emerald-600 text-white font-black rounded-xl disabled:opacity-40 flex items-center justify-center gap-2">
+                <CheckCircle2 size={16} /> Collect & Generate Receipt
               </button>
             </div>
           </div>
         )}
 
-        {/* Write-off Modal */}
+        {/* ── WRITE-OFF MODAL ───────────────────────────────────────────────── */}
         {writeOffModal && (
-          <div className="absolute inset-0 bg-slate-900/50 backdrop-blur-sm z-50 flex items-end">
+          <div className="absolute inset-0 bg-slate-900/60 backdrop-blur-sm z-50 flex items-end">
             <div className="w-full bg-white rounded-t-3xl p-6 pb-8 animate-in slide-in-from-bottom-8">
               <div className="flex justify-between items-center mb-4">
                 <h3 className="text-lg font-black text-slate-900">Fee Write-Off</h3>
-                <button onClick={() => setWriteOffModal(null)} className="w-8 h-8 bg-slate-100 rounded-full flex items-center justify-center text-slate-500">✕</button>
+                <button onClick={() => setWriteOffModal(null)} className="w-8 h-8 bg-slate-100 rounded-full flex items-center justify-center">
+                  <X size={16} className="text-slate-500" />
+                </button>
               </div>
               <div className="bg-amber-50 border border-amber-200 rounded-xl p-3 mb-4">
                 <p className="text-xs font-bold text-amber-700">
-                  {feeTypeLabel(writeOffModal.feeType)} for {writeOffModal.month}. Remaining due: ₹{(writeOffModal.amount - writeOffModal.paidAmount).toLocaleString()}.
+                  {FEE_TYPE_LABEL[writeOffModal.feeType]} · {writeOffModal.month} · Remaining: ₹{(writeOffModal.amount - writeOffModal.paidAmount).toLocaleString('en-IN')}
                 </p>
               </div>
               <div className="bg-slate-50 border border-slate-200 rounded-xl p-3 flex items-center gap-2 mb-4">
                 <IndianRupee size={16} className="text-slate-400" />
                 <input type="number" value={writeOffAmount} onChange={e => setWriteOffAmount(e.target.value)}
-                  placeholder="Amount to write off"
+                  placeholder="Amount to waive (leave blank for full)"
                   className="flex-1 bg-transparent font-black text-slate-900 text-lg outline-none" />
               </div>
               <textarea value={writeOffReason} onChange={e => setWriteOffReason(e.target.value)}
-                rows={3} placeholder="Reason for write-off (required)..."
+                rows={3} placeholder="Reason for write-off (required)…"
                 className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-3 text-sm font-bold text-slate-900 outline-none focus:border-blue-500 resize-none mb-4" />
-              <button onClick={handleWriteOff}
-                disabled={!writeOffReason.trim()}
-                className="w-full py-3 bg-rose-600 text-white font-black rounded-xl disabled:opacity-40">
+              <button onClick={handleWriteOff} disabled={!writeOffReason.trim()}
+                className="w-full py-3.5 bg-rose-600 text-white font-black rounded-xl disabled:opacity-40">
                 Confirm Write-Off
               </button>
             </div>
           </div>
         )}
 
-        {/* Receipt Modal */}
+        {/* ── GOVT PAY MODAL ─────────────────────────────────────────────────── */}
+        {govtPayModal && (
+          <div className="absolute inset-0 bg-slate-900/60 backdrop-blur-sm z-50 flex items-end">
+            <div className="w-full bg-white rounded-t-3xl p-6 pb-8 animate-in slide-in-from-bottom-8">
+              <div className="flex justify-between items-center mb-3">
+                <div>
+                  <h3 className="text-lg font-black text-slate-900">RTE Government Payment</h3>
+                  <p className="text-[10px] font-bold text-slate-400">Allocated to all RTE students' oldest dues first</p>
+                </div>
+                <button onClick={() => setGovtPayModal(false)} className="w-8 h-8 bg-slate-100 rounded-full flex items-center justify-center">
+                  <X size={16} className="text-slate-500" />
+                </button>
+              </div>
+              <div className="bg-slate-50 border border-slate-200 rounded-xl p-3 flex items-center gap-2 mb-4 mt-4">
+                <IndianRupee size={20} className="text-slate-400 shrink-0" />
+                <input type="number" value={govtPayAmount} onChange={e => setGovtPayAmount(e.target.value)}
+                  placeholder="0" className="flex-1 bg-transparent font-black text-slate-900 text-2xl outline-none" />
+              </div>
+              <input type="text" value={govtRefNo} onChange={e => setGovtRefNo(e.target.value)}
+                placeholder="Reference No. (e.g. RTE/2026/APR/001)"
+                className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-3 text-sm font-bold text-slate-900 outline-none focus:border-blue-500 mb-3" />
+              <textarea value={govtNote} onChange={e => setGovtNote(e.target.value)}
+                rows={2} placeholder="Note (optional)"
+                className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-2.5 text-sm font-bold text-slate-900 outline-none focus:border-blue-500 resize-none mb-4" />
+              <button onClick={handleGovtPayment} disabled={!govtPayAmount || !govtRefNo.trim()}
+                className="w-full py-3.5 bg-blue-600 text-white font-black rounded-xl disabled:opacity-40 flex items-center justify-center gap-2">
+                <ShieldCheck size={16} /> Record Government Payment
+              </button>
+            </div>
+          </div>
+        )}
+
+        {/* ── RECEIPT MODAL ────────────────────────────────────────────────── */}
         {receiptModal && (
-          <div className="absolute inset-0 bg-slate-900/50 backdrop-blur-sm z-50 flex items-end">
-            <div className="w-full bg-white rounded-t-3xl p-6 pb-8 animate-in slide-in-from-bottom-8 max-h-[80vh] overflow-y-auto">
-              <div className="flex justify-between items-center mb-4">
+          <div className="absolute inset-0 bg-slate-900/60 backdrop-blur-sm z-50 flex items-end">
+            <div className="w-full bg-white rounded-t-3xl p-6 pb-8 animate-in slide-in-from-bottom-8 max-h-[85vh] overflow-y-auto">
+              <div className="flex justify-between items-center mb-5">
                 <h3 className="text-lg font-black text-slate-900">Fee Receipt</h3>
-                <button onClick={() => setReceiptModal(null)} className="w-8 h-8 bg-slate-100 rounded-full flex items-center justify-center text-slate-500">✕</button>
+                <button onClick={() => setReceiptModal(null)} className="w-8 h-8 bg-slate-100 rounded-full flex items-center justify-center">
+                  <X size={16} className="text-slate-500" />
+                </button>
               </div>
 
-              {/* Receipt Card */}
               <div className="border-2 border-dashed border-slate-200 rounded-2xl p-5 mb-4">
-                {/* Header */}
                 <div className="text-center mb-4 pb-4 border-b border-slate-100">
                   <div className="font-black text-slate-900 text-lg uppercase tracking-wide">EduGrow School</div>
-                  <div className="text-[10px] font-bold text-slate-400 uppercase tracking-widest mt-0.5">Fee Receipt</div>
-                  <div className="mt-2 inline-block bg-emerald-100 text-emerald-700 text-[10px] font-black px-3 py-1 rounded-full uppercase tracking-widest">
-                    PAID ✓
-                  </div>
+                  <div className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">Fee Receipt</div>
+                  <div className="mt-2 inline-block bg-emerald-100 text-emerald-700 text-[10px] font-black px-3 py-1 rounded-full">PAID ✓</div>
                 </div>
 
-                {/* Receipt Details */}
                 <div className="space-y-2 mb-4">
                   {[
                     { label: 'Receipt No.', val: receiptModal.receiptNo },
-                    { label: 'Date', val: receiptModal.date },
-                    { label: 'Student', val: receiptModal.studentName },
-                    { label: 'Class', val: receiptModal.className },
-                    { label: 'Admission No.', val: receiptModal.admissionNo },
-                    { label: 'Payment Method', val: receiptModal.method },
+                    { label: 'Date',        val: receiptModal.date },
+                    { label: 'Student',     val: receiptModal.studentName },
+                    { label: 'Class',       val: receiptModal.className },
+                    { label: 'Adm. No.',    val: receiptModal.admissionNo },
+                    { label: 'Method',      val: receiptModal.method },
                   ].map(({ label, val }) => (
                     <div key={label} className="flex justify-between gap-2">
                       <span className="text-[10px] font-bold text-slate-400">{label}</span>
-                      <span className="text-[11px] font-black text-slate-800 text-right">{val}</span>
+                      <span className="text-[11px] font-black text-slate-800">{val}</span>
                     </div>
                   ))}
                 </div>
 
-                {/* Installments */}
                 {receiptModal.installmentDetails.length > 0 && (
                   <div className="border-t border-slate-100 pt-3 mb-3">
-                    <p className="text-[9px] font-black uppercase tracking-widest text-slate-400 mb-2">Fee Breakdown</p>
+                    <p className="text-[9px] font-black uppercase tracking-widest text-slate-400 mb-2">Breakdown</p>
                     {receiptModal.installmentDetails.map((d, i) => (
-                      <div key={i} className="flex justify-between gap-2 py-1.5 border-b border-slate-50 last:border-0">
-                        <span className="text-[11px] font-bold text-slate-600">{d.month} · {d.feeType === 'TUITION' ? 'Tuition' : d.feeType === 'TRANSPORT' ? 'Transport' : d.feeType}</span>
+                      <div key={i} className="flex justify-between py-1.5 border-b border-slate-50 last:border-0">
+                        <span className="text-[11px] font-bold text-slate-600">{d.month} · {FEE_TYPE_LABEL[d.feeType]}</span>
                         <span className="text-[11px] font-black text-slate-900">₹{d.amount.toLocaleString('en-IN')}</span>
                       </div>
                     ))}
                     {receiptModal.advanceAmount > 0 && (
-                      <div className="flex justify-between gap-2 py-1.5 mt-1 bg-violet-50 rounded-lg px-2">
+                      <div className="flex justify-between py-1.5 mt-1 bg-violet-50 rounded-lg px-2">
                         <span className="text-[11px] font-bold text-violet-600">Advance Credit Added</span>
                         <span className="text-[11px] font-black text-violet-700">₹{receiptModal.advanceAmount.toLocaleString('en-IN')}</span>
                       </div>
@@ -538,15 +556,12 @@ export const FeeLedger: React.FC<Props> = ({ onBack }) => {
                   </div>
                 )}
 
-                {/* Total */}
                 <div className="flex justify-between items-center bg-slate-900 rounded-xl px-4 py-3 mb-3">
                   <span className="text-xs font-black text-white uppercase">Total Paid</span>
                   <span className="text-lg font-black text-white">₹{receiptModal.amount.toLocaleString('en-IN')}</span>
                 </div>
-
-                {/* Note if present */}
                 {receiptModal.note && (
-                  <div className="bg-slate-50 rounded-xl px-4 py-3 mb-3 border border-slate-200">
+                  <div className="bg-slate-50 rounded-xl px-4 py-3 border border-slate-200">
                     <p className="text-[9px] font-black uppercase tracking-widest text-slate-400 mb-1">Note</p>
                     <p className="text-sm font-bold text-slate-700">{receiptModal.note}</p>
                   </div>
@@ -554,47 +569,9 @@ export const FeeLedger: React.FC<Props> = ({ onBack }) => {
               </div>
 
               <div className="flex gap-3">
-                <button onClick={() => window.print()}
-                  className="flex-1 py-3 bg-slate-100 text-slate-900 font-black rounded-xl hover:bg-slate-200 transition-colors">
-                  Print PDF
-                </button>
-                <button onClick={() => setReceiptModal(null)}
-                  className="flex-1 py-3 bg-indigo-600 text-white font-black rounded-xl">
-                  Close
-                </button>
+                <button onClick={() => window.print()} className="flex-1 py-3 bg-slate-100 text-slate-900 font-black rounded-xl">Print PDF</button>
+                <button onClick={() => setReceiptModal(null)} className="flex-1 py-3 bg-indigo-600 text-white font-black rounded-xl">Close</button>
               </div>
-            </div>
-          </div>
-        )}
-
-        {/* Government Payment Modal */}
-        {govtPayModal && (
-          <div className="absolute inset-0 bg-slate-900/50 backdrop-blur-sm z-50 flex items-end">
-            <div className="w-full bg-white rounded-t-3xl p-6 pb-8 animate-in slide-in-from-bottom-8">
-              <div className="flex justify-between items-center mb-4">
-                <h3 className="text-lg font-black text-slate-900">Government Payment (RTE)</h3>
-                <button onClick={() => setGovtPayModal(false)} className="w-8 h-8 bg-slate-100 rounded-full flex items-center justify-center text-slate-500">✕</button>
-              </div>
-              <p className="text-[11px] font-bold text-slate-400 mb-4">
-                Record government RTE reimbursement. Payment will be allocated to all RTE students' government-payer tuition fees (oldest due first).
-              </p>
-              <div className="bg-slate-50 border border-slate-200 rounded-xl p-3 flex items-center gap-2 mb-4">
-                <IndianRupee size={16} className="text-slate-400" />
-                <input type="number" value={govtPayAmount} onChange={e => setGovtPayAmount(e.target.value)}
-                  placeholder="Enter amount received"
-                  className="flex-1 bg-transparent font-black text-slate-900 text-lg outline-none" />
-              </div>
-              <input type="text" value={govtRefNo} onChange={e => setGovtRefNo(e.target.value)}
-                placeholder="Reference No. (e.g. RTE/2026/APR/001)"
-                className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-3 text-sm font-bold text-slate-900 outline-none focus:border-blue-500 mb-4" />
-              <textarea value={govtNote} onChange={e => setGovtNote(e.target.value)}
-                rows={2} placeholder="Note / Description (optional)"
-                className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-3 text-sm font-bold text-slate-900 outline-none focus:border-blue-500 resize-none mb-4" />
-              <button onClick={handleGovtPayment}
-                disabled={!govtPayAmount || !govtRefNo.trim()}
-                className="w-full py-3 bg-blue-600 text-white font-black rounded-xl disabled:opacity-40">
-                Record Government Payment
-              </button>
             </div>
           </div>
         )}
@@ -602,170 +579,128 @@ export const FeeLedger: React.FC<Props> = ({ onBack }) => {
     );
   }
 
-  if (loading) return (
-    <div className="absolute inset-0 z-50 bg-slate-50 flex items-center justify-center">
-      <div className="w-8 h-8 border-2 border-slate-200 border-t-blue-600 rounded-full animate-spin" />
-    </div>
-  );
-
-  const dueStudents = students.filter(s => {
-    const p = feeService.getParentDueSummary(s.studentId).total;
-    const g = s.isRte ? feeService.getGovernmentDueSummary(s.studentId).total : 0;
-    return p > 0 || g > 0;
-  });
-  const totalParentDue = dueStudents.reduce((acc, s) => acc + feeService.getParentDueSummary(s.studentId).total, 0);
-  const totalGovtDue = dueStudents.filter(s => s.isRte).reduce((acc, s) => acc + feeService.getGovernmentDueSummary(s.studentId).total, 0);
-
+  // ─── LIST VIEW ────────────────────────────────────────────────────────────────
   return (
     <div className="absolute inset-0 z-50 bg-slate-50 flex flex-col animate-in slide-in-from-right-8 duration-300">
-      <div className="bg-white border-b border-slate-100 px-4 pt-4 pb-3 shadow-sm">
-        <div className="flex items-center gap-3 mb-3">
-          <button onClick={onBack} className="p-2 -ml-2 bg-slate-100 rounded-full">
-            <ArrowLeft size={20} className="text-slate-600" />
+
+      {/* Header */}
+      <div className="bg-white border-b border-slate-100 shadow-sm">
+        <div className="px-4 pt-4 pb-3 flex items-center gap-3">
+          <button onClick={onBack} className="p-2 -ml-2 bg-slate-100 rounded-full text-slate-600">
+            <ArrowLeft size={20} />
           </button>
           <div className="flex-1">
-            <h2 className="text-xl font-black text-slate-900 uppercase tracking-tight">Fee Ledger</h2>
+            <h2 className="text-xl font-black text-slate-900 uppercase tracking-tight">Fee Collection</h2>
             <p className="text-[10px] font-bold text-slate-400">{students.length} students · {dueStudents.length} with dues</p>
           </div>
         </div>
-        <div className="flex gap-2">
-          <div className="relative flex-1">
-            <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
-            <input value={search} onChange={e => setSearch(e.target.value)}
-              placeholder="Search by name, class, admission no..."
-              className="w-full bg-slate-50 border border-slate-200 rounded-xl pl-9 pr-4 py-2.5 text-sm font-bold outline-none focus:border-blue-500" />
+
+        {/* Stats row */}
+        <div className="flex border-t border-slate-100">
+          <div className="flex-1 px-4 py-3 text-center">
+            <div className="text-lg font-black text-emerald-600">₹{totalCollected.toLocaleString('en-IN')}</div>
+            <div className="text-[9px] font-black text-slate-400 uppercase tracking-widest">Collected</div>
           </div>
-          <button onClick={() => setShowOnlyDue(d => !d)}
-            className={`flex items-center gap-1.5 px-3 py-2.5 rounded-xl text-[10px] font-black transition-colors border ${showOnlyDue ? 'bg-rose-600 text-white border-rose-600' : 'bg-white text-slate-500 border-slate-200'}`}>
-            <Filter size={12} /> Due Only
-          </button>
+          <div className="w-px bg-slate-100" />
+          <div className="flex-1 px-4 py-3 text-center">
+            <div className="text-lg font-black text-rose-600">₹{totalParentDue.toLocaleString('en-IN')}</div>
+            <div className="text-[9px] font-black text-slate-400 uppercase tracking-widest">Parent Due</div>
+          </div>
+          {totalGovtDue > 0 && (
+            <>
+              <div className="w-px bg-slate-100" />
+              <div className="flex-1 px-4 py-3 text-center">
+                <div className="text-lg font-black text-blue-600">₹{totalGovtDue.toLocaleString('en-IN')}</div>
+                <div className="text-[9px] font-black text-slate-400 uppercase tracking-widest">Govt Due</div>
+              </div>
+            </>
+          )}
+        </div>
+
+        {/* Search + tabs */}
+        <div className="px-4 pb-3 space-y-2">
+          <div className="relative">
+            <Search size={14} className="absolute left-3.5 top-1/2 -translate-y-1/2 text-slate-400" />
+            <input value={search} onChange={e => setSearch(e.target.value)}
+              placeholder="Search by name, class, admission no…"
+              className="w-full bg-slate-50 border border-slate-200 rounded-2xl pl-10 pr-4 py-2.5 text-sm font-bold outline-none focus:border-blue-500 transition-colors" />
+          </div>
+          <div className="flex gap-2">
+            {(['ALL', 'DUE', 'CLEARED'] as ListTab[]).map(t => (
+              <button key={t} onClick={() => setListTab(t)}
+                className={`px-4 py-1.5 rounded-xl text-[10px] font-black uppercase tracking-widest transition-colors ${listTab === t
+                  ? t === 'DUE' ? 'bg-rose-600 text-white' : t === 'CLEARED' ? 'bg-emerald-600 text-white' : 'bg-slate-900 text-white'
+                  : 'bg-slate-100 text-slate-500'}`}>
+                {t === 'ALL' ? `All (${students.length})` : t === 'DUE' ? `Due (${dueStudents.length})` : `Cleared (${clearedStudents.length})`}
+              </button>
+            ))}
+          </div>
         </div>
       </div>
 
-      <div className="flex-1 overflow-y-auto p-4 pb-28 space-y-3">
-        {/* Summary banner — only when showing dues */}
-        {dueStudents.length > 0 && (
-          <div className="bg-[#0d1b3e] rounded-2xl p-4 text-white">
-            <p className="text-[9px] font-black uppercase tracking-widest text-blue-300 mb-2">Total Outstanding</p>
-            <div className="grid grid-cols-2 gap-3">
-              <div>
-                <div className="text-xl font-black">₹{totalParentDue.toLocaleString('en-IN')}</div>
-                <div className="text-[9px] font-bold text-blue-300 mt-0.5">{dueStudents.filter(s => feeService.getParentDueSummary(s.studentId).total > 0).length} students — Parent Due</div>
-              </div>
-              {totalGovtDue > 0 && (
-                <div>
-                  <div className="text-xl font-black text-emerald-400">₹{totalGovtDue.toLocaleString('en-IN')}</div>
-                  <div className="text-[9px] font-bold text-emerald-300 mt-0.5">{dueStudents.filter(s => s.isRte).length} RTE — Govt Due</div>
-                </div>
-              )}
-            </div>
-          </div>
-        )}
-
-        {/* Due students — prominent cards at top */}
-        {!showOnlyDue && dueStudents.length > 0 && (
-          <>
-            <p className="text-[10px] font-black uppercase tracking-widest text-rose-500">Pending Dues ({dueStudents.length})</p>
-            {dueStudents.filter(s =>
-              s.name.toLowerCase().includes(search.toLowerCase()) ||
-              s.admissionNo.toLowerCase().includes(search.toLowerCase()) ||
-              s.className.toLowerCase().includes(search.toLowerCase())
-            ).map(student => {
-              const parentSummary = feeService.getParentDueSummary(student.studentId);
-              const govtSummary = student.isRte ? feeService.getGovernmentDueSummary(student.studentId) : { tuition: 0, total: 0 };
-              return (
-                <button key={student.studentId} onClick={() => { setSelected(student); setMainView('DETAIL'); }}
-                  className="w-full text-left bg-white rounded-2xl border border-rose-200 shadow-sm p-4 active:scale-[0.98] transition-transform">
-                  <div className="flex items-start justify-between gap-2">
-                    <div className="flex-1 min-w-0">
-                      <div className="flex items-center gap-2">
-                        <div className="w-8 h-8 rounded-full bg-rose-100 text-rose-700 flex items-center justify-center font-black text-xs shrink-0">
-                          {student.name.split(' ').map(w => w[0]).join('').slice(0, 2)}
-                        </div>
-                        <div className="min-w-0">
-                          <div className="flex items-center gap-1.5">
-                            <div className="font-extrabold text-slate-900 text-sm truncate">{student.name}</div>
-                            {student.isRte && <ShieldCheck size={11} className="text-emerald-600 shrink-0" />}
-                          </div>
-                          <div className="text-[10px] font-bold text-slate-400">{student.className} · {student.admissionNo}</div>
-                        </div>
-                      </div>
-                    </div>
-                    <div className="text-right shrink-0">
-                      {parentSummary.total > 0 && (
-                        <div>
-                          <div className="font-black text-rose-600 text-base">₹{parentSummary.total.toLocaleString('en-IN')}</div>
-                          <div className="text-[9px] font-bold text-rose-400">Parent Due</div>
-                        </div>
-                      )}
-                      {govtSummary.total > 0 && (
-                        <div className="mt-1">
-                          <div className="font-black text-emerald-600 text-sm">₹{govtSummary.total.toLocaleString('en-IN')}</div>
-                          <div className="text-[9px] font-bold text-emerald-500">Govt Due</div>
-                        </div>
-                      )}
-                    </div>
-                  </div>
-                  {/* Due breakdown pills */}
-                  <div className="flex gap-1.5 mt-2.5 flex-wrap">
-                    {parentSummary.tuition > 0 && (
-                      <span className="text-[9px] font-black bg-indigo-50 text-indigo-700 px-2 py-0.5 rounded-full">
-                        Tuition ₹{parentSummary.tuition.toLocaleString()}
-                      </span>
-                    )}
-                    {parentSummary.transport > 0 && (
-                      <span className="text-[9px] font-black bg-orange-50 text-orange-700 px-2 py-0.5 rounded-full">
-                        Transport ₹{parentSummary.transport.toLocaleString()}
-                      </span>
-                    )}
-                    {govtSummary.tuition > 0 && (
-                      <span className="text-[9px] font-black bg-emerald-50 text-emerald-700 px-2 py-0.5 rounded-full">
-                        RTE Tuition ₹{govtSummary.tuition.toLocaleString()}
-                      </span>
-                    )}
-                  </div>
-                </button>
-              );
-            })}
-            {search === '' && students.filter(s => feeService.getParentDueSummary(s.studentId).total === 0 && (!s.isRte || feeService.getGovernmentDueSummary(s.studentId).total === 0)).length > 0 && (
-              <p className="text-[10px] font-black uppercase tracking-widest text-emerald-600 mt-2">All Cleared</p>
-            )}
-          </>
-        )}
-
-        {/* All students (or filtered) */}
-        {filtered
-          .filter(s => showOnlyDue || feeService.getParentDueSummary(s.studentId).total === 0 && (!s.isRte || feeService.getGovernmentDueSummary(s.studentId).total === 0))
-          .map(student => {
-            const parentSummary = feeService.getParentDueSummary(student.studentId);
-            return (
-              <button key={student.studentId} onClick={() => { setSelected(student); setMainView('DETAIL'); }}
-                className="w-full text-left bg-white rounded-2xl border border-slate-100 shadow-sm p-3.5 active:scale-[0.98] transition-transform">
-                <div className="flex items-center gap-3">
-                  <div className="w-8 h-8 rounded-full bg-emerald-100 text-emerald-700 flex items-center justify-center font-black text-xs shrink-0">
-                    {student.name.split(' ').map(w => w[0]).join('').slice(0, 2)}
-                  </div>
-                  <div className="flex-1 min-w-0">
-                    <div className="flex items-center gap-1.5">
-                      <span className="font-extrabold text-slate-900 text-sm truncate">{student.name}</span>
-                      {student.isRte && <ShieldCheck size={10} className="text-emerald-600 shrink-0" />}
-                    </div>
-                    <div className="text-[10px] font-bold text-slate-400">{student.className} · {student.admissionNo}</div>
-                  </div>
-                  <div className="flex items-center gap-1.5 text-[9px] font-black text-emerald-600 bg-emerald-50 px-2.5 py-1 rounded-full shrink-0">
-                    <CheckCircle2 size={10} /> Cleared
-                  </div>
-                </div>
-              </button>
-            );
-          })}
-
-        {filtered.length === 0 && (
+      {/* List */}
+      <div className="flex-1 overflow-y-auto p-4 pb-28 space-y-2.5">
+        {visibleStudents.length === 0 && (
           <div className="flex flex-col items-center py-16 text-slate-400">
-            <IndianRupee size={32} className="mb-3 opacity-40" />
-            <p className="font-bold text-sm">No students found</p>
+            <Users size={32} className="mb-3 opacity-30" />
+            <p className="font-bold text-sm">No students</p>
           </div>
         )}
+
+        {visibleStudents.map(student => {
+          const pd = getParentDue(student.studentId);
+          const gd = student.isRte ? getGovtDue(student.studentId) : { tuition: 0, total: 0 };
+          const isDue = pd.total > 0 || gd.total > 0;
+          const totalD = student.installments.reduce((a, i) => a + i.amount, 0);
+          const totalP = student.installments.reduce((a, i) => a + i.paidAmount, 0);
+          const pct = totalD > 0 ? Math.round((totalP / totalD) * 100) : 100;
+
+          return (
+            <button key={student.studentId}
+              onClick={() => { setSelected(student); setDetailTab('SCHEDULE'); }}
+              className={`w-full text-left bg-white rounded-2xl shadow-sm border p-4 active:scale-[0.99] transition-transform ${isDue ? 'border-rose-200' : 'border-slate-100'}`}>
+              <div className="flex items-center gap-3">
+                {/* Avatar */}
+                <div className={`w-10 h-10 rounded-xl flex items-center justify-center font-black text-sm shrink-0 ${isDue ? 'bg-rose-100 text-rose-700' : 'bg-emerald-100 text-emerald-700'}`}>
+                  {student.name.split(' ').map(w => w[0]).join('').slice(0, 2)}
+                </div>
+
+                <div className="flex-1 min-w-0">
+                  <div className="flex items-center gap-1.5 mb-0.5">
+                    <span className="font-extrabold text-slate-900 text-sm truncate">{student.name}</span>
+                    {student.isRte && <ShieldCheck size={11} className="text-emerald-600 shrink-0" />}
+                  </div>
+                  <div className="text-[10px] font-bold text-slate-400">{student.className} · {student.admissionNo}</div>
+
+                  {/* Mini progress bar */}
+                  <div className="mt-2 h-1 bg-slate-100 rounded-full overflow-hidden">
+                    <div className={`h-full rounded-full ${pct === 100 ? 'bg-emerald-500' : 'bg-blue-400'}`} style={{ width: `${pct}%` }} />
+                  </div>
+                  <div className="text-[9px] font-bold text-slate-400 mt-0.5">{pct}% collected</div>
+                </div>
+
+                {/* Right: due amount or cleared badge */}
+                <div className="shrink-0 text-right">
+                  {isDue ? (
+                    <>
+                      {pd.total > 0 && <div className="font-black text-rose-600 text-sm">₹{pd.total.toLocaleString('en-IN')}</div>}
+                      {gd.total > 0 && <div className="font-black text-blue-600 text-sm">₹{gd.total.toLocaleString('en-IN')}</div>}
+                      <div className="flex gap-1 mt-1 justify-end flex-wrap">
+                        {pd.tuition > 0 && <span className="text-[8px] font-black bg-indigo-50 text-indigo-700 px-1.5 py-0.5 rounded-full">Tuition</span>}
+                        {pd.transport > 0 && <span className="text-[8px] font-black bg-orange-50 text-orange-700 px-1.5 py-0.5 rounded-full">Transport</span>}
+                      </div>
+                    </>
+                  ) : (
+                    <span className="flex items-center gap-0.5 text-[9px] font-black text-emerald-600 bg-emerald-50 px-2 py-1 rounded-full">
+                      <CheckCircle2 size={10} /> Cleared
+                    </span>
+                  )}
+                </div>
+                <ChevronRight size={15} className="text-slate-300 shrink-0" />
+              </div>
+            </button>
+          );
+        })}
       </div>
     </div>
   );
