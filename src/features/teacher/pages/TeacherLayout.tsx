@@ -64,6 +64,7 @@ export const TeacherLayout: React.FC = () => {
   ];
 
   return (
+    <>
     <div className="flex flex-col gap-4 animate-in slide-in-from-bottom-4 duration-300 fade-in pt-2">
       {/* Greeting */}
       <div>
@@ -143,5 +144,6 @@ export const TeacherLayout: React.FC = () => {
       </div>
     </div>
     <ToastContainer />
+    </>
   );
 };

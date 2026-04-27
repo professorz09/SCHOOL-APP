@@ -75,6 +75,7 @@ export const StudentLayout: React.FC = () => {
   const initials = STUDENT_FULL.split(' ').map(w => w[0]).join('').slice(0, 2);
 
   return (
+    <>
     <div className="flex flex-col gap-5 animate-in slide-in-from-bottom-4 duration-300 fade-in pt-3 pb-6">
 
       {/* ── Top Greeting ─────────────────────────────────────────────── */}
@@ -245,5 +246,6 @@ export const StudentLayout: React.FC = () => {
       </button>
     </div>
     <ToastContainer />
+    </>
   );
 };

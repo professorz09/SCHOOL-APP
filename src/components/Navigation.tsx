@@ -2,7 +2,7 @@ import React from 'react';
 import {
   Home, User, Bell, IndianRupee, Users,
   Building2, CreditCard, ClipboardList, MapPin,
-  LayoutDashboard,
+  LayoutDashboard, LogOut,
 } from 'lucide-react';
 import { AppRole, NavTab } from '../types';
 import { useAuthStore } from '../store/authStore';
@@ -44,7 +44,7 @@ const ROLE_TABS: Record<AppRole, TabDef[]> = {
   ],
 };
 
-// ─── BottomNav ────────────────────────────────────────────────────────────────
+// ─── BottomNav (mobile) ───────────────────────────────────────────────────────
 
 interface BottomNavProps {
   role: AppRole;
@@ -81,7 +81,86 @@ export const BottomNav: React.FC<BottomNavProps> = ({ role, currentTab, setTab }
   );
 };
 
-// ─── Header ───────────────────────────────────────────────────────────────────
+// ─── SidebarNav (desktop) ─────────────────────────────────────────────────────
+
+interface SidebarNavProps {
+  role: AppRole;
+  currentTab: NavTab;
+  setTab: (tab: NavTab) => void;
+  onLogout: () => void;
+}
+
+const ROLE_LABEL: Record<AppRole, string> = {
+  STUDENT:    'Student',
+  PRINCIPAL:  'Principal',
+  SUPER_ADMIN:'Super Admin',
+  TEACHER:    'Teacher',
+  DRIVER:     'Driver',
+};
+
+export const SidebarNav: React.FC<SidebarNavProps> = ({ role, currentTab, setTab, onLogout }) => {
+  const session = useAuthStore(state => state.session);
+  const tabs = ROLE_TABS[role] ?? ROLE_TABS.STUDENT;
+  const initials = session?.name
+    ? session.name.split(' ').map((w: string) => w[0]).join('').slice(0, 2).toUpperCase()
+    : 'U';
+
+  return (
+    <div className="flex flex-col h-full select-none overflow-hidden">
+
+      {/* ── Brand ── */}
+      <div className="px-6 pt-8 pb-6 border-b border-slate-100 shrink-0">
+        <div className="text-2xl font-black text-blue-600 tracking-tight leading-none">EduGrow</div>
+        <div className="text-[10px] font-black uppercase tracking-[0.2em] text-slate-400 mt-2">
+          {ROLE_LABEL[role]}
+        </div>
+      </div>
+
+      {/* ── Nav items ── */}
+      <nav className="flex-1 px-3 py-4 space-y-0.5 overflow-y-auto">
+        {tabs.map(tab => {
+          const Icon = tab.icon;
+          const isActive = currentTab === tab.id;
+          return (
+            <button
+              key={tab.id}
+              onClick={() => setTab(tab.id)}
+              className={`w-full flex items-center gap-3 px-4 py-3 rounded-2xl text-sm transition-all active:scale-[0.98] ${
+                isActive
+                  ? 'bg-blue-600 text-white shadow-sm font-black'
+                  : 'text-slate-600 hover:bg-slate-100 hover:text-slate-900 font-bold'
+              }`}
+            >
+              <Icon size={20} strokeWidth={isActive ? 2.5 : 2} />
+              <span className="tracking-tight">{tab.label}</span>
+            </button>
+          );
+        })}
+      </nav>
+
+      {/* ── User footer ── */}
+      <div className="p-4 border-t border-slate-100 space-y-2 shrink-0">
+        <div className="flex items-center gap-3 px-2 py-1">
+          <div className="w-9 h-9 rounded-full bg-blue-100 border-2 border-blue-400 flex items-center justify-center text-blue-700 font-black text-sm shrink-0">
+            {initials}
+          </div>
+          <div className="flex-1 min-w-0">
+            <div className="font-extrabold text-slate-900 text-sm truncate">{session?.name ?? 'User'}</div>
+            <div className="text-[10px] font-bold text-slate-400 truncate">{session?.mobileNumber}</div>
+          </div>
+        </div>
+        <button
+          onClick={onLogout}
+          className="w-full flex items-center justify-center gap-2 py-2.5 bg-rose-50 text-rose-600 rounded-xl text-xs font-black border border-rose-100 hover:bg-rose-100 transition-colors active:scale-[0.98]"
+        >
+          <LogOut size={14} /> Logout
+        </button>
+      </div>
+    </div>
+  );
+};
+
+// ─── Header (mobile) ──────────────────────────────────────────────────────────
 
 interface HeaderProps {
   role: AppRole;
