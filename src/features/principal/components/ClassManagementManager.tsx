@@ -282,11 +282,7 @@ export const ClassManagementManager: React.FC<Props> = ({ onBack }) => {
   /* ── CLASS DETAIL ── */
   if (view === 'CLASS_DETAIL' && selectedClass) return (
     <div className="absolute inset-0 z-50 bg-slate-50 flex flex-col animate-in slide-in-from-right-8 duration-300">
-      {renderHeader(selectedClass.className, () => { setSelectedClass(null); setView('LIST'); },
-        <button onClick={() => { setSelectedSection(null); setView('ADD_PERMISSION'); }} className="p-2 bg-indigo-500 text-white rounded-full shadow-md">
-          <Plus size={18} />
-        </button>
-      )}
+      {renderHeader(selectedClass.className, () => { setSelectedClass(null); setView('LIST'); })}
       <div className="flex-1 overflow-y-auto p-4 pb-28 space-y-4">
         <div className="grid grid-cols-2 gap-3">
           <div className="bg-white rounded-2xl border border-slate-100 shadow-sm p-4 text-center">

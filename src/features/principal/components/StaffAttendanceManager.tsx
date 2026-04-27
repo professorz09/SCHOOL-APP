@@ -173,6 +173,7 @@ export const StaffAttendanceManager: React.FC<Props> = ({ onBack }) => {
   // ── Summary counts ────────────────────────────────────────────────────────
   const counts = useMemo(() => {
     const c: Record<AttendanceStatus, number> = { PRESENT: 0, ABSENT: 0, HALF_DAY: 0, LEAVE: 0, LATE: 0, HOLIDAY: 0 };
+    if (!record) return c;
     for (const row of record.rows) c[row.status]++;
     return c;
   }, [record]);

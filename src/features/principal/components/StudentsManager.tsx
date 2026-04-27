@@ -15,7 +15,7 @@ import { AdmissionFormPrint } from '../../../components/AdmissionFormPrint';
 type MainView = 'MENU' | 'ADMISSION' | 'FEES' | 'CLASSES';
 type SubView = 'LIST' | 'CREATE' | 'PROFILE' | 'CLASS_DETAIL' | 'SECTION_DETAIL';
 
-interface Props { onBack: () => void; }
+interface Props { onBack: () => void; initialView?: MainView; }
 
 const CLASS_OPTIONS = ['Class 1','Class 2','Class 3','Class 4','Class 5','Class 6','Class 7','Class 8','Class 9','Class 10','Class 11','Class 12'];
 const BLOOD_GROUPS = ['A+','A-','B+','B-','O+','O-','AB+','AB-'];
@@ -44,9 +44,9 @@ const BLANK_FORM_WITH_PARENT: FormWithParent = {
   parentEmail: '',
 };
 
-export const StudentsManager: React.FC<Props> = ({ onBack }) => {
+export const StudentsManager: React.FC<Props> = ({ onBack, initialView }) => {
   const { showToast } = useUIStore();
-  const [mainView, setMainView] = useState<MainView>('MENU');
+  const [mainView, setMainView] = useState<MainView>(initialView ?? 'CLASSES');
   const [subView, setSubView] = useState<SubView>('LIST');
   const [students, setStudents] = useState<Student[]>([]);
   const [selected, setSelected] = useState<Student | null>(null);
@@ -194,14 +194,16 @@ export const StudentsManager: React.FC<Props> = ({ onBack }) => {
   // ─── ADMISSION (Add/Search) ────────────────────────────────────────────
 
   if (!renderProfile && mainView === 'ADMISSION') {
-    const filteredStudents = students.filter(s =>
-      s.name.toLowerCase().includes(search.toLowerCase()) ||
-      s.rollNo.includes(search) || s.admissionNo.toLowerCase().includes(search.toLowerCase())
-    );
+    const filteredStudents = students
+      .filter(s =>
+        s.name.toLowerCase().includes(search.toLowerCase()) ||
+        s.rollNo.includes(search) || s.admissionNo.toLowerCase().includes(search.toLowerCase())
+      )
+      .sort((a, b) => new Date(b.admissionDate ?? 0).getTime() - new Date(a.admissionDate ?? 0).getTime());
 
     if (subView === 'CREATE') return (
       <div className="absolute inset-0 z-50 bg-slate-50 flex flex-col animate-in slide-in-from-right-8 duration-300">
-        {renderHeader('New Admission', () => { setSubView('LIST'); setMainView('MENU'); })}
+        {renderHeader('New Admission', () => setSubView('LIST'))}
         <div className="flex-1 overflow-y-auto p-4 pb-28 space-y-4">
           <div className="bg-white rounded-2xl border border-slate-100 shadow-sm p-4 space-y-4">
             <p className="text-[10px] font-black uppercase tracking-widest text-slate-400">Student Info</p>
@@ -344,7 +346,7 @@ export const StudentsManager: React.FC<Props> = ({ onBack }) => {
 
     return (
       <div className="absolute inset-0 z-50 bg-slate-50 flex flex-col animate-in slide-in-from-right-8 duration-300">
-        {renderHeader('Admission', () => { setMainView('MENU'); },
+        {renderHeader('Admission', onBack,
           <button onClick={() => { setSubView('CREATE'); }} className="p-2 bg-indigo-500 text-white rounded-full shadow-md">
             <Plus size={18} />
           </button>
@@ -470,7 +472,7 @@ export const StudentsManager: React.FC<Props> = ({ onBack }) => {
             <div className="bg-white rounded-2xl border border-slate-100 shadow-sm overflow-hidden">
               {classStudents.map((s, idx) => (
                 <button key={s.id}
-                  onClick={() => { setSelected(s); loadStudentData(s); setActiveProfileTab('INFO'); setSubView('PROFILE'); setMainView('ADMISSION'); }}
+                  onClick={() => { setSelected(s); loadStudentData(s); setActiveProfileTab('INFO'); setSubView('PROFILE'); }}
                   className={`w-full flex items-center gap-4 px-4 py-3.5 text-left active:bg-slate-50 transition-colors ${idx < classStudents.length - 1 ? 'border-b border-slate-100' : ''}`}>
                   {/* Avatar */}
                   <div className="w-10 h-10 rounded-full bg-indigo-100 text-indigo-700 flex items-center justify-center font-black text-sm shrink-0">
@@ -545,7 +547,7 @@ export const StudentsManager: React.FC<Props> = ({ onBack }) => {
     return (
       <div className="absolute inset-0 z-50 bg-slate-50 flex flex-col animate-in slide-in-from-right-8 duration-300">
         <div className="bg-white border-b border-slate-100 px-4 pt-12 pb-4 flex items-center gap-3 sticky top-0 z-10 shadow-sm">
-          <button onClick={() => setMainView('MENU')} className="p-2 -ml-2 bg-slate-100 rounded-full text-slate-600">
+          <button onClick={onBack} className="p-2 -ml-2 bg-slate-100 rounded-full text-slate-600">
             <ArrowLeft size={20} />
           </button>
           <div>
@@ -606,7 +608,7 @@ export const StudentsManager: React.FC<Props> = ({ onBack }) => {
         <div className="bg-white border-b border-slate-100 px-4 pt-12 pb-4 sticky top-0 z-10 shadow-sm">
           <div className="flex items-center justify-between gap-3 mb-4">
             <div className="flex items-center gap-3">
-              <button onClick={() => { setSubView('LIST'); setMainView('MENU'); }}
+              <button onClick={() => setSubView('LIST')}
                 className="p-2 -ml-2 bg-slate-100 rounded-full text-slate-600">
                 <ArrowLeft size={20} />
               </button>
