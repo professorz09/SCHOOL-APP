@@ -20,6 +20,7 @@ import { AttendanceHub } from '../components/AttendanceHub';
 export type PrincipalView =
   | 'DASHBOARD'
   | 'STUDENTS'
+  | 'ADMISSION'
   | 'STAFF'
   | 'ASSETS'
   | 'COMPLAINTS'
@@ -43,6 +44,7 @@ export const PrincipalLayout: React.FC = () => {
   const goBack = () => setView('DASHBOARD');
 
   if (view === 'STUDENTS')      return <StudentsManager        onBack={goBack} />;
+  if (view === 'ADMISSION')     return <StudentsManager        onBack={goBack} initialView="ADMISSION" />;
   if (view === 'STAFF')         return <StaffManager           onBack={goBack} />;
   if (view === 'ASSETS')        return <AssetsManager          onBack={goBack} />;
   if (view === 'COMPLAINTS')    return <ComplaintsManager      onBack={goBack} />;

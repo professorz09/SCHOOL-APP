@@ -3,6 +3,7 @@ import {
   Users, UserCheck, Receipt, Library, Bus, CircleAlert,
   Bell, CheckSquare, Settings, TrendingUp, IndianRupee, Calendar,
   CalendarDays, CreditCard, Banknote, Lock, ClipboardCheck, ArrowUpRight,
+  UserPlus,
 } from 'lucide-react';
 import { studentService } from '../../../services/student.service';
 import { staffService } from '../../../services/staff.service';
@@ -66,6 +67,7 @@ export const PrincipalDashboard: React.FC<Props> = ({ onNavigate }) => {
       title: 'People',
       items: [
         { icon: Users,          label: 'Students',     view: 'STUDENTS',         iconBg: 'bg-indigo-50',   iconFg: 'text-indigo-600',   badge: stats.totalStudents },
+        { icon: UserPlus,       label: 'Admission',    view: 'ADMISSION',        iconBg: 'bg-emerald-50',  iconFg: 'text-emerald-600' },
         { icon: UserCheck,      label: 'Staff',        view: 'STAFF',            iconBg: 'bg-blue-50',     iconFg: 'text-blue-600',     badge: stats.totalStaff },
         { icon: ClipboardCheck, label: 'Attendance',   view: 'ATTENDANCE',       iconBg: 'bg-cyan-50',     iconFg: 'text-cyan-600' },
       ],
