@@ -97,55 +97,66 @@ export const StaffManager: React.FC<Props> = ({ onBack }) => {
   if (view === 'LIST') return (
     <div className="absolute inset-0 z-50 bg-slate-50 flex flex-col animate-in slide-in-from-right-8 duration-300">
       {renderHeader('Staff', onBack,
-        <button onClick={() => setView('CREATE')} className="p-2 bg-blue-500 text-white rounded-full shadow-md"><Plus size={18} /></button>
+        <button onClick={() => setView('CREATE')} className="w-9 h-9 bg-blue-600 text-white rounded-full shadow-md flex items-center justify-center active:scale-90 transition-transform"><Plus size={18} /></button>
       )}
-      <div className="flex-1 overflow-y-auto p-4 pb-28 space-y-3">
-        <div className="relative">
-          <Search size={16} className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-400" />
-          <input value={search} onChange={e => setSearch(e.target.value)} placeholder="Search staff…"
-            className="w-full bg-white border border-slate-200 rounded-2xl pl-11 pr-4 py-3 font-bold text-sm outline-none shadow-sm" />
-        </div>
+      <div className="flex-1 overflow-y-auto pb-28">
 
-        <div className="flex gap-2">
+        {/* Stats row */}
+        <div className="grid grid-cols-4 gap-2 px-4 pt-3 pb-1">
           {[
-            { label: 'Total', val: staff.length, c: 'bg-slate-900 text-white' },
-            { label: 'Active', val: staff.filter(s => s.status === 'ACTIVE').length, c: 'bg-emerald-50 text-emerald-700' },
-            { label: 'On Leave', val: staff.filter(s => s.status === 'ON_LEAVE').length, c: 'bg-amber-50 text-amber-700' },
-            { label: 'Suspended', val: staff.filter(s => s.status === 'SUSPENDED').length, c: 'bg-rose-50 text-rose-700' },
-          ].map(({ label, val, c }) => (
-            <div key={label} className={`flex-1 px-2 py-2 rounded-xl text-center text-[9px] font-black uppercase ${c}`}>
-              <div className="text-sm font-black">{val}</div>
-              <div className="opacity-80">{label}</div>
+            { label: 'Total',     val: staff.length,                                          num: 'text-slate-900', bg: 'bg-white border border-slate-100' },
+            { label: 'Active',    val: staff.filter(s => s.status === 'ACTIVE').length,       num: 'text-emerald-600', bg: 'bg-emerald-50' },
+            { label: 'On Leave',  val: staff.filter(s => s.status === 'ON_LEAVE').length,     num: 'text-amber-600',  bg: 'bg-amber-50' },
+            { label: 'Suspended', val: staff.filter(s => s.status === 'SUSPENDED').length,    num: 'text-rose-600',   bg: 'bg-rose-50' },
+          ].map(({ label, val, num, bg }) => (
+            <div key={label} className={`rounded-2xl px-2 py-3 text-center shadow-sm ${bg}`}>
+              <div className={`text-xl font-black leading-none ${num}`}>{val}</div>
+              <div className="text-[9px] font-black text-slate-400 uppercase tracking-wide mt-1">{label}</div>
             </div>
           ))}
         </div>
 
-        <div className="flex gap-2 overflow-x-auto pb-1 hide-scrollbar">
-          {['ALL', ...ROLE_OPTIONS].map(r => (
+        {/* Search */}
+        <div className="relative px-4 pt-2">
+          <Search size={15} className="absolute left-8 top-1/2 -translate-y-1/2 text-slate-400 mt-1" />
+          <input value={search} onChange={e => setSearch(e.target.value)} placeholder="Search by name or subject…"
+            className="w-full bg-white border border-slate-200 rounded-2xl pl-10 pr-4 py-2.5 font-bold text-sm outline-none shadow-sm focus:border-blue-400 transition-colors" />
+        </div>
+
+        {/* Role filter chips */}
+        <div className="flex gap-2 overflow-x-auto px-4 py-2.5 pb-1 hide-scrollbar">
+          {(['ALL', ...ROLE_OPTIONS] as const).map(r => (
             <button key={r} onClick={() => setRoleFilter(r as any)}
-              className={`flex-shrink-0 px-3 py-1.5 rounded-xl text-[10px] font-black uppercase tracking-widest transition-colors ${roleFilter === r ? 'bg-blue-600 text-white' : 'bg-white text-slate-500 border border-slate-200'}`}>
-              {r.replace('_', ' ')}
+              className={`flex-shrink-0 px-3 py-1.5 rounded-full text-[11px] font-black uppercase tracking-wide transition-all ${
+                roleFilter === r
+                  ? 'bg-blue-600 text-white shadow-sm'
+                  : 'bg-white text-slate-500 border border-slate-200'
+              }`}>
+              {String(r).replace(/_/g, ' ')}
             </button>
           ))}
         </div>
 
-        <div className="space-y-2">
+        {/* Staff list */}
+        <div className="space-y-2 px-4 pt-1">
           {filtered.map(member => (
             <button key={member.id} onClick={() => { setSelected(member); setView('PROFILE'); }}
-              className="w-full bg-white rounded-2xl border border-slate-100 shadow-sm p-4 text-left active:bg-slate-50">
+              className="w-full bg-white rounded-2xl border border-slate-100 shadow-sm px-4 py-3.5 text-left active:scale-[0.98] transition-transform">
               <div className="flex items-center gap-3">
-                <div className={`w-10 h-10 rounded-xl flex items-center justify-center font-black text-sm shrink-0 ${roleColor(member.role)}`}>
-                  {member.name.split(' ').map(w => w[0]).join('').slice(0, 2)}
+                <div className={`w-11 h-11 rounded-2xl flex items-center justify-center font-black text-sm shrink-0 ${roleColor(member.role)}`}>
+                  {member.name.split(' ').map((w: string) => w[0]).join('').slice(0, 2)}
                 </div>
                 <div className="flex-1 min-w-0">
                   <div className="font-extrabold text-slate-900 text-sm truncate">{member.name}</div>
-                  <div className="text-[10px] font-bold text-slate-400 mt-0.5">
-                    {member.role.replace('_', ' ')} {member.subject && member.subject !== '—' ? `· ${member.subject}` : ''}
+                  <div className="text-[11px] font-bold text-slate-400 mt-0.5">
+                    {member.role.replace(/_/g, ' ')}{member.subject && member.subject !== '—' ? ` · ${member.subject}` : ''}
                   </div>
                 </div>
                 <div className="flex flex-col items-end gap-1 shrink-0">
-                  <span className={`text-[9px] font-black px-2 py-0.5 rounded-full uppercase ${statusColor(member.status)}`}>{member.status.replace('_', ' ')}</span>
-                  <span className="text-[10px] font-black text-slate-500">₹{(member.salary / 1000).toFixed(0)}K</span>
+                  <span className={`text-[10px] font-black px-2 py-0.5 rounded-full uppercase tracking-wide ${statusColor(member.status)}`}>
+                    {member.status.replace('_', ' ')}
+                  </span>
+                  <span className="text-xs font-black text-slate-600">₹{(member.salary / 1000).toFixed(0)}K</span>
                 </div>
               </div>
             </button>
