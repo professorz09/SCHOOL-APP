@@ -186,7 +186,7 @@ export const YearClosingWizard: React.FC<Props> = ({ onBack }) => {
   return (
     <div className="absolute inset-0 z-50 bg-slate-50 flex flex-col animate-in slide-in-from-right-8 duration-300">
       {/* Header */}
-      <div className="bg-white border-b border-slate-100 px-4 pt-12 pb-4 shadow-sm">
+      <div className="bg-white border-b border-slate-100 px-4 pt-4 pb-4 shadow-sm">
         <div className="flex items-center gap-3 mb-4">
           <button onClick={onBack} className="p-2 -ml-2 bg-slate-100 rounded-full hover:bg-slate-200">
             <ArrowLeft size={20} className="text-slate-600" />

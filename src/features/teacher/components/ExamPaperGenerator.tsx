@@ -82,7 +82,7 @@ export const ExamPaperGeneratorView: React.FC<Props> = ({ onBack }) => {
 
   if (view === 'PREVIEW' && paper) return (
     <div className="absolute inset-0 z-50 bg-slate-50 flex flex-col animate-in slide-in-from-right-8 duration-300">
-      <div className="bg-white border-b border-slate-100 px-4 pt-12 pb-4 flex items-center justify-between sticky top-0 z-10 shadow-sm">
+      <div className="bg-white border-b border-slate-100 px-4 pt-4 pb-4 flex items-center justify-between sticky top-0 z-10 shadow-sm">
         <div className="flex items-center gap-3">
           <button onClick={() => setView('FORM')} className="p-2 -ml-2 bg-slate-100 rounded-full text-slate-600"><ArrowLeft size={20} /></button>
           <h2 className="text-xl font-black text-slate-900 uppercase tracking-tight">Generated Paper</h2>
@@ -139,7 +139,7 @@ export const ExamPaperGeneratorView: React.FC<Props> = ({ onBack }) => {
 
   return (
     <div className="absolute inset-0 z-50 bg-slate-50 flex flex-col animate-in slide-in-from-right-8 duration-300">
-      <div className="bg-white border-b border-slate-100 px-4 pt-12 pb-4 flex items-center gap-3 sticky top-0 z-10 shadow-sm">
+      <div className="bg-white border-b border-slate-100 px-4 pt-4 pb-4 flex items-center gap-3 sticky top-0 z-10 shadow-sm">
         <button onClick={onBack} className="p-2 -ml-2 bg-slate-100 rounded-full text-slate-600"><ArrowLeft size={20} /></button>
         <div>
           <h2 className="text-xl font-black text-slate-900 uppercase tracking-tight">AI Exam Generator</h2>

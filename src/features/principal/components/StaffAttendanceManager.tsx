@@ -140,7 +140,7 @@ export const StaffAttendanceManager: React.FC<Props> = ({ onBack }) => {
   if (!record) {
     return (
       <div className="absolute inset-0 z-50 bg-slate-50 flex flex-col animate-in slide-in-from-right-8 duration-300">
-        <div className="bg-white border-b border-slate-100 px-4 pt-12 pb-3 shadow-sm sticky top-0 z-20 flex items-center gap-3">
+        <div className="bg-white border-b border-slate-100 px-4 pt-4 pb-3 shadow-sm sticky top-0 z-20 flex items-center gap-3">
           <button onClick={onBack} className="p-2 -ml-2 bg-slate-100 rounded-full">
             <ArrowLeft size={20} className="text-slate-600" />
           </button>
@@ -193,7 +193,7 @@ export const StaffAttendanceManager: React.FC<Props> = ({ onBack }) => {
     <div className="absolute inset-0 z-50 bg-slate-50 flex flex-col animate-in slide-in-from-right-8 duration-300">
 
       {/* ── Header ── */}
-      <div className="bg-white border-b border-slate-100 px-4 pt-12 pb-3 shadow-sm sticky top-0 z-20">
+      <div className="bg-white border-b border-slate-100 px-4 pt-4 pb-3 shadow-sm sticky top-0 z-20">
         <div className="flex items-center gap-3 mb-3">
           <button onClick={onBack} className="p-2 -ml-2 bg-slate-100 rounded-full">
             <ArrowLeft size={20} className="text-slate-600" />

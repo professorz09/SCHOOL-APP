@@ -129,7 +129,7 @@ export default function App() {
     return (
       <div className="h-dvh bg-gradient-to-br from-blue-600 to-blue-800 flex items-center justify-center p-4">
         <div className="w-full max-w-sm bg-slate-50 rounded-2xl shadow-2xl flex flex-col overflow-hidden" style={{height: 'min(850px, calc(100dvh - 2rem))'}}>
-          <div className="bg-gradient-to-r from-blue-600 to-blue-700 px-6 pt-12 pb-8 text-white">
+          <div className="bg-gradient-to-r from-blue-600 to-blue-700 px-6 pt-6 pb-8 text-white">
             <div className="text-2xl font-black">Select Student</div>
             <div className="text-xs font-bold text-blue-100 mt-1">Choose which child to view</div>
           </div>

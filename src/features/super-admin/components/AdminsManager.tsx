@@ -88,7 +88,7 @@ export const AdminsManager: React.FC<Props> = ({ onBack }) => {
   };
 
   const renderHeader = (title: string, back: () => void, action?: React.ReactNode) => (
-    <div className="bg-white border-b border-slate-100 px-4 pt-12 pb-4 flex items-center justify-between sticky top-0 z-10 shadow-sm">
+    <div className="bg-white border-b border-slate-100 px-4 pt-4 pb-4 flex items-center justify-between sticky top-0 z-10 shadow-sm">
       <div className="flex items-center gap-3">
         <button onClick={back} className="p-2 -ml-2 bg-slate-100 rounded-full text-slate-600 hover:bg-slate-200 transition-colors">
           <ArrowLeft size={20} />

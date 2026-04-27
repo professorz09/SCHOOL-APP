@@ -75,7 +75,7 @@ export const FeesView: React.FC<Props> = ({ onBack }) => {
   if (view === 'QR_PAY') return (
     <div className="absolute inset-0 z-50 bg-white flex flex-col animate-in slide-in-from-right-8 duration-300">
       {/* Header */}
-      <div className="px-4 pt-12 pb-4 flex items-center gap-3 border-b border-slate-100">
+      <div className="px-4 pt-4 pb-4 flex items-center gap-3 border-b border-slate-100">
         <button onClick={() => setView('MAIN')} className="p-2 -ml-2 bg-slate-100 rounded-full">
           <ArrowLeft size={20} className="text-slate-600" />
         </button>
@@ -124,7 +124,7 @@ export const FeesView: React.FC<Props> = ({ onBack }) => {
   return (
     <div className="absolute inset-0 z-50 bg-slate-50 flex flex-col animate-in slide-in-from-right-8 duration-300">
       {/* Header */}
-      <div className="bg-white border-b border-slate-100 px-4 pt-12 pb-4 flex items-center gap-3 shadow-sm">
+      <div className="bg-white border-b border-slate-100 px-4 pt-4 pb-4 flex items-center gap-3 shadow-sm">
         <button onClick={onBack} className="p-2 -ml-2 bg-slate-100 rounded-full">
           <ArrowLeft size={20} className="text-slate-600" />
         </button>
