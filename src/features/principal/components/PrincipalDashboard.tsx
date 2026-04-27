@@ -1,13 +1,13 @@
 import React, { useEffect, useState } from 'react';
 import {
-  Users, UserCheck, Receipt, Library, Bus, CircleAlert,
-  Bell, CheckSquare, Settings, TrendingUp, IndianRupee, Calendar,
-  CalendarDays, CreditCard, Banknote, Lock, ClipboardCheck, ArrowUpRight,
-  UserPlus, ChevronRight,
+  Users, UserCheck, BookOpen, IndianRupee, Bus, CircleAlert,
+  Wallet, MoreHorizontal, CircleCheckBig, MapPin, ChevronRight,
+  SlidersHorizontal,
 } from 'lucide-react';
 import { studentService } from '../../../services/student.service';
 import { staffService } from '../../../services/staff.service';
 import { principalService } from '../../../services/principal.service';
+import { transportService } from '../../../services/transport.service';
 import { PrincipalView } from '../pages/PrincipalLayout';
 import { useAuthStore } from '../../../store/authStore';
 
@@ -15,37 +15,33 @@ interface Props {
   onNavigate: (view: PrincipalView) => void;
 }
 
-interface Module {
-  icon: React.ComponentType<{ size?: number; className?: string }>;
-  label: string;
-  view: PrincipalView;
-  color: string;
-  badge?: number | null;
-}
-
-const todayLabel = new Date().toLocaleDateString('en-IN', {
-  weekday: 'long', day: 'numeric', month: 'long',
-});
+const LIVE_CLASSES = [
+  { classId: '10-A', subject: 'Mathematics', teacher: 'Mr. Sharma', present: 42, total: 45, color: 'bg-purple-100 text-purple-700' },
+  { classId: '9-B',  subject: 'Physics',     teacher: 'Mrs. Gupta',  present: 38, total: 40, color: 'bg-emerald-100 text-emerald-700' },
+  { classId: '8-A',  subject: 'English',     teacher: 'Ms. Priya',   present: 35, total: 38, color: 'bg-sky-100 text-sky-700' },
+];
 
 export const PrincipalDashboard: React.FC<Props> = ({ onNavigate }) => {
-  const session = useAuthStore(state => state.session);
+  const session = useAuthStore(s => s.session);
   const [stats, setStats] = useState({
-    totalStudents: 0, presentToday: 0, paidFees: 0, totalFees: 0,
+    totalStudents: 0, avgAttendance: 0, paidFees: 0, totalFees: 0,
     totalStaff: 0, openComplaints: 0, pendingApprovals: 0,
   });
+  const [vehicles, setVehicles] = useState<{ id: string; vehicleNo: string; routeName: string; driverName: string; isActive: boolean; currentStop: string }[]>([]);
 
   useEffect(() => {
     const load = async () => {
-      const [students, staff, complaints, approvals] = await Promise.all([
+      const [students, staff, complaints, approvals, allVehicles] = await Promise.all([
         studentService.getAll(),
         staffService.getAll(),
         principalService.getComplaints(),
         principalService.getApprovals(),
+        transportService.getVehicles(),
       ]);
       setStats({
         totalStudents: students.length,
-        presentToday: students.length > 0
-          ? Math.round(students.reduce((a, s) => a + s.attendancePercent, 0) / students.length)
+        avgAttendance: students.length > 0
+          ? parseFloat((students.reduce((a, s) => a + s.attendancePercent, 0) / students.length).toFixed(1))
           : 0,
         paidFees: students.reduce((a, s) => a + s.paidFee, 0),
         totalFees: students.reduce((a, s) => a + s.totalFee, 0),
@@ -53,213 +49,180 @@ export const PrincipalDashboard: React.FC<Props> = ({ onNavigate }) => {
         openComplaints: complaints.filter(c => c.status !== 'RESOLVED').length,
         pendingApprovals: approvals.filter(a => a.status === 'PENDING').length,
       });
+      setVehicles(allVehicles.filter(v => v.isActive).map(v => ({
+        id: v.id,
+        vehicleNo: v.vehicleNo,
+        routeName: v.routeName,
+        driverName: v.driverName,
+        isActive: v.isActive,
+        currentStop: v.stops[Math.floor(v.stops.length / 2)]?.name ?? 'En Route',
+      })));
     };
     load();
   }, []);
 
   const feePercent = stats.totalFees > 0 ? Math.round((stats.paidFees / stats.totalFees) * 100) : 0;
-  const feePending = Math.max(0, stats.totalFees - stats.paidFees);
-  const firstName = session?.name?.split(' ')[0] ?? 'Principal';
 
-  const formatCrore = (n: number) => {
-    if (n >= 10_000_000) return `₹${(n / 10_000_000).toFixed(1)}Cr`;
-    if (n >= 100_000) return `₹${(n / 100_000).toFixed(1)}L`;
-    if (n >= 1000) return `₹${(n / 1000).toFixed(0)}K`;
-    return `₹${n}`;
-  };
-
-  const modules: Module[] = [
-    { icon: UserCheck,      label: 'Staff',        view: 'STAFF',            color: 'bg-blue-500',    badge: stats.totalStaff },
-    { icon: ClipboardCheck, label: 'Attendance',   view: 'ATTENDANCE',       color: 'bg-cyan-500' },
-    { icon: CalendarDays,   label: 'Timetable',    view: 'TIMETABLE',        color: 'bg-sky-500' },
-    { icon: Calendar,       label: 'Classes',      view: 'CLASS_MGMT',       color: 'bg-violet-500' },
-    { icon: Banknote,       label: 'Salary',       view: 'SALARY_LEDGER',    color: 'bg-teal-500' },
-    { icon: Receipt,        label: 'Expenses',     view: 'EXPENSES',         color: 'bg-rose-500' },
-    { icon: Library,        label: 'Assets',       view: 'ASSETS',           color: 'bg-amber-500' },
-    { icon: Bus,            label: 'Transport',    view: 'TRANSPORT_MGMT',   color: 'bg-orange-500' },
-    { icon: Bell,           label: 'Notices',      view: 'NOTICES',          color: 'bg-fuchsia-500' },
-    { icon: CircleAlert,    label: 'Complaints',   view: 'COMPLAINTS',       color: 'bg-red-500',     badge: stats.openComplaints || null },
-    { icon: CheckSquare,    label: 'Approvals',    view: 'APPROVALS',        color: 'bg-emerald-500', badge: stats.pendingApprovals || null },
-    { icon: Lock,           label: 'Year Close',   view: 'YEAR_CLOSING',     color: 'bg-slate-500' },
-    { icon: Settings,       label: 'Settings',     view: 'SETTINGS',         color: 'bg-slate-400' },
+  const QUICK_ACTIONS: { icon: React.ReactNode; label: string; view: PrincipalView; color: string }[] = [
+    { icon: <Users size={22} />,       label: 'Students',   view: 'STUDENTS',       color: 'text-violet-600 bg-violet-50' },
+    { icon: <UserCheck size={22} />,   label: 'Staff',      view: 'STAFF',          color: 'text-blue-600 bg-blue-50' },
+    { icon: <BookOpen size={22} />,    label: 'Classes',    view: 'CLASS_MGMT',     color: 'text-purple-600 bg-purple-50' },
+    { icon: <IndianRupee size={22} />, label: 'Fees Col.',  view: 'FEE_LEDGER',     color: 'text-emerald-600 bg-emerald-50' },
+    { icon: <Bus size={22} />,         label: 'Transport',  view: 'TRANSPORT_MGMT', color: 'text-orange-500 bg-orange-50' },
+    { icon: <CircleAlert size={22} />, label: 'Complaints', view: 'COMPLAINTS',     color: 'text-rose-600 bg-rose-50' },
+    { icon: <Wallet size={22} />,      label: 'Expenses',   view: 'EXPENSES',       color: 'text-red-500 bg-red-50' },
+    { icon: <MoreHorizontal size={22} />, label: 'More',    view: 'SETTINGS',       color: 'text-slate-500 bg-slate-100' },
   ];
 
   return (
-    <div className="flex flex-col gap-4 animate-in slide-in-from-bottom-4 duration-300 fade-in">
+    <div className="flex flex-col gap-5 pb-4">
 
-      {/* ── Greeting ─────────────────────────────────────────────── */}
-      <div className="flex items-center justify-between pt-1">
+      {/* ── Header: Attendance ──────────────────────────────────────────── */}
+      <div className="flex items-start justify-between pt-1">
         <div>
-          <p className="text-[11px] font-bold text-slate-400 uppercase tracking-widest">{todayLabel}</p>
-          <h2 className="text-2xl font-black text-slate-900 mt-0.5">Namaskar, {firstName} 👋</h2>
+          <p className="text-[11px] font-black uppercase tracking-widest text-slate-400">Today's Attendance</p>
+          <h1 className="text-5xl font-black text-blue-600 mt-1 leading-none tabular-nums">
+            {stats.avgAttendance}<span className="text-3xl">%</span>
+          </h1>
         </div>
         <button
-          onClick={() => onNavigate('ADMISSION')}
-          className="flex items-center gap-1.5 bg-indigo-600 text-white text-xs font-black px-3 py-2 rounded-xl shadow-sm active:scale-95 transition-transform"
+          onClick={() => onNavigate('SETTINGS')}
+          className="w-11 h-11 rounded-full bg-slate-900 flex items-center justify-center shadow-md active:scale-90 transition-transform"
         >
-          <UserPlus size={14} />
-          Admit
+          <SlidersHorizontal size={18} className="text-white" />
         </button>
       </div>
 
-      {/* ── Primary Hero Cards: Students + Fees ──────────────────── */}
-      <div className="grid grid-cols-2 gap-3">
+      {/* ── Quick Actions Grid ──────────────────────────────────────────── */}
+      <div className="grid grid-cols-4 gap-3">
+        {QUICK_ACTIONS.map(({ icon, label, view, color }) => (
+          <button
+            key={label}
+            onClick={() => onNavigate(view)}
+            className="flex flex-col items-center gap-2 active:scale-95 transition-transform"
+          >
+            <div className={`w-14 h-14 rounded-2xl flex items-center justify-center ${color} shadow-sm`}>
+              {icon}
+            </div>
+            <span className="text-[10px] font-black text-slate-500 uppercase tracking-wide text-center leading-tight">{label}</span>
+          </button>
+        ))}
+      </div>
 
-        {/* Students Card */}
+      {/* ── Stat Cards ─────────────────────────────────────────────────── */}
+      <div className="grid grid-cols-2 gap-3">
+        {/* Total Students */}
         <button
           onClick={() => onNavigate('STUDENTS')}
-          className="group relative bg-indigo-600 rounded-2xl p-5 text-white shadow-lg active:scale-[0.97] transition-all overflow-hidden text-left"
+          className="bg-white rounded-2xl border border-slate-100 shadow-sm p-4 text-left active:scale-[0.97] transition-transform"
         >
-          <div className="absolute -top-6 -right-6 w-24 h-24 rounded-full bg-white/10" />
-          <div className="absolute -bottom-4 -left-4 w-16 h-16 rounded-full bg-white/5" />
-          <div className="relative">
-            <div className="w-9 h-9 rounded-xl bg-white/20 flex items-center justify-center mb-4">
-              <Users size={18} />
-            </div>
-            <div className="text-4xl font-black leading-none tabular-nums">{stats.totalStudents}</div>
-            <div className="text-[11px] font-black uppercase tracking-widest mt-1.5 text-indigo-200">Students</div>
-            <div className="flex items-center gap-1 mt-3 text-[10px] font-bold text-indigo-200">
-              <TrendingUp size={11} />
-              <span>{stats.presentToday}% avg attendance</span>
-            </div>
-          </div>
-          <div className="absolute bottom-3 right-3 w-6 h-6 rounded-full bg-white/10 flex items-center justify-center group-hover:bg-white/20 transition-colors">
-            <ChevronRight size={13} />
+          <p className="text-[10px] font-black uppercase tracking-widest text-slate-400">Total Students</p>
+          <p className="text-4xl font-black text-slate-900 mt-2 tabular-nums leading-none">{stats.totalStudents.toLocaleString('en-IN')}</p>
+          <div className="flex items-center gap-1.5 mt-2">
+            <CircleCheckBig size={13} className="text-emerald-500" />
+            <span className="text-[10px] font-black text-emerald-600">Active this year</span>
           </div>
         </button>
 
-        {/* Fees Card */}
+        {/* Fee Collected */}
         <button
           onClick={() => onNavigate('FEE_LEDGER')}
-          className="group relative bg-emerald-600 rounded-2xl p-5 text-white shadow-lg active:scale-[0.97] transition-all overflow-hidden text-left"
+          className="bg-white rounded-2xl border border-slate-100 shadow-sm p-4 text-left active:scale-[0.97] transition-transform"
         >
-          <div className="absolute -top-6 -right-6 w-24 h-24 rounded-full bg-white/10" />
-          <div className="absolute -bottom-4 -left-4 w-16 h-16 rounded-full bg-white/5" />
-          <div className="relative">
-            <div className="w-9 h-9 rounded-xl bg-white/20 flex items-center justify-center mb-4">
-              <IndianRupee size={18} />
-            </div>
-            <div className="text-4xl font-black leading-none tabular-nums">{feePercent}<span className="text-xl font-black text-emerald-200">%</span></div>
-            <div className="text-[11px] font-black uppercase tracking-widest mt-1.5 text-emerald-200">Fees Collected</div>
-            <div className="mt-3 w-full h-1.5 bg-white/20 rounded-full overflow-hidden">
-              <div className="h-full bg-white rounded-full transition-all duration-700" style={{ width: `${feePercent}%` }} />
-            </div>
-          </div>
-          <div className="absolute bottom-3 right-3 w-6 h-6 rounded-full bg-white/10 flex items-center justify-center group-hover:bg-white/20 transition-colors">
-            <ChevronRight size={13} />
+          <p className="text-[10px] font-black uppercase tracking-widest text-slate-400">Fee Collected</p>
+          <p className="text-4xl font-black text-slate-900 mt-2 tabular-nums leading-none">{feePercent}<span className="text-2xl text-slate-400">%</span></p>
+          <div className="mt-2">
+            <span className={`inline-block text-[10px] font-black px-2 py-0.5 rounded-full ${feePercent >= 80 ? 'bg-emerald-100 text-emerald-700' : 'bg-amber-100 text-amber-700'}`}>
+              {feePercent >= 80 ? '✓ ON TARGET' : 'BELOW TARGET'}
+            </span>
           </div>
         </button>
       </div>
 
-      {/* ── Fee Details Row ───────────────────────────────────────── */}
-      <div className="grid grid-cols-2 gap-3">
-        <div className="bg-white rounded-2xl border border-slate-100 shadow-sm p-4">
-          <div className="flex items-center gap-2 mb-1">
-            <div className="w-7 h-7 rounded-lg bg-emerald-50 flex items-center justify-center">
-              <IndianRupee size={14} className="text-emerald-600" />
-            </div>
-            <span className="text-[10px] font-black uppercase tracking-widest text-slate-400">Collected</span>
-          </div>
-          <div className="text-xl font-black text-emerald-700 mt-1">{formatCrore(stats.paidFees)}</div>
-        </div>
-        <div className="bg-white rounded-2xl border border-slate-100 shadow-sm p-4">
-          <div className="flex items-center gap-2 mb-1">
-            <div className="w-7 h-7 rounded-lg bg-rose-50 flex items-center justify-center">
-              <IndianRupee size={14} className="text-rose-600" />
-            </div>
-            <span className="text-[10px] font-black uppercase tracking-widest text-slate-400">Pending</span>
-          </div>
-          <div className="text-xl font-black text-rose-600 mt-1">{formatCrore(feePending)}</div>
-        </div>
-      </div>
-
-      {/* ── Alert Banner ─────────────────────────────────────────── */}
+      {/* ── Alert Strip ────────────────────────────────────────────────── */}
       {(stats.openComplaints > 0 || stats.pendingApprovals > 0) && (
-        <div className="flex flex-col gap-2">
+        <div className="flex gap-2">
           {stats.openComplaints > 0 && (
             <button
               onClick={() => onNavigate('COMPLAINTS')}
-              className="flex items-center gap-3 bg-orange-50 border border-orange-200 rounded-2xl px-4 py-3 text-left active:scale-[0.98] transition-transform"
+              className="flex-1 flex items-center gap-2 bg-orange-50 border border-orange-100 rounded-2xl px-3 py-2.5 active:scale-[0.97] transition-transform"
             >
-              <div className="w-8 h-8 rounded-full bg-orange-500 text-white flex items-center justify-center shrink-0">
-                <CircleAlert size={15} />
-              </div>
-              <div className="flex-1">
-                <div className="text-xs font-black text-orange-800">{stats.openComplaints} open complaint{stats.openComplaints > 1 ? 's' : ''}</div>
-                <div className="text-[10px] font-bold text-orange-500 mt-0.5">Tap to review</div>
-              </div>
-              <ArrowUpRight size={15} className="text-orange-400" />
+              <CircleAlert size={15} className="text-orange-500 shrink-0" />
+              <span className="text-xs font-black text-orange-700 truncate">{stats.openComplaints} Complaints</span>
+              <ChevronRight size={13} className="text-orange-400 ml-auto shrink-0" />
             </button>
           )}
           {stats.pendingApprovals > 0 && (
             <button
               onClick={() => onNavigate('APPROVALS')}
-              className="flex items-center gap-3 bg-violet-50 border border-violet-200 rounded-2xl px-4 py-3 text-left active:scale-[0.98] transition-transform"
+              className="flex-1 flex items-center gap-2 bg-violet-50 border border-violet-100 rounded-2xl px-3 py-2.5 active:scale-[0.97] transition-transform"
             >
-              <div className="w-8 h-8 rounded-full bg-violet-500 text-white flex items-center justify-center shrink-0">
-                <CheckSquare size={15} />
-              </div>
-              <div className="flex-1">
-                <div className="text-xs font-black text-violet-800">{stats.pendingApprovals} pending approval{stats.pendingApprovals > 1 ? 's' : ''}</div>
-                <div className="text-[10px] font-bold text-violet-500 mt-0.5">Tap to review</div>
-              </div>
-              <ArrowUpRight size={15} className="text-violet-400" />
+              <CircleCheckBig size={15} className="text-violet-500 shrink-0" />
+              <span className="text-xs font-black text-violet-700 truncate">{stats.pendingApprovals} Approvals</span>
+              <ChevronRight size={13} className="text-violet-400 ml-auto shrink-0" />
             </button>
           )}
         </div>
       )}
 
-      {/* ── Quick Stats Row ───────────────────────────────────────── */}
-      <div className="bg-white rounded-2xl border border-slate-100 shadow-sm overflow-hidden">
-        <div className="px-4 pt-4 pb-2">
-          <p className="text-[10px] font-black uppercase tracking-[0.2em] text-slate-400">At a Glance</p>
+      {/* ── Live Classes ────────────────────────────────────────────────── */}
+      <div>
+        <div className="flex items-center justify-between mb-3">
+          <h2 className="text-base font-black text-slate-900 uppercase tracking-tight">Live Classes</h2>
+          <button
+            onClick={() => onNavigate('TIMETABLE')}
+            className="text-xs font-black text-blue-600 uppercase tracking-wide"
+          >
+            Monitor All
+          </button>
         </div>
-        <div className="divide-y divide-slate-50">
-          {[
-            { label: 'Active Staff',     val: `${stats.totalStaff} members`,   icon: UserCheck,  color: 'text-blue-500',    bg: 'bg-blue-50',    view: 'STAFF' as PrincipalView },
-            { label: 'Avg Attendance',   val: `${stats.presentToday}%`,         icon: TrendingUp, color: 'text-emerald-500', bg: 'bg-emerald-50', view: 'ATTENDANCE' as PrincipalView },
-          ].map(({ label, val, icon: Icon, color, bg, view }) => (
-            <button
-              key={label}
-              onClick={() => onNavigate(view)}
-              className="w-full flex items-center justify-between px-4 py-3 hover:bg-slate-50 transition-colors text-left"
-            >
-              <div className="flex items-center gap-3">
-                <div className={`w-8 h-8 rounded-xl ${bg} ${color} flex items-center justify-center`}>
-                  <Icon size={15} />
-                </div>
-                <span className="text-sm font-bold text-slate-700">{label}</span>
+        <div className="bg-white rounded-2xl border border-slate-100 shadow-sm overflow-hidden divide-y divide-slate-50">
+          {LIVE_CLASSES.map((cls) => (
+            <div key={cls.classId} className="flex items-center gap-3 px-4 py-3.5">
+              <div className={`w-11 h-11 rounded-xl flex items-center justify-center shrink-0 font-black text-sm ${cls.color}`}>
+                {cls.classId}
               </div>
-              <div className="flex items-center gap-1.5">
-                <span className="text-sm font-black text-slate-900">{val}</span>
-                <ChevronRight size={14} className="text-slate-300" />
+              <div className="flex-1 min-w-0">
+                <p className="text-sm font-black text-slate-900">{cls.subject}</p>
+                <p className="text-[11px] font-bold text-slate-400 mt-0.5">{cls.teacher} · {cls.present}/{cls.total} Present</p>
               </div>
-            </button>
+              <div className="w-2.5 h-2.5 rounded-full bg-red-400 shrink-0 animate-pulse" />
+            </div>
           ))}
         </div>
       </div>
 
-      {/* ── All Modules ───────────────────────────────────────────── */}
+      {/* ── Transport Fleet ─────────────────────────────────────────────── */}
       <div>
-        <p className="text-[10px] font-black uppercase tracking-[0.2em] text-slate-400 mb-3 px-1">All Modules</p>
-        <div className="grid grid-cols-4 gap-2.5">
-          {modules.map(({ icon: Icon, label, view, color, badge }) => (
-            <button
-              key={label}
-              onClick={() => onNavigate(view)}
-              className="relative flex flex-col items-center gap-2 bg-white rounded-2xl border border-slate-100 shadow-sm p-3 active:scale-[0.95] transition-transform hover:shadow-md hover:border-slate-200"
-            >
-              {badge !== null && badge !== undefined && badge !== 0 && (
-                <div className="absolute top-1.5 right-1.5 min-w-[16px] h-[16px] px-1 bg-rose-500 text-white text-[8px] font-black rounded-full flex items-center justify-center">
-                  {badge > 99 ? '99+' : badge}
-                </div>
-              )}
-              <div className={`w-10 h-10 rounded-xl flex items-center justify-center ${color}`}>
-                <Icon size={19} className="text-white" />
+        <div className="flex items-center justify-between mb-3">
+          <h2 className="text-base font-black text-slate-900 uppercase tracking-tight">Transport Fleet</h2>
+          <button
+            onClick={() => onNavigate('TRANSPORT_MGMT')}
+            className="text-xs font-black text-blue-600 uppercase tracking-wide"
+          >
+            View Map
+          </button>
+        </div>
+        <div className="bg-white rounded-2xl border border-slate-100 shadow-sm overflow-hidden divide-y divide-slate-50">
+          {vehicles.map((v) => (
+            <div key={v.id} className="flex items-center gap-3 px-4 py-3.5">
+              <div className="w-11 h-11 rounded-xl bg-amber-100 flex items-center justify-center shrink-0">
+                <Bus size={20} className="text-amber-600" />
               </div>
-              <span className="text-[10px] font-black text-slate-700 text-center leading-tight">{label}</span>
-            </button>
+              <div className="flex-1 min-w-0">
+                <p className="text-sm font-black text-slate-900">{v.routeName.toUpperCase()} · {v.vehicleNo}</p>
+                <div className="flex items-center gap-1 mt-0.5">
+                  <MapPin size={10} className="text-blue-500 shrink-0" />
+                  <p className="text-[11px] font-bold text-blue-600 truncate">{v.currentStop}</p>
+                </div>
+                <p className="text-[10px] font-bold text-slate-400 mt-0.5 uppercase tracking-wide">Driver: {v.driverName} · Ongoing</p>
+              </div>
+              <div className="w-2.5 h-2.5 rounded-full bg-emerald-400 shrink-0" />
+            </div>
           ))}
+          {vehicles.length === 0 && (
+            <div className="px-4 py-6 text-center text-sm font-bold text-slate-400">No active vehicles</div>
+          )}
         </div>
       </div>
 
