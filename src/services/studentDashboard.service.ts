@@ -1,5 +1,17 @@
 import { TimetableDay, StudentExamResult, FeePaymentUpload, TransportStop, StudentNotice, StudentComplaint } from '../types/student.types';
 import { sharedExamResults } from './sharedExamResults';
+import { sharedSchedule } from './sharedSchedule';
+
+export interface UpcomingExam {
+  id: string;
+  title: string;
+  subject: string;
+  testType: string;
+  scheduledDate: string;
+  maxMarks: number;
+  duration: number;
+  isFinal: boolean;
+}
 
 const TODAY = new Date().toISOString().split('T')[0];
 
@@ -79,6 +91,29 @@ let _complaints = [...MOCK_COMPLAINTS];
 export const studentDashboardService = {
   async getTimetable(): Promise<TimetableDay[]> {
     return [...MOCK_TIMETABLE];
+  },
+
+  async getScheduledExams(): Promise<UpcomingExam[]> {
+    const { tests, finalExams } = sharedSchedule.getForClass('Class 10', 'A');
+    const upcoming: UpcomingExam[] = [
+      ...tests
+        .filter(t => !t.resultsUploaded)
+        .map(t => ({
+          id: t.id, title: t.title, subject: t.subject,
+          testType: t.testType, scheduledDate: t.scheduledDate,
+          maxMarks: t.maxMarks, duration: t.duration, isFinal: false,
+        })),
+      ...finalExams
+        .filter(fe => !fe.resultsUploaded)
+        .map(fe => ({
+          id: fe.id, title: fe.title,
+          subject: fe.subjects.map(s => s.subject).join(', '),
+          testType: 'FINAL', scheduledDate: fe.scheduledDate,
+          maxMarks: fe.subjects.reduce((a, s) => a + s.maxMarks, 0),
+          duration: fe.duration, isFinal: true,
+        })),
+    ];
+    return upcoming.sort((a, b) => a.scheduledDate.localeCompare(b.scheduledDate));
   },
 
   async getResults(): Promise<StudentExamResult[]> {

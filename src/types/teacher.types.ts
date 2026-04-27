@@ -1,6 +1,25 @@
 export type TestType = 'UNIT_TEST' | 'MID_TERM' | 'FINAL' | 'QUIZ' | 'PRACTICAL';
 export type HomeworkStatus = 'PENDING' | 'SUBMITTED' | 'GRADED';
 
+export interface FinalExamSubject {
+  subject: string;
+  maxMarks: number;
+  teacherName: string;
+}
+
+export interface FinalExamSchedule {
+  id: string;
+  classId: string;
+  className: string;
+  section: string;
+  title: string;
+  description: string;
+  scheduledDate: string;
+  duration: number;
+  subjects: FinalExamSubject[];
+  resultsUploaded: boolean;
+}
+
 export interface TeacherClass {
   id: string;
   className: string;

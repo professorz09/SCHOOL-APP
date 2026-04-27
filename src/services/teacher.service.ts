@@ -1,5 +1,6 @@
-import { TeacherClass, AttendanceRecord, TestSchedule, TestResult, HomeworkItem, TeacherComplaint, ExamPaperRequest, GeneratedExamPaper } from '../types/teacher.types';
-import { sharedExamResults, PublishResultsInput } from './sharedExamResults';
+import { TeacherClass, AttendanceRecord, TestSchedule, HomeworkItem, TeacherComplaint, ExamPaperRequest, GeneratedExamPaper, FinalExamSchedule } from '../types/teacher.types';
+import { sharedExamResults, PublishResultsInput, FinalExamPublishInput } from './sharedExamResults';
+import { sharedSchedule } from './sharedSchedule';
 
 const MOCK_CLASSES: TeacherClass[] = [
   {
@@ -58,9 +59,13 @@ const MOCK_COMPLAINTS: TeacherComplaint[] = [
 
 let _attendance = [...MOCK_ATTENDANCE];
 let _tests = [...MOCK_TESTS];
+let _finalExams: FinalExamSchedule[] = [];
 let _homework = [...MOCK_HOMEWORK];
 let _complaints = [...MOCK_COMPLAINTS];
 let _generatedPapers: GeneratedExamPaper[] = [];
+
+// seed shared schedule with mock tests
+sharedSchedule.syncTests(_tests);
 
 export const teacherService = {
   async getClasses(): Promise<TeacherClass[]> {
@@ -96,12 +101,31 @@ export const teacherService = {
   async createTest(input: Omit<TestSchedule, 'id' | 'resultsUploaded'>): Promise<TestSchedule> {
     const test: TestSchedule = { ...input, id: `test${Date.now()}`, resultsUploaded: false };
     _tests = [test, ..._tests];
+    sharedSchedule.addTest(test);
     return test;
   },
 
   async publishResults(payload: PublishResultsInput): Promise<void> {
     sharedExamResults.publish(payload);
     _tests = _tests.map(t => t.id === payload.testId ? { ...t, resultsUploaded: true } : t);
+    sharedSchedule.markTestUploaded(payload.testId);
+  },
+
+  async getFinalExams(): Promise<FinalExamSchedule[]> {
+    return [..._finalExams];
+  },
+
+  async createFinalExam(input: Omit<FinalExamSchedule, 'id' | 'resultsUploaded'>): Promise<FinalExamSchedule> {
+    const exam: FinalExamSchedule = { ...input, id: `fe${Date.now()}`, resultsUploaded: false };
+    _finalExams = [exam, ..._finalExams];
+    sharedSchedule.addFinalExam(exam);
+    return exam;
+  },
+
+  async publishFinalExamResults(payload: FinalExamPublishInput): Promise<void> {
+    sharedExamResults.publishFinalExam(payload);
+    _finalExams = _finalExams.map(fe => fe.id === payload.finalExamId ? { ...fe, resultsUploaded: true } : fe);
+    sharedSchedule.markFinalExamUploaded(payload.finalExamId);
   },
 
   async getHomework(): Promise<HomeworkItem[]> {
