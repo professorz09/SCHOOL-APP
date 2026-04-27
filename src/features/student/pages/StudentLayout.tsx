@@ -7,9 +7,8 @@ import { TransportView } from '../components/TransportView';
 import { StudentNoticesView } from '../components/StudentNoticesView';
 import { StudentComplaintsView } from '../components/StudentComplaintsView';
 import {
-  Calendar, Trophy, CreditCard, Bus, Bell, CircleAlert,
-  BookOpen, Library, HeadphonesIcon, Upload, Clock,
-  ChevronRight, FileText, CheckCircle2, AlertCircle,
+  Calendar, Trophy, CreditCard, Bus, Bell,
+  BookOpen, Library, HeadphonesIcon, Clock, FileText,
 } from 'lucide-react';
 import { timetableService, PERIOD_SLOTS } from '../../../services/timetable.service';
 import { useAuthStore } from '../../../store/authStore';
@@ -41,11 +40,6 @@ const isLive = (startTime: string, endTime: string) => {
   const [eh, em] = endTime.split(':').map(Number);
   return nowMins >= sh * 60 + sm && nowMins < eh * 60 + em;
 };
-
-const PENDING_TASKS = [
-  { id: 't1', title: 'Algebra Worksheet', subject: 'Mathematics', dueLabel: 'Due Tomorrow', urgent: true },
-  { id: 't2', title: 'Science Project Report', subject: 'Science', dueLabel: 'Due in 3 Days', urgent: false },
-];
 
 const LEAVE_APPS = [
   { id: 'l1', title: 'Family Visit', date: '26 Apr', status: 'PENDING' as const },
@@ -174,38 +168,11 @@ export const StudentLayout: React.FC = () => {
         </div>
       </div>
 
-      {/* ── Pending Tasks ─────────────────────────────────────────────── */}
-      <div>
-        <h3 className="text-base font-black text-slate-900 uppercase tracking-tight mb-3">Pending Tasks</h3>
-        <div className="space-y-2">
-          {PENDING_TASKS.map(task => (
-            <div key={task.id}
-              className="bg-white rounded-2xl border border-slate-100 shadow-sm px-4 py-3.5 flex items-center gap-3">
-              <div className="flex-1 min-w-0">
-                <div className="font-extrabold text-slate-900 text-sm">{task.title}</div>
-                <div className="flex items-center gap-1.5 mt-0.5">
-                  {task.urgent
-                    ? <AlertCircle size={10} className="text-rose-500 shrink-0" />
-                    : <Clock size={10} className="text-amber-500 shrink-0" />}
-                  <span className={`text-[10px] font-black ${task.urgent ? 'text-rose-500' : 'text-amber-600'}`}>
-                    {task.dueLabel}
-                  </span>
-                </div>
-              </div>
-              <button
-                className="flex items-center gap-1.5 bg-slate-900 text-white text-[10px] font-black px-3 py-2 rounded-full active:scale-95 transition-transform shrink-0">
-                <Upload size={11} /> Upload
-              </button>
-            </div>
-          ))}
-        </div>
-      </div>
-
       {/* ── My Leave Applications ─────────────────────────────────────── */}
       <div>
         <div className="flex items-center justify-between mb-3">
           <h3 className="text-base font-black text-slate-900 uppercase tracking-tight">My Leave Applications</h3>
-          <button className="text-xs font-black text-blue-600 uppercase tracking-wide">Apply Leave</button>
+          <button onClick={() => setView('COMPLAINTS')} className="text-xs font-black text-blue-600 uppercase tracking-wide">Apply Leave</button>
         </div>
         <div className="space-y-2">
           {LEAVE_APPS.map(app => (
