@@ -11,6 +11,11 @@ const barColor = (pct: number) =>
 const pctColor = (pct: number) =>
   pct >= 75 ? 'text-emerald-600' : pct >= 50 ? 'text-amber-600' : 'text-rose-500';
 
+const PassFailBadge = ({ pct }: { pct: number }) =>
+  pct >= 33
+    ? <span className="text-[9px] font-black uppercase tracking-widest px-2 py-0.5 rounded-full bg-emerald-100 text-emerald-700 border border-emerald-200">Pass</span>
+    : <span className="text-[9px] font-black uppercase tracking-widest px-2 py-0.5 rounded-full bg-rose-100 text-rose-700 border border-rose-200">Fail</span>;
+
 const rankSuffix = (n: number) =>
   n === 1 ? 'st' : n === 2 ? 'nd' : n === 3 ? 'rd' : 'th';
 
@@ -162,8 +167,8 @@ export const ResultsView: React.FC<Props> = ({ onBack }) => {
                           </div>
                         </div>
 
-                        {/* Marks + Rank row */}
-                        <div className="px-4 pb-3 flex items-center gap-2">
+                        {/* Marks + Rank + Pass/Fail row */}
+                        <div className="px-4 pb-3 flex items-center gap-2 flex-wrap">
                           <div className="bg-slate-50 border border-slate-100 rounded-xl px-3 py-1.5 flex items-baseline gap-1">
                             <span className="font-black text-slate-900 text-sm tabular-nums">{r.obtainedMarks}</span>
                             <span className="text-slate-400 font-bold text-xs">/ {r.maxMarks}</span>
@@ -178,6 +183,7 @@ export const ResultsView: React.FC<Props> = ({ onBack }) => {
                               <span className="text-[9px] font-bold text-amber-400">/{r.totalStudents}</span>
                             </div>
                           )}
+                          <PassFailBadge pct={pct} />
                         </div>
 
                         {/* Teacher note */}
@@ -256,7 +262,7 @@ export const ResultsView: React.FC<Props> = ({ onBack }) => {
                                   </div>
                                 </div>
                               </div>
-                              <div className="flex items-center gap-2 shrink-0">
+                              <div className="flex items-center gap-2 shrink-0 flex-wrap justify-end">
                                 {r.rank && (
                                   <div className="flex items-center gap-1 bg-amber-50 border border-amber-100 rounded-lg px-1.5 py-0.5">
                                     <Medal size={9} className="text-amber-500" />
@@ -265,6 +271,7 @@ export const ResultsView: React.FC<Props> = ({ onBack }) => {
                                     </span>
                                   </div>
                                 )}
+                                <PassFailBadge pct={pct} />
                                 <span className={`font-black text-sm tabular-nums ${pctColor(pct)}`}>{pct}%</span>
                                 <span className="text-[10px] font-bold text-slate-500 tabular-nums">{r.obtainedMarks}/{r.maxMarks}</span>
                               </div>
