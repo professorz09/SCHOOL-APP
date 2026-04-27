@@ -43,6 +43,7 @@ export interface TestSchedule {
   maxMarks: number;
   syllabus: string;
   resultsUploaded: boolean;
+  results?: TestResult[];
 }
 
 export interface TestResult {
