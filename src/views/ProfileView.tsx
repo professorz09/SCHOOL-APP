@@ -118,10 +118,12 @@ export const ProfileView: React.FC = () => {
         <div className="bg-white rounded-2xl border border-slate-100 shadow-sm overflow-hidden">
           <div className="flex items-center justify-between px-4 pt-4 pb-2">
             <p className="text-[9px] font-black uppercase tracking-widest text-slate-400">Account Info</p>
-            <button onClick={() => { setEditName(session.name || ''); setEditMobile(session.mobileNumber || ''); setIsEditMode(true); }}
-              className="text-[9px] font-black text-indigo-600 hover:text-indigo-700">
-              Edit
-            </button>
+            {session.role !== 'PRINCIPAL' && (
+              <button onClick={() => { setEditName(session.name || ''); setEditMobile(session.mobileNumber || ''); setIsEditMode(true); }}
+                className="text-[9px] font-black text-indigo-600 hover:text-indigo-700">
+                Edit
+              </button>
+            )}
           </div>
           {[
             { icon: User, label: 'Full Name', val: session.name || '—' },
