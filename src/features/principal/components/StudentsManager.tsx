@@ -64,7 +64,14 @@ export const StudentsManager: React.FC<Props> = ({ onBack, initialView }) => {
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [feeRecords, setFeeRecords] = useState<FeeRecord[]>([]);
   const [academicRecord, setAcademicRecord] = useState<StudentAcademicRecord | null>(null);
-  const [activeProfileTab, setActiveProfileTab] = useState<'INFO' | 'ACADEMIC' | 'FEES' | 'ATTENDANCE'>('INFO');
+  const [activeProfileTab, setActiveProfileTab] = useState<'INFO' | 'ACADEMIC' | 'FEES' | 'ATTENDANCE' | 'DOCS'>('INFO');
+  const [profileDocs, setProfileDocs] = useState<DocumentUpload[]>([
+    { type: 'BIRTH_CERT',     name: 'Birth Certificate',   uploaded: false },
+    { type: 'TRANSFER_CERT',  name: 'Transfer Certificate', uploaded: false },
+    { type: 'AADHAAR',        name: 'Aadhaar Card',         uploaded: false },
+    { type: 'PHOTO',          name: 'Student Photo',        uploaded: false },
+    { type: 'OTHER',          name: 'Other Documents',      uploaded: false },
+  ]);
   const [createdParent, setCreatedParent] = useState<ParentUser | null>(null);
   const [showParentModal, setShowParentModal] = useState(false);
   const [showAdmissionForm, setShowAdmissionForm] = useState(false);
@@ -146,17 +153,25 @@ export const StudentsManager: React.FC<Props> = ({ onBack, initialView }) => {
   const handleDocumentUpload = (e: React.ChangeEvent<HTMLInputElement>, docType: DocumentUpload['type']) => {
     const file = e.target.files?.[0];
     if (!file) return;
-
-    const maxSizeMB = 2;
-    const maxSizeBytes = maxSizeMB * 1024 * 1024;
-
+    const maxSizeBytes = 2 * 1024 * 1024;
     if (file.size > maxSizeBytes) {
-      showToast(`File must be less than ${maxSizeMB}MB. Current: ${(file.size / 1024 / 1024).toFixed(1)}MB`, 'error');
+      showToast(`File must be less than 2MB. Current: ${(file.size / 1024 / 1024).toFixed(1)}MB`, 'error');
       return;
     }
-
     setDocuments(prev => prev.map(d => d.type === docType ? { ...d, uploaded: true } : d));
     showToast(`${file.name} uploaded (${(file.size / 1024).toFixed(0)}KB)`);
+  };
+
+  const handleProfileDocUpload = (e: React.ChangeEvent<HTMLInputElement>, docType: DocumentUpload['type']) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    const maxSizeBytes = 2 * 1024 * 1024;
+    if (file.size > maxSizeBytes) {
+      showToast(`File must be less than 2MB. Current: ${(file.size / 1024 / 1024).toFixed(1)}MB`, 'error');
+      return;
+    }
+    setProfileDocs(prev => prev.map(d => d.type === docType ? { ...d, uploaded: true } : d));
+    showToast(`${file.name} attached successfully`);
   };
 
   const renderHeader = (title: string, back: () => void, action?: React.ReactNode) => (
@@ -650,6 +665,7 @@ export const StudentsManager: React.FC<Props> = ({ onBack, initialView }) => {
       { key: 'ACADEMIC' as const,   label: 'RESULTS' },
       { key: 'FEES' as const,       label: 'FEES' },
       { key: 'ATTENDANCE' as const, label: 'ATTEND.' },
+      { key: 'DOCS' as const,       label: 'DOCS' },
     ];
 
     return (
@@ -892,6 +908,50 @@ export const StudentsManager: React.FC<Props> = ({ onBack, initialView }) => {
                       </div>
                     );
                   })}
+                </div>
+              </div>
+            )}
+
+            {activeProfileTab === 'DOCS' && (
+              <div className="space-y-4">
+                {/* Already uploaded docs from student record */}
+                {selected.docs.length > 0 && (
+                  <div className="bg-white rounded-2xl border border-slate-100 shadow-sm p-4">
+                    <p className="text-[10px] font-black uppercase tracking-widest text-slate-400 mb-3">Previously Attached</p>
+                    <div className="space-y-2">
+                      {selected.docs.map(doc => (
+                        <div key={doc.id} className="flex items-center gap-3 bg-emerald-50 border border-emerald-100 rounded-xl px-3 py-2.5">
+                          <CheckCircle2 size={16} className="text-emerald-600 shrink-0" />
+                          <span className="text-sm font-bold text-emerald-800 flex-1 truncate">{doc.name}</span>
+                          <span className="text-[9px] font-black text-emerald-600 bg-emerald-100 px-2 py-0.5 rounded-full">SAVED</span>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+
+                {/* Upload checklist */}
+                <div className="bg-white rounded-2xl border border-slate-100 shadow-sm p-4">
+                  <p className="text-[10px] font-black uppercase tracking-widest text-slate-400 mb-1">Document Checklist</p>
+                  <p className="text-[10px] font-bold text-slate-400 mb-3">Attach documents (max 2MB each)</p>
+                  <div className="space-y-2">
+                    {profileDocs.map(doc => (
+                      <div key={doc.type} className="flex items-center justify-between bg-slate-50 rounded-xl p-3 border border-slate-200">
+                        <div className="flex items-center gap-3 flex-1">
+                          {doc.uploaded
+                            ? <CheckCircle2 size={16} className="text-emerald-600 shrink-0" />
+                            : <div className="w-4 h-4 rounded border-2 border-slate-300 shrink-0" />}
+                          <span className={`text-sm font-bold ${doc.uploaded ? 'text-emerald-800' : 'text-slate-700'}`}>{doc.name}</span>
+                        </div>
+                        <label className="cursor-pointer shrink-0">
+                          <input type="file" onChange={e => handleProfileDocUpload(e, doc.type)} className="hidden" accept="image/*,.pdf,.doc,.docx" />
+                          <span className={`text-[10px] font-black px-3 py-1.5 rounded-full transition-colors ${doc.uploaded ? 'bg-emerald-100 text-emerald-700' : 'bg-indigo-100 text-indigo-700 hover:bg-indigo-200'}`}>
+                            {doc.uploaded ? '✓ Done' : 'Attach'}
+                          </span>
+                        </label>
+                      </div>
+                    ))}
+                  </div>
                 </div>
               </div>
             )}

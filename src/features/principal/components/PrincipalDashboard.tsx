@@ -72,7 +72,7 @@ export const PrincipalDashboard: React.FC<Props> = ({ onNavigate }) => {
     { icon: <IndianRupee size={22} />, label: 'Fees Col.',  view: 'FEE_LEDGER',     color: 'text-emerald-600 bg-emerald-50' },
     { icon: <Bus size={22} />,         label: 'Transport',  view: 'TRANSPORT_MGMT', color: 'text-orange-500 bg-orange-50' },
     { icon: <CircleAlert size={22} />, label: 'Complaints', view: 'COMPLAINTS',     color: 'text-rose-600 bg-rose-50' },
-    { icon: <Wallet size={22} />,      label: 'Expenses',   view: 'EXPENSES',       color: 'text-red-500 bg-red-50' },
+    { icon: <UserCog size={22} />,     label: 'Admission',  view: 'ADMISSION',      color: 'text-indigo-600 bg-indigo-50' },
   ];
 
   const MORE_ACTIONS: { icon: React.ReactNode; label: string; view: PrincipalView; color: string }[] = [
@@ -80,7 +80,7 @@ export const PrincipalDashboard: React.FC<Props> = ({ onNavigate }) => {
     { icon: <ClipboardCheck size={22} />, label: 'Approvals',  view: 'APPROVALS',        color: 'text-indigo-600 bg-indigo-50' },
     { icon: <Clock size={22} />,          label: 'Timetable',  view: 'TIMETABLE',        color: 'text-fuchsia-600 bg-fuchsia-50' },
     { icon: <BanknoteIcon size={22} />,   label: 'Salary',     view: 'SALARY_LEDGER',    color: 'text-lime-600 bg-lime-50' },
-    { icon: <UserCog size={22} />,        label: 'Attendance', view: 'ATTENDANCE',       color: 'text-teal-600 bg-teal-50' },
+    { icon: <Wallet size={22} />,         label: 'Expenses',   view: 'EXPENSES',         color: 'text-red-500 bg-red-50' },
     { icon: <Settings size={22} />,       label: 'Settings',   view: 'SETTINGS',         color: 'text-slate-600 bg-slate-100' },
   ];
 
