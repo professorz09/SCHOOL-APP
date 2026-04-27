@@ -5,7 +5,7 @@ import {
   X, Save, Send, FileText, BarChart2, FolderOpen, Home, Copy, MapPin, FileCheck,
 } from 'lucide-react';
 import { studentService } from '../../../services/student.service';
-import { Student, CreateStudentInput, FeeRecord, StudentAcademicRecord } from '../../../types/principal.types';
+import { Student, CreateStudentInput, FeeRecord, StudentAcademicRecord, STREAMS, STREAM_CLASSES, StudentStream } from '../../../types/principal.types';
 import { PaymentStatus, PAYMENT_COLORS } from '../../../config/constants';
 import { useUIStore } from '../../../store/uiStore';
 import { authService, ParentUser } from '../../../services/auth.service';
@@ -83,6 +83,10 @@ export const StudentsManager: React.FC<Props> = ({ onBack }) => {
       showToast('Parent mobile number required', 'error');
       return;
     }
+    if (STREAM_CLASSES.has(form.className) && !form.stream) {
+      showToast('Stream is required for Class 11 and 12', 'error');
+      return;
+    }
 
     setIsSubmitting(true);
     try {
@@ -155,7 +159,6 @@ export const StudentsManager: React.FC<Props> = ({ onBack }) => {
         <div className="grid grid-cols-1 gap-3">
           {[
             { icon: FileText, label: 'Admission', desc: 'Add new students & update records', action: () => { setMainView('ADMISSION'); setSubView('LIST'); } },
-            { icon: BookOpen, label: 'Classes', desc: 'Browse by class & section', action: () => { setMainView('CLASSES'); setSubView('LIST'); } },
           ].map(({ icon: Icon, label, desc, action }) => (
             <button key={label} onClick={action}
               className="flex items-center gap-4 bg-white rounded-2xl border border-slate-100 shadow-sm p-5 active:scale-95 transition-transform text-left">
@@ -222,7 +225,7 @@ export const StudentsManager: React.FC<Props> = ({ onBack }) => {
             <div className="grid grid-cols-2 gap-3">
               <div>
                 <label className="block text-[10px] font-black uppercase tracking-widest text-slate-500 mb-1.5">Class</label>
-                <select value={form.className} onChange={e => setForm(f => ({ ...f, className: e.target.value }))}
+                <select value={form.className} onChange={e => setForm(f => ({ ...f, className: e.target.value, stream: undefined }))}
                   className="w-full border border-slate-200 bg-slate-50 rounded-xl px-3 py-3 font-bold text-sm outline-none focus:border-indigo-500">
                   {CLASS_OPTIONS.map(c => <option key={c}>{c}</option>)}
                 </select>
@@ -233,6 +236,20 @@ export const StudentsManager: React.FC<Props> = ({ onBack }) => {
                   placeholder="A" className="w-full border border-slate-200 bg-slate-50 rounded-xl px-4 py-3 font-bold text-sm outline-none focus:border-indigo-500" />
               </div>
             </div>
+            {STREAM_CLASSES.has(form.className) && (
+              <div>
+                <label className="block text-[10px] font-black uppercase tracking-widest text-slate-500 mb-1.5">Stream *</label>
+                <div className="grid grid-cols-3 gap-2">
+                  {STREAMS.map(s => (
+                    <button key={s} type="button"
+                      onClick={() => setForm(f => ({ ...f, stream: s }))}
+                      className={`py-3 rounded-xl text-sm font-black border transition-all ${form.stream === s ? 'bg-indigo-600 text-white border-indigo-600' : 'bg-slate-50 text-slate-600 border-slate-200'}`}>
+                      {s}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            )}
             <div className="grid grid-cols-2 gap-3">
               <div>
                 <label className="block text-[10px] font-black uppercase tracking-widest text-slate-500 mb-1.5">Date of Birth</label>
@@ -688,6 +705,7 @@ export const StudentsManager: React.FC<Props> = ({ onBack }) => {
                     { label: 'Date of Birth',  val: selected.dob },
                     { label: 'Blood Group',    val: selected.bloodGroup },
                     { label: 'Gender',         val: selected.gender },
+                    ...(STREAM_CLASSES.has(selected.className) ? [{ label: 'Stream', val: selected.stream || '—' }] : []),
                     { label: 'Religion',       val: selected.religion || '—' },
                     { label: 'Caste',          val: selected.caste || '—' },
                     { label: 'PEN Number',     val: selected.penNumber || '—' },

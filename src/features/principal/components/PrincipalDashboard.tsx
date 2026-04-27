@@ -67,7 +67,7 @@ export const PrincipalDashboard: React.FC<Props> = ({ onNavigate }) => {
       items: [
         { icon: Users,          label: 'Students',     view: 'STUDENTS',         iconBg: 'bg-indigo-50',   iconFg: 'text-indigo-600',   badge: stats.totalStudents },
         { icon: UserCheck,      label: 'Staff',        view: 'STAFF',            iconBg: 'bg-blue-50',     iconFg: 'text-blue-600',     badge: stats.totalStaff },
-        { icon: ClipboardCheck, label: 'Attendance',   view: 'STAFF_ATTENDANCE', iconBg: 'bg-cyan-50',     iconFg: 'text-cyan-600' },
+        { icon: ClipboardCheck, label: 'Attendance',   view: 'ATTENDANCE',       iconBg: 'bg-cyan-50',     iconFg: 'text-cyan-600' },
       ],
     },
     {
