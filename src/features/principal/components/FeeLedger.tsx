@@ -18,6 +18,7 @@ interface PaymentTransaction {
   receiptNo: string;
   installmentIds: string[];
   installmentDetails: { month: string; feeType: FeeType; amount: number }[];
+  advanceAmount: number;
 }
 
 const METHOD_LABEL: Record<PaymentMethod, string> = {
@@ -139,7 +140,8 @@ export const FeeLedger: React.FC<Props> = ({ onBack }) => {
 
     const prevInstallments = feeService.getStudentInstallments(selected.studentId).map(i => ({ ...i }));
 
-    if (feeService.recordPayment(selected.studentId, amount)) {
+    const result = feeService.recordPayment(selected.studentId, amount);
+    if (result.applied > 0 || result.advance > 0) {
       const updated = feeService.getStudentFeeProfile(selected.studentId, selected.name, selected.className, selected.admissionNo, selected.isRte);
       updateStudent(updated);
 
@@ -168,6 +170,7 @@ export const FeeLedger: React.FC<Props> = ({ onBack }) => {
         receiptNo,
         installmentIds: changedIds,
         installmentDetails: changedDetails,
+        advanceAmount: result.advance,
       };
       setPaymentTransactions(prev => [...prev, tx]);
       setReceiptModal(tx);
@@ -255,6 +258,18 @@ export const FeeLedger: React.FC<Props> = ({ onBack }) => {
                 </div>
               ))}
             </div>
+            {/* Advance Balance */}
+            {feeService.getAdvanceBalance(selected.studentId) > 0 && (
+              <div className="bg-violet-50 border border-violet-200 rounded-xl p-3 flex items-center justify-between">
+                <div>
+                  <div className="text-[9px] font-black uppercase tracking-widest text-violet-500">Advance Credit</div>
+                  <div className="text-[10px] font-bold text-violet-700 mt-0.5">Will auto-adjust to next due</div>
+                </div>
+                <div className="text-base font-black text-violet-700">
+                  ₹{feeService.getAdvanceBalance(selected.studentId).toLocaleString()}
+                </div>
+              </div>
+            )}
             {/* Government Due (RTE only) */}
             {selected.isRte && (
               <div className="grid grid-cols-2 gap-2">
@@ -375,8 +390,14 @@ export const FeeLedger: React.FC<Props> = ({ onBack }) => {
                   placeholder="Enter amount received"
                   className="flex-1 bg-transparent font-black text-slate-900 text-lg outline-none" />
               </div>
+              {feeService.getAdvanceBalance(selected?.studentId ?? '') > 0 && (
+                <div className="bg-violet-50 border border-violet-200 rounded-xl px-3 py-2 flex items-center justify-between mb-3">
+                  <span className="text-[10px] font-black text-violet-600 uppercase tracking-wide">Existing Advance Credit</span>
+                  <span className="text-sm font-black text-violet-700">₹{feeService.getAdvanceBalance(selected?.studentId ?? '').toLocaleString()}</span>
+                </div>
+              )}
               <p className="text-[11px] font-bold text-slate-400 mb-4">
-                Amount will be allocated oldest dues first across Tuition and Transport fees.
+                Allocated oldest dues first. Any excess is stored as advance credit for future months.
               </p>
               <button onClick={handlePayment}
                 disabled={!payAmount}
@@ -465,6 +486,12 @@ export const FeeLedger: React.FC<Props> = ({ onBack }) => {
                         <span className="text-[11px] font-black text-slate-900">₹{d.amount.toLocaleString('en-IN')}</span>
                       </div>
                     ))}
+                    {receiptModal.advanceAmount > 0 && (
+                      <div className="flex justify-between gap-2 py-1.5 mt-1 bg-violet-50 rounded-lg px-2">
+                        <span className="text-[11px] font-bold text-violet-600">Advance Credit Added</span>
+                        <span className="text-[11px] font-black text-violet-700">₹{receiptModal.advanceAmount.toLocaleString('en-IN')}</span>
+                      </div>
+                    )}
                   </div>
                 )}
 

@@ -90,6 +90,9 @@ let _transportSchedule: FeeInstallment[] = [
   { id: 'tra8', studentId: 'student3', academicYearId: 'ay1', month: 'May 2026', dueDate: '2026-05-10', feeType: 'TRANSPORT', amount: 400, paidAmount: 0, writeOffAmount: 0, writeOffReason: '', status: 'UNPAID', payerType: 'PARENT', relatedId: 'ta3' },
 ];
 
+// Advance balance per student (excess payment stored here)
+let _advanceBalances: Record<string, number> = {};
+
 // Government payment history
 let _governmentPayments: GovernmentPaymentRecord[] = [
   {
@@ -188,16 +191,20 @@ export const feeService = {
     });
   },
 
-  // ── Record payment (parent pays) — only allocates PARENT payer installments ──
-  recordPayment(studentId: string, amount: number): boolean {
-    if (amount <= 0) return false;
+  // ── Record payment (parent pays) — allocates oldest PARENT dues first; excess → advance ──
+  recordPayment(studentId: string, amount: number): { applied: number; advance: number } {
+    if (amount <= 0) return { applied: 0, advance: 0 };
 
-    // Only allocate to parent-payer installments
+    // Combine new payment with any existing advance balance
+    const existingAdvance = _advanceBalances[studentId] ?? 0;
+    let remaining = amount + existingAdvance;
+    _advanceBalances[studentId] = 0;
+
     const installments = feeService.getStudentInstallments(studentId)
       .filter(i => i.payerType === 'PARENT')
       .sort((a, b) => new Date(a.dueDate).getTime() - new Date(b.dueDate).getTime());
 
-    let remaining = amount;
+    const startRemaining = remaining;
 
     for (const inst of installments) {
       if (remaining <= 0) break;
@@ -218,7 +225,49 @@ export const feeService = {
       }
     }
 
-    return remaining < amount;
+    // Store excess as advance balance for future dues
+    if (remaining > 0) {
+      _advanceBalances[studentId] = remaining;
+    }
+
+    return { applied: startRemaining - remaining, advance: remaining };
+  },
+
+  // ── Advance balance for a student ──────────────────────────────────────
+  getAdvanceBalance(studentId: string): number {
+    return _advanceBalances[studentId] ?? 0;
+  },
+
+  // ── Compute "paid till" month (all installments cleared consecutively) ──
+  getPaidTillMonth(studentId: string): { lastClearedMonth: string | null; allCleared: boolean } {
+    const installments = feeService.getStudentInstallments(studentId)
+      .filter(i => i.payerType === 'PARENT');
+
+    if (installments.length === 0) return { lastClearedMonth: null, allCleared: false };
+
+    // Build sorted unique months
+    const monthDueMap = new Map<string, string>();
+    for (const inst of installments) {
+      if (!monthDueMap.has(inst.month)) monthDueMap.set(inst.month, inst.dueDate);
+    }
+    const months = [...monthDueMap.entries()]
+      .sort((a, b) => new Date(a[1]).getTime() - new Date(b[1]).getTime())
+      .map(([month]) => month);
+
+    let lastClearedMonth: string | null = null;
+    for (const month of months) {
+      const allPaid = installments
+        .filter(i => i.month === month)
+        .every(i => i.status === 'PAID' || i.status === 'WAIVED');
+      if (allPaid) {
+        lastClearedMonth = month;
+      } else {
+        break;
+      }
+    }
+
+    const allCleared = lastClearedMonth === months[months.length - 1] && months.length > 0;
+    return { lastClearedMonth, allCleared };
   },
 
   // ── Record government payment (bulk) — allocates GOVERNMENT payer installments ──
