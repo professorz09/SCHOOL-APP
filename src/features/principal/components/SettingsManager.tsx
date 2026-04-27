@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { ArrowLeft, Plus, Trash2, ChevronDown, ChevronUp, Save, Calendar, QrCode, CreditCard, CheckCircle2, Lock, Eye, EyeOff, ShieldCheck, IndianRupee, Edit2, Building2, BookOpen } from 'lucide-react';
+import { ArrowLeft, Plus, Trash2, ChevronDown, ChevronUp, Save, Calendar, QrCode, CreditCard, CheckCircle2, Lock, Eye, EyeOff, ShieldCheck, IndianRupee, Edit2, Building2, BookOpen, ChevronRight, X } from 'lucide-react';
 import { principalService } from '../../../services/principal.service';
 import { AcademicYearConfig, ClassConfig } from '../../../types/principal.types';
 import { useUIStore } from '../../../store/uiStore';
@@ -164,23 +164,27 @@ export const SettingsManager: React.FC<Props> = ({ onBack }) => {
         </button>
         <h2 className="text-xl font-black text-slate-900 uppercase tracking-tight">Settings</h2>
       </div>
-      <div className="flex-1 overflow-y-auto p-4 pb-28">
-        <div className="grid grid-cols-2 gap-3">
-          {[
-            { icon: Building2, title: 'School Info', desc: 'School details & contact', color: 'bg-blue-50 text-blue-600', action: () => setView('SCHOOL_INFO') },
-            { icon: Calendar, title: 'Academic Year', desc: 'View active & locked years', color: 'bg-indigo-50 text-indigo-600', action: () => setView('ACADEMIC') },
-            { icon: BookOpen, title: 'Classes', desc: 'Class & section setup', color: 'bg-violet-50 text-violet-600', action: () => setView('CLASSES') },
-            { icon: IndianRupee, title: 'Fee Structure', desc: 'Class-wise fee config', color: 'bg-emerald-50 text-emerald-600', action: () => setView('FEE_STRUCT') },
-            { icon: CreditCard, title: 'Payments', desc: 'UPI & QR code setup', color: 'bg-orange-50 text-orange-600', action: () => setView('PAYMENTS') },
-            { icon: Lock, title: 'Security', desc: 'Password & security', color: 'bg-rose-50 text-rose-600', action: () => setView('SECURITY') },
-          ].map(({ icon: Icon, title, desc, color, action }) => (
-            <button key={title} onClick={action} className={`${color} rounded-2xl p-4 text-left active:scale-95 transition-transform border border-opacity-20`}>
-              <Icon size={28} className="mb-2 opacity-80" />
-              <div className="font-black text-sm">{title}</div>
-              <div className="text-[9px] font-bold opacity-70 mt-1">{desc}</div>
-            </button>
-          ))}
-        </div>
+      <div className="flex-1 overflow-y-auto p-4 pb-28 space-y-2">
+        {[
+          { icon: Building2, title: 'School Info',    desc: 'School details & contact info',    iconBg: 'bg-blue-100',    iconColor: 'text-blue-600',    action: () => setView('SCHOOL_INFO') },
+          { icon: Calendar,  title: 'Academic Year',  desc: 'View active & locked years',       iconBg: 'bg-indigo-100',  iconColor: 'text-indigo-600',  action: () => setView('ACADEMIC') },
+          { icon: BookOpen,  title: 'Classes',        desc: 'Class & section setup',            iconBg: 'bg-violet-100',  iconColor: 'text-violet-600',  action: () => setView('CLASSES') },
+          { icon: IndianRupee, title: 'Fee Structure', desc: 'Class-wise fee configuration',   iconBg: 'bg-emerald-100', iconColor: 'text-emerald-600', action: () => setView('FEE_STRUCT') },
+          { icon: CreditCard, title: 'Payments',      desc: 'UPI & QR code setup',             iconBg: 'bg-orange-100',  iconColor: 'text-orange-600',  action: () => setView('PAYMENTS') },
+          { icon: Lock,      title: 'Security',       desc: 'Password & account security',     iconBg: 'bg-rose-100',    iconColor: 'text-rose-600',    action: () => setView('SECURITY') },
+        ].map(({ icon: Icon, title, desc, iconBg, iconColor, action }) => (
+          <button key={title} onClick={action}
+            className="w-full flex items-center gap-4 bg-white border border-slate-100 rounded-2xl p-4 shadow-sm text-left active:scale-[0.98] transition-transform">
+            <div className={`w-11 h-11 rounded-xl flex items-center justify-center shrink-0 ${iconBg}`}>
+              <Icon size={20} className={iconColor} />
+            </div>
+            <div className="flex-1 min-w-0">
+              <div className="font-extrabold text-slate-900 text-sm">{title}</div>
+              <div className="text-[10px] font-bold text-slate-400 mt-0.5">{desc}</div>
+            </div>
+            <ChevronRight size={16} className="text-slate-300 shrink-0" />
+          </button>
+        ))}
       </div>
     </div>
   );
@@ -322,9 +326,12 @@ export const SettingsManager: React.FC<Props> = ({ onBack }) => {
                     <div className="px-4 pb-4 space-y-3 border-t border-slate-50">
                       <div className="flex flex-wrap gap-2 pt-3">
                         {cls.sections.map(sec => (
-                          <div key={sec} className="flex items-center gap-1 bg-slate-100 rounded-xl pl-3 pr-2 py-1.5">
-                            <span className="text-xs font-black text-slate-700">Section {sec}</span>
-                            <button onClick={() => handleRemoveSection(cls.name, sec)} className="text-slate-400 hover:text-rose-500"><Trash2 size={11} /></button>
+                          <div key={sec} className="flex items-center gap-1.5 bg-indigo-50 border border-indigo-200 rounded-full pl-3 pr-2 py-1.5">
+                            <span className="text-xs font-black text-indigo-700">Sec {sec}</span>
+                            <button onClick={() => handleRemoveSection(cls.name, sec)}
+                              className="w-4 h-4 bg-indigo-200 hover:bg-rose-400 hover:text-white text-indigo-600 rounded-full flex items-center justify-center transition-colors">
+                              <X size={9} />
+                            </button>
                           </div>
                         ))}
                       </div>
@@ -391,14 +398,20 @@ export const SettingsManager: React.FC<Props> = ({ onBack }) => {
                   </div>
                 </div>
                 {fs.feeHeads.length > 0 && (
-                  <div className="px-4 pb-3 flex flex-wrap gap-1.5 border-t border-slate-50 pt-2">
+                  <div className="px-4 pb-3.5 flex flex-wrap gap-2 border-t border-slate-100 pt-3">
                     {fs.feeHeads.slice(0, 4).map(h => (
-                      <span key={h.id} className="text-[9px] font-black bg-slate-100 text-slate-600 px-2 py-0.5 rounded-full">
-                        {h.name} ₹{h.amount.toLocaleString('en-IN')} ({h.frequency === 'MONTHLY' ? 'mo' : h.frequency === 'ANNUAL' ? 'yr' : '1x'})
+                      <span key={h.id}
+                        className="inline-flex items-center gap-1 text-[10px] font-bold bg-slate-50 border border-slate-200 text-slate-700 px-2.5 py-1 rounded-full">
+                        <span className="font-black">{h.name}</span>
+                        <span className="text-slate-400">·</span>
+                        <span className="text-emerald-600 font-black">₹{h.amount.toLocaleString('en-IN')}</span>
+                        <span className="text-slate-400 text-[9px]">{h.frequency === 'MONTHLY' ? '/mo' : h.frequency === 'ANNUAL' ? '/yr' : '×1'}</span>
                       </span>
                     ))}
                     {fs.feeHeads.length > 4 && (
-                      <span className="text-[9px] font-black bg-indigo-50 text-indigo-600 px-2 py-0.5 rounded-full">+{fs.feeHeads.length - 4} more</span>
+                      <span className="inline-flex items-center text-[10px] font-black bg-indigo-50 border border-indigo-200 text-indigo-600 px-2.5 py-1 rounded-full">
+                        +{fs.feeHeads.length - 4} more
+                      </span>
                     )}
                   </div>
                 )}
