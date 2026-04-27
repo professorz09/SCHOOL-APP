@@ -70,8 +70,8 @@ export default function App() {
   const parentLinkedStudents = session.linkedStudentIds || [];
   if (session.role === 'PARENT' && parentLinkedStudents.length > 1 && !selectedStudentId) {
     return (
-      <div className="min-h-screen bg-gradient-to-br from-blue-600 to-blue-800 flex items-center justify-center sm:py-8 sm:px-4">
-        <div className="w-full h-screen sm:h-[850px] sm:max-w-[400px] bg-slate-50 relative sm:rounded-[40px] sm:border-[8px] border-slate-800 shadow-2xl flex flex-col overflow-hidden">
+      <div className="h-dvh bg-gradient-to-br from-blue-600 to-blue-800 flex items-center justify-center sm:py-8 sm:px-4">
+        <div className="w-full h-full sm:h-[850px] sm:max-w-[400px] bg-slate-50 relative sm:rounded-[40px] sm:border-[8px] border-slate-800 shadow-2xl flex flex-col overflow-hidden">
           <div className="bg-gradient-to-r from-blue-600 to-blue-700 px-6 pt-12 pb-8 text-white">
             <div className="text-2xl font-black">Select Student</div>
             <div className="text-xs font-bold text-blue-100 mt-1">Choose which child to view</div>
@@ -152,7 +152,7 @@ export default function App() {
   if (isDesktop) {
     const firstName = session.name?.split(' ')[0] ?? 'User';
     return (
-      <div className="flex h-screen bg-slate-100 overflow-hidden">
+      <div className="flex h-full bg-slate-100 overflow-hidden">
         {/* Sidebar */}
         <aside className="w-64 xl:w-72 bg-white border-r border-slate-100 shadow-sm shrink-0">
           <SidebarNav
@@ -190,16 +190,16 @@ export default function App() {
     );
   }
 
-  // ── Mobile layout (unchanged phone mockup) ────────────────────────────────
+  // ── Mobile layout ─────────────────────────────────────────────────────────
   return (
-    <div className="min-h-screen bg-slate-100 flex items-center justify-center sm:py-8 sm:px-4">
-      <div className="w-full h-screen sm:h-[850px] sm:max-w-[400px] bg-slate-50 relative sm:rounded-[40px] sm:border-[8px] border-slate-800 shadow-2xl flex flex-col overflow-hidden">
+    <div className="h-dvh bg-slate-100 flex items-center justify-center sm:py-8 sm:px-4">
+      <div className="w-full h-full sm:h-[850px] sm:max-w-[400px] bg-slate-50 relative sm:rounded-[40px] sm:border-[8px] border-slate-800 shadow-2xl flex flex-col overflow-hidden">
 
         {/* Dynamic Header */}
         <Header role={role} />
 
         {/* Scrollable Main Content */}
-        <main className="flex-1 overflow-y-auto px-5 pb-24 hide-scrollbar">
+        <main className="flex-1 overflow-y-auto px-5 pb-28 hide-scrollbar">
           {renderTabContent()}
         </main>
 

@@ -1,345 +1,697 @@
 import React, { useState, useEffect } from 'react';
 import {
   ArrowLeft, CheckCircle2, AlertTriangle, ChevronRight,
-  Users, Lock, Sparkles,
+  Lock, Sparkles, CreditCard, Users, BarChart3, Clock,
 } from 'lucide-react';
-import { studentService } from '../../../services/student.service';
-import { feeService } from '../../../services/fee.service';
-import { Student } from '../../../types/principal.types';
+import { useAcademicYear } from '../../../context/AcademicYearContext';
+import { yearClosingService, streamService } from '../../../services/yearClosing.service';
+import type {
+  PreClosingChecklist,
+  YearClosingPreview,
+  YearClosingConfig,
+  StreamDefinition,
+} from '../../../types/yearClosing.types';
 
-type WizardStep = 'REVIEW' | 'PROMOTE' | 'DONE';
-type PromotionResult = 'PROMOTED' | 'DETAINED' | 'TC';
+type WizardStep = 'PRE_CHECKS' | 'CONFIGURATION' | 'PREVIEW' | 'FINAL_COMMIT' | 'DONE';
 
-interface ReviewCheck {
-  label: string;
-  status: 'OK' | 'WARN' | 'BLOCK';
-  detail: string;
+interface Props {
+  onBack: () => void;
 }
-
-interface StudentPromotion {
-  id: string;
-  name: string;
-  currentClass: string;
-  currentSection: string;
-  rollNo: string;
-  attendancePercent: number;
-  feePending: number;
-  promotionResult: PromotionResult;
-  newClass: string;
-  newSection: string;
-  newFeePlan: string;
-}
-
-const resultColor: Record<PromotionResult, string> = {
-  PROMOTED: 'bg-emerald-50 text-emerald-700 border-emerald-200',
-  DETAINED: 'bg-amber-50 text-amber-700 border-amber-200',
-  TC:       'bg-slate-50 text-slate-500 border-slate-200',
-};
-
-const SECTIONS = ['A', 'B', 'C'];
-const FEE_PLANS = ['Standard', 'RTE', 'Scholarship'];
-
-const promoteClass = (cls: string): string => {
-  const match = cls.match(/^(\D*)(\d+)(.*)$/);
-  if (!match) return cls;
-  const num = parseInt(match[2], 10);
-  return `${match[1]}${num + 1}${match[3]}`;
-};
-
-const buildReviewChecks = (students: Student[]): ReviewCheck[] => {
-  const pendingFeeStudents = students.filter(s => {
-    const summary = feeService.getParentDueSummary(s.id);
-    return summary.total > 0;
-  });
-  const lowAttendance = students.filter(s => s.attendancePercent < 75);
-
-  return [
-    {
-      label: 'All Attendance Locked',
-      status: 'OK',
-      detail: '100% attendance records approved and locked.',
-    },
-    {
-      label: 'Results Uploaded',
-      status: lowAttendance.length > 0 ? 'WARN' : 'OK',
-      detail: lowAttendance.length > 0
-        ? `${lowAttendance.length} student(s) have attendance below 75%.`
-        : 'All results uploaded and verified.',
-    },
-    {
-      label: 'Pending Fee Records',
-      status: pendingFeeStudents.length > 0 ? 'WARN' : 'OK',
-      detail: pendingFeeStudents.length > 0
-        ? `${pendingFeeStudents.length} student(s) have outstanding fees. Will carry forward.`
-        : 'No outstanding fees.',
-    },
-    {
-      label: 'Timetable Locked',
-      status: 'OK',
-      detail: 'All timetable entries will be read-only after closing.',
-    },
-  ];
-};
-
-interface Props { onBack: () => void; }
 
 export const YearClosingWizard: React.FC<Props> = ({ onBack }) => {
-  const [step, setStep] = useState<WizardStep>('REVIEW');
-  const [allStudents, setAllStudents] = useState<Student[]>([]);
-  const [promotions, setPromotions] = useState<StudentPromotion[]>([]);
-  const [reviewChecks, setReviewChecks] = useState<ReviewCheck[]>([]);
-  const [closing, setClosing] = useState(false);
-  const [loading, setLoading] = useState(true);
+  const { activeYear, lockYear, addAcademicYear } = useAcademicYear();
+  const [step, setStep] = useState<WizardStep>('PRE_CHECKS');
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState('');
 
+  // Step data
+  const [checklist, setChecklist] = useState<PreClosingChecklist | null>(null);
+  const [config, setConfig] = useState<Partial<YearClosingConfig> | null>(null);
+  const [configId, setConfigId] = useState<string>('');
+  const [preview, setPreview] = useState<YearClosingPreview | null>(null);
+  const [result, setResult] = useState<any>(null);
+
+  // Configuration form state
+  const [nextYearName, setNextYearName] = useState('');
+  const [nextStartDate, setNextStartDate] = useState('');
+  const [nextEndDate, setNextEndDate] = useState('');
+  const [board, setBoard] = useState('CBSE');
+  const [streams, setStreams] = useState<StreamDefinition[]>([
+    { id: '1', name: 'Science-PCM', capacity: 40, currentCount: 0 },
+    { id: '2', name: 'Science-PCB', capacity: 40, currentCount: 0 },
+    { id: '3', name: 'Commerce', capacity: 40, currentCount: 0 },
+    { id: '4', name: 'Arts', capacity: 40, currentCount: 0 },
+  ]);
+  const [outstandingHandling, setOutstandingHandling] = useState<'WRITEOFF' | 'ARREARS'>('WRITEOFF');
+  const [carryForward, setCarryForward] = useState({
+    staff: true,
+    vehicles: true,
+    feeStructure: true,
+    timetable: true,
+  });
+
+  // Load pre-closing checklist
   useEffect(() => {
-    studentService.getAll().then(students => {
-      setAllStudents(students);
-      setReviewChecks(buildReviewChecks(students));
-      const promos: StudentPromotion[] = students.map(s => {
-        const feeSummary = feeService.getParentDueSummary(s.id);
-        const lowAtt = s.attendancePercent < 75;
-        const result: PromotionResult = lowAtt ? 'DETAINED' : 'PROMOTED';
-        const newClass = result === 'PROMOTED' ? promoteClass(`${s.className}`) : s.className;
-        return {
-          id: s.id,
-          name: s.name,
-          currentClass: s.className,
-          currentSection: s.section,
-          rollNo: s.rollNo,
-          attendancePercent: s.attendancePercent,
-          feePending: feeSummary.total,
-          promotionResult: result,
-          newClass,
-          newSection: s.section,
-          newFeePlan: s.rte ? 'RTE' : 'Standard',
-        };
-      });
-      setPromotions(promos);
+    if (step === 'PRE_CHECKS' && activeYear && !checklist) {
+      setLoading(true);
+      yearClosingService.getPreClosingChecklist(activeYear.id)
+        .then(setChecklist)
+        .catch(err => setError(err.message))
+        .finally(() => setLoading(false));
+    }
+  }, [step, activeYear, checklist]);
+
+  const handleProceedToConfig = () => {
+    if (checklist?.status === 'READY') {
+      setStep('CONFIGURATION');
+    } else {
+      setError('Cannot proceed: Outstanding fees or salary exist');
+    }
+  };
+
+  const handleSaveConfig = () => {
+    if (!activeYear) return;
+    if (!nextYearName.trim()) {
+      setError('Academic year name is required');
+      return;
+    }
+    if (!nextStartDate || !nextEndDate) {
+      setError('Start and end dates are required');
+      return;
+    }
+
+    const newConfig: YearClosingConfig = {
+      id: `config_${Date.now()}`,
+      fromYearId: activeYear.id,
+      nextYearName,
+      nextYearStartDate: nextStartDate,
+      nextYearEndDate: nextEndDate,
+      board,
+      streams: streams.filter(s => s.capacity > 0),
+      outstandingDuesHandling: outstandingHandling,
+      carryForward,
+      status: 'PENDING_COMMIT',
+      createdDate: new Date().toISOString(),
+    };
+
+    const saved = yearClosingService.saveConfig(newConfig);
+    setConfig(saved);
+    setConfigId(saved.id);
+    setStep('PREVIEW');
+  };
+
+  const handlePreview = async () => {
+    if (!configId) return;
+    setLoading(true);
+    try {
+      const previewData = await yearClosingService.simulateYearClosing(configId);
+      setPreview(previewData);
+      setStep('FINAL_COMMIT');
+    } catch (err) {
+      setError((err as Error).message);
+    } finally {
       setLoading(false);
-    });
-  }, []);
-
-  const updatePromotion = (id: string, field: keyof StudentPromotion, value: string) => {
-    setPromotions(prev => prev.map(s => s.id === id ? { ...s, [field]: value } : s));
+    }
   };
 
-  const setResult = (id: string, result: PromotionResult) => {
-    setPromotions(prev => prev.map(s => {
-      if (s.id !== id) return s;
-      const newClass = result === 'PROMOTED' ? promoteClass(s.currentClass) : result === 'TC' ? '—' : s.currentClass;
-      return { ...s, promotionResult: result, newClass, newSection: result === 'TC' ? '—' : s.currentClass.split('-')[1] ?? s.currentSection };
-    }));
+  const handleCommit = async () => {
+    if (!configId || !activeYear) return;
+    setLoading(true);
+    try {
+      const closeResult = await yearClosingService.commitYearClosing(
+        configId,
+        // Callback: create new year
+        (yearData) => {
+          return addAcademicYear({
+            name: yearData.name,
+            startDate: yearData.startDate,
+            endDate: yearData.endDate,
+            board: yearData.board,
+          });
+        },
+        // Callback: lock old year
+        (yearId) => lockYear(yearId)
+      );
+      setResult(closeResult);
+      setStep('DONE');
+    } catch (err) {
+      setError((err as Error).message);
+    } finally {
+      setLoading(false);
+    }
   };
 
-  const handleClose = async () => {
-    setClosing(true);
-    await new Promise(r => setTimeout(r, 1800));
-    setClosing(false);
-    setStep('DONE');
-  };
-
-  const hasBlocks = reviewChecks.some(c => c.status === 'BLOCK');
-  const hasWarns = reviewChecks.some(c => c.status === 'WARN');
-
-  if (loading) return (
-    <div className="absolute inset-0 z-50 bg-slate-50 flex items-center justify-center">
-      <div className="w-8 h-8 border-2 border-slate-200 border-t-slate-600 rounded-full animate-spin" />
-    </div>
-  );
-
-  if (step === 'DONE') return (
-    <div className="absolute inset-0 z-50 bg-slate-50 flex flex-col items-center justify-center animate-in fade-in duration-500 p-8">
-      <div className="w-20 h-20 bg-emerald-100 rounded-full flex items-center justify-center mb-6">
-        <CheckCircle2 size={40} className="text-emerald-500" />
+  if (loading && step === 'PRE_CHECKS') {
+    return (
+      <div className="absolute inset-0 z-50 bg-slate-50 flex items-center justify-center">
+        <div className="w-8 h-8 border-2 border-slate-200 border-t-slate-600 rounded-full animate-spin" />
       </div>
-      <h2 className="text-2xl font-black text-slate-900 text-center">Year 2025-26 Closed!</h2>
-      <p className="text-sm font-bold text-slate-400 text-center mt-3 max-w-xs">
-        All records are now read-only. New academic year 2026-27 is ready for setup.
-        Student promotions have been applied.
-      </p>
-      <div className="grid grid-cols-3 gap-3 mt-8 w-full max-w-sm">
-        {[
-          { label: 'Promoted', val: promotions.filter(s => s.promotionResult === 'PROMOTED').length, color: 'text-emerald-600' },
-          { label: 'Detained', val: promotions.filter(s => s.promotionResult === 'DETAINED').length, color: 'text-amber-600' },
-          { label: 'TC', val: promotions.filter(s => s.promotionResult === 'TC').length, color: 'text-slate-500' },
-        ].map(({ label, val, color }) => (
-          <div key={label} className="bg-white rounded-2xl border border-slate-100 p-3 text-center">
-            <div className={`text-2xl font-black ${color}`}>{val}</div>
-            <div className="text-[9px] font-black uppercase tracking-widest text-slate-400 mt-0.5">{label}</div>
+    );
+  }
+
+  if (step === 'DONE' && result) {
+    return (
+      <div className="absolute inset-0 z-50 bg-slate-50 flex flex-col items-center justify-center animate-in fade-in duration-500 p-8">
+        <div className="w-20 h-20 bg-emerald-100 rounded-full flex items-center justify-center mb-6">
+          <CheckCircle2 size={40} className="text-emerald-500" />
+        </div>
+        <h2 className="text-2xl font-black text-slate-900 text-center">{result.newYearName} Ready!</h2>
+        <p className="text-sm font-bold text-slate-400 text-center mt-3 max-w-xs">
+          Year {result.summary.oldYearLocked} is now locked (read-only). New academic year is active.
+        </p>
+        <div className="grid grid-cols-3 gap-3 mt-8 w-full max-w-sm text-center">
+          <div className="bg-white rounded-2xl border border-slate-100 p-3">
+            <div className="text-xl font-black text-emerald-600">{result.summary.studentsPromoted}</div>
+            <div className="text-[9px] font-bold uppercase tracking-widest text-slate-400 mt-0.5">Promoted</div>
           </div>
-        ))}
+          <div className="bg-white rounded-2xl border border-slate-100 p-3">
+            <div className="text-xl font-black text-amber-600">{result.summary.studentsDetained}</div>
+            <div className="text-[9px] font-bold uppercase tracking-widest text-slate-400 mt-0.5">Detained</div>
+          </div>
+          <div className="bg-white rounded-2xl border border-slate-100 p-3">
+            <div className="text-xl font-black text-blue-600">{result.summary.streamsAssigned}</div>
+            <div className="text-[9px] font-bold uppercase tracking-widest text-slate-400 mt-0.5">Streams</div>
+          </div>
+        </div>
+        <button
+          onClick={onBack}
+          className="mt-8 w-full max-w-sm py-3 bg-slate-900 text-white font-black rounded-2xl hover:bg-slate-800"
+        >
+          Back to Dashboard
+        </button>
       </div>
-      <button onClick={onBack}
-        className="mt-8 w-full max-w-sm py-3 bg-slate-900 text-white font-black rounded-2xl">
-        Back to Dashboard
-      </button>
-    </div>
-  );
+    );
+  }
 
   return (
     <div className="absolute inset-0 z-50 bg-slate-50 flex flex-col animate-in slide-in-from-right-8 duration-300">
       {/* Header */}
       <div className="bg-white border-b border-slate-100 px-4 pt-12 pb-4 shadow-sm">
         <div className="flex items-center gap-3 mb-4">
-          <button onClick={onBack} className="p-2 -ml-2 bg-slate-100 rounded-full">
+          <button onClick={onBack} className="p-2 -ml-2 bg-slate-100 rounded-full hover:bg-slate-200">
             <ArrowLeft size={20} className="text-slate-600" />
           </button>
           <div>
             <h2 className="text-xl font-black text-slate-900">Year Closing Wizard</h2>
-            <p className="text-[10px] font-bold text-slate-400">Academic Year 2025-26 · {allStudents.length} students</p>
+            <p className="text-[10px] font-bold text-slate-400">{activeYear?.name ?? 'Academic Year'}</p>
           </div>
         </div>
-
-        {/* Step indicator */}
         <div className="flex items-center gap-2">
-          {(['REVIEW', 'PROMOTE'] as WizardStep[]).map((s, i) => (
+          {(['PRE_CHECKS', 'CONFIGURATION', 'PREVIEW', 'FINAL_COMMIT'] as WizardStep[]).map((s, i) => (
             <React.Fragment key={s}>
-              <div className={`flex items-center gap-2 px-3 py-1.5 rounded-full text-[10px] font-black ${
-                step === s ? 'bg-slate-900 text-white' : 'bg-slate-100 text-slate-400'
-              }`}>
+              <div
+                className={`flex items-center gap-1.5 px-3 py-1.5 rounded-full text-[10px] font-black transition-all ${
+                  step === s ? 'bg-slate-900 text-white' : 'bg-slate-100 text-slate-400'
+                }`}
+              >
                 <span>{i + 1}</span>
-                <span className="uppercase tracking-widest">{s === 'REVIEW' ? 'Review' : 'Promote'}</span>
+                <span className="hidden sm:inline uppercase tracking-widest">
+                  {s === 'PRE_CHECKS' ? 'Checks' : s === 'CONFIGURATION' ? 'Config' : s === 'PREVIEW' ? 'Preview' : 'Commit'}
+                </span>
               </div>
-              {i < 1 && <ChevronRight size={14} className="text-slate-300" />}
+              {i < 3 && <ChevronRight size={14} className="text-slate-300 hidden sm:block" />}
             </React.Fragment>
           ))}
         </div>
       </div>
 
-      <div className="flex-1 overflow-y-auto p-4 pb-32 space-y-3">
-        {/* REVIEW STEP */}
-        {step === 'REVIEW' && (
-          <>
-            <p className="text-[9px] font-black uppercase tracking-widest text-slate-400">Pre-close Checklist</p>
-            {reviewChecks.map(check => (
-              <div key={check.label}
-                className={`flex items-start gap-3 p-4 rounded-2xl border ${
-                  check.status === 'OK'   ? 'bg-emerald-50 border-emerald-200' :
-                  check.status === 'WARN' ? 'bg-amber-50 border-amber-200' :
-                  'bg-rose-50 border-rose-200'
-                }`}>
-                {check.status === 'OK'    && <CheckCircle2 size={18} className="text-emerald-500 shrink-0 mt-0.5" />}
-                {check.status === 'WARN'  && <AlertTriangle size={18} className="text-amber-500 shrink-0 mt-0.5" />}
-                {check.status === 'BLOCK' && <AlertTriangle size={18} className="text-rose-500 shrink-0 mt-0.5" />}
-                <div>
-                  <div className="font-extrabold text-slate-900 text-sm">{check.label}</div>
-                  <div className="text-[10px] font-bold text-slate-500 mt-0.5">{check.detail}</div>
-                </div>
-              </div>
-            ))}
-
-            {hasWarns && (
-              <div className="bg-amber-50 border border-amber-200 rounded-2xl p-3 mt-2">
-                <p className="text-[11px] font-bold text-amber-700">
-                  Warnings found. You can still proceed — pending items will carry forward to next year.
-                </p>
-              </div>
-            )}
-
-            <div className="flex items-center gap-3 bg-slate-100 rounded-2xl p-4">
-              <Lock size={16} className="text-slate-500 shrink-0" />
-              <div>
-                <div className="font-extrabold text-slate-900 text-sm">After closing, these will be locked:</div>
-                <div className="text-[10px] font-bold text-slate-400 mt-1">
-                  Attendance · Results · Timetable · Paid fee records
-                </div>
-              </div>
-            </div>
-          </>
+      {/* Content */}
+      <div className="flex-1 overflow-y-auto p-4 pb-24 space-y-4">
+        {/* PRE_CHECKS STEP */}
+        {step === 'PRE_CHECKS' && checklist && (
+          <PreChecklistStage checklist={checklist} onProceed={handleProceedToConfig} />
         )}
 
-        {/* PROMOTE STEP */}
-        {step === 'PROMOTE' && (
-          <>
-            <p className="text-[9px] font-black uppercase tracking-widest text-slate-400">
-              Promotion Wizard · {promotions.length} students
-            </p>
-            <div className="flex gap-3 text-[10px] font-bold text-slate-500">
-              <span className="flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-emerald-400 inline-block" /> {promotions.filter(s => s.promotionResult === 'PROMOTED').length} promoted</span>
-              <span className="flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-amber-400 inline-block" /> {promotions.filter(s => s.promotionResult === 'DETAINED').length} detained</span>
-              <span className="flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-slate-300 inline-block" /> {promotions.filter(s => s.promotionResult === 'TC').length} TC</span>
-            </div>
+        {/* CONFIGURATION STEP */}
+        {step === 'CONFIGURATION' && (
+          <ConfigurationStage
+            nextYearName={nextYearName}
+            setNextYearName={setNextYearName}
+            nextStartDate={nextStartDate}
+            setNextStartDate={setNextStartDate}
+            nextEndDate={nextEndDate}
+            setNextEndDate={setNextEndDate}
+            board={board}
+            setBoard={setBoard}
+            streams={streams}
+            setStreams={setStreams}
+            outstandingHandling={outstandingHandling}
+            setOutstandingHandling={setOutstandingHandling}
+            carryForward={carryForward}
+            setCarryForward={setCarryForward}
+            onSave={handleSaveConfig}
+          />
+        )}
 
-            {promotions.map(s => (
-              <div key={s.id} className="bg-white rounded-2xl border border-slate-100 shadow-sm p-4">
-                <div className="flex items-start justify-between gap-3 mb-3">
-                  <div>
-                    <div className="font-extrabold text-slate-900">{s.name}</div>
-                    <div className="text-[10px] font-bold text-slate-400 mt-0.5">
-                      {s.currentClass}-{s.currentSection} · Roll {s.rollNo} · {s.attendancePercent}% attendance
-                    </div>
-                    {s.feePending > 0 && (
-                      <div className="text-[10px] font-black text-amber-600 mt-0.5">
-                        ₹{s.feePending.toLocaleString()} fee pending (will carry forward)
-                      </div>
-                    )}
-                  </div>
-                  {/* Result toggle */}
-                  <div className="flex flex-col gap-1 shrink-0">
-                    {(['PROMOTED', 'DETAINED', 'TC'] as PromotionResult[]).map(r => (
-                      <button key={r} onClick={() => setResult(s.id, r)}
-                        className={`text-[8px] font-black px-2 py-0.5 rounded-full border transition-colors ${
-                          s.promotionResult === r ? resultColor[r] : 'bg-white border-slate-200 text-slate-400'
-                        }`}>
-                        {r}
-                      </button>
-                    ))}
-                  </div>
-                </div>
+        {/* PREVIEW STEP */}
+        {step === 'PREVIEW' && (
+          <PreviewStage
+            preview={preview}
+            config={config}
+            loading={loading}
+            onLoadPreview={handlePreview}
+          />
+        )}
 
-                {s.promotionResult !== 'TC' && (
-                  <div className="grid grid-cols-3 gap-2">
-                    <div>
-                      <label className="text-[8px] font-black uppercase tracking-widest text-slate-400 mb-1 block">New Class</label>
-                      <input value={s.newClass} onChange={e => updatePromotion(s.id, 'newClass', e.target.value)}
-                        className="w-full bg-slate-50 border border-slate-200 rounded-lg px-2 py-1.5 text-xs font-bold outline-none focus:border-blue-500" />
-                    </div>
-                    <div>
-                      <label className="text-[8px] font-black uppercase tracking-widest text-slate-400 mb-1 block">Section</label>
-                      <select value={s.newSection} onChange={e => updatePromotion(s.id, 'newSection', e.target.value)}
-                        className="w-full bg-slate-50 border border-slate-200 rounded-lg px-2 py-1.5 text-xs font-bold outline-none focus:border-blue-500 appearance-none">
-                        {SECTIONS.map(sec => <option key={sec}>{sec}</option>)}
-                      </select>
-                    </div>
-                    <div>
-                      <label className="text-[8px] font-black uppercase tracking-widest text-slate-400 mb-1 block">Fee Plan</label>
-                      <select value={s.newFeePlan} onChange={e => updatePromotion(s.id, 'newFeePlan', e.target.value)}
-                        className="w-full bg-slate-50 border border-slate-200 rounded-lg px-2 py-1.5 text-xs font-bold outline-none focus:border-blue-500 appearance-none">
-                        {FEE_PLANS.map(p => <option key={p}>{p}</option>)}
-                      </select>
-                    </div>
-                  </div>
-                )}
-              </div>
-            ))}
-          </>
+        {/* FINAL_COMMIT STEP */}
+        {step === 'FINAL_COMMIT' && preview && (
+          <FinalCommitStage
+            preview={preview}
+            loading={loading}
+            onCommit={handleCommit}
+          />
         )}
       </div>
 
-      {/* Bottom action */}
-      <div className="absolute bottom-0 left-0 right-0 bg-white border-t border-slate-100 p-4">
-        {step === 'REVIEW' && (
-          <button onClick={() => setStep('PROMOTE')} disabled={hasBlocks}
-            className="w-full py-4 bg-slate-900 text-white font-black rounded-2xl disabled:opacity-40 flex items-center justify-center gap-2">
-            <Users size={18} /> Continue to Promotion Wizard
+      {/* Error */}
+      {error && (
+        <div className="fixed bottom-20 left-4 right-4 bg-rose-50 border border-rose-200 rounded-2xl p-3 text-xs font-bold text-rose-600">
+          {error}
+          <button
+            onClick={() => setError('')}
+            className="float-right text-rose-400 hover:text-rose-600"
+          >
+            ✕
+          </button>
+        </div>
+      )}
+
+      {/* Bottom Actions */}
+      <div className="absolute bottom-0 left-0 right-0 bg-white border-t border-slate-100 p-4 flex gap-3">
+        {step === 'PRE_CHECKS' && (
+          <button
+            onClick={() => setStep('CONFIGURATION')}
+            disabled={checklist?.status !== 'READY'}
+            className="flex-1 py-3 bg-slate-900 text-white font-black rounded-2xl disabled:opacity-40 flex items-center justify-center gap-2 hover:bg-slate-800"
+          >
+            <Users size={16} /> Configure
           </button>
         )}
-        {step === 'PROMOTE' && (
-          <button onClick={handleClose} disabled={closing}
-            className="w-full py-4 bg-rose-600 text-white font-black rounded-2xl flex items-center justify-center gap-2 disabled:opacity-60">
-            {closing ? (
-              <>
-                <div className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" />
-                Closing Year...
-              </>
-            ) : (
-              <>
-                <Lock size={18} /> Close Academic Year 2025-26
-              </>
-            )}
-          </button>
+        {step === 'CONFIGURATION' && (
+          <>
+            <button
+              onClick={() => setStep('PRE_CHECKS')}
+              className="flex-1 py-3 border border-slate-200 text-slate-600 font-black rounded-2xl hover:bg-slate-50"
+            >
+              Back
+            </button>
+            <button
+              onClick={handleSaveConfig}
+              className="flex-1 py-3 bg-blue-600 text-white font-black rounded-2xl hover:bg-blue-700"
+            >
+              Preview
+            </button>
+          </>
+        )}
+        {step === 'PREVIEW' && (
+          <>
+            <button
+              onClick={() => setStep('CONFIGURATION')}
+              className="flex-1 py-3 border border-slate-200 text-slate-600 font-black rounded-2xl hover:bg-slate-50"
+            >
+              Back
+            </button>
+            <button
+              onClick={handlePreview}
+              disabled={loading}
+              className="flex-1 py-3 bg-blue-600 text-white font-black rounded-2xl disabled:opacity-60 flex items-center justify-center gap-2 hover:bg-blue-700"
+            >
+              {loading ? <div className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" /> : <Sparkles size={16} />}
+              {loading ? 'Validating...' : 'Validate'}
+            </button>
+          </>
+        )}
+        {step === 'FINAL_COMMIT' && (
+          <>
+            <button
+              onClick={() => setStep('PREVIEW')}
+              className="flex-1 py-3 border border-slate-200 text-slate-600 font-black rounded-2xl hover:bg-slate-50"
+            >
+              Back
+            </button>
+            <button
+              onClick={handleCommit}
+              disabled={loading}
+              className="flex-1 py-3 bg-rose-600 text-white font-black rounded-2xl disabled:opacity-60 flex items-center justify-center gap-2 hover:bg-rose-700"
+            >
+              {loading ? <div className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" /> : <Lock size={16} />}
+              {loading ? 'Closing...' : 'Close Year'}
+            </button>
+          </>
         )}
       </div>
     </div>
   );
 };
+
+// ─────────────────────────────────────────────────────────────────────────────
+
+const PreChecklistStage: React.FC<{ checklist: PreClosingChecklist; onProceed: () => void }> = ({
+  checklist,
+  onProceed,
+}) => (
+  <div className="space-y-4 max-w-2xl">
+    <div>
+      <p className="text-[9px] font-black uppercase tracking-widest text-slate-400 mb-3">Pre-Closing Checklist</p>
+    </div>
+
+    {/* Fees */}
+    <div
+      className={`p-4 rounded-2xl border ${
+        checklist.feesPending.total === 0 ? 'bg-emerald-50 border-emerald-200' : 'bg-rose-50 border-rose-200'
+      }`}
+    >
+      <div className="flex items-start justify-between gap-3">
+        <div>
+          <h4 className="font-black text-slate-900 flex items-center gap-2">
+            <CreditCard size={18} />
+            Outstanding Fees
+          </h4>
+          {checklist.feesPending.total > 0 && (
+            <div className="mt-2 text-sm font-bold text-rose-600">
+              ₹{checklist.feesPending.total.toLocaleString()} from {checklist.feesPending.count} student(s)
+            </div>
+          )}
+        </div>
+        <div
+          className={`text-2xl font-black ${
+            checklist.feesPending.total === 0 ? 'text-emerald-600' : 'text-rose-600'
+          }`}
+        >
+          {checklist.feesPending.total === 0 ? '✓' : '✗'}
+        </div>
+      </div>
+    </div>
+
+    {/* Salary */}
+    <div
+      className={`p-4 rounded-2xl border ${
+        checklist.salaryPending.total === 0 ? 'bg-emerald-50 border-emerald-200' : 'bg-rose-50 border-rose-200'
+      }`}
+    >
+      <div className="flex items-start justify-between gap-3">
+        <div>
+          <h4 className="font-black text-slate-900 flex items-center gap-2">
+            <Users size={18} />
+            Outstanding Salary
+          </h4>
+          {checklist.salaryPending.total > 0 && (
+            <div className="mt-2 text-sm font-bold text-rose-600">
+              ₹{checklist.salaryPending.total.toLocaleString()} for {checklist.salaryPending.count} staff
+            </div>
+          )}
+        </div>
+        <div
+          className={`text-2xl font-black ${
+            checklist.salaryPending.total === 0 ? 'text-emerald-600' : 'text-rose-600'
+          }`}
+        >
+          {checklist.salaryPending.total === 0 ? '✓' : '✗'}
+        </div>
+      </div>
+    </div>
+
+    {/* Results */}
+    <div className="p-4 rounded-2xl border border-slate-200 bg-slate-50">
+      <div className="flex items-start justify-between gap-3">
+        <div>
+          <h4 className="font-black text-slate-900 flex items-center gap-2">
+            <BarChart3 size={18} />
+            Results Entered
+          </h4>
+          <div className="mt-3 w-full bg-slate-200 rounded-full h-2">
+            <div
+              className="bg-blue-600 h-2 rounded-full transition-all"
+              style={{ width: `${checklist.resultsCompletion.percentage}%` }}
+            />
+          </div>
+          <div className="mt-1 text-xs font-bold text-slate-600">
+            {checklist.resultsCompletion.percentage.toFixed(0)}%
+          </div>
+        </div>
+      </div>
+    </div>
+
+    {/* Attendance */}
+    <div className="p-4 rounded-2xl border border-slate-200 bg-slate-50">
+      <div className="flex items-start justify-between gap-3">
+        <div>
+          <h4 className="font-black text-slate-900 flex items-center gap-2">
+            <Clock size={18} />
+            Attendance Marked
+          </h4>
+          <div className="mt-3 w-full bg-slate-200 rounded-full h-2">
+            <div
+              className="bg-blue-600 h-2 rounded-full transition-all"
+              style={{ width: `${checklist.attendanceCompletion.percentage}%` }}
+            />
+          </div>
+          <div className="mt-1 text-xs font-bold text-slate-600">
+            {checklist.attendanceCompletion.percentage.toFixed(0)}%
+          </div>
+        </div>
+      </div>
+    </div>
+
+    {/* Warnings */}
+    {checklist.warnings.length > 0 && (
+      <div className="p-3 bg-amber-50 border border-amber-200 rounded-2xl">
+        <p className="text-xs font-bold text-amber-700">
+          {checklist.warnings.map((w, i) => (
+            <div key={i}>⚠️ {w}</div>
+          ))}
+        </p>
+      </div>
+    )}
+
+    {checklist.status === 'NOT_READY' && (
+      <div className="p-3 bg-rose-50 border border-rose-200 rounded-2xl text-xs font-bold text-rose-600">
+        ⛔ {checklist.blockers.map((b, i) => <div key={i}>{b}</div>)}
+      </div>
+    )}
+  </div>
+);
+
+// ─────────────────────────────────────────────────────────────────────────────
+
+const ConfigurationStage: React.FC<any> = ({
+  nextYearName,
+  setNextYearName,
+  nextStartDate,
+  setNextStartDate,
+  nextEndDate,
+  setNextEndDate,
+  board,
+  setBoard,
+  streams,
+  setStreams,
+  outstandingHandling,
+  setOutstandingHandling,
+  carryForward,
+  setCarryForward,
+  onSave,
+}) => (
+  <div className="space-y-4 max-w-2xl">
+    <p className="text-[9px] font-black uppercase tracking-widest text-slate-400">Configuration</p>
+
+    <input
+      type="text"
+      placeholder="2025-2026"
+      value={nextYearName}
+      onChange={(e) => setNextYearName(e.target.value)}
+      className="w-full px-3 py-2.5 border border-slate-200 rounded-lg font-bold text-slate-900 placeholder:text-slate-300"
+    />
+
+    <div className="grid grid-cols-2 gap-3">
+      <input
+        type="date"
+        value={nextStartDate}
+        onChange={(e) => setNextStartDate(e.target.value)}
+        className="px-3 py-2.5 border border-slate-200 rounded-lg font-bold text-slate-900 text-sm"
+      />
+      <input
+        type="date"
+        value={nextEndDate}
+        onChange={(e) => setNextEndDate(e.target.value)}
+        className="px-3 py-2.5 border border-slate-200 rounded-lg font-bold text-slate-900 text-sm"
+      />
+    </div>
+
+    <div>
+      <label className="text-xs font-black uppercase text-slate-400 mb-2 block">Board</label>
+      <select
+        value={board}
+        onChange={(e) => setBoard(e.target.value)}
+        className="w-full px-3 py-2.5 border border-slate-200 rounded-lg font-bold text-slate-900"
+      >
+        <option>CBSE</option>
+        <option>RBSE</option>
+        <option>ICSE</option>
+      </select>
+    </div>
+
+    <div>
+      <label className="text-xs font-black uppercase text-slate-400 mb-2 block">Class 11 Streams</label>
+      <div className="space-y-2">
+        {streams.map((stream, idx) => (
+          <div key={idx} className="flex gap-2 items-center">
+            <input
+              type="text"
+              value={stream.name}
+              disabled
+              className="flex-1 px-3 py-2 bg-slate-100 border border-slate-200 rounded-lg font-bold text-slate-900 text-sm"
+            />
+            <input
+              type="number"
+              min="0"
+              value={stream.capacity}
+              onChange={(e) => {
+                const updated = [...streams];
+                updated[idx].capacity = parseInt(e.target.value) || 0;
+                setStreams(updated);
+              }}
+              className="w-20 px-3 py-2 border border-slate-200 rounded-lg font-bold text-slate-900 text-sm"
+              placeholder="Capacity"
+            />
+          </div>
+        ))}
+      </div>
+    </div>
+
+    <div>
+      <label className="text-xs font-black uppercase text-slate-400 mb-2 block">Outstanding Dues</label>
+      <div className="space-y-2">
+        {[
+          { value: 'WRITEOFF', label: 'Write off (bad debt)' },
+          { value: 'ARREARS', label: 'Carry as arrears to new year' },
+        ].map((opt: any) => (
+          <label key={opt.value} className="flex items-center gap-2 cursor-pointer">
+            <input
+              type="radio"
+              name="outstanding"
+              value={opt.value}
+              checked={outstandingHandling === opt.value}
+              onChange={(e) => setOutstandingHandling(e.target.value as any)}
+              className="w-4 h-4"
+            />
+            <span className="text-sm font-bold text-slate-700">{opt.label}</span>
+          </label>
+        ))}
+      </div>
+    </div>
+
+    <div>
+      <label className="text-xs font-black uppercase text-slate-400 mb-2 block">Carry Forward</label>
+      <div className="space-y-2">
+        {[
+          { key: 'staff', label: 'Staff assignments' },
+          { key: 'vehicles', label: 'Vehicles & routes' },
+          { key: 'feeStructure', label: 'Fee structure' },
+          { key: 'timetable', label: 'Timetable' },
+        ].map((item: any) => (
+          <label key={item.key} className="flex items-center gap-2 cursor-pointer">
+            <input
+              type="checkbox"
+              checked={carryForward[item.key]}
+              onChange={(e) => setCarryForward({ ...carryForward, [item.key]: e.target.checked })}
+              className="w-4 h-4"
+            />
+            <span className="text-sm font-bold text-slate-700">{item.label}</span>
+          </label>
+        ))}
+      </div>
+    </div>
+  </div>
+);
+
+// ─────────────────────────────────────────────────────────────────────────────
+
+const PreviewStage: React.FC<any> = ({ preview, config, loading, onLoadPreview }) => (
+  <div className="space-y-4 max-w-2xl">
+    <p className="text-[9px] font-black uppercase tracking-widest text-slate-400">Preview & Validation</p>
+
+    {!preview ? (
+      <button
+        onClick={onLoadPreview}
+        disabled={loading}
+        className="w-full py-3 bg-blue-600 text-white font-black rounded-2xl disabled:opacity-60 flex items-center justify-center gap-2 hover:bg-blue-700"
+      >
+        {loading ? <div className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" /> : ''}
+        {loading ? 'Validating...' : 'Load Preview'}
+      </button>
+    ) : (
+      <>
+        {preview.errors.length > 0 && (
+          <div className="p-4 bg-rose-50 border border-rose-200 rounded-2xl">
+            <p className="text-xs font-bold text-rose-700">
+              {preview.errors.map((e, i) => (
+                <div key={i}>🔴 {e}</div>
+              ))}
+            </p>
+          </div>
+        )}
+
+        {preview.warnings.length > 0 && (
+          <div className="p-4 bg-amber-50 border border-amber-200 rounded-2xl">
+            <p className="text-xs font-bold text-amber-700">
+              {preview.warnings.map((w, i) => (
+                <div key={i}>🟡 {w}</div>
+              ))}
+            </p>
+          </div>
+        )}
+
+        <div className="grid grid-cols-2 gap-3">
+          {[
+            { label: 'Students', val: preview.summary.studentsTotal },
+            { label: 'Promote', val: preview.summary.studentsToPromote },
+            { label: 'Detain', val: preview.summary.studentsToDetain },
+            { label: 'Graduate', val: preview.summary.studentsGraduating },
+            { label: 'Streams', val: preview.summary.streamsToAssign },
+            { label: 'Staff', val: preview.summary.staffToCarry },
+          ].map((item, i) => (
+            <div key={i} className="bg-white rounded-2xl border border-slate-100 p-3 text-center">
+              <div className="text-lg font-black text-slate-900">{item.val}</div>
+              <div className="text-[9px] font-bold uppercase tracking-widest text-slate-400">{item.label}</div>
+            </div>
+          ))}
+        </div>
+      </>
+    )}
+  </div>
+);
+
+// ─────────────────────────────────────────────────────────────────────────────
+
+const FinalCommitStage: React.FC<any> = ({ preview, loading, onCommit }) => (
+  <div className="space-y-4 max-w-2xl">
+    <p className="text-[9px] font-black uppercase tracking-widest text-slate-400">Final Confirmation</p>
+
+    <div className="bg-blue-50 border border-blue-200 rounded-2xl p-4">
+      <p className="text-xs font-bold text-blue-700">
+        ℹ️ This action will LOCK the current year (read-only) and create a new active year. All student promotions and stream assignments will be applied.
+      </p>
+    </div>
+
+    <div className="grid grid-cols-2 gap-3">
+      {[
+        { label: 'Promote', val: preview.summary.studentsToPromote, color: 'emerald' },
+        { label: 'Detain', val: preview.summary.studentsToDetain, color: 'amber' },
+        { label: 'Graduate', val: preview.summary.studentsGraduating, color: 'blue' },
+        { label: 'Streams', val: preview.summary.streamsToAssign, color: 'purple' },
+      ].map((item, i) => (
+        <div key={i} className={`bg-${item.color}-50 rounded-2xl border border-${item.color}-200 p-3 text-center`}>
+          <div className={`text-lg font-black text-${item.color}-600`}>{item.val}</div>
+          <div className="text-[9px] font-bold uppercase tracking-widest text-slate-400">{item.label}</div>
+        </div>
+      ))}
+    </div>
+
+    <label className="flex items-start gap-2 cursor-pointer p-3 bg-slate-50 rounded-2xl border border-slate-200">
+      <input type="checkbox" required className="w-4 h-4 mt-1" />
+      <span className="text-xs font-bold text-slate-700">
+        I understand the current year will be LOCKED and cannot be modified further
+      </span>
+    </label>
+  </div>
+);

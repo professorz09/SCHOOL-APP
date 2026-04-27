@@ -56,7 +56,7 @@ export const BottomNav: React.FC<BottomNavProps> = ({ role, currentTab, setTab }
   const tabs = ROLE_TABS[role] ?? ROLE_TABS.STUDENT;
 
   return (
-    <div className="absolute bottom-0 left-0 right-0 bg-white border-t border-slate-100 flex justify-between items-center px-6 py-2 pb-6 z-20">
+    <div className="absolute bottom-0 left-0 right-0 bg-white border-t border-slate-100 flex justify-between items-center px-6 pt-2 pb-[max(env(safe-area-inset-bottom),16px)] z-20">
       {tabs.map((tab) => {
         const Icon = tab.icon;
         const isActive = currentTab === tab.id;
@@ -174,7 +174,7 @@ export const Header: React.FC<HeaderProps> = ({ role }) => {
     : 'U';
 
   return (
-    <div className="flex items-center justify-between px-5 pt-8 pb-4 sticky top-0 bg-slate-50/90 backdrop-blur-md z-10">
+    <div className="flex items-center justify-between px-5 pt-[max(env(safe-area-inset-top),24px)] pb-4 sticky top-0 bg-slate-50/90 backdrop-blur-md z-10">
       <div className="flex items-center gap-3">
         <div className="w-10 h-10 rounded-full bg-blue-100 border-2 border-blue-500 overflow-hidden flex items-center justify-center text-blue-700 font-bold">
           {initials}
