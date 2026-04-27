@@ -7,22 +7,33 @@ import { studentService } from '../../../services/student.service';
 import { authService } from '../../../services/auth.service';
 import { useAuthStore } from '../../../store/authStore';
 import { schoolInfoService, SchoolInfo } from '../../../services/schoolInfo.service';
+import { FeeStructureForm, FeeStructureItem } from './FeeStructureForm';
 
 type View = 'MENU' | 'SCHOOL_INFO' | 'ACADEMIC' | 'CREATE_AY' | 'CLASSES' | 'FEE_STRUCT' | 'FEE_STRUCT_EDIT' | 'PROMOTION' | 'PROMOTION_WIZARD' | 'PAYMENTS' | 'SECURITY';
 
-interface FeeStructureItem {
-  id: string;
-  className: string;
-  tuitionPerMonth: number;
-  admissionFee: number;
-  examFeePerYear: number;
-  otherCharges: { label: string; amount: number; frequency: 'MONTHLY' | 'ANNUAL' | 'ONE_TIME' }[];
-}
-
 const DEFAULT_FEE_STRUCTURES: FeeStructureItem[] = [
-  { id: 'fs1', className: 'Class 1', tuitionPerMonth: 1500, admissionFee: 2000, examFeePerYear: 1200, otherCharges: [{ label: 'Smart Class', amount: 200, frequency: 'MONTHLY' }] },
-  { id: 'fs2', className: 'Class 9', tuitionPerMonth: 2800, admissionFee: 3000, examFeePerYear: 2000, otherCharges: [{ label: 'Lab Fee', amount: 300, frequency: 'MONTHLY' }] },
-  { id: 'fs3', className: 'Class 10', tuitionPerMonth: 3500, admissionFee: 3500, examFeePerYear: 2500, otherCharges: [{ label: 'Lab Fee', amount: 350, frequency: 'MONTHLY' }, { label: 'Board Fee', amount: 1500, frequency: 'ONE_TIME' }] },
+  {
+    id: 'fs1', name: 'Standard Fees - Class 1', className: 'Class 1',
+    feeHeads: [
+      { id: 'h1', name: 'Tuition Fee', amount: 1500, frequency: 'MONTHLY', description: 'Monthly tuition charges' },
+      { id: 'h2', name: 'Admission Fee', amount: 2000, frequency: 'ONE_TIME', description: '' },
+      { id: 'h3', name: 'Exam Fee', amount: 1200, frequency: 'ANNUAL', description: '' },
+      { id: 'h4', name: 'Smart Class Fee', amount: 200, frequency: 'MONTHLY', description: '' },
+    ],
+    monthlyDueDates: [],
+    lateFee: { enabled: false, gracePeriodDays: 5, type: 'FIXED', amount: 100, maxCap: 1000 },
+  },
+  {
+    id: 'fs2', name: 'Standard Fees - Class 9', className: 'Class 9',
+    feeHeads: [
+      { id: 'h1', name: 'Tuition Fee', amount: 2800, frequency: 'MONTHLY', description: '' },
+      { id: 'h2', name: 'Admission Fee', amount: 3000, frequency: 'ONE_TIME', description: '' },
+      { id: 'h3', name: 'Exam Fee', amount: 2000, frequency: 'ANNUAL', description: '' },
+      { id: 'h4', name: 'Lab Fee', amount: 300, frequency: 'MONTHLY', description: '' },
+    ],
+    monthlyDueDates: [],
+    lateFee: { enabled: true, gracePeriodDays: 5, type: 'FIXED', amount: 100, maxCap: 1000 },
+  },
 ];
 
 interface Props { onBack: () => void; }
@@ -48,14 +59,6 @@ export const SettingsManager: React.FC<Props> = ({ onBack }) => {
   const [qrFileName, setQrFileName] = useState('');
   const [feeStructures, setFeeStructures] = useState<FeeStructureItem[]>(DEFAULT_FEE_STRUCTURES);
   const [editingFs, setEditingFs] = useState<FeeStructureItem | null>(null);
-  const [newFsClass, setNewFsClass] = useState('');
-  const [newFsStream, setNewFsStream] = useState('');
-  const [newFsTuition, setNewFsTuition] = useState('');
-  const [newFsAdmission, setNewFsAdmission] = useState('');
-  const [newFsExam, setNewFsExam] = useState('');
-  const [newChargeLabel, setNewChargeLabel] = useState('');
-  const [newChargeAmount, setNewChargeAmount] = useState('');
-  const [newChargeFreq, setNewChargeFreq] = useState<'MONTHLY' | 'ANNUAL' | 'ONE_TIME'>('MONTHLY');
   const [schoolInfo, setSchoolInfo] = useState<SchoolInfo>(schoolInfoService.get());
   const session = useAuthStore(s => s.session);
   const setSession = useAuthStore(s => s.setSession);
@@ -171,41 +174,19 @@ export const SettingsManager: React.FC<Props> = ({ onBack }) => {
     } finally { setIsSaving(false); }
   };
 
-  const handleAddFeeStructure = () => {
-    if (!newFsClass.trim() || !newFsTuition) { showToast('Class name and tuition fee required', 'error'); return; }
-    if (STREAM_CLASSES.has(newFsClass.trim()) && !newFsStream) { showToast('Stream required for Class 11 and 12', 'error'); return; }
-    const fullName = (STREAM_CLASSES.has(newFsClass.trim()) && newFsStream)
-      ? `${newFsClass.trim()} - ${newFsStream}`
-      : newFsClass.trim();
-    const newFs: FeeStructureItem = {
-      id: `fs${Date.now()}`,
-      className: fullName,
-      tuitionPerMonth: Number(newFsTuition),
-      admissionFee: Number(newFsAdmission) || 0,
-      examFeePerYear: Number(newFsExam) || 0,
-      otherCharges: [],
-    };
-    setFeeStructures(prev => [...prev, newFs]);
-    setNewFsClass(''); setNewFsStream(''); setNewFsTuition(''); setNewFsAdmission(''); setNewFsExam('');
-    showToast(`Fee structure added for ${newFs.className}`);
-  };
-
   const handleDeleteFs = (id: string) => {
     setFeeStructures(prev => prev.filter(f => f.id !== id));
     showToast('Fee structure removed');
   };
 
-  const handleSaveEditFs = () => {
-    if (!editingFs) return;
-    setFeeStructures(prev => prev.map(f => f.id === editingFs.id ? editingFs : f));
+  const handleSaveFs = (data: FeeStructureItem) => {
+    setFeeStructures(prev => {
+      const exists = prev.some(f => f.id === data.id);
+      return exists ? prev.map(f => f.id === data.id ? data : f) : [...prev, data];
+    });
     setEditingFs(null);
-    showToast('Fee structure saved');
-  };
-
-  const handleAddOtherCharge = () => {
-    if (!editingFs || !newChargeLabel.trim() || !newChargeAmount) return;
-    setEditingFs(prev => prev ? { ...prev, otherCharges: [...prev.otherCharges, { label: newChargeLabel.trim(), amount: Number(newChargeAmount), frequency: newChargeFreq }] } : prev);
-    setNewChargeLabel(''); setNewChargeAmount('');
+    setView('FEE_STRUCT');
+    showToast(`Fee structure "${data.name}" saved`);
   };
 
   const handleSaveSchoolInfo = () => {
@@ -437,141 +418,82 @@ export const SettingsManager: React.FC<Props> = ({ onBack }) => {
     </div>
   );
 
-  // FEE STRUCT VIEWS (list + edit)
+  // FEE STRUCT — list view
   if (view === 'FEE_STRUCT') return (
     <div className="absolute inset-0 z-50 bg-slate-50 flex flex-col animate-in slide-in-from-right-8 duration-300">
       {renderHeader('Fee Structure')}
       <div className="flex-1 overflow-y-auto p-4 pb-28 space-y-4">
-        <div className="bg-indigo-50 border border-indigo-200 rounded-2xl p-4">
-          <p className="text-xs font-black text-indigo-700">Define class-wise fee structure. Used as default when admitting students.</p>
-        </div>
+        <button
+          onClick={() => { setEditingFs(null); setView('FEE_STRUCT_EDIT'); }}
+          className="w-full flex items-center justify-center gap-2 bg-emerald-600 text-white font-black text-xs uppercase tracking-widest py-4 rounded-2xl active:scale-95 transition-transform shadow-lg"
+        >
+          <Plus size={16} /> Create Fee Structure
+        </button>
 
-        <div className="bg-white rounded-2xl border border-slate-100 shadow-sm p-4 space-y-3">
-          <p className="text-[10px] font-black uppercase tracking-widest text-slate-400">Add Class Fee Structure</p>
-          <select value={newFsClass} onChange={e => { setNewFsClass(e.target.value); setNewFsStream(''); }}
-            className="w-full border border-slate-200 bg-slate-50 rounded-xl px-3 py-3 font-bold text-sm outline-none focus:border-indigo-500">
-            <option value="">Select class…</option>
-            {['Class 1','Class 2','Class 3','Class 4','Class 5','Class 6','Class 7','Class 8','Class 9','Class 10','Class 11','Class 12'].map(c => (
-              <option key={c} value={c}>{c}</option>
-            ))}
-          </select>
-          {STREAM_CLASSES.has(newFsClass) && (
-            <div>
-              <label className="block text-[9px] font-black uppercase tracking-widest text-slate-400 mb-1.5">Stream *</label>
-              <div className="grid grid-cols-3 gap-2">
-                {STREAMS.map(s => (
-                  <button key={s} type="button"
-                    onClick={() => setNewFsStream(s)}
-                    className={`py-2.5 rounded-xl text-xs font-black border transition-all ${newFsStream === s ? 'bg-emerald-600 text-white border-emerald-600' : 'bg-slate-50 text-slate-600 border-slate-200'}`}>
-                    {s}
-                  </button>
-                ))}
-              </div>
-            </div>
-          )}
-          <div className="grid grid-cols-3 gap-2">
-            {[
-              { label: 'Tuition/Month', key: 'FsTuition' },
-              { label: 'Admission', key: 'FsAdmission' },
-              { label: 'Exam Fee/Yr', key: 'FsExam' },
-            ].map(({ label, key }) => (
-              <div key={key}>
-                <label className="block text-[9px] font-black uppercase tracking-widest text-slate-400 mb-1">₹ {label}</label>
-                <input type="number" value={(key === 'FsTuition' ? newFsTuition : key === 'FsAdmission' ? newFsAdmission : newFsExam)} onChange={e => key === 'FsTuition' ? setNewFsTuition(e.target.value) : key === 'FsAdmission' ? setNewFsAdmission(e.target.value) : setNewFsExam(e.target.value)} className="w-full border border-slate-200 bg-slate-50 rounded-xl px-3 py-2.5 font-bold text-sm outline-none focus:border-indigo-500" />
-              </div>
-            ))}
-          </div>
-          <button onClick={handleAddFeeStructure} className="w-full flex items-center justify-center gap-2 bg-indigo-600 text-white font-black text-xs uppercase tracking-widest py-3 rounded-xl active:scale-95 transition-transform">
-            <Plus size={14} /> Add Fee Structure
-          </button>
+        <div className="bg-indigo-50 border border-indigo-200 rounded-2xl p-3">
+          <p className="text-xs font-black text-indigo-700">Define class-wise fee structures with custom fee heads, due dates, and late fee rules.</p>
         </div>
 
         <div className="space-y-2">
-          {feeStructures.length === 0 && <div className="flex flex-col items-center py-10 text-slate-400"><IndianRupee size={28} className="mb-2 opacity-40" /><p className="font-bold text-sm">No fee structures yet</p></div>}
-          {feeStructures.map(fs => (
-            <div key={fs.id} className="bg-white rounded-2xl border border-slate-100 shadow-sm overflow-hidden">
-              <div className="flex items-center gap-3 px-4 py-3.5">
-                <div className="w-10 h-10 rounded-xl bg-indigo-50 text-indigo-600 flex items-center justify-center font-black text-sm shrink-0">
-                  {fs.className.replace('Class ', '')}
-                </div>
-                <div className="flex-1">
-                  <div className="font-extrabold text-slate-900 text-sm">{fs.className}</div>
-                  <div className="text-[10px] font-bold text-slate-400 mt-0.5">
-                    ₹{fs.tuitionPerMonth.toLocaleString('en-IN')}/mo · Admission ₹{fs.admissionFee.toLocaleString('en-IN')} · Exam ₹{fs.examFeePerYear.toLocaleString('en-IN')}/yr
+          {feeStructures.length === 0 && (
+            <div className="flex flex-col items-center py-12 text-slate-400">
+              <IndianRupee size={32} className="mb-3 opacity-30" />
+              <p className="font-bold text-sm">No fee structures yet</p>
+              <p className="text-[10px] font-bold text-slate-300 mt-1">Create one to get started</p>
+            </div>
+          )}
+          {feeStructures.map(fs => {
+            const annualTotal = fs.feeHeads.reduce((s, h) => {
+              if (h.frequency === 'MONTHLY') return s + h.amount * 12;
+              return s + h.amount;
+            }, 0);
+            return (
+              <div key={fs.id} className="bg-white rounded-2xl border border-slate-100 shadow-sm overflow-hidden">
+                <div className="flex items-center gap-3 px-4 py-3.5">
+                  <div className="w-10 h-10 rounded-xl bg-emerald-50 text-emerald-700 flex items-center justify-center font-black text-xs shrink-0 text-center leading-tight">
+                    {fs.className.replace('Class ', '').slice(0, 4)}
+                  </div>
+                  <div className="flex-1 min-w-0">
+                    <div className="font-extrabold text-slate-900 text-sm truncate">{fs.name}</div>
+                    <div className="text-[10px] font-bold text-slate-400 mt-0.5">
+                      {fs.className} · {fs.feeHeads.length} fee heads · ₹{annualTotal.toLocaleString('en-IN')}/yr
+                      {fs.lateFee.enabled && <span className="ml-1 text-amber-600">· Late fee on</span>}
+                    </div>
+                  </div>
+                  <div className="flex gap-1.5 shrink-0">
+                    <button onClick={() => { setEditingFs(fs); setView('FEE_STRUCT_EDIT'); }} className="p-2 bg-indigo-50 text-indigo-600 rounded-xl"><Edit2 size={13} /></button>
+                    <button onClick={() => handleDeleteFs(fs.id)} className="p-2 bg-rose-50 text-rose-500 rounded-xl"><Trash2 size={13} /></button>
                   </div>
                 </div>
-                <div className="flex gap-1.5">
-                  <button onClick={() => { setEditingFs(fs); setView('FEE_STRUCT_EDIT'); }} className="p-2 bg-indigo-50 text-indigo-600 rounded-xl"><Edit2 size={13} /></button>
-                  <button onClick={() => handleDeleteFs(fs.id)} className="p-2 bg-rose-50 text-rose-500 rounded-xl"><Trash2 size={13} /></button>
-                </div>
+                {fs.feeHeads.length > 0 && (
+                  <div className="px-4 pb-3 flex flex-wrap gap-1.5 border-t border-slate-50 pt-2">
+                    {fs.feeHeads.slice(0, 4).map(h => (
+                      <span key={h.id} className="text-[9px] font-black bg-slate-100 text-slate-600 px-2 py-0.5 rounded-full">
+                        {h.name} ₹{h.amount.toLocaleString('en-IN')} ({h.frequency === 'MONTHLY' ? 'mo' : h.frequency === 'ANNUAL' ? 'yr' : '1x'})
+                      </span>
+                    ))}
+                    {fs.feeHeads.length > 4 && (
+                      <span className="text-[9px] font-black bg-indigo-50 text-indigo-600 px-2 py-0.5 rounded-full">+{fs.feeHeads.length - 4} more</span>
+                    )}
+                  </div>
+                )}
               </div>
-              {fs.otherCharges.length > 0 && (
-                <div className="px-4 pb-3 flex flex-wrap gap-1.5 border-t border-slate-50 pt-2">
-                  {fs.otherCharges.map((c, i) => (
-                    <span key={i} className="text-[9px] font-black bg-slate-100 text-slate-600 px-2 py-0.5 rounded-full">
-                      {c.label} ₹{c.amount} ({c.frequency === 'MONTHLY' ? 'mo' : c.frequency === 'ANNUAL' ? 'yr' : '1x'})
-                    </span>
-                  ))}
-                </div>
-              )}
-            </div>
-          ))}
+            );
+          })}
         </div>
       </div>
     </div>
   );
 
-  if (view === 'FEE_STRUCT_EDIT' && editingFs) return (
-    <div className="absolute inset-0 z-50 bg-slate-50 flex flex-col animate-in slide-in-from-right-8 duration-300">
-      {renderHeader(`Edit: ${editingFs.className}`)}
-      <div className="flex-1 overflow-y-auto p-4 pb-28 space-y-4">
-        <div className="bg-white rounded-2xl border border-slate-100 shadow-sm p-4 space-y-4">
-          <p className="text-[10px] font-black uppercase tracking-widest text-slate-400">Core Fees</p>
-          {[
-            { label: 'Tuition Fee / Month (₹)', key: 'tuitionPerMonth' },
-            { label: 'Admission Fee (₹)', key: 'admissionFee' },
-            { label: 'Exam Fee / Year (₹)', key: 'examFeePerYear' },
-          ].map(({ label, key }) => (
-            <div key={key}>
-              <label className="block text-[10px] font-black uppercase tracking-widest text-slate-500 mb-1.5">{label}</label>
-              <input type="number" value={(editingFs as any)[key]} onChange={e => setEditingFs(prev => prev ? { ...prev, [key]: Number(e.target.value) } : prev)} className="w-full border border-slate-200 bg-slate-50 rounded-xl px-4 py-3 font-bold text-sm outline-none focus:border-indigo-500" />
-            </div>
-          ))}
-        </div>
-
-        <div className="bg-white rounded-2xl border border-slate-100 shadow-sm p-4 space-y-3">
-          <p className="text-[10px] font-black uppercase tracking-widest text-slate-400">Other Charges</p>
-          {editingFs.otherCharges.map((charge, idx) => (
-            <div key={idx} className="flex items-center gap-2 bg-slate-50 rounded-xl px-3 py-2.5">
-              <div className="flex-1">
-                <div className="font-bold text-slate-800 text-sm">{charge.label}</div>
-                <div className="text-[10px] font-bold text-slate-400">₹{charge.amount} · {charge.frequency}</div>
-              </div>
-              <button onClick={() => setEditingFs(prev => prev ? { ...prev, otherCharges: prev.otherCharges.filter((_, i) => i !== idx) } : prev)} className="text-slate-300 hover:text-rose-500 transition-colors"><Trash2 size={14} /></button>
-            </div>
-          ))}
-          <div className="border-t border-slate-100 pt-3 space-y-2">
-            <p className="text-[9px] font-black uppercase tracking-widest text-slate-400">Add Charge</p>
-            <input value={newChargeLabel} onChange={e => setNewChargeLabel(e.target.value)} placeholder="Charge label (e.g. Lab Fee, Smart Class)" className="w-full border border-slate-200 bg-slate-50 rounded-xl px-3 py-2.5 font-bold text-sm outline-none focus:border-indigo-500" />
-            <div className="flex gap-2">
-              <input type="number" value={newChargeAmount} onChange={e => setNewChargeAmount(e.target.value)} placeholder="Amount (₹)" className="flex-1 border border-slate-200 bg-slate-50 rounded-xl px-3 py-2.5 font-bold text-sm outline-none focus:border-indigo-500" />
-              <select value={newChargeFreq} onChange={e => setNewChargeFreq(e.target.value as any)} className="border border-slate-200 bg-slate-50 rounded-xl px-3 py-2.5 font-bold text-xs outline-none focus:border-indigo-500">
-                <option value="MONTHLY">Monthly</option>
-                <option value="ANNUAL">Annual</option>
-                <option value="ONE_TIME">One-time</option>
-              </select>
-            </div>
-            <button onClick={handleAddOtherCharge} className="w-full flex items-center justify-center gap-2 bg-indigo-50 text-indigo-700 font-black text-xs uppercase py-2.5 rounded-xl">
-              <Plus size={14} /> Add Charge
-            </button>
-          </div>
-        </div>
-
-        <button onClick={handleSaveEditFs} className="w-full flex items-center justify-center gap-2 bg-slate-900 text-white font-black text-xs uppercase tracking-widest py-4 rounded-2xl active:scale-95 transition-transform shadow-lg">
-          <Save size={16} /> Save Fee Structure
-        </button>
-      </div>
-    </div>
+  // FEE STRUCT — create/edit form (delegates to FeeStructureForm component)
+  if (view === 'FEE_STRUCT_EDIT') return (
+    <FeeStructureForm
+      initialData={editingFs ?? undefined}
+      activeYearLabel={activeConfig?.label ?? ''}
+      activeYearStartDate={activeConfig?.startDate ?? ''}
+      onSave={handleSaveFs}
+      onBack={() => setView('FEE_STRUCT')}
+    />
   );
 
   // PROMOTION VIEWS
