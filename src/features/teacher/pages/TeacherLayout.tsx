@@ -1,4 +1,5 @@
 import React, { useState, useMemo, useEffect } from 'react';
+import { ToastContainer } from '../../../components/ui/Toast';
 import {
   Users, FileCheck2, ClipboardList, ScrollText, CircleAlert,
   TrendingUp, BookOpen, Calendar, IndianRupee, Bell, CalendarDays,
@@ -63,6 +64,7 @@ export const TeacherLayout: React.FC = () => {
   ];
 
   return (
+    <>
     <div className="flex flex-col gap-4 animate-in slide-in-from-bottom-4 duration-300 fade-in pt-2">
       {/* Greeting */}
       <div>
@@ -141,5 +143,7 @@ export const TeacherLayout: React.FC = () => {
         ))}
       </div>
     </div>
+    <ToastContainer />
+    </>
   );
 };

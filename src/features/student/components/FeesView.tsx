@@ -2,7 +2,7 @@ import React, { useEffect, useState } from 'react';
 import {
   ArrowLeft, Upload, CheckCircle2, QrCode, Zap, AlertTriangle, Wallet,
 } from 'lucide-react';
-import { studentDashboardService } from '../../../services/student.service2';
+import { studentDashboardService } from '../../../services/studentDashboard.service';
 import { FeePaymentUpload } from '../../../types/student.types';
 import { useUIStore } from '../../../store/uiStore';
 import { feeService, FeeInstallment } from '../../../services/fee.service';

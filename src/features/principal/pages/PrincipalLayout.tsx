@@ -1,4 +1,5 @@
 import React, { useState } from 'react';
+import { ToastContainer } from '../../../components/ui/Toast';
 import { PrincipalDashboard } from '../components/PrincipalDashboard';
 import { StudentsManager } from '../components/StudentsManager';
 import { StaffManager } from '../components/StaffManager';
@@ -20,6 +21,7 @@ import { AttendanceHub } from '../components/AttendanceHub';
 export type PrincipalView =
   | 'DASHBOARD'
   | 'STUDENTS'
+  | 'ADMISSION'
   | 'STAFF'
   | 'ASSETS'
   | 'COMPLAINTS'
@@ -43,6 +45,7 @@ export const PrincipalLayout: React.FC = () => {
   const goBack = () => setView('DASHBOARD');
 
   if (view === 'STUDENTS')      return <StudentsManager        onBack={goBack} />;
+  if (view === 'ADMISSION')     return <StudentsManager        onBack={goBack} initialView="ADMISSION" />;
   if (view === 'STAFF')         return <StaffManager           onBack={goBack} />;
   if (view === 'ASSETS')        return <AssetsManager          onBack={goBack} />;
   if (view === 'COMPLAINTS')    return <ComplaintsManager      onBack={goBack} />;
@@ -59,5 +62,10 @@ export const PrincipalLayout: React.FC = () => {
   if (view === 'ATTENDANCE')       return <AttendanceHub          onBack={goBack} />;
   if (view === 'TRANSPORT_MGMT')   return <TransportManager       onBack={goBack} />;
 
-  return <PrincipalDashboard onNavigate={goTo} />;
+  return (
+    <>
+      <PrincipalDashboard onNavigate={goTo} />
+      <ToastContainer />
+    </>
+  );
 };

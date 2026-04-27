@@ -129,10 +129,26 @@ export const StaffAttendanceManager: React.FC<Props> = ({ onBack }) => {
     setActiveStatus(null);
   };
 
+  // ── Summary counts — must be before any conditional return ────────────────
+  const counts = useMemo(() => {
+    const c: Record<AttendanceStatus, number> = { PRESENT: 0, ABSENT: 0, HALF_DAY: 0, LEAVE: 0, LATE: 0, HOLIDAY: 0 };
+    if (!record) return c;
+    for (const row of record.rows) c[row.status]++;
+    return c;
+  }, [record]);
+
   if (!record) {
     return (
-      <div className="absolute inset-0 z-50 bg-slate-50 flex items-center justify-center">
-        <div className="w-8 h-8 border-2 border-slate-200 border-t-slate-600 rounded-full animate-spin" />
+      <div className="absolute inset-0 z-50 bg-slate-50 flex flex-col animate-in slide-in-from-right-8 duration-300">
+        <div className="bg-white border-b border-slate-100 px-4 pt-12 pb-3 shadow-sm sticky top-0 z-20 flex items-center gap-3">
+          <button onClick={onBack} className="p-2 -ml-2 bg-slate-100 rounded-full">
+            <ArrowLeft size={20} className="text-slate-600" />
+          </button>
+          <h2 className="text-xl font-black text-slate-900 uppercase tracking-tight">Staff Attendance</h2>
+        </div>
+        <div className="flex-1 flex items-center justify-center">
+          <div className="w-8 h-8 border-2 border-slate-200 border-t-slate-600 rounded-full animate-spin" />
+        </div>
       </div>
     );
   }
@@ -170,13 +186,6 @@ export const StaffAttendanceManager: React.FC<Props> = ({ onBack }) => {
     setSaved(true);
   };
 
-  // ── Summary counts ────────────────────────────────────────────────────────
-  const counts = useMemo(() => {
-    const c: Record<AttendanceStatus, number> = { PRESENT: 0, ABSENT: 0, HALF_DAY: 0, LEAVE: 0, LATE: 0, HOLIDAY: 0 };
-    if (!record) return c;
-    for (const row of record.rows) c[row.status]++;
-    return c;
-  }, [record]);
 
   const ROW_STATUSES: AttendanceStatus[] = ['PRESENT', 'ABSENT', 'HALF_DAY', 'LEAVE', 'LATE'];
 

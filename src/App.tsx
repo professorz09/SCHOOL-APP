@@ -1,18 +1,18 @@
 import React, { useState, useEffect } from 'react';
 import { AppRole, NavTab } from './types';
-import { Header, BottomNav } from './components/Navigation';
+import { Header, BottomNav, SidebarNav } from './components/Navigation';
 import { LoginPage } from './components/LoginPage';
 import { FirstLoginPasswordChange } from './components/FirstLoginPasswordChange';
 import { PrincipalLayout } from './features/principal';
 import { SuperAdminLayout } from './features/super-admin';
 import { TeacherLayout } from './features/teacher';
 import { StudentLayout } from './features/student';
-import { DriverLayout } from './features/driver/DriverLayout';
+import { DriverLayout } from './features/driver';
 import { ProfileView } from './views/ProfileView';
 import { useAuthStore, restoreAuthSession } from './store/authStore';
 import { studentService } from './services/student.service';
 import { Student } from './types/principal.types';
-import { Settings2, LogOut } from 'lucide-react';
+import { Settings2, LogOut, Bell } from 'lucide-react';
 // Tab-specific views (lazy imports keep the route definitions explicit)
 import { FeesView }            from './features/student/components/FeesView';
 import { StudentNoticesView }  from './features/student/components/StudentNoticesView';
@@ -23,12 +23,23 @@ import { BillingManager }      from './features/super-admin/components/BillingMa
 import { AttendanceManager }   from './features/teacher/components/AttendanceManager';
 import { TeacherNoticesView }  from './features/teacher/components/TeacherNoticesView';
 
+const useIsDesktop = () => {
+  const [isDesktop, setIsDesktop] = useState(() => window.innerWidth >= 1024);
+  useEffect(() => {
+    const handler = () => setIsDesktop(window.innerWidth >= 1024);
+    window.addEventListener('resize', handler);
+    return () => window.removeEventListener('resize', handler);
+  }, []);
+  return isDesktop;
+};
+
 export default function App() {
   const { session, logout } = useAuthStore();
   const [tab, setTab] = useState<NavTab>('HOME');
   const [showRoleSelector, setShowRoleSelector] = useState(false);
   const [selectedStudentId, setSelectedStudentId] = useState<string | null>(null);
   const [linkedStudents, setLinkedStudents] = useState<Student[]>([]);
+  const isDesktop = useIsDesktop();
 
   // Restore auth session on app load
   useEffect(() => {
@@ -132,6 +143,54 @@ export default function App() {
     return renderDashboard();
   };
 
+  const handleLogout = () => {
+    logout();
+    window.location.reload();
+  };
+
+  // ── Desktop layout ────────────────────────────────────────────────────────
+  if (isDesktop) {
+    const firstName = session.name?.split(' ')[0] ?? 'User';
+    return (
+      <div className="flex h-screen bg-slate-100 overflow-hidden">
+        {/* Sidebar */}
+        <aside className="w-64 xl:w-72 bg-white border-r border-slate-100 shadow-sm shrink-0">
+          <SidebarNav
+            role={role}
+            currentTab={tab}
+            setTab={setTab}
+            onLogout={handleLogout}
+          />
+        </aside>
+
+        {/* Main area */}
+        <div className="flex-1 flex flex-col overflow-hidden">
+          {/* Top bar */}
+          <div className="bg-white border-b border-slate-100 px-8 py-4 flex items-center justify-between shrink-0">
+            <div>
+              <p className="text-[10px] font-black uppercase tracking-widest text-slate-400">EduGrow School</p>
+              <h1 className="text-xl font-black text-slate-900 leading-tight">Hi, {firstName}</h1>
+            </div>
+            <button className="relative p-2 bg-slate-100 rounded-full text-slate-600 hover:bg-slate-200 transition-colors">
+              <Bell size={20} />
+              <span className="absolute -top-1 -right-1 w-4 h-4 bg-red-500 text-white text-[10px] font-bold flex items-center justify-center rounded-full border-2 border-white">3</span>
+            </button>
+          </div>
+
+          {/* Scrollable content — relative+overflow-hidden so absolute inset-0 panels work */}
+          <div className="flex-1 relative overflow-hidden">
+            <main className="absolute inset-0 overflow-y-auto px-8 py-6 hide-scrollbar">
+              <div className="max-w-5xl mx-auto">
+                {renderTabContent()}
+              </div>
+            </main>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  // ── Mobile layout (unchanged phone mockup) ────────────────────────────────
   return (
     <div className="min-h-screen bg-slate-100 flex items-center justify-center sm:py-8 sm:px-4">
       <div className="w-full h-screen sm:h-[850px] sm:max-w-[400px] bg-slate-50 relative sm:rounded-[40px] sm:border-[8px] border-slate-800 shadow-2xl flex flex-col overflow-hidden">

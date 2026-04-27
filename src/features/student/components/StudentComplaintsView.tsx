@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import { ArrowLeft, Plus, CircleAlert } from 'lucide-react';
-import { studentDashboardService } from '../../../services/student.service2';
+import { studentDashboardService } from '../../../services/studentDashboard.service';
 import { StudentComplaint } from '../../../types/student.types';
 import { useUIStore } from '../../../store/uiStore';
 
