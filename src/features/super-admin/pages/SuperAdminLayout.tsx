@@ -13,18 +13,20 @@ type ActiveView = 'dashboard' | 'schools' | 'billing' | 'admins' | 'broadcast' |
 export const SuperAdminLayout: React.FC = () => {
   const [view, setView] = useState<ActiveView>('dashboard');
 
+  const onNavigate = (v: string) => setView(v as ActiveView);
+  const onBack = () => setView('dashboard');
+
+  if (view === 'schools')   return <><SchoolsManager  onBack={onBack} /><ToastContainer /></>;
+  if (view === 'billing')   return <><BillingManager  onBack={onBack} /><ToastContainer /></>;
+  if (view === 'admins')    return <><AdminsManager   onBack={onBack} /><ToastContainer /></>;
+  if (view === 'broadcast') return <><BroadcastManager onBack={onBack} /><ToastContainer /></>;
+  if (view === 'reports')   return <><ReportsView     onBack={onBack} /><ToastContainer /></>;
+  if (view === 'logs')      return <><LogsViewer      onBack={onBack} /><ToastContainer /></>;
+
   return (
-    <div className="w-full h-full">
-      <SADashboard onNavigate={(v) => setView(v as ActiveView)} />
-
-      {view === 'schools' && <SchoolsManager onBack={() => setView('dashboard')} />}
-      {view === 'billing' && <BillingManager onBack={() => setView('dashboard')} />}
-      {view === 'admins' && <AdminsManager onBack={() => setView('dashboard')} />}
-      {view === 'broadcast' && <BroadcastManager onBack={() => setView('dashboard')} />}
-      {view === 'reports' && <ReportsView onBack={() => setView('dashboard')} />}
-      {view === 'logs' && <LogsViewer onBack={() => setView('dashboard')} />}
-
+    <>
+      <SADashboard onNavigate={onNavigate} />
       <ToastContainer />
-    </div>
+    </>
   );
 };

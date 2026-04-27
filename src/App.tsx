@@ -286,8 +286,10 @@ export default function App() {
       <div className="w-full h-full bg-slate-50 relative flex flex-col overflow-hidden">
         <Header role={role} />
 
-        <main className="flex-1 overflow-y-auto px-5 pb-28 hide-scrollbar">
-          {renderTabContent()}
+        <main className="flex-1 relative overflow-hidden">
+          <div className="absolute inset-0 overflow-y-auto px-5 pb-28 hide-scrollbar">
+            {renderTabContent()}
+          </div>
         </main>
 
         <BottomNav role={role} currentTab={tab} setTab={setTab} />
