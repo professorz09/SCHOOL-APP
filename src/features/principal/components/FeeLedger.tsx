@@ -1,8 +1,40 @@
 import React, { useState, useEffect } from 'react';
-import { ArrowLeft, IndianRupee, CheckCircle2, AlertTriangle, Clock, X, ShieldCheck, Search, Filter } from 'lucide-react';
+import { ArrowLeft, IndianRupee, CheckCircle2, AlertTriangle, Clock, X, ShieldCheck, Search, Filter, Printer, Banknote, Smartphone, CreditCard, Building2, FileCheck } from 'lucide-react';
 import { feeService, FeeInstallment, FeeStatus, FeeType } from '../../../services/fee.service';
 import { studentService } from '../../../services/student.service';
 import { useUIStore } from '../../../store/uiStore';
+
+type PaymentMethod = 'CASH' | 'UPI' | 'NET_BANKING' | 'CHEQUE' | 'ONLINE';
+
+interface PaymentTransaction {
+  id: string;
+  studentId: string;
+  studentName: string;
+  className: string;
+  admissionNo: string;
+  amount: number;
+  method: PaymentMethod;
+  date: string;
+  receiptNo: string;
+  installmentIds: string[];
+  installmentDetails: { month: string; feeType: FeeType; amount: number }[];
+}
+
+const METHOD_LABEL: Record<PaymentMethod, string> = {
+  CASH: 'Cash',
+  UPI: 'UPI',
+  NET_BANKING: 'Net Banking',
+  CHEQUE: 'Cheque',
+  ONLINE: 'Online',
+};
+
+const METHOD_ICON: Record<PaymentMethod, React.ReactNode> = {
+  CASH: <Banknote size={16} />,
+  UPI: <Smartphone size={16} />,
+  NET_BANKING: <Building2 size={16} />,
+  CHEQUE: <FileCheck size={16} />,
+  ONLINE: <CreditCard size={16} />,
+};
 
 interface StudentFeeProfile {
   studentId: string;
@@ -69,6 +101,9 @@ export const FeeLedger: React.FC<Props> = ({ onBack }) => {
   const [govtNote, setGovtNote] = useState('');
   const [search, setSearch] = useState('');
   const [showOnlyDue, setShowOnlyDue] = useState(false);
+  const [paymentMethod, setPaymentMethod] = useState<PaymentMethod>('CASH');
+  const [paymentTransactions, setPaymentTransactions] = useState<PaymentTransaction[]>([]);
+  const [receiptModal, setReceiptModal] = useState<PaymentTransaction | null>(null);
 
   useEffect(() => {
     studentService.getAll().then(all => {
@@ -102,9 +137,40 @@ export const FeeLedger: React.FC<Props> = ({ onBack }) => {
     const amount = Number(payAmount);
     if (isNaN(amount) || amount <= 0) return;
 
+    const prevInstallments = feeService.getStudentInstallments(selected.studentId).map(i => ({ ...i }));
+
     if (feeService.recordPayment(selected.studentId, amount)) {
       const updated = feeService.getStudentFeeProfile(selected.studentId, selected.name, selected.className, selected.admissionNo, selected.isRte);
       updateStudent(updated);
+
+      // Determine which installments changed to PAID/PARTIAL
+      const newInstallments = feeService.getStudentInstallments(selected.studentId);
+      const changedIds: string[] = [];
+      const changedDetails: { month: string; feeType: FeeType; amount: number }[] = [];
+      for (const newInst of newInstallments) {
+        const prev = prevInstallments.find(p => p.id === newInst.id);
+        if (prev && newInst.paidAmount > prev.paidAmount) {
+          changedIds.push(newInst.id);
+          changedDetails.push({ month: newInst.month, feeType: newInst.feeType, amount: newInst.paidAmount - prev.paidAmount });
+        }
+      }
+
+      const receiptNo = `RCT-${new Date().getFullYear()}-${String(paymentTransactions.length + 1).padStart(4, '0')}`;
+      const tx: PaymentTransaction = {
+        id: `tx${Date.now()}`,
+        studentId: selected.studentId,
+        studentName: selected.name,
+        className: selected.className,
+        admissionNo: selected.admissionNo,
+        amount,
+        method: paymentMethod,
+        date: new Date().toISOString().split('T')[0],
+        receiptNo,
+        installmentIds: changedIds,
+        installmentDetails: changedDetails,
+      };
+      setPaymentTransactions(prev => [...prev, tx]);
+      setReceiptModal(tx);
       setPayAmount('');
       setPayModal(false);
     }
@@ -150,6 +216,9 @@ export const FeeLedger: React.FC<Props> = ({ onBack }) => {
       showToast('Government payment recorded successfully');
     }
   };
+
+  const getInstallmentReceipt = (installmentId: string) =>
+    paymentTransactions.slice().reverse().find(tx => tx.installmentIds.includes(installmentId)) ?? null;
 
   if (selected && mainView === 'DETAIL') {
     const parentSummary = feeService.getParentDueSummary(selected.studentId);
@@ -245,10 +314,19 @@ export const FeeLedger: React.FC<Props> = ({ onBack }) => {
                       {inst.writeOffAmount > 0 && <div className="text-[10px] font-bold text-slate-400">Waived: ₹{inst.writeOffAmount.toLocaleString()}</div>}
                     </div>
                   </div>
-                  <div className="flex items-center gap-2 px-3.5 pb-3">
+                  <div className="flex items-center gap-2 px-3.5 pb-3 flex-wrap">
                     <div className={`flex items-center gap-1.5 text-[10px] font-black px-2.5 py-1 rounded-full border ${statusColor[inst.status]}`}>
                       {statusIcon(inst.status)} {inst.status}
                     </div>
+                    {inst.status === 'PAID' && (() => {
+                      const receipt = getInstallmentReceipt(inst.id);
+                      return receipt ? (
+                        <button onClick={() => setReceiptModal(receipt)}
+                          className="flex items-center gap-1 text-[9px] font-black text-indigo-600 px-2.5 py-1 rounded-full border border-indigo-200 bg-indigo-50">
+                          <Printer size={10} /> Receipt
+                        </button>
+                      ) : null;
+                    })()}
                     {inst.status !== 'PAID' && inst.status !== 'WAIVED' && due > 0 && (
                       <button onClick={() => setWriteOffModal(inst)}
                         className="flex items-center gap-1 text-[9px] font-black text-slate-400 px-2.5 py-1 rounded-full border border-slate-200 hover:border-slate-300">
@@ -271,22 +349,39 @@ export const FeeLedger: React.FC<Props> = ({ onBack }) => {
           <div className="absolute inset-0 bg-slate-900/50 backdrop-blur-sm z-50 flex items-end">
             <div className="w-full bg-white rounded-t-3xl p-6 pb-8 animate-in slide-in-from-bottom-8">
               <div className="flex justify-between items-center mb-4">
-                <h3 className="text-lg font-black text-slate-900">Record Payment</h3>
+                <h3 className="text-lg font-black text-slate-900">Collect Payment</h3>
                 <button onClick={() => { setPayModal(false); setPayAmount(''); }} className="w-8 h-8 bg-slate-100 rounded-full flex items-center justify-center text-slate-500">✕</button>
               </div>
-              <p className="text-[11px] font-bold text-slate-400 mb-4">
-                Payment will be allocated to oldest dues first across both Tuition and Transport fees.
-              </p>
+
+              {/* Payment Method Selection */}
+              <p className="text-[10px] font-black uppercase tracking-widest text-slate-400 mb-2">Payment Method</p>
+              <div className="flex gap-2 flex-wrap mb-4">
+                {(Object.keys(METHOD_LABEL) as PaymentMethod[]).map(method => (
+                  <button key={method} onClick={() => setPaymentMethod(method)}
+                    className={`flex items-center gap-1.5 px-3 py-2 rounded-xl text-[10px] font-black uppercase tracking-wider border transition-colors ${
+                      paymentMethod === method
+                        ? 'bg-indigo-600 text-white border-indigo-600'
+                        : 'bg-slate-50 text-slate-600 border-slate-200'
+                    }`}>
+                    {METHOD_ICON[method]} {METHOD_LABEL[method]}
+                  </button>
+                ))}
+              </div>
+
+              <p className="text-[10px] font-black uppercase tracking-widest text-slate-400 mb-2">Amount Received</p>
               <div className="bg-slate-50 border border-slate-200 rounded-xl p-3 flex items-center gap-2 mb-4">
                 <IndianRupee size={16} className="text-slate-400" />
                 <input type="number" value={payAmount} onChange={e => setPayAmount(e.target.value)}
                   placeholder="Enter amount received"
                   className="flex-1 bg-transparent font-black text-slate-900 text-lg outline-none" />
               </div>
+              <p className="text-[11px] font-bold text-slate-400 mb-4">
+                Amount will be allocated oldest dues first across Tuition and Transport fees.
+              </p>
               <button onClick={handlePayment}
                 disabled={!payAmount}
                 className="w-full py-3 bg-emerald-600 text-white font-black rounded-xl disabled:opacity-40">
-                Allocate Payment
+                Collect & Generate Receipt
               </button>
             </div>
           </div>
@@ -318,6 +413,71 @@ export const FeeLedger: React.FC<Props> = ({ onBack }) => {
                 disabled={!writeOffReason.trim()}
                 className="w-full py-3 bg-rose-600 text-white font-black rounded-xl disabled:opacity-40">
                 Confirm Write-Off
+              </button>
+            </div>
+          </div>
+        )}
+
+        {/* Receipt Modal */}
+        {receiptModal && (
+          <div className="absolute inset-0 bg-slate-900/50 backdrop-blur-sm z-50 flex items-end">
+            <div className="w-full bg-white rounded-t-3xl p-6 pb-8 animate-in slide-in-from-bottom-8 max-h-[80vh] overflow-y-auto">
+              <div className="flex justify-between items-center mb-4">
+                <h3 className="text-lg font-black text-slate-900">Fee Receipt</h3>
+                <button onClick={() => setReceiptModal(null)} className="w-8 h-8 bg-slate-100 rounded-full flex items-center justify-center text-slate-500">✕</button>
+              </div>
+
+              {/* Receipt Card */}
+              <div className="border-2 border-dashed border-slate-200 rounded-2xl p-5 mb-4">
+                {/* Header */}
+                <div className="text-center mb-4 pb-4 border-b border-slate-100">
+                  <div className="font-black text-slate-900 text-lg uppercase tracking-wide">EduGrow School</div>
+                  <div className="text-[10px] font-bold text-slate-400 uppercase tracking-widest mt-0.5">Fee Receipt</div>
+                  <div className="mt-2 inline-block bg-emerald-100 text-emerald-700 text-[10px] font-black px-3 py-1 rounded-full uppercase tracking-widest">
+                    PAID ✓
+                  </div>
+                </div>
+
+                {/* Receipt Details */}
+                <div className="space-y-2 mb-4">
+                  {[
+                    { label: 'Receipt No.', val: receiptModal.receiptNo },
+                    { label: 'Date', val: receiptModal.date },
+                    { label: 'Student', val: receiptModal.studentName },
+                    { label: 'Class', val: receiptModal.className },
+                    { label: 'Admission No.', val: receiptModal.admissionNo },
+                    { label: 'Payment Method', val: METHOD_LABEL[receiptModal.method] },
+                  ].map(({ label, val }) => (
+                    <div key={label} className="flex justify-between gap-2">
+                      <span className="text-[10px] font-bold text-slate-400">{label}</span>
+                      <span className="text-[11px] font-black text-slate-800 text-right">{val}</span>
+                    </div>
+                  ))}
+                </div>
+
+                {/* Installments */}
+                {receiptModal.installmentDetails.length > 0 && (
+                  <div className="border-t border-slate-100 pt-3 mb-3">
+                    <p className="text-[9px] font-black uppercase tracking-widest text-slate-400 mb-2">Fee Breakdown</p>
+                    {receiptModal.installmentDetails.map((d, i) => (
+                      <div key={i} className="flex justify-between gap-2 py-1.5 border-b border-slate-50 last:border-0">
+                        <span className="text-[11px] font-bold text-slate-600">{d.month} · {d.feeType === 'TUITION' ? 'Tuition' : d.feeType === 'TRANSPORT' ? 'Transport' : d.feeType}</span>
+                        <span className="text-[11px] font-black text-slate-900">₹{d.amount.toLocaleString('en-IN')}</span>
+                      </div>
+                    ))}
+                  </div>
+                )}
+
+                {/* Total */}
+                <div className="flex justify-between items-center bg-slate-900 rounded-xl px-4 py-3">
+                  <span className="text-xs font-black text-white uppercase">Total Paid</span>
+                  <span className="text-lg font-black text-white">₹{receiptModal.amount.toLocaleString('en-IN')}</span>
+                </div>
+              </div>
+
+              <button onClick={() => setReceiptModal(null)}
+                className="w-full py-3 bg-indigo-600 text-white font-black rounded-xl">
+                Close
               </button>
             </div>
           </div>

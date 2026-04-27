@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { ArrowLeft, Plus, Trash2, ChevronDown, ChevronUp, Save, Calendar, Users, QrCode, CreditCard, CheckCircle2, Lock, Eye, EyeOff, ShieldCheck } from 'lucide-react';
+import { ArrowLeft, Plus, Trash2, ChevronDown, ChevronUp, Save, Calendar, Users, QrCode, CreditCard, CheckCircle2, Lock, Eye, EyeOff, ShieldCheck, IndianRupee, Edit2 } from 'lucide-react';
 import { principalService } from '../../../services/principal.service';
 import { AcademicYearConfig, ClassConfig, Student } from '../../../types/principal.types';
 import { useUIStore } from '../../../store/uiStore';
@@ -7,8 +7,23 @@ import { studentService } from '../../../services/student.service';
 import { authService } from '../../../services/auth.service';
 import { useAuthStore } from '../../../store/authStore';
 
-type Tab = 'ACADEMIC' | 'CLASSES' | 'PROMOTION' | 'PAYMENTS' | 'SECURITY';
-type View = 'CONFIG' | 'CREATE_AY' | 'PROMOTION';
+type Tab = 'ACADEMIC' | 'CLASSES' | 'FEE_STRUCT' | 'PROMOTION' | 'PAYMENTS' | 'SECURITY';
+type View = 'CONFIG' | 'CREATE_AY' | 'PROMOTION' | 'FEE_STRUCT_EDIT';
+
+interface FeeStructureItem {
+  id: string;
+  className: string;
+  tuitionPerMonth: number;
+  admissionFee: number;
+  examFeePerYear: number;
+  otherCharges: { label: string; amount: number; frequency: 'MONTHLY' | 'ANNUAL' | 'ONE_TIME' }[];
+}
+
+const DEFAULT_FEE_STRUCTURES: FeeStructureItem[] = [
+  { id: 'fs1', className: 'Class 1', tuitionPerMonth: 1500, admissionFee: 2000, examFeePerYear: 1200, otherCharges: [{ label: 'Smart Class', amount: 200, frequency: 'MONTHLY' }] },
+  { id: 'fs2', className: 'Class 9', tuitionPerMonth: 2800, admissionFee: 3000, examFeePerYear: 2000, otherCharges: [{ label: 'Lab Fee', amount: 300, frequency: 'MONTHLY' }] },
+  { id: 'fs3', className: 'Class 10', tuitionPerMonth: 3500, admissionFee: 3500, examFeePerYear: 2500, otherCharges: [{ label: 'Lab Fee', amount: 350, frequency: 'MONTHLY' }, { label: 'Board Fee', amount: 1500, frequency: 'ONE_TIME' }] },
+];
 
 interface Props { onBack: () => void; }
 
@@ -40,6 +55,17 @@ export const SettingsManager: React.FC<Props> = ({ onBack }) => {
   const [upiId, setUpiId] = useState('school@upi');
   const [upiSaved, setUpiSaved] = useState(false);
   const [qrFileName, setQrFileName] = useState('');
+
+  // Fee Structure
+  const [feeStructures, setFeeStructures] = useState<FeeStructureItem[]>(DEFAULT_FEE_STRUCTURES);
+  const [editingFs, setEditingFs] = useState<FeeStructureItem | null>(null);
+  const [newFsClass, setNewFsClass] = useState('');
+  const [newFsTuition, setNewFsTuition] = useState('');
+  const [newFsAdmission, setNewFsAdmission] = useState('');
+  const [newFsExam, setNewFsExam] = useState('');
+  const [newChargeLabel, setNewChargeLabel] = useState('');
+  const [newChargeAmount, setNewChargeAmount] = useState('');
+  const [newChargeFreq, setNewChargeFreq] = useState<'MONTHLY' | 'ANNUAL' | 'ONE_TIME'>('MONTHLY');
 
   const session = useAuthStore(s => s.session);
   const setSession = useAuthStore(s => s.setSession);
@@ -182,9 +208,46 @@ export const SettingsManager: React.FC<Props> = ({ onBack }) => {
     } finally { setIsSaving(false); }
   };
 
+  const handleAddFeeStructure = () => {
+    if (!newFsClass.trim() || !newFsTuition) { showToast('Class name and tuition fee required', 'error'); return; }
+    const newFs: FeeStructureItem = {
+      id: `fs${Date.now()}`,
+      className: newFsClass.trim(),
+      tuitionPerMonth: Number(newFsTuition),
+      admissionFee: Number(newFsAdmission) || 0,
+      examFeePerYear: Number(newFsExam) || 0,
+      otherCharges: [],
+    };
+    setFeeStructures(prev => [...prev, newFs]);
+    setNewFsClass(''); setNewFsTuition(''); setNewFsAdmission(''); setNewFsExam('');
+    showToast(`Fee structure added for ${newFs.className}`);
+  };
+
+  const handleDeleteFs = (id: string) => {
+    setFeeStructures(prev => prev.filter(f => f.id !== id));
+    showToast('Fee structure removed');
+  };
+
+  const handleSaveEditFs = () => {
+    if (!editingFs) return;
+    setFeeStructures(prev => prev.map(f => f.id === editingFs.id ? editingFs : f));
+    setEditingFs(null);
+    showToast('Fee structure saved');
+  };
+
+  const handleAddOtherCharge = () => {
+    if (!editingFs || !newChargeLabel.trim() || !newChargeAmount) return;
+    setEditingFs(prev => prev ? {
+      ...prev,
+      otherCharges: [...prev.otherCharges, { label: newChargeLabel.trim(), amount: Number(newChargeAmount), frequency: newChargeFreq }],
+    } : prev);
+    setNewChargeLabel(''); setNewChargeAmount('');
+  };
+
   const tabs = [
-    { key: 'ACADEMIC' as Tab, label: 'Academic Year' },
+    { key: 'ACADEMIC' as Tab, label: 'Academic' },
     { key: 'CLASSES' as Tab, label: 'Classes' },
+    { key: 'FEE_STRUCT' as Tab, label: 'Fees' },
     { key: 'PROMOTION' as Tab, label: 'Promotion' },
     { key: 'PAYMENTS' as Tab, label: 'Payments' },
     { key: 'SECURITY' as Tab, label: 'Security' },
@@ -317,6 +380,76 @@ export const SettingsManager: React.FC<Props> = ({ onBack }) => {
     </div>
   );
 
+  // ─── FEE STRUCTURE EDIT VIEW ──────────────────────────────────────────
+  if (view === 'FEE_STRUCT_EDIT' && editingFs) return (
+    <div className="absolute inset-0 z-50 bg-slate-50 flex flex-col animate-in slide-in-from-right-8 duration-300">
+      <div className="bg-white border-b border-slate-100 px-4 pt-12 pb-4 sticky top-0 z-10 shadow-sm flex items-center gap-3">
+        <button onClick={() => { setView('CONFIG'); setTab('FEE_STRUCT'); }} className="p-2 -ml-2 bg-slate-100 rounded-full text-slate-600">
+          <ArrowLeft size={20} />
+        </button>
+        <h2 className="text-xl font-black text-slate-900 uppercase tracking-tight">Edit: {editingFs.className}</h2>
+      </div>
+
+      <div className="flex-1 overflow-y-auto p-4 pb-28 space-y-4">
+        <div className="bg-white rounded-2xl border border-slate-100 shadow-sm p-4 space-y-4">
+          <p className="text-[10px] font-black uppercase tracking-widest text-slate-400">Core Fees</p>
+          {[
+            { label: 'Tuition Fee / Month (₹)', key: 'tuitionPerMonth' },
+            { label: 'Admission Fee (₹)', key: 'admissionFee' },
+            { label: 'Exam Fee / Year (₹)', key: 'examFeePerYear' },
+          ].map(({ label, key }) => (
+            <div key={key}>
+              <label className="block text-[10px] font-black uppercase tracking-widest text-slate-500 mb-1.5">{label}</label>
+              <input type="number" value={(editingFs as any)[key]}
+                onChange={e => setEditingFs(prev => prev ? { ...prev, [key]: Number(e.target.value) } : prev)}
+                className="w-full border border-slate-200 bg-slate-50 rounded-xl px-4 py-3 font-bold text-sm outline-none focus:border-indigo-500" />
+            </div>
+          ))}
+        </div>
+
+        <div className="bg-white rounded-2xl border border-slate-100 shadow-sm p-4 space-y-3">
+          <p className="text-[10px] font-black uppercase tracking-widest text-slate-400">Other Charges</p>
+          {editingFs.otherCharges.map((charge, idx) => (
+            <div key={idx} className="flex items-center gap-2 bg-slate-50 rounded-xl px-3 py-2.5">
+              <div className="flex-1">
+                <div className="font-bold text-slate-800 text-sm">{charge.label}</div>
+                <div className="text-[10px] font-bold text-slate-400">₹{charge.amount} · {charge.frequency}</div>
+              </div>
+              <button onClick={() => setEditingFs(prev => prev ? { ...prev, otherCharges: prev.otherCharges.filter((_, i) => i !== idx) } : prev)}
+                className="text-slate-300 hover:text-rose-500 transition-colors"><Trash2 size={14} /></button>
+            </div>
+          ))}
+          <div className="border-t border-slate-100 pt-3 space-y-2">
+            <p className="text-[9px] font-black uppercase tracking-widest text-slate-400">Add Charge</p>
+            <input value={newChargeLabel} onChange={e => setNewChargeLabel(e.target.value)}
+              placeholder="Charge label (e.g. Lab Fee, Smart Class)"
+              className="w-full border border-slate-200 bg-slate-50 rounded-xl px-3 py-2.5 font-bold text-sm outline-none focus:border-indigo-500" />
+            <div className="flex gap-2">
+              <input type="number" value={newChargeAmount} onChange={e => setNewChargeAmount(e.target.value)}
+                placeholder="Amount (₹)"
+                className="flex-1 border border-slate-200 bg-slate-50 rounded-xl px-3 py-2.5 font-bold text-sm outline-none focus:border-indigo-500" />
+              <select value={newChargeFreq} onChange={e => setNewChargeFreq(e.target.value as any)}
+                className="border border-slate-200 bg-slate-50 rounded-xl px-3 py-2.5 font-bold text-xs outline-none focus:border-indigo-500">
+                <option value="MONTHLY">Monthly</option>
+                <option value="ANNUAL">Annual</option>
+                <option value="ONE_TIME">One-time</option>
+              </select>
+            </div>
+            <button onClick={handleAddOtherCharge}
+              className="w-full flex items-center justify-center gap-2 bg-indigo-50 text-indigo-700 font-black text-xs uppercase py-2.5 rounded-xl">
+              <Plus size={14} /> Add Charge
+            </button>
+          </div>
+        </div>
+
+        <button onClick={handleSaveEditFs}
+          className="w-full flex items-center justify-center gap-2 bg-slate-900 text-white font-black text-xs uppercase tracking-widest py-4 rounded-2xl active:scale-95 transition-transform shadow-lg">
+          <Save size={16} /> Save Fee Structure
+        </button>
+      </div>
+    </div>
+  );
+
   // ─── CONFIG VIEW (Default) ─────────────────────────────────────────────
 
   return (
@@ -328,10 +461,10 @@ export const SettingsManager: React.FC<Props> = ({ onBack }) => {
           </button>
           <h2 className="text-xl font-black text-slate-900 uppercase tracking-tight">Settings</h2>
         </div>
-        <div className="flex border-t border-slate-100">
+        <div className="flex overflow-x-auto hide-scrollbar border-t border-slate-100">
           {tabs.map(({ key, label }) => (
             <button key={key} onClick={() => setTab(key)}
-              className={`flex-1 py-3 text-[11px] font-black uppercase tracking-widest transition-colors border-b-2 ${tab === key ? 'border-slate-900 text-slate-900' : 'border-transparent text-slate-400'}`}>
+              className={`flex-shrink-0 px-3 py-3 text-[10px] font-black uppercase tracking-widest transition-colors border-b-2 ${tab === key ? 'border-slate-900 text-slate-900' : 'border-transparent text-slate-400'}`}>
               {label}
             </button>
           ))}
@@ -438,6 +571,89 @@ export const SettingsManager: React.FC<Props> = ({ onBack }) => {
                           <Plus size={14} />
                         </button>
                       </div>
+                    </div>
+                  )}
+                </div>
+              ))}
+            </div>
+          </>
+        )}
+
+        {/* FEE STRUCTURE TAB */}
+        {tab === 'FEE_STRUCT' && (
+          <>
+            <div className="bg-indigo-50 border border-indigo-200 rounded-2xl p-4">
+              <p className="text-xs font-black text-indigo-700">
+                Define class-wise fee structure. These rates are used as default when admitting new students.
+              </p>
+            </div>
+
+            {/* Add new fee structure */}
+            <div className="bg-white rounded-2xl border border-slate-100 shadow-sm p-4 space-y-3">
+              <p className="text-[10px] font-black uppercase tracking-widest text-slate-400">Add Class Fee Structure</p>
+              <input value={newFsClass} onChange={e => setNewFsClass(e.target.value)}
+                placeholder="Class name (e.g. Class 1, Class 10)"
+                className="w-full border border-slate-200 bg-slate-50 rounded-xl px-4 py-3 font-bold text-sm outline-none focus:border-indigo-500" />
+              <div className="grid grid-cols-3 gap-2">
+                <div>
+                  <label className="block text-[9px] font-black uppercase tracking-widest text-slate-400 mb-1">Tuition/Month</label>
+                  <input type="number" value={newFsTuition} onChange={e => setNewFsTuition(e.target.value)}
+                    placeholder="₹"
+                    className="w-full border border-slate-200 bg-slate-50 rounded-xl px-3 py-2.5 font-bold text-sm outline-none focus:border-indigo-500" />
+                </div>
+                <div>
+                  <label className="block text-[9px] font-black uppercase tracking-widest text-slate-400 mb-1">Admission Fee</label>
+                  <input type="number" value={newFsAdmission} onChange={e => setNewFsAdmission(e.target.value)}
+                    placeholder="₹"
+                    className="w-full border border-slate-200 bg-slate-50 rounded-xl px-3 py-2.5 font-bold text-sm outline-none focus:border-indigo-500" />
+                </div>
+                <div>
+                  <label className="block text-[9px] font-black uppercase tracking-widest text-slate-400 mb-1">Exam Fee/Year</label>
+                  <input type="number" value={newFsExam} onChange={e => setNewFsExam(e.target.value)}
+                    placeholder="₹"
+                    className="w-full border border-slate-200 bg-slate-50 rounded-xl px-3 py-2.5 font-bold text-sm outline-none focus:border-indigo-500" />
+                </div>
+              </div>
+              <button onClick={handleAddFeeStructure}
+                className="w-full flex items-center justify-center gap-2 bg-indigo-600 text-white font-black text-xs uppercase tracking-widest py-3 rounded-xl active:scale-95 transition-transform">
+                <Plus size={14} /> Add Fee Structure
+              </button>
+            </div>
+
+            {/* Existing fee structures */}
+            <div className="space-y-2">
+              {feeStructures.length === 0 && (
+                <div className="flex flex-col items-center py-10 text-slate-400">
+                  <IndianRupee size={28} className="mb-2 opacity-40" />
+                  <p className="font-bold text-sm">No fee structures yet</p>
+                </div>
+              )}
+              {feeStructures.map(fs => (
+                <div key={fs.id} className="bg-white rounded-2xl border border-slate-100 shadow-sm overflow-hidden">
+                  <div className="flex items-center gap-3 px-4 py-3.5">
+                    <div className="w-10 h-10 rounded-xl bg-indigo-50 text-indigo-600 flex items-center justify-center font-black text-sm shrink-0">
+                      {fs.className.replace('Class ', '')}
+                    </div>
+                    <div className="flex-1">
+                      <div className="font-extrabold text-slate-900 text-sm">{fs.className}</div>
+                      <div className="text-[10px] font-bold text-slate-400 mt-0.5">
+                        ₹{fs.tuitionPerMonth.toLocaleString('en-IN')}/mo · Admission ₹{fs.admissionFee.toLocaleString('en-IN')} · Exam ₹{fs.examFeePerYear.toLocaleString('en-IN')}/yr
+                      </div>
+                    </div>
+                    <div className="flex gap-1.5">
+                      <button onClick={() => { setEditingFs(fs); setView('FEE_STRUCT_EDIT'); }}
+                        className="p-2 bg-indigo-50 text-indigo-600 rounded-xl"><Edit2 size={13} /></button>
+                      <button onClick={() => handleDeleteFs(fs.id)}
+                        className="p-2 bg-rose-50 text-rose-500 rounded-xl"><Trash2 size={13} /></button>
+                    </div>
+                  </div>
+                  {fs.otherCharges.length > 0 && (
+                    <div className="px-4 pb-3 flex flex-wrap gap-1.5 border-t border-slate-50 pt-2">
+                      {fs.otherCharges.map((c, i) => (
+                        <span key={i} className="text-[9px] font-black bg-slate-100 text-slate-600 px-2 py-0.5 rounded-full">
+                          {c.label} ₹{c.amount} ({c.frequency === 'MONTHLY' ? 'mo' : c.frequency === 'ANNUAL' ? 'yr' : '1x'})
+                        </span>
+                      ))}
                     </div>
                   )}
                 </div>

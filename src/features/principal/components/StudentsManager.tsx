@@ -152,7 +152,6 @@ export const StudentsManager: React.FC<Props> = ({ onBack }) => {
         <div className="grid grid-cols-1 gap-3">
           {[
             { icon: FileText, label: 'Admission', desc: 'Add new students & update records', action: () => { setMainView('ADMISSION'); setSubView('LIST'); } },
-            { icon: IndianRupee, label: 'Fee Collection', desc: 'View & manage student fees', action: () => { setMainView('FEES'); setSubView('LIST'); } },
             { icon: BookOpen, label: 'Classes', desc: 'Browse by class & section', action: () => { setMainView('CLASSES'); setSubView('LIST'); } },
           ].map(({ icon: Icon, label, desc, action }) => (
             <button key={label} onClick={action}
