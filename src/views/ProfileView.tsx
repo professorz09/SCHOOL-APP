@@ -90,7 +90,7 @@ export const ProfileView: React.FC = () => {
   const gradient = ROLE_GRADIENT[session.role] ?? 'from-indigo-600 to-blue-700';
 
   return (
-    <div className="space-y-4 pb-4">
+    <div className="space-y-4 pb-4 px-5">
       {/* Profile Hero Card */}
       <div className={`bg-gradient-to-br ${gradient} rounded-3xl p-6 text-white mt-2`}>
         <div className="flex items-center gap-4">

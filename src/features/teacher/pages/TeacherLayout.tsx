@@ -67,7 +67,7 @@ export const TeacherLayout: React.FC = () => {
 
   return (
     <>
-    <div className="flex flex-col gap-4 animate-in slide-in-from-bottom-4 duration-300 fade-in pt-2">
+    <div className="flex flex-col gap-4 animate-in slide-in-from-bottom-4 duration-300 fade-in pt-2 px-5">
       {/* Greeting */}
       <div>
         <p className="text-[10px] font-black uppercase tracking-widest text-slate-400">TEACHER DASHBOARD</p>
