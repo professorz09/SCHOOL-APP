@@ -8,6 +8,7 @@ import { StudentLayout } from './features/student';
 import { DriverLayout } from './features/driver';
 import { ProfileView } from './views/ProfileView';
 import { useAuthStore } from './store/authStore';
+import { useUIStore } from './store/uiStore';
 import { studentService } from './services/student.service';
 import { Student } from './types/principal.types';
 import { AuthSession } from './services/auth.service';
@@ -87,6 +88,8 @@ const useIsDesktop = () => {
 
 export default function App() {
   const { session, setSession } = useAuthStore();
+  const isSubView = useUIStore(s => s.isSubView);
+  const setSubView = useUIStore(s => s.setSubView);
   const [tab, setTab] = useState<NavTab>('HOME');
   const [showSwitcher, setShowSwitcher] = useState(false);
   const [selectedStudentId, setSelectedStudentId] = useState<string | null>(null);
@@ -171,7 +174,7 @@ export default function App() {
     }
   };
 
-  const goHome = () => setTab('HOME');
+  const goHome = () => { setTab('HOME'); setSubView(false); };
 
   const renderTabContent = () => {
     if (tab === 'HOME')    return renderDashboard();
@@ -284,14 +287,14 @@ export default function App() {
   return (
     <div className="h-dvh bg-slate-100 flex flex-col overflow-hidden">
       <div className="w-full h-full bg-slate-50 flex flex-col overflow-hidden">
-        {tab === 'HOME' && <Header role={role} />}
+        {tab === 'HOME' && !isSubView && <Header role={role} />}
 
         <main className="flex-1 overflow-y-auto px-5 pb-32 hide-scrollbar">
           {renderTabContent()}
         </main>
 
         <div className="fixed bottom-0 left-0 right-0 z-20">
-          <BottomNav role={role} currentTab={tab} setTab={setTab} />
+          <BottomNav role={role} currentTab={tab} setTab={(t) => { setTab(t); setSubView(false); }} />
         </div>
 
         {/* Floating Role Switcher Button */}

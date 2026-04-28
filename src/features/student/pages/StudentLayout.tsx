@@ -1,5 +1,6 @@
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useEffect } from 'react';
 import { ToastContainer } from '../../../components/ui/Toast';
+import { useUIStore } from '../../../store/uiStore';
 import { TimetableView } from '../components/TimetableView';
 import { ResultsView } from '../components/ResultsView';
 import { FeesView } from '../components/FeesView';
@@ -51,15 +52,20 @@ export const StudentLayout: React.FC = () => {
   const [view, setView] = useState<StudentView>('DASHBOARD');
   const todaySchedule = useMemo(() => getTodaySchedule(), []);
   const initials = STUDENT_FULL.split(' ').map((w: string) => w[0]).join('').slice(0, 2).toUpperCase();
+  const setSubView = useUIStore(s => s.setSubView);
+  const goTo = (v: StudentView) => { setView(v); setSubView(true); };
+  const goBack = () => { setView('DASHBOARD'); setSubView(false); };
 
-  if (view === 'TIMETABLE')   return <TimetableView         onBack={() => setView('DASHBOARD')} />;
-  if (view === 'RESULTS')     return <ResultsView           onBack={() => setView('DASHBOARD')} />;
-  if (view === 'FEES')        return <FeesView              onBack={() => setView('DASHBOARD')} />;
-  if (view === 'TRANSPORT')   return <TransportView         onBack={() => setView('DASHBOARD')} />;
-  if (view === 'NOTICES')     return <StudentNoticesView    onBack={() => setView('DASHBOARD')} />;
-  if (view === 'COMPLAINTS')  return <StudentComplaintsView onBack={() => setView('DASHBOARD')} />;
-  if (view === 'ATTENDANCE')  return <AttendanceView        onBack={() => setView('DASHBOARD')} />;
-  if (view === 'LEAVE')       return <StudentLeaveView      onBack={() => setView('DASHBOARD')} studentId={STUDENT_ID} />;
+  useEffect(() => { setSubView(false); }, []);
+
+  if (view === 'TIMETABLE')   return <TimetableView         onBack={goBack} />;
+  if (view === 'RESULTS')     return <ResultsView           onBack={goBack} />;
+  if (view === 'FEES')        return <FeesView              onBack={goBack} />;
+  if (view === 'TRANSPORT')   return <TransportView         onBack={goBack} />;
+  if (view === 'NOTICES')     return <StudentNoticesView    onBack={goBack} />;
+  if (view === 'COMPLAINTS')  return <StudentComplaintsView onBack={goBack} />;
+  if (view === 'ATTENDANCE')  return <AttendanceView        onBack={goBack} />;
+  if (view === 'LEAVE')       return <StudentLeaveView      onBack={goBack} studentId={STUDENT_ID} />;
 
   const MODULES: { icon: React.ReactNode; label: string; view: StudentView; iconColor: string }[] = [
     { icon: <Calendar       size={22} />, label: 'Timetable',  view: 'TIMETABLE',  iconColor: 'text-blue-600' },
@@ -104,7 +110,7 @@ export const StudentLayout: React.FC = () => {
       {/* ── 4-column Module Grid (8 modules = 2 rows) ─────────────── */}
       <div className="grid grid-cols-4 gap-3">
         {MODULES.map(({ icon, label, view: v, iconColor }) => (
-          <button key={label} onClick={() => setView(v)}
+          <button key={label} onClick={() => goTo(v)}
             className="flex flex-col items-center gap-2 bg-white border border-slate-200 rounded-2xl py-4 px-1 shadow-sm active:scale-95 transition-transform">
             <div className={`${iconColor}`}>{icon}</div>
             <span className="text-[9px] font-black uppercase tracking-wide text-slate-500 text-center leading-tight">{label}</span>
@@ -116,7 +122,7 @@ export const StudentLayout: React.FC = () => {
       <div>
         <div className="flex items-center justify-between mb-3">
           <h3 className="text-base font-black text-slate-900 uppercase tracking-tight">Today's Schedule</h3>
-          <button onClick={() => setView('TIMETABLE')}
+          <button onClick={() => goTo('TIMETABLE')}
             className="text-xs font-black text-blue-600 uppercase tracking-wide">
             View All
           </button>
