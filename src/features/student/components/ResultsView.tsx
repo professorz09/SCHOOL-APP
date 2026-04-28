@@ -364,12 +364,9 @@ const ResultGroupCard: React.FC<{
               return (
                 <div key={r.id} className="bg-slate-50 rounded-xl p-3">
                   <div className="flex items-center justify-between gap-2 mb-1.5">
-                    <div className="flex items-center gap-2 min-w-0">
-                      <span className="text-base shrink-0">{SUBJ_ICON[r.subject] ?? '📝'}</span>
-                      <div className="min-w-0">
-                        <div className="font-extrabold text-slate-800 text-xs">{r.subject}</div>
-                        <div className="text-[9px] font-bold text-slate-400 truncate">{r.teacherName}</div>
-                      </div>
+                    <div className="min-w-0">
+                      <div className="font-extrabold text-slate-800 text-xs">{r.subject}</div>
+                      <div className="text-[9px] font-bold text-slate-400 truncate">{r.teacherName}</div>
                     </div>
                     <div className="flex items-center gap-1.5 shrink-0 flex-wrap justify-end">
                       {r.rank && (
@@ -410,7 +407,6 @@ const ResultGroupCard: React.FC<{
         {/* Summary row when collapsed and single subject */}
         {!expanded && item.results.length === 1 && (
           <div className="px-4 pb-3 flex items-center gap-2 flex-wrap border-t border-slate-50 pt-2.5">
-            <span className="text-base">{SUBJ_ICON[item.results[0].subject] ?? '📝'}</span>
             <span className="font-bold text-slate-700 text-xs">{item.results[0].subject}</span>
             {item.results[0].rank && (
               <div className="flex items-center gap-1 bg-amber-50 border border-amber-100 rounded-lg px-1.5 py-0.5">
