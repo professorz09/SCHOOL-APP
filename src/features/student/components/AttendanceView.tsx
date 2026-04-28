@@ -24,18 +24,20 @@ const getWeekDates = (): WeekDay[] => {
   const monday = new Date(today);
   monday.setDate(today.getDate() - (day === 0 ? 6 : day - 1));
 
-  const days = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
-  const statuses: DayStatus[] = ['PRESENT', 'PRESENT', 'ABSENT', 'PRESENT', 'PRESENT', 'HOLIDAY'];
+  // Mon-Sat get real statuses; Sun is always HOLIDAY
+  const days    = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
+  const statuses: DayStatus[] = ['PRESENT', 'PRESENT', 'ABSENT', 'PRESENT', 'PRESENT', 'HOLIDAY', 'HOLIDAY'];
 
   return days.map((d, i) => {
     const dt = new Date(monday);
     dt.setDate(monday.getDate() + i);
     const isFuture = dt > today;
     const isToday  = dt.toDateString() === today.toDateString();
+    const isSunday = i === 6;
     return {
       date: dt.toISOString().split('T')[0],
       day: d,
-      status: isFuture ? 'HOLIDAY' : isToday ? 'PRESENT' : statuses[i],
+      status: isSunday ? 'HOLIDAY' : isFuture ? 'HOLIDAY' : isToday ? 'PRESENT' : statuses[i],
     };
   });
 };
@@ -150,7 +152,7 @@ export const AttendanceView: React.FC<Props> = ({ onBack }) => {
 
           <div className="bg-white rounded-2xl border border-slate-100 shadow-sm p-4">
             {/* Day circles */}
-            <div className="grid grid-cols-6 gap-2 mb-4">
+            <div className="grid grid-cols-7 gap-1.5 mb-4">
               {weekDays.map(wd => {
                 const cfg     = STATUS_CFG[wd.status];
                 const isToday = wd.date === today;

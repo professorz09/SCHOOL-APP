@@ -688,12 +688,6 @@ export const StudentsManager: React.FC<Props> = ({ onBack, initialView }) => {
               <FileCheck size={20} />
             </button>
           </div>
-          {/* Search */}
-          <div className="relative mb-4">
-            <Search size={15} className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-400" />
-            <input readOnly placeholder="Search students, classes..."
-              className="w-full bg-slate-50 border border-slate-200 rounded-2xl pl-11 pr-4 py-3 font-bold text-sm text-slate-400" />
-          </div>
           {/* Tab Pills */}
           <div className="flex gap-2 overflow-x-auto hide-scrollbar pb-1">
             {tabList.map(({ key, label }) => (

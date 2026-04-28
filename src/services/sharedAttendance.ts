@@ -168,6 +168,33 @@ export const sharedAttendance = {
     return _records.find(r => r.id === id) ?? null;
   },
 
+  getByClassNameSectionDate(className: string, section: string, date: string): SharedAttendanceRecord | null {
+    return _records.find(r => r.className === className && r.section === section && r.date === date) ?? null;
+  },
+
+  submitPrincipal(
+    className: string, section: string, date: string,
+    students: AttendanceStudentRecord[],
+  ): SharedAttendanceRecord {
+    const present = students.filter(s => s.isPresent).length;
+    const absent  = students.filter(s => !s.isPresent).length;
+    const newRecord: SharedAttendanceRecord = {
+      id:           `att_${Date.now()}`,
+      classId:      `${className.replace('Class ', '').toLowerCase()}-${section.toLowerCase()}`,
+      className, section,
+      subject:      'General',
+      date,
+      totalPresent: present,
+      totalAbsent:  absent,
+      totalStudents: students.length,
+      markedBy:     'Principal',
+      status:       'APPROVED',
+      students,
+    };
+    _records = [newRecord, ..._records];
+    return newRecord;
+  },
+
   /* ── Student-facing queries ──────────────────────────────────── */
 
   getForStudent(studentId: string): { date: string; isPresent: boolean; status: AttendanceApprovalStatus; subject: string }[] {

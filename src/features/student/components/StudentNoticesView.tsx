@@ -1,39 +1,26 @@
 import React, { useEffect, useState } from 'react';
 import {
   ArrowLeft, Bell, Pin, ChevronDown, ChevronUp,
-  Clock, CheckCircle2, AlertCircle, Calendar, User,
-  BookOpen, Trophy, IndianRupee, Megaphone,
+  Clock, CheckCircle2, AlertCircle, Calendar, User, BookOpen,
 } from 'lucide-react';
 import { studentDashboardService, HomeworkItem } from '../../../services/studentDashboard.service';
 import { StudentNotice } from '../../../types/student.types';
 
 interface Props { onBack: () => void; }
 
-/* ── subject icons & colors ─────────────────────────── */
-const SUBJ_ICON: Record<string, string> = {
-  Mathematics: '📐', Science: '🔬', English: '📖',
-  Hindi: '✍️', 'Social Studies': '🌍', 'Computer Science': '💻',
-  'Physical Education': '⚽',
+/* ── Category config for notices ─────────────────────── */
+const NOTICE_CAT: Record<string, { label: string; cls: string }> = {
+  EXAM:    { label: 'Exam',    cls: 'text-rose-700 bg-rose-50 border-rose-200' },
+  FEE:     { label: 'Fee',     cls: 'text-emerald-700 bg-emerald-50 border-emerald-200' },
+  EVENT:   { label: 'Event',   cls: 'text-violet-700 bg-violet-50 border-violet-200' },
+  GENERAL: { label: 'General', cls: 'text-slate-600 bg-slate-100 border-slate-200' },
 };
 
-const NOTICE_ICON: Record<string, React.ReactNode> = {
-  EXAM:    <Trophy size={16} className="text-rose-500" />,
-  FEE:     <IndianRupee size={16} className="text-emerald-500" />,
-  EVENT:   <Calendar size={16} className="text-violet-500" />,
-  GENERAL: <Megaphone size={16} className="text-slate-500" />,
-};
-
+/* ── Homework status config ──────────────────────────── */
 const HW_STATUS_CFG = {
-  PENDING:   { label: 'Pending',   icon: <Clock size={10}/>,         cls: 'text-amber-700 bg-amber-50 border-amber-200' },
-  SUBMITTED: { label: 'Submitted', icon: <CheckCircle2 size={10}/>,  cls: 'text-emerald-700 bg-emerald-50 border-emerald-200' },
-  OVERDUE:   { label: 'Overdue',   icon: <AlertCircle size={10}/>,   cls: 'text-rose-700 bg-rose-50 border-rose-200' },
-};
-
-const NOTICE_CAT_COLOR: Record<string, string> = {
-  EXAM:    'text-rose-700 bg-rose-50 border-rose-200',
-  FEE:     'text-emerald-700 bg-emerald-50 border-emerald-200',
-  EVENT:   'text-violet-700 bg-violet-50 border-violet-200',
-  GENERAL: 'text-slate-600 bg-slate-100 border-slate-200',
+  PENDING:   { label: 'Pending',   icon: <Clock size={10}/>,        cls: 'text-amber-700 bg-amber-50 border-amber-200' },
+  SUBMITTED: { label: 'Submitted', icon: <CheckCircle2 size={10}/>, cls: 'text-emerald-700 bg-emerald-50 border-emerald-200' },
+  OVERDUE:   { label: 'Overdue',   icon: <AlertCircle size={10}/>,  cls: 'text-rose-700 bg-rose-50 border-rose-200' },
 };
 
 const formatDate = (d: string) =>
@@ -42,7 +29,6 @@ const formatDate = (d: string) =>
 const daysLeft = (due: string) =>
   Math.ceil((new Date(due).getTime() - Date.now()) / 86400000);
 
-/* ── Unified item type ──────────────────────────────── */
 type FeedItem =
   | { kind: 'notice'; data: StudentNotice }
   | { kind: 'homework'; data: HomeworkItem };
@@ -58,14 +44,11 @@ const HomeworkCard: React.FC<{ hw: HomeworkItem }> = ({ hw }) => {
   return (
     <div className={`bg-white rounded-2xl border shadow-sm overflow-hidden ${hw.status === 'OVERDUE' ? 'border-rose-100' : 'border-slate-100'}`}>
       <div className="px-4 pt-3.5 pb-3">
-        {/* Subject + status */}
+        {/* Subject label + status badge */}
         <div className="flex items-start justify-between gap-2 mb-2">
-          <div className="flex items-center gap-2 min-w-0">
-            <span className="text-xl shrink-0">{SUBJ_ICON[hw.subject] ?? '📝'}</span>
-            <div className="min-w-0">
-              <div className="text-[10px] font-black uppercase tracking-widest text-slate-400">{hw.subject}</div>
-              <div className="font-black text-slate-900 text-sm leading-tight">{hw.title}</div>
-            </div>
+          <div className="min-w-0">
+            <div className="text-[10px] font-black uppercase tracking-widest text-slate-400">{hw.subject}</div>
+            <div className="font-black text-slate-900 text-sm leading-tight mt-0.5">{hw.title}</div>
           </div>
           <span className={`flex items-center gap-1 text-[9px] font-black px-2 py-1 rounded-full border shrink-0 ${scfg.cls}`}>
             {scfg.icon}{scfg.label}
@@ -73,7 +56,7 @@ const HomeworkCard: React.FC<{ hw: HomeworkItem }> = ({ hw }) => {
         </div>
 
         {/* Meta */}
-        <div className="flex items-center gap-3 text-[10px] font-bold text-slate-400 mb-2">
+        <div className="flex items-center flex-wrap gap-x-3 gap-y-0.5 text-[10px] font-bold text-slate-400 mb-2">
           <span className="flex items-center gap-1"><User size={10}/>{hw.teacher}</span>
           <span className="flex items-center gap-1"><Calendar size={10}/>Due: {formatDate(hw.dueDate)}</span>
           {hw.status === 'PENDING' && days >= 0 && (
@@ -111,32 +94,25 @@ const HomeworkCard: React.FC<{ hw: HomeworkItem }> = ({ hw }) => {
 /* ── Notice Card ────────────────────────────────────── */
 const NoticeCard: React.FC<{ notice: StudentNotice }> = ({ notice }) => {
   const [open, setOpen] = useState(false);
-  const catCls = NOTICE_CAT_COLOR[notice.category] ?? NOTICE_CAT_COLOR['GENERAL'];
+  const cat = NOTICE_CAT[notice.category] ?? NOTICE_CAT['GENERAL'];
 
   return (
     <div className={`bg-white rounded-2xl border shadow-sm overflow-hidden ${notice.pinned ? 'border-violet-100' : 'border-slate-100'}`}>
       <div className="px-4 pt-3.5 pb-3">
-        {/* Icon + category + date */}
-        <div className="flex items-start justify-between gap-2 mb-2">
-          <div className="flex items-center gap-2 min-w-0">
-            <div className="w-9 h-9 rounded-xl bg-slate-50 border border-slate-100 flex items-center justify-center shrink-0">
-              {NOTICE_ICON[notice.category] ?? <Bell size={16} className="text-slate-400"/>}
-            </div>
-            <div className="min-w-0">
-              <div className="flex items-center gap-1.5 mb-0.5">
-                {notice.pinned && <Pin size={10} className="text-violet-500 shrink-0"/>}
-                <span className={`text-[9px] font-black px-2 py-0.5 rounded-full border uppercase ${catCls}`}>
-                  {notice.category}
-                </span>
-              </div>
-              <div className="font-black text-slate-900 text-sm leading-tight">{notice.title}</div>
-            </div>
-          </div>
-          <span className="text-[10px] font-bold text-slate-400 shrink-0">{notice.sentAt}</span>
+        {/* Top row: pin + category badge + date */}
+        <div className="flex items-center gap-2 mb-1.5">
+          {notice.pinned && <Pin size={10} className="text-violet-500 shrink-0"/>}
+          <span className={`text-[9px] font-black px-2 py-0.5 rounded-full border uppercase ${cat.cls}`}>
+            {cat.label}
+          </span>
+          <span className="ml-auto text-[10px] font-bold text-slate-400 shrink-0">{notice.sentAt}</span>
         </div>
 
+        {/* Title */}
+        <div className="font-black text-slate-900 text-sm leading-tight mb-2">{notice.title}</div>
+
         <button onClick={() => setOpen(o => !o)}
-          className="flex items-center gap-1 text-[10px] font-black text-blue-600 uppercase tracking-wide mb-0.5">
+          className="flex items-center gap-1 text-[10px] font-black text-blue-600 uppercase tracking-wide">
           {open ? <ChevronUp size={12}/> : <ChevronDown size={12}/>}
           {open ? 'Hide' : 'Read More'}
         </button>
@@ -172,8 +148,8 @@ export const StudentNoticesView: React.FC<Props> = ({ onBack }) => {
     filter === 'NOTICES'  ? feed.filter(f => f.kind === 'notice') :
     feed.filter(f => f.kind === 'homework');
 
-  const noticeCount  = feed.filter(f => f.kind === 'notice').length;
-  const hwCount      = feed.filter(f => f.kind === 'homework').length;
+  const noticeCount = feed.filter(f => f.kind === 'notice').length;
+  const hwCount     = feed.filter(f => f.kind === 'homework').length;
 
   const FILTER_TABS: { key: FilterKey; label: string; count: number }[] = [
     { key: 'ALL',      label: 'All',      count: feed.length },
@@ -228,7 +204,6 @@ export const StudentNoticesView: React.FC<Props> = ({ onBack }) => {
             <p className="font-bold text-sm">Nothing here</p>
           </div>
         )}
-
         {filtered.map((item, idx) =>
           item.kind === 'notice'
             ? <NoticeCard key={`n-${item.data.id ?? idx}`} notice={item.data}/>
