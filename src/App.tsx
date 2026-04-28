@@ -290,13 +290,7 @@ export default function App() {
         {tab === 'HOME' && !isSubView && <Header role={role} />}
 
         <main className="flex-1 overflow-y-auto pb-32 hide-scrollbar">
-          {(tab === 'HOME' && !isSubView) || (tab === 'PROFILE') ? (
-            <div className="px-5">
-              {renderTabContent()}
-            </div>
-          ) : (
-            renderTabContent()
-          )}
+          {renderTabContent()}
         </main>
 
         <div className="fixed bottom-0 left-0 right-0 z-20">

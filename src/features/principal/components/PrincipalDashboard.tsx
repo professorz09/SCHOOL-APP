@@ -76,18 +76,18 @@ export const PrincipalDashboard: React.FC<Props> = ({ onNavigate }) => {
   ];
 
   const MORE_ACTIONS: { icon: React.ReactNode; label: string; view: PrincipalView; color: string }[] = [
-    { icon: <Sparkles size={22} />,       label: 'Tools',      view: 'TOOLS',            color: 'text-purple-600 bg-purple-50' },
     { icon: <Bell size={22} />,           label: 'Notices',    view: 'NOTICES',          color: 'text-sky-600 bg-sky-50' },
     { icon: <ClipboardCheck size={22} />, label: 'Approvals',  view: 'APPROVALS',        color: 'text-indigo-600 bg-indigo-50' },
     { icon: <UserCog size={22} />,        label: 'Admission',  view: 'ADMISSION',        color: 'text-indigo-600 bg-indigo-50' },
     { icon: <Clock size={22} />,          label: 'Timetable',  view: 'TIMETABLE',        color: 'text-fuchsia-600 bg-fuchsia-50' },
     { icon: <BanknoteIcon size={22} />,   label: 'Salary',     view: 'SALARY_LEDGER',    color: 'text-lime-600 bg-lime-50' },
     { icon: <Wallet size={22} />,         label: 'Expenses',   view: 'EXPENSES',         color: 'text-red-500 bg-red-50' },
+    { icon: <Sparkles size={22} />,       label: 'Tools',      view: 'TOOLS',            color: 'text-purple-600 bg-purple-50' },
     { icon: <Settings size={22} />,       label: 'Settings',   view: 'SETTINGS',         color: 'text-slate-600 bg-slate-100' },
   ];
 
   return (
-    <div className="flex flex-col gap-5 pb-4">
+    <div className="flex flex-col gap-5 pb-4 px-5">
 
       {/* ── Header: Attendance ──────────────────────────────────────────── */}
       <div className="pt-1">

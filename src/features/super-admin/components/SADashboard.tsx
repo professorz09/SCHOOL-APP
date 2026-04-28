@@ -43,7 +43,7 @@ export const SADashboard: React.FC<SADashboardProps> = ({ onNavigate }) => {
   ];
 
   return (
-    <div className="flex flex-col gap-5 animate-in slide-in-from-bottom-4 duration-500 fade-in">
+    <div className="flex flex-col gap-5 px-5 animate-in slide-in-from-bottom-4 duration-500 fade-in">
 
       {/* Quick actions grid */}
       <div className="grid grid-cols-3 gap-3">

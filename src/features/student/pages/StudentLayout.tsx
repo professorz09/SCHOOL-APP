@@ -80,7 +80,7 @@ export const StudentLayout: React.FC = () => {
 
   return (
     <>
-    <div className="flex flex-col gap-5 pb-6 pt-3 animate-in fade-in duration-300">
+    <div className="flex flex-col gap-5 pb-6 pt-3 px-5 animate-in fade-in duration-300">
 
       {/* ── Header ───────────────────────────────────────────────────── */}
       <div className="flex items-center justify-between">
