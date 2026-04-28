@@ -294,7 +294,7 @@ export default function App() {
         </main>
 
         <div className="fixed bottom-0 left-0 right-0 z-20">
-          <BottomNav role={role} currentTab={tab} setTab={(t) => { setTab(t); setSubView(false); }} />
+          <BottomNav role={role} currentTab={tab} setTab={(t) => { setTab(t); setSubView(t !== 'HOME' && t !== 'PROFILE'); }} />
         </div>
 
         {/* Floating Role Switcher Button */}
