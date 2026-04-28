@@ -174,12 +174,12 @@ export const Header: React.FC<HeaderProps> = ({ role }) => {
     : 'U';
 
   return (
-    <div className="flex items-center justify-between px-5 pt-[max(env(safe-area-inset-top),24px)] pb-4 sticky top-0 bg-slate-50/90 backdrop-blur-md z-10">
-      <div className="flex items-center gap-3">
-        <div className="w-10 h-10 rounded-full bg-blue-100 border-2 border-blue-500 overflow-hidden flex items-center justify-center text-blue-700 font-bold">
+    <div className="flex items-center gap-3 px-5 pt-[max(env(safe-area-inset-top),24px)] pb-4 sticky top-0 bg-slate-50/90 backdrop-blur-md z-10">
+      <div className="flex items-center gap-3 flex-1">
+        <div className="w-10 h-10 rounded-full bg-blue-100 border-2 border-blue-500 overflow-hidden flex items-center justify-center text-blue-700 font-bold shrink-0">
           {initials}
         </div>
-        <div>
+        <div className="min-w-0">
           <h1 className="text-2xl font-black text-slate-900 tracking-tight uppercase leading-tight">
             Hi, {firstName}
           </h1>
@@ -188,12 +188,10 @@ export const Header: React.FC<HeaderProps> = ({ role }) => {
           </p>
         </div>
       </div>
-      <div className="flex items-center gap-2">
-        <button className="relative p-2 bg-slate-100 rounded-full text-slate-600 hover:bg-slate-200 transition-colors">
-          <Bell size={20} />
-          <span className="absolute -top-1 -right-1 w-4 h-4 bg-red-500 text-white text-[10px] font-bold flex items-center justify-center rounded-full border-2 border-white">3</span>
-        </button>
-      </div>
+      <button className="relative p-2 bg-slate-100 rounded-full text-slate-600 hover:bg-slate-200 transition-colors shrink-0">
+        <Bell size={20} />
+        <span className="absolute -top-1 -right-1 w-4 h-4 bg-red-500 text-white text-[10px] font-bold flex items-center justify-center rounded-full border-2 border-white">3</span>
+      </button>
     </div>
   );
 };
