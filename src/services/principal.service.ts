@@ -65,6 +65,16 @@ const MOCK_APPROVALS: Approval[] = [
     subject: 'Absent on Oct 10 — medical reason', description: 'Was hospitalised. Doctor certificate attached.',
     status: 'APPROVED', createdAt: '2024-10-12', attachmentUrl: null,
   },
+  {
+    id: 'ap4', type: 'LEAVE', fromName: 'Aakash Sharma', fromRole: 'STUDENT',
+    subject: 'Medical Leave', description: 'From: 10 Apr 2026  To: 10 Apr 2026\nReason: Doctor appointment for routine checkup',
+    status: 'APPROVED', createdAt: '2026-04-09', attachmentUrl: null, studentId: 'stu1',
+  },
+  {
+    id: 'ap5', type: 'LEAVE', fromName: 'Aakash Sharma', fromRole: 'STUDENT',
+    subject: 'Family Visit', description: 'From: 26 Apr 2026  To: 27 Apr 2026\nReason: Family event – cousin\'s wedding',
+    status: 'PENDING', createdAt: '2026-04-25', attachmentUrl: null, studentId: 'stu1',
+  },
 ];
 
 // ─── LIBRARY ───────────────────────────────────────────────────────────────
@@ -172,9 +182,23 @@ export const principalService = {
     _approvals = _approvals.map(a => a.id === id ? { ...a, status: 'APPROVED' as const } : a);
     return _approvals.find(a => a.id === id)!;
   },
-  async rejectRequest(id: string): Promise<Approval> {
-    _approvals = _approvals.map(a => a.id === id ? { ...a, status: 'REJECTED' as const } : a);
+  async rejectRequest(id: string, reason?: string): Promise<Approval> {
+    _approvals = _approvals.map(a => a.id === id ? { ...a, status: 'REJECTED' as const, rejectionReason: reason ?? null } : a);
     return _approvals.find(a => a.id === id)!;
+  },
+  async submitStudentLeave(studentId: string, studentName: string, title: string, fromDate: string, toDate: string, reason: string): Promise<Approval> {
+    const app: Approval = {
+      id: `ap${Date.now()}`, type: 'LEAVE', fromName: studentName, fromRole: 'STUDENT',
+      subject: title,
+      description: `From: ${fromDate}  To: ${toDate}\nReason: ${reason}`,
+      status: 'PENDING', createdAt: new Date().toISOString().split('T')[0],
+      attachmentUrl: null, studentId,
+    };
+    _approvals = [app, ..._approvals];
+    return app;
+  },
+  getStudentLeaves(studentId: string): Approval[] {
+    return _approvals.filter(a => a.type === 'LEAVE' && a.studentId === studentId);
   },
 
   // Library

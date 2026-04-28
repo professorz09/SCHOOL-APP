@@ -3,7 +3,7 @@ import {
   Users, UserCheck, BookOpen, IndianRupee, Bus, CircleAlert,
   Wallet, MoreHorizontal, CircleCheckBig, MapPin, ChevronRight,
   Bell, ClipboardCheck, Clock, BanknoteIcon, Settings, ChevronUp,
-  UserCog,
+  UserCog, CalendarCheck,
 } from 'lucide-react';
 import { studentService } from '../../../services/student.service';
 import { staffService } from '../../../services/staff.service';
@@ -66,18 +66,19 @@ export const PrincipalDashboard: React.FC<Props> = ({ onNavigate }) => {
   const feePercent = stats.totalFees > 0 ? Math.round((stats.paidFees / stats.totalFees) * 100) : 0;
 
   const MAIN_ACTIONS: { icon: React.ReactNode; label: string; view: PrincipalView; color: string }[] = [
-    { icon: <Users size={22} />,       label: 'Students',   view: 'STUDENTS',       color: 'text-violet-600 bg-violet-50' },
-    { icon: <UserCheck size={22} />,   label: 'Staff',      view: 'STAFF',          color: 'text-blue-600 bg-blue-50' },
-    { icon: <BookOpen size={22} />,    label: 'Classes',    view: 'CLASS_MGMT',     color: 'text-purple-600 bg-purple-50' },
-    { icon: <IndianRupee size={22} />, label: 'Fees Col.',  view: 'FEE_LEDGER',     color: 'text-emerald-600 bg-emerald-50' },
-    { icon: <Bus size={22} />,         label: 'Transport',  view: 'TRANSPORT_MGMT', color: 'text-orange-500 bg-orange-50' },
-    { icon: <CircleAlert size={22} />, label: 'Complaints', view: 'COMPLAINTS',     color: 'text-rose-600 bg-rose-50' },
-    { icon: <UserCog size={22} />,     label: 'Admission',  view: 'ADMISSION',      color: 'text-indigo-600 bg-indigo-50' },
+    { icon: <Users size={22} />,          label: 'Students',   view: 'STUDENTS',       color: 'text-violet-600 bg-violet-50' },
+    { icon: <UserCheck size={22} />,      label: 'Staff',      view: 'STAFF',          color: 'text-blue-600 bg-blue-50' },
+    { icon: <CalendarCheck size={22} />,  label: 'Attendance', view: 'ATTENDANCE',     color: 'text-teal-600 bg-teal-50' },
+    { icon: <BookOpen size={22} />,       label: 'Classes',    view: 'CLASS_MGMT',     color: 'text-purple-600 bg-purple-50' },
+    { icon: <IndianRupee size={22} />,    label: 'Fees Col.',  view: 'FEE_LEDGER',     color: 'text-emerald-600 bg-emerald-50' },
+    { icon: <Bus size={22} />,            label: 'Transport',  view: 'TRANSPORT_MGMT', color: 'text-orange-500 bg-orange-50' },
+    { icon: <CircleAlert size={22} />,    label: 'Complaints', view: 'COMPLAINTS',     color: 'text-rose-600 bg-rose-50' },
   ];
 
   const MORE_ACTIONS: { icon: React.ReactNode; label: string; view: PrincipalView; color: string }[] = [
     { icon: <Bell size={22} />,           label: 'Notices',    view: 'NOTICES',          color: 'text-sky-600 bg-sky-50' },
     { icon: <ClipboardCheck size={22} />, label: 'Approvals',  view: 'APPROVALS',        color: 'text-indigo-600 bg-indigo-50' },
+    { icon: <UserCog size={22} />,        label: 'Admission',  view: 'ADMISSION',        color: 'text-indigo-600 bg-indigo-50' },
     { icon: <Clock size={22} />,          label: 'Timetable',  view: 'TIMETABLE',        color: 'text-fuchsia-600 bg-fuchsia-50' },
     { icon: <BanknoteIcon size={22} />,   label: 'Salary',     view: 'SALARY_LEDGER',    color: 'text-lime-600 bg-lime-50' },
     { icon: <Wallet size={22} />,         label: 'Expenses',   view: 'EXPENSES',         color: 'text-red-500 bg-red-50' },

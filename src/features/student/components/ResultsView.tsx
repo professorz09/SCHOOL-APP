@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import {
-  ArrowLeft, Trophy, Star, Medal, Calendar, Clock,
+  ArrowLeft, Trophy, Medal, Calendar, Clock,
   CheckCircle2, Hourglass, BookOpen, ChevronDown, ChevronUp,
 } from 'lucide-react';
 import { studentDashboardService, UpcomingExam } from '../../../services/studentDashboard.service';
@@ -106,10 +106,6 @@ export const ResultsView: React.FC<Props> = ({ onBack }) => {
     ? Math.round(results.reduce((a, r) => a + (r.obtainedMarks / r.maxMarks) * 100, 0) / results.length)
     : 0;
 
-  const bestResult = results.reduce<StudentExamResult | null>(
-    (best, r) => !best || (r.obtainedMarks / r.maxMarks) > (best.obtainedMarks / best.maxMarks) ? r : best, null,
-  );
-
   const performanceLabel =
     avgPercent >= 85 ? 'Outstanding' : avgPercent >= 75 ? 'Excellent' :
     avgPercent >= 60 ? 'Good'        : avgPercent >= 45 ? 'Average'   : 'Needs Work';
@@ -164,30 +160,6 @@ export const ResultsView: React.FC<Props> = ({ onBack }) => {
                   <div className="text-[9px] font-black uppercase tracking-widest text-blue-300 mt-0.5">{label}</div>
                 </div>
               ))}
-            </div>
-          </div>
-        )}
-
-        {/* ── Best Score banner ── */}
-        {bestResult && (
-          <div className="mx-4 mt-3 bg-amber-50 border border-amber-100 rounded-2xl px-4 py-3 flex items-center gap-3">
-            <div className="w-9 h-9 bg-amber-100 rounded-xl flex items-center justify-center shrink-0">
-              <Star size={17} className="text-amber-500"/>
-            </div>
-            <div className="flex-1 min-w-0">
-              <div className="text-[9px] font-black uppercase tracking-widest text-amber-500 mb-0.5">Best Performance</div>
-              <div className="font-extrabold text-slate-900 text-sm">
-                {SUBJ_ICON[bestResult.subject] ?? '📝'} {bestResult.subject}
-              </div>
-              <div className="text-[10px] font-bold text-slate-400">{bestResult.examName}</div>
-            </div>
-            <div className="text-right shrink-0">
-              <div className="font-black text-amber-600 text-xl">
-                {Math.round((bestResult.obtainedMarks / bestResult.maxMarks) * 100)}%
-              </div>
-              <div className="text-[10px] font-bold text-amber-400">
-                {bestResult.obtainedMarks}/{bestResult.maxMarks}
-              </div>
             </div>
           </div>
         )}
@@ -320,6 +292,10 @@ const ResultGroupCard: React.FC<{
   const maxTot  = item.results.reduce((a, r) => a + r.maxMarks, 0);
   const overall = maxTot > 0 ? Math.round((total / maxTot) * 100) : 0;
   const isFinal = item.testType === 'FINAL';
+  const rankedResults = item.results.filter(r => r.rank != null);
+  const overallRank = rankedResults.length > 0
+    ? Math.round(rankedResults.reduce((s, r) => s + r.rank!, 0) / rankedResults.length)
+    : null;
 
   return (
     <div className="flex gap-3">
@@ -346,6 +322,14 @@ const ResultGroupCard: React.FC<{
                 </span>
                 <span className="text-[9px] font-bold text-slate-400">{formatDate(item.date)}</span>
                 <span className="text-[9px] font-bold text-slate-400">{item.results.length} subject{item.results.length > 1 ? 's' : ''}</span>
+                {overallRank != null && (
+                  <div className="flex items-center gap-1 bg-amber-50 border border-amber-100 rounded-lg px-1.5 py-0.5">
+                    <Trophy size={9} className="text-amber-500"/>
+                    <span className="font-black text-amber-700 text-[9px]">
+                      Rank {overallRank}<sup className="text-[7px]">{rankSuffix(overallRank)}</sup>
+                    </span>
+                  </div>
+                )}
               </div>
               <div className="font-black text-slate-900 text-sm leading-tight">{item.examName}</div>
             </div>

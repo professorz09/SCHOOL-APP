@@ -22,6 +22,8 @@ export const ApprovalsManager: React.FC<Props> = ({ onBack }) => {
   const [selected, setSelected] = useState<Approval | null>(null);
   const [filter, setFilter] = useState<Filter>('PENDING');
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [rejectReason, setRejectReason] = useState('');
+  const [showRejectForm, setShowRejectForm] = useState(false);
 
   useEffect(() => { principalService.getApprovals().then(setApprovals); }, []);
 
@@ -34,16 +36,20 @@ export const ApprovalsManager: React.FC<Props> = ({ onBack }) => {
       const updated = await principalService.approveRequest(id);
       setApprovals(prev => prev.map(a => a.id === updated.id ? updated : a));
       setSelected(updated);
+      setShowRejectForm(false);
       showToast('Request approved');
     } finally { setIsSubmitting(false); }
   };
 
   const handleReject = async (id: string) => {
+    if (!rejectReason.trim()) { setShowRejectForm(true); return; }
     setIsSubmitting(true);
     try {
-      const updated = await principalService.rejectRequest(id);
+      const updated = await principalService.rejectRequest(id, rejectReason.trim());
       setApprovals(prev => prev.map(a => a.id === updated.id ? updated : a));
       setSelected(updated);
+      setRejectReason('');
+      setShowRejectForm(false);
       showToast('Request rejected', 'info');
     } finally { setIsSubmitting(false); }
   };
@@ -51,7 +57,8 @@ export const ApprovalsManager: React.FC<Props> = ({ onBack }) => {
   if (selected) return (
     <div className="absolute inset-0 z-50 bg-slate-50 flex flex-col animate-in slide-in-from-right-8 duration-300">
       <div className="bg-white border-b border-slate-100 px-4 pt-4 pb-4 flex items-center gap-3 sticky top-0 z-10 shadow-sm">
-        <button onClick={() => setSelected(null)} className="p-2 -ml-2 bg-slate-100 rounded-full text-slate-600"><ArrowLeft size={20} /></button>
+        <button onClick={() => { setSelected(null); setShowRejectForm(false); setRejectReason(''); }}
+          className="p-2 -ml-2 bg-slate-100 rounded-full text-slate-600"><ArrowLeft size={20} /></button>
         <h2 className="text-xl font-black text-slate-900 uppercase tracking-tight">Request Detail</h2>
       </div>
       <div className="flex-1 overflow-y-auto p-4 pb-28 space-y-4">
@@ -61,7 +68,7 @@ export const ApprovalsManager: React.FC<Props> = ({ onBack }) => {
             <span className={`text-[9px] font-black px-2 py-0.5 rounded-full uppercase ${statusColor(selected.status)}`}>{selected.status}</span>
           </div>
           <h3 className="font-black text-slate-900 text-base">{selected.subject}</h3>
-          <p className="text-sm font-bold text-slate-500">{selected.description}</p>
+          <p className="text-sm font-bold text-slate-500 whitespace-pre-line">{selected.description}</p>
           <div className="text-[10px] font-bold text-slate-400">
             From: <span className="text-slate-700 font-black">{selected.fromName}</span> ({selected.fromRole})
           </div>
@@ -72,18 +79,52 @@ export const ApprovalsManager: React.FC<Props> = ({ onBack }) => {
               <span className="text-xs font-bold text-indigo-700">Attachment: {selected.attachmentUrl}</span>
             </div>
           )}
+          {selected.rejectionReason && (
+            <div className="bg-rose-50 border border-rose-100 rounded-xl p-3">
+              <p className="text-[10px] font-black uppercase tracking-widest text-rose-500 mb-1">Rejection Reason</p>
+              <p className="text-sm font-bold text-rose-700">{selected.rejectionReason}</p>
+            </div>
+          )}
         </div>
 
         {selected.status === 'PENDING' && (
-          <div className="flex gap-3">
-            <button onClick={() => handleReject(selected.id)} disabled={isSubmitting}
-              className="flex-1 flex items-center justify-center gap-2 py-3.5 bg-rose-50 text-rose-700 border border-rose-200 font-black rounded-2xl active:scale-95 transition-transform disabled:opacity-60">
-              <XCircle size={16} /> Reject
-            </button>
-            <button onClick={() => handleApprove(selected.id)} disabled={isSubmitting}
-              className="flex-1 flex items-center justify-center gap-2 py-3.5 bg-emerald-600 text-white font-black rounded-2xl active:scale-95 transition-transform disabled:opacity-60">
-              <CheckCircle2 size={16} /> Approve
-            </button>
+          <div className="space-y-3">
+            {/* Rejection reason input */}
+            {showRejectForm && (
+              <div className="bg-white rounded-2xl border border-rose-100 shadow-sm p-4 space-y-3">
+                <p className="text-[10px] font-black uppercase tracking-widest text-rose-500">Rejection Reason</p>
+                <textarea
+                  placeholder="Enter reason for rejection..."
+                  value={rejectReason}
+                  onChange={e => setRejectReason(e.target.value)}
+                  rows={3}
+                  className="w-full border border-slate-200 rounded-xl px-3 py-2.5 text-sm font-bold text-slate-800 placeholder:text-slate-400 focus:outline-none focus:border-rose-400 resize-none"
+                />
+                <div className="flex gap-3">
+                  <button onClick={() => { setShowRejectForm(false); setRejectReason(''); }}
+                    className="flex-1 py-3 bg-slate-100 text-slate-600 font-black rounded-2xl text-sm">
+                    Cancel
+                  </button>
+                  <button onClick={() => handleReject(selected.id)} disabled={isSubmitting || !rejectReason.trim()}
+                    className="flex-1 flex items-center justify-center gap-2 py-3 bg-rose-500 text-white font-black rounded-2xl active:scale-95 transition-transform disabled:opacity-60 text-sm">
+                    <XCircle size={16} /> Confirm Reject
+                  </button>
+                </div>
+              </div>
+            )}
+
+            {!showRejectForm && (
+              <div className="flex gap-3">
+                <button onClick={() => setShowRejectForm(true)} disabled={isSubmitting}
+                  className="flex-1 flex items-center justify-center gap-2 py-3.5 bg-rose-50 text-rose-700 border border-rose-200 font-black rounded-2xl active:scale-95 transition-transform disabled:opacity-60">
+                  <XCircle size={16} /> Reject
+                </button>
+                <button onClick={() => handleApprove(selected.id)} disabled={isSubmitting}
+                  className="flex-1 flex items-center justify-center gap-2 py-3.5 bg-emerald-600 text-white font-black rounded-2xl active:scale-95 transition-transform disabled:opacity-60">
+                  <CheckCircle2 size={16} /> Approve
+                </button>
+              </div>
+            )}
           </div>
         )}
       </div>
@@ -112,7 +153,7 @@ export const ApprovalsManager: React.FC<Props> = ({ onBack }) => {
         </div>
         <div className="space-y-2">
           {filtered.map(ap => (
-            <button key={ap.id} onClick={() => setSelected(ap)}
+            <button key={ap.id} onClick={() => { setSelected(ap); setShowRejectForm(false); setRejectReason(''); }}
               className="w-full bg-white rounded-2xl border border-slate-100 shadow-sm p-4 text-left active:bg-slate-50">
               <div className="flex items-start justify-between gap-2 mb-2">
                 <div className="flex gap-2 flex-wrap">
@@ -123,6 +164,11 @@ export const ApprovalsManager: React.FC<Props> = ({ onBack }) => {
               </div>
               <div className="font-extrabold text-slate-900 text-sm">{ap.subject}</div>
               <div className="text-[10px] font-bold text-slate-500 mt-1">{ap.fromName} · {ap.fromRole}</div>
+              {ap.rejectionReason && (
+                <div className="mt-1.5 text-[10px] font-bold text-rose-600 truncate">
+                  Reason: {ap.rejectionReason}
+                </div>
+              )}
             </button>
           ))}
           {filtered.length === 0 && (
