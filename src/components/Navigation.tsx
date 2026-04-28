@@ -56,7 +56,7 @@ export const BottomNav: React.FC<BottomNavProps> = ({ role, currentTab, setTab }
   const tabs = ROLE_TABS[role] ?? ROLE_TABS.STUDENT;
 
   return (
-    <div className="absolute bottom-0 left-0 right-0 bg-white border-t border-slate-100 flex justify-between items-center px-6 pt-2 pb-[max(env(safe-area-inset-bottom),16px)] z-20">
+    <div className="w-full bg-white border-t border-slate-100 flex justify-between items-center px-6 pt-2 pb-[max(env(safe-area-inset-bottom),16px)]">
       {tabs.map((tab) => {
         const Icon = tab.icon;
         const isActive = currentTab === tab.id;

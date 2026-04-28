@@ -197,9 +197,9 @@ export const StudentsManager: React.FC<Props> = ({ onBack, initialView }) => {
   // ─── MENU (Main Folders) ────────────────────────────────────────────────
 
   if (!renderProfile && mainView === 'MENU') return (
-    <div className="absolute inset-0 z-50 bg-slate-50 flex flex-col animate-in slide-in-from-right-8 duration-300">
+    <div className="w-full bg-slate-50 flex flex-col animate-in slide-in-from-right-8 duration-300">
       {renderHeader('Students', onBack)}
-      <div className="flex-1 overflow-y-auto p-4 pb-28 space-y-4">
+      <div className="flex-1 overflow-y-auto p-4  space-y-4">
         <div className="grid grid-cols-1 gap-3">
           {[
             { icon: FileText, label: 'Admission', desc: 'Add new students & update records', action: () => { setMainView('ADMISSION'); setSubView('LIST'); } },
@@ -246,9 +246,9 @@ export const StudentsManager: React.FC<Props> = ({ onBack, initialView }) => {
       .sort((a, b) => new Date(b.admissionDate ?? 0).getTime() - new Date(a.admissionDate ?? 0).getTime());
 
     if (subView === 'CREATE') return (
-      <div className="absolute inset-0 z-50 bg-slate-50 flex flex-col animate-in slide-in-from-right-8 duration-300">
+      <div className="w-full bg-slate-50 flex flex-col animate-in slide-in-from-right-8 duration-300">
         {renderHeader('New Admission', () => setSubView('LIST'))}
-        <div className="flex-1 overflow-y-auto p-4 pb-28 space-y-4">
+        <div className="flex-1 overflow-y-auto p-4  space-y-4">
           <div className="bg-white rounded-2xl border border-slate-100 shadow-sm p-4 space-y-4">
             <p className="text-[10px] font-black uppercase tracking-widest text-slate-400">Student Info</p>
             {[
@@ -410,13 +410,13 @@ export const StudentsManager: React.FC<Props> = ({ onBack, initialView }) => {
     );
 
     return (
-      <div className="absolute inset-0 z-50 bg-slate-50 flex flex-col animate-in slide-in-from-right-8 duration-300">
+      <div className="w-full bg-slate-50 flex flex-col animate-in slide-in-from-right-8 duration-300">
         {renderHeader('Admission', onBack,
           <button onClick={() => { setSubView('CREATE'); }} className="p-2 bg-indigo-500 text-white rounded-full shadow-md">
             <Plus size={18} />
           </button>
         )}
-        <div className="flex-1 overflow-y-auto p-4 pb-28 space-y-3">
+        <div className="flex-1 overflow-y-auto p-4  space-y-3">
           <div className="relative">
             <Search size={16} className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-400" />
             <input value={search} onChange={e => setSearch(e.target.value)} placeholder="Search name / roll no…"
@@ -461,9 +461,9 @@ export const StudentsManager: React.FC<Props> = ({ onBack, initialView }) => {
     );
 
     return (
-      <div className="absolute inset-0 z-50 bg-slate-50 flex flex-col animate-in slide-in-from-right-8 duration-300">
+      <div className="w-full bg-slate-50 flex flex-col animate-in slide-in-from-right-8 duration-300">
         {renderHeader('Fee Collection', () => setMainView('MENU'))}
-        <div className="flex-1 overflow-y-auto p-4 pb-28 space-y-3">
+        <div className="flex-1 overflow-y-auto p-4  space-y-3">
           <div className="relative">
             <Search size={16} className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-400" />
             <input value={search} onChange={e => setSearch(e.target.value)} placeholder="Search name…"
@@ -518,7 +518,7 @@ export const StudentsManager: React.FC<Props> = ({ onBack, initialView }) => {
     // ── Student list in a section ──────────────────────────────────────────
     if (selectedClass && selectedSection) {
       return (
-        <div className="absolute inset-0 z-50 bg-slate-50 flex flex-col animate-in slide-in-from-right-8 duration-300">
+        <div className="w-full bg-slate-50 flex flex-col animate-in slide-in-from-right-8 duration-300">
           <div className="bg-white border-b border-slate-100 px-4 pt-4 pb-4 flex items-center justify-between sticky top-0 z-10 shadow-sm">
             <div className="flex items-center gap-3">
               <button onClick={() => setSelectedSection(null)} className="p-2 -ml-2 bg-slate-100 rounded-full text-slate-600">
@@ -533,7 +533,7 @@ export const StudentsManager: React.FC<Props> = ({ onBack, initialView }) => {
             </div>
           </div>
 
-          <div className="flex-1 overflow-y-auto p-4 pb-28">
+          <div className="flex-1 overflow-y-auto p-4 ">
             <div className="bg-white rounded-2xl border border-slate-100 shadow-sm overflow-hidden">
               {classStudents.map((s, idx) => (
                 <button key={s.id}
@@ -567,7 +567,7 @@ export const StudentsManager: React.FC<Props> = ({ onBack, initialView }) => {
     if (selectedClass) {
       const clsNum = selectedClass.replace('Class ', '');
       return (
-        <div className="absolute inset-0 z-50 bg-slate-50 flex flex-col animate-in slide-in-from-right-8 duration-300">
+        <div className="w-full bg-slate-50 flex flex-col animate-in slide-in-from-right-8 duration-300">
           <div className="bg-white border-b border-slate-100 px-4 pt-4 pb-4 flex items-center gap-3 sticky top-0 z-10 shadow-sm">
             <button onClick={() => setSelectedClass(null)} className="p-2 -ml-2 bg-slate-100 rounded-full text-slate-600">
               <ArrowLeft size={20} />
@@ -577,7 +577,7 @@ export const StudentsManager: React.FC<Props> = ({ onBack, initialView }) => {
             </h2>
           </div>
 
-          <div className="flex-1 overflow-y-auto p-4 pb-28">
+          <div className="flex-1 overflow-y-auto p-4 ">
             <div className="bg-white rounded-2xl border border-slate-100 shadow-sm overflow-hidden">
               {sections.map((section, idx) => {
                 const count = students.filter(s => s.className === selectedClass && s.section === section).length;
@@ -610,7 +610,7 @@ export const StudentsManager: React.FC<Props> = ({ onBack, initialView }) => {
 
     // ── Class Directory (2×2 Grid) ─────────────────────────────────────────
     return (
-      <div className="absolute inset-0 z-50 bg-slate-50 flex flex-col animate-in slide-in-from-right-8 duration-300">
+      <div className="w-full bg-slate-50 flex flex-col animate-in slide-in-from-right-8 duration-300">
         <div className="bg-white border-b border-slate-100 px-4 pt-4 pb-4 flex items-center gap-3 sticky top-0 z-10 shadow-sm">
           <button onClick={onBack} className="p-2 -ml-2 bg-slate-100 rounded-full text-slate-600">
             <ArrowLeft size={20} />
@@ -630,7 +630,7 @@ export const StudentsManager: React.FC<Props> = ({ onBack, initialView }) => {
           </div>
         </div>
 
-        <div className="flex-1 overflow-y-auto p-4 pb-28">
+        <div className="flex-1 overflow-y-auto p-4 ">
           {/* 2x2 Grid of classes */}
           <div className="grid grid-cols-2 gap-3">
             {classes.map(cls => {
@@ -669,7 +669,7 @@ export const StudentsManager: React.FC<Props> = ({ onBack, initialView }) => {
     ];
 
     return (
-      <div className="absolute inset-0 z-50 bg-white flex flex-col animate-in slide-in-from-right-8 duration-300">
+      <div className="w-full bg-white flex flex-col animate-in slide-in-from-right-8 duration-300">
         {/* Header */}
         <div className="bg-white border-b border-slate-100 px-4 pt-4 pb-4 sticky top-0 z-10 shadow-sm">
           <div className="flex items-center justify-between gap-3 mb-4">
@@ -703,7 +703,7 @@ export const StudentsManager: React.FC<Props> = ({ onBack, initialView }) => {
           </div>
         </div>
 
-        <div className="flex-1 overflow-y-auto pb-28">
+        <div className="flex-1 overflow-y-auto ">
           <div className="p-4 space-y-4">
             {activeProfileTab === 'INFO' && (
               <>
@@ -959,7 +959,7 @@ export const StudentsManager: React.FC<Props> = ({ onBack, initialView }) => {
   if (showParentModal && createdParent) {
     const tempPassword = authService.getTempPassword(form.parentMobileNumber);
     return (
-      <div className="absolute inset-0 z-50 bg-slate-900/50 backdrop-blur-sm flex items-end">
+      <div className="w-full bg-slate-900/50 backdrop-blur-sm flex items-end">
         <div className="w-full bg-white rounded-t-3xl p-6 pb-8 animate-in slide-in-from-bottom-8">
           <div className="flex justify-between items-center mb-6">
             <h3 className="text-lg font-black text-slate-900">Parent Account Created</h3>

@@ -56,9 +56,9 @@ export const TeacherNoticesView: React.FC<Props> = ({ onBack }) => {
   );
 
   if (view === 'CREATE') return (
-    <div className="absolute inset-0 z-50 bg-slate-50 flex flex-col animate-in slide-in-from-right-8 duration-300">
+    <div className="w-full bg-slate-50 flex flex-col animate-in slide-in-from-right-8 duration-300">
       {renderHeader('Send Notice', () => setView('LIST'))}
-      <div className="flex-1 overflow-y-auto p-4 pb-28 space-y-4">
+      <div className="flex-1 overflow-y-auto p-4  space-y-4">
         <div className="bg-white rounded-2xl border border-slate-100 shadow-sm p-4 space-y-4">
           <p className="text-[10px] font-black uppercase tracking-widest text-slate-400">Target Class</p>
           <div className="flex gap-2 flex-wrap">
@@ -106,13 +106,13 @@ export const TeacherNoticesView: React.FC<Props> = ({ onBack }) => {
   );
 
   return (
-    <div className="absolute inset-0 z-50 bg-slate-50 flex flex-col animate-in slide-in-from-right-8 duration-300">
+    <div className="w-full bg-slate-50 flex flex-col animate-in slide-in-from-right-8 duration-300">
       {renderHeader('Notices', onBack,
         <button onClick={() => setView('CREATE')} className="p-2 bg-indigo-500 text-white rounded-full shadow-md">
           <Plus size={18} />
         </button>
       )}
-      <div className="flex-1 overflow-y-auto p-4 pb-28 space-y-3">
+      <div className="flex-1 overflow-y-auto p-4  space-y-3">
         <p className="text-[10px] font-black uppercase tracking-widest text-slate-400">Sent to your classes</p>
         {notices.length === 0 && (
           <div className="flex flex-col items-center py-16 text-slate-400">

@@ -95,11 +95,11 @@ export const StaffManager: React.FC<Props> = ({ onBack }) => {
   );
 
   if (view === 'LIST') return (
-    <div className="absolute inset-0 z-50 bg-slate-50 flex flex-col animate-in slide-in-from-right-8 duration-300">
+    <div className="w-full bg-slate-50 flex flex-col animate-in slide-in-from-right-8 duration-300">
       {renderHeader('Staff', onBack,
         <button onClick={() => setView('CREATE')} className="w-9 h-9 bg-blue-600 text-white rounded-full shadow-md flex items-center justify-center active:scale-90 transition-transform"><Plus size={18} /></button>
       )}
-      <div className="flex-1 overflow-y-auto pb-28">
+      <div className="flex-1 overflow-y-auto ">
 
         {/* Stats row */}
         <div className="grid grid-cols-4 gap-2 px-4 pt-3 pb-1">
@@ -173,9 +173,9 @@ export const StaffManager: React.FC<Props> = ({ onBack }) => {
   );
 
   if (view === 'CREATE') return (
-    <div className="absolute inset-0 z-50 bg-slate-50 flex flex-col animate-in slide-in-from-right-8 duration-300">
+    <div className="w-full bg-slate-50 flex flex-col animate-in slide-in-from-right-8 duration-300">
       {renderHeader('Add Staff', () => setView('LIST'))}
-      <div className="flex-1 overflow-y-auto p-4 pb-28 space-y-4">
+      <div className="flex-1 overflow-y-auto p-4  space-y-4">
         <div className="bg-white rounded-2xl border border-slate-100 shadow-sm p-4 space-y-4">
           {[
             { label: 'Full Name *', key: 'name', placeholder: 'Staff full name' },
@@ -221,9 +221,9 @@ export const StaffManager: React.FC<Props> = ({ onBack }) => {
   );
 
   if (view === 'EDIT' && selected) return (
-    <div className="absolute inset-0 z-50 bg-slate-50 flex flex-col animate-in slide-in-from-right-8 duration-300">
+    <div className="w-full bg-slate-50 flex flex-col animate-in slide-in-from-right-8 duration-300">
       {renderHeader('Edit Staff', () => setView('PROFILE'))}
-      <div className="flex-1 overflow-y-auto p-4 pb-28 space-y-4">
+      <div className="flex-1 overflow-y-auto p-4  space-y-4">
         <div className="bg-white rounded-2xl border border-slate-100 shadow-sm p-4 space-y-4">
           {[
             { label: 'Full Name *', key: 'name', placeholder: 'Staff full name' },
@@ -278,14 +278,14 @@ export const StaffManager: React.FC<Props> = ({ onBack }) => {
   );
 
   if (view === 'PROFILE' && selected) return (
-    <div className="absolute inset-0 z-50 bg-slate-50 flex flex-col animate-in slide-in-from-right-8 duration-300">
+    <div className="w-full bg-slate-50 flex flex-col animate-in slide-in-from-right-8 duration-300">
       {renderHeader(selected.name, () => setView('LIST'),
         <button onClick={() => { setEditForm({ ...selected }); setView('EDIT'); }}
           className="p-2 bg-slate-100 rounded-full text-slate-600">
           <Edit3 size={18} />
         </button>
       )}
-      <div className="flex-1 overflow-y-auto p-4 pb-28 space-y-4">
+      <div className="flex-1 overflow-y-auto p-4  space-y-4">
         <div className="bg-white rounded-2xl border border-slate-100 shadow-sm p-4">
           <div className="flex items-center gap-4 mb-4">
             <div className={`w-16 h-16 rounded-2xl flex items-center justify-center font-black text-2xl ${roleColor(selected.role)}`}>

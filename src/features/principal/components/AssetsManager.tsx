@@ -161,7 +161,7 @@ export const AssetsManager: React.FC<Props> = ({ onBack }) => {
   ];
 
   return (
-    <div className="absolute inset-0 z-50 bg-slate-50 flex flex-col animate-in slide-in-from-right-8 duration-300">
+    <div className="w-full bg-slate-50 flex flex-col animate-in slide-in-from-right-8 duration-300">
       <div className="bg-white border-b border-slate-100 px-4 pt-4 pb-0 sticky top-0 z-10 shadow-sm">
         <div className="flex items-center justify-between pb-3">
           <div className="flex items-center gap-3">
@@ -212,7 +212,7 @@ export const AssetsManager: React.FC<Props> = ({ onBack }) => {
         )}
       </div>
 
-      <div className="flex-1 overflow-y-auto p-4 pb-28 space-y-3">
+      <div className="flex-1 overflow-y-auto p-4  space-y-3">
 
         {/* LIBRARY */}
         {tab === 'LIBRARY' && librarySubTab === 'BOOKS' && (

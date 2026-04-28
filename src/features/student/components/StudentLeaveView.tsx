@@ -90,7 +90,7 @@ export const StudentLeaveView: React.FC<Props> = ({ onBack, studentId }) => {
   const rejected = leaveApps.filter(l => l.status === 'REJECTED').length;
 
   return (
-    <div className="absolute inset-0 z-50 bg-slate-50 flex flex-col animate-in slide-in-from-right-8 duration-300">
+    <div className="w-full bg-slate-50 flex flex-col animate-in slide-in-from-right-8 duration-300">
       {/* Header */}
       <div className="bg-white border-b border-slate-100 px-4 pt-4 pb-4 sticky top-0 z-10 shadow-sm">
         <div className="flex items-center justify-between gap-3 mb-4">
@@ -128,7 +128,7 @@ export const StudentLeaveView: React.FC<Props> = ({ onBack, studentId }) => {
         </div>
       </div>
 
-      <div className="flex-1 overflow-y-auto p-4 pb-28 space-y-3">
+      <div className="flex-1 overflow-y-auto p-4  space-y-3">
         {/* Apply Form */}
         {showForm && (
           <div className="bg-white rounded-2xl border border-blue-100 shadow-sm p-4 space-y-3">

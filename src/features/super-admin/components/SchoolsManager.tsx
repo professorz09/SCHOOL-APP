@@ -152,7 +152,7 @@ export const SchoolsManager: React.FC<Props> = ({ onBack }) => {
     const overdueCount   = Object.values(latestBillingMap).filter(y => y.outstanding > 0).length;
 
     return (
-      <div className="absolute inset-0 z-50 bg-slate-50 flex flex-col animate-in slide-in-from-right-8 duration-300">
+      <div className="w-full bg-slate-50 flex flex-col animate-in slide-in-from-right-8 duration-300">
         {renderHeader('Schools', onBack,
           <button onClick={() => setView('CREATE')} className="flex items-center gap-1.5 bg-emerald-500 text-white font-black text-[10px] uppercase tracking-widest px-3 py-2 rounded-xl hover:bg-emerald-600 transition-colors shadow-md">
             <Plus size={14} /> Add
@@ -183,7 +183,7 @@ export const SchoolsManager: React.FC<Props> = ({ onBack }) => {
             </div>
           </div>
 
-          <div className="p-4 pb-28 space-y-3">
+          <div className="p-4  space-y-3">
             {/* Search */}
             <div className="relative">
               <Search size={15} className="absolute left-3.5 top-1/2 -translate-y-1/2 text-slate-400" />
@@ -285,9 +285,9 @@ export const SchoolsManager: React.FC<Props> = ({ onBack }) => {
       </div>
     );
     return (
-      <div className="absolute inset-0 z-50 bg-slate-50 flex flex-col animate-in slide-in-from-right-8 duration-300">
+      <div className="w-full bg-slate-50 flex flex-col animate-in slide-in-from-right-8 duration-300">
         {renderHeader('Add School', () => setView('LIST'))}
-        <div className="flex-1 overflow-y-auto p-4 pb-28 space-y-4">
+        <div className="flex-1 overflow-y-auto p-4  space-y-4">
 
           {/* School Info */}
           <div className="bg-white rounded-2xl p-4 border border-slate-100 shadow-sm space-y-4">
@@ -346,7 +346,7 @@ export const SchoolsManager: React.FC<Props> = ({ onBack }) => {
     const isActive = selected.status === SchoolStatus.ACTIVE;
 
     return (
-      <div className="absolute inset-0 z-50 bg-slate-50 flex flex-col animate-in slide-in-from-right-8 duration-300">
+      <div className="w-full bg-slate-50 flex flex-col animate-in slide-in-from-right-8 duration-300">
         {renderHeader(selected.name, () => setView('LIST'),
           <div className="flex gap-2">
             <button onClick={() => handleEdit(selected)} className="p-2 bg-blue-50 text-blue-600 rounded-full hover:bg-blue-100 transition-colors">
@@ -361,7 +361,7 @@ export const SchoolsManager: React.FC<Props> = ({ onBack }) => {
             </button>
           </div>
         )}
-        <div className="flex-1 overflow-y-auto p-4 pb-28 space-y-4">
+        <div className="flex-1 overflow-y-auto p-4  space-y-4">
 
           {/* Hero identity */}
           <div className="bg-gradient-to-br from-slate-800 to-slate-900 rounded-2xl p-5 text-white">
@@ -514,9 +514,9 @@ export const SchoolsManager: React.FC<Props> = ({ onBack }) => {
   if (view === 'SECTIONS' && selected) {
     const ay = selected.academicYears[activeAYIdx];
     return (
-      <div className="absolute inset-0 z-50 bg-slate-50 flex flex-col animate-in slide-in-from-right-8 duration-300">
+      <div className="w-full bg-slate-50 flex flex-col animate-in slide-in-from-right-8 duration-300">
         {renderHeader('Sections', () => setView('DETAIL'))}
-        <div className="flex-1 overflow-y-auto p-4 pb-28 space-y-3">
+        <div className="flex-1 overflow-y-auto p-4  space-y-3">
           {(!ay || ay.sections.length === 0) && (
             <div className="flex flex-col items-center py-16 text-slate-400">
               <BookOpen size={32} className="mb-3 opacity-40" />
@@ -549,9 +549,9 @@ export const SchoolsManager: React.FC<Props> = ({ onBack }) => {
   if (view === 'STUDENTS' && selected) {
     const sec = selectedSection;
     return (
-      <div className="absolute inset-0 z-50 bg-slate-50 flex flex-col animate-in slide-in-from-right-8 duration-300">
+      <div className="w-full bg-slate-50 flex flex-col animate-in slide-in-from-right-8 duration-300">
         {renderHeader(sec ? `${sec.className}-${sec.section}` : 'Students', () => setView(sec ? 'SECTIONS' : 'DETAIL'))}
-        <div className="flex-1 overflow-y-auto p-4 pb-28 flex flex-col items-center justify-center text-slate-400">
+        <div className="flex-1 overflow-y-auto p-4  flex flex-col items-center justify-center text-slate-400">
           <Users size={32} className="mb-3 opacity-40" />
           <p className="font-bold text-sm">Student list coming soon</p>
         </div>
@@ -562,9 +562,9 @@ export const SchoolsManager: React.FC<Props> = ({ onBack }) => {
   // ── STAFF ─────────────────────────────────────────────────────────────────────
   if (view === 'STAFF' && selected) {
     return (
-      <div className="absolute inset-0 z-50 bg-slate-50 flex flex-col animate-in slide-in-from-right-8 duration-300">
+      <div className="w-full bg-slate-50 flex flex-col animate-in slide-in-from-right-8 duration-300">
         {renderHeader('Staff & Teachers', () => setView('DETAIL'))}
-        <div className="flex-1 overflow-y-auto p-4 pb-28 space-y-3">
+        <div className="flex-1 overflow-y-auto p-4  space-y-3">
           {STAFF_MOCK.map(s => (
             <div key={s.id} className="bg-white rounded-2xl border border-slate-100 shadow-sm p-4 flex items-center gap-3">
               <div className={`w-10 h-10 rounded-xl flex items-center justify-center font-bold text-sm ${s.role === 'Teacher' ? 'bg-emerald-50 text-emerald-700' : 'bg-blue-50 text-blue-700'}`}>
@@ -599,9 +599,9 @@ export const SchoolsManager: React.FC<Props> = ({ onBack }) => {
       </div>
     );
     return (
-      <div className="absolute inset-0 z-50 bg-slate-50 flex flex-col animate-in slide-in-from-right-8 duration-300">
+      <div className="w-full bg-slate-50 flex flex-col animate-in slide-in-from-right-8 duration-300">
         {renderHeader(`Edit: ${selected.name}`, () => setView('DETAIL'))}
-        <div className="flex-1 overflow-y-auto p-4 pb-28 space-y-4">
+        <div className="flex-1 overflow-y-auto p-4  space-y-4">
           <div className="bg-white rounded-2xl p-4 border border-slate-100 shadow-sm space-y-4">
             <p className="text-[10px] font-black uppercase tracking-widest text-slate-400">School Info</p>
             <Field label="School Code" k="code" placeholder="" locked />

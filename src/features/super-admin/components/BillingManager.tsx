@@ -112,9 +112,9 @@ export const BillingManager: React.FC<Props> = ({ onBack }) => {
   // ── LIST view ──────────────────────────────────────────────────────────────
 
   if (view === 'LIST') return (
-    <div className="absolute inset-0 z-50 bg-slate-50 flex flex-col animate-in slide-in-from-right-8 duration-300">
+    <div className="w-full bg-slate-50 flex flex-col animate-in slide-in-from-right-8 duration-300">
       <Header title="Billing" back={onBack} />
-      <div className="flex-1 overflow-y-auto pb-28">
+      <div className="flex-1 overflow-y-auto ">
 
         {/* Stats */}
         <div className="grid grid-cols-3 gap-2 px-4 pt-3 pb-2">
@@ -207,7 +207,7 @@ export const BillingManager: React.FC<Props> = ({ onBack }) => {
     const pct  = due > 0 ? Math.min(100, Math.round((paid / due) * 100)) : 0;
 
     return (
-      <div className="absolute inset-0 z-50 bg-slate-50 flex flex-col animate-in slide-in-from-right-8 duration-300">
+      <div className="w-full bg-slate-50 flex flex-col animate-in slide-in-from-right-8 duration-300">
         <Header title={billing.schoolName}
           back={() => { setView('LIST'); setSelectedId(null); }}
           right={
@@ -218,7 +218,7 @@ export const BillingManager: React.FC<Props> = ({ onBack }) => {
           }
         />
 
-        <div className="flex-1 overflow-y-auto pb-28 space-y-3 px-4 pt-3">
+        <div className="flex-1 overflow-y-auto  space-y-3 px-4 pt-3">
 
           {/* Plan info card */}
           <div className="bg-white rounded-2xl border border-slate-100 shadow-sm p-4">
@@ -324,9 +324,9 @@ export const BillingManager: React.FC<Props> = ({ onBack }) => {
     const out = year?.outstanding ?? billing.annualAmount;
 
     return (
-      <div className="absolute inset-0 z-50 bg-slate-50 flex flex-col animate-in slide-in-from-right-8 duration-300">
+      <div className="w-full bg-slate-50 flex flex-col animate-in slide-in-from-right-8 duration-300">
         <Header title="Add Payment" back={() => setView('SCHOOL_DETAIL')} />
-        <div className="flex-1 overflow-y-auto pb-28 px-4 pt-4 space-y-4">
+        <div className="flex-1 overflow-y-auto  px-4 pt-4 space-y-4">
 
           {/* School summary */}
           <div className="bg-white rounded-2xl border border-slate-100 shadow-sm p-4 flex items-center gap-3">

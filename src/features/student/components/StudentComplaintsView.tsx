@@ -44,9 +44,9 @@ export const StudentComplaintsView: React.FC<Props> = ({ onBack }) => {
   );
 
   if (view === 'CREATE') return (
-    <div className="absolute inset-0 z-50 bg-slate-50 flex flex-col animate-in slide-in-from-right-8 duration-300">
+    <div className="w-full bg-slate-50 flex flex-col animate-in slide-in-from-right-8 duration-300">
       {renderHeader('File Complaint', () => setView('LIST'))}
-      <div className="flex-1 overflow-y-auto p-4 pb-28 space-y-4">
+      <div className="flex-1 overflow-y-auto p-4  space-y-4">
         <div className="bg-blue-50 border border-blue-100 rounded-2xl p-3">
           <p className="text-xs font-bold text-blue-700">Your complaint will be reviewed by the principal.</p>
         </div>
@@ -73,11 +73,11 @@ export const StudentComplaintsView: React.FC<Props> = ({ onBack }) => {
   );
 
   return (
-    <div className="absolute inset-0 z-50 bg-slate-50 flex flex-col animate-in slide-in-from-right-8 duration-300">
+    <div className="w-full bg-slate-50 flex flex-col animate-in slide-in-from-right-8 duration-300">
       {renderHeader('My Complaints', onBack,
         <button onClick={() => setView('CREATE')} className="p-2 bg-rose-500 text-white rounded-full shadow-md"><Plus size={18} /></button>
       )}
-      <div className="flex-1 overflow-y-auto p-4 pb-28 space-y-3">
+      <div className="flex-1 overflow-y-auto p-4  space-y-3">
         {complaints.map(c => (
           <div key={c.id} className="bg-white rounded-2xl border border-slate-100 shadow-sm p-4">
             <div className="flex items-start justify-between gap-2 mb-2">

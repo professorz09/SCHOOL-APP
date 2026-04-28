@@ -182,7 +182,7 @@ export const FeeStructureForm: React.FC<Props> = ({
   };
 
   return (
-    <div className="absolute inset-0 z-50 bg-slate-50 flex flex-col animate-in slide-in-from-right-8 duration-300">
+    <div className="w-full bg-slate-50 flex flex-col animate-in slide-in-from-right-8 duration-300">
       {/* Header */}
       <div className="bg-white border-b border-slate-100 px-4 pt-4 pb-4 sticky top-0 z-10 shadow-sm flex items-center gap-3">
         <button onClick={onBack} className="p-2 -ml-2 bg-slate-100 rounded-full text-slate-600">
@@ -193,7 +193,7 @@ export const FeeStructureForm: React.FC<Props> = ({
         </h2>
       </div>
 
-      <div className="flex-1 overflow-y-auto p-4 pb-28 space-y-4">
+      <div className="flex-1 overflow-y-auto p-4  space-y-4">
 
         {/* ── Name ── */}
         <div className="bg-white rounded-2xl border border-slate-100 shadow-sm p-4 space-y-3">

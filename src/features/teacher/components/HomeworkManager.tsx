@@ -58,9 +58,9 @@ export const HomeworkManager: React.FC<Props> = ({ onBack }) => {
   );
 
   if (view === 'CREATE') return (
-    <div className="absolute inset-0 z-50 bg-slate-50 flex flex-col animate-in slide-in-from-right-8 duration-300">
+    <div className="w-full bg-slate-50 flex flex-col animate-in slide-in-from-right-8 duration-300">
       {renderHeader('Assign Homework', () => setView('LIST'))}
-      <div className="flex-1 overflow-y-auto p-4 pb-28 space-y-4">
+      <div className="flex-1 overflow-y-auto p-4  space-y-4">
         <div className="bg-white rounded-2xl border border-slate-100 shadow-sm p-4 space-y-4">
           <div>
             <label className="block text-[10px] font-black uppercase tracking-widest text-slate-500 mb-1.5">Class</label>
@@ -107,11 +107,11 @@ export const HomeworkManager: React.FC<Props> = ({ onBack }) => {
   );
 
   return (
-    <div className="absolute inset-0 z-50 bg-slate-50 flex flex-col animate-in slide-in-from-right-8 duration-300">
+    <div className="w-full bg-slate-50 flex flex-col animate-in slide-in-from-right-8 duration-300">
       {renderHeader('Homework', onBack,
         <button onClick={() => setView('CREATE')} className="p-2 bg-purple-500 text-white rounded-full shadow-md"><Plus size={18} /></button>
       )}
-      <div className="flex-1 overflow-y-auto p-4 pb-28 space-y-3">
+      <div className="flex-1 overflow-y-auto p-4  space-y-3">
         {homework.map(hw => {
           const submittedPct = hw.totalStudents > 0 ? Math.round((hw.submittedCount / hw.totalStudents) * 100) : 0;
           const isOverdue = new Date(hw.dueDate) < new Date();

@@ -73,16 +73,16 @@ export const FeesView: React.FC<Props> = ({ onBack }) => {
 
   // ── QR Pay View ──────────────────────────────────────────────────────────
   if (view === 'QR_PAY') return (
-    <div className="absolute inset-0 z-50 bg-white flex flex-col animate-in slide-in-from-right-8 duration-300">
+    <div className="w-full flex flex-col animate-in slide-in-from-right-8 duration-300">
       {/* Header */}
-      <div className="px-4 pt-4 pb-4 flex items-center gap-3 border-b border-slate-100">
+      <div className="sticky top-0 bg-white px-4 pt-4 pb-4 flex items-center gap-3 border-b border-slate-100 z-10">
         <button onClick={() => setView('MAIN')} className="p-2 -ml-2 bg-slate-100 rounded-full">
           <ArrowLeft size={20} className="text-slate-600" />
         </button>
         <h2 className="text-xl font-black text-slate-900 uppercase tracking-tight">Pay via UPI</h2>
       </div>
 
-      <div className="flex-1 overflow-y-auto p-5 pb-28 space-y-5">
+      <div className="space-y-5 p-5">
         {/* QR Card */}
         <div className="bg-[#0d1b3e] rounded-3xl p-6 flex flex-col items-center text-white">
           <p className="text-[10px] font-black uppercase tracking-widest text-blue-300 mb-4">Scan & Pay</p>
@@ -122,16 +122,16 @@ export const FeesView: React.FC<Props> = ({ onBack }) => {
 
   // ── Main View ────────────────────────────────────────────────────────────
   return (
-    <div className="absolute inset-0 z-50 bg-slate-50 flex flex-col animate-in slide-in-from-right-8 duration-300">
+    <div className="w-full flex flex-col animate-in slide-in-from-right-8 duration-300">
       {/* Header */}
-      <div className="bg-white border-b border-slate-100 px-4 pt-4 pb-4 flex items-center gap-3 shadow-sm">
+      <div className="sticky top-0 bg-white border-b border-slate-100 px-4 pt-4 pb-4 flex items-center gap-3 shadow-sm z-10">
         <button onClick={onBack} className="p-2 -ml-2 bg-slate-100 rounded-full">
           <ArrowLeft size={20} className="text-slate-600" />
         </button>
         <h2 className="text-xl font-black text-slate-900 uppercase tracking-tight">Fee Payments</h2>
       </div>
 
-      <div className="flex-1 overflow-y-auto pb-28">
+      <div>
         {/* RTE Banner */}
         {isRte && (
           <div className="mx-4 mt-4 bg-emerald-50 border border-emerald-200 rounded-2xl p-4 flex items-center gap-3">

@@ -156,7 +156,7 @@ export const StudentAttendanceManager: React.FC<Props> = ({ onBack }) => {
     const editPresent = editStudents.filter(s => s.isPresent).length;
     const editAbsent  = editStudents.filter(s => !s.isPresent).length;
     return (
-      <div className="absolute inset-0 z-50 bg-slate-50 flex flex-col animate-in slide-in-from-right-8 duration-300">
+      <div className="w-full bg-slate-50 flex flex-col animate-in slide-in-from-right-8 duration-300">
         <div className="bg-white border-b border-slate-100 px-4 pt-4 pb-4 sticky top-0 z-10 shadow-sm">
           <div className="flex items-center gap-3 mb-3">
             <button onClick={() => setView('RECORDS')} className="p-2 -ml-2 bg-slate-100 rounded-full text-slate-600">
@@ -226,7 +226,7 @@ export const StudentAttendanceManager: React.FC<Props> = ({ onBack }) => {
     const canSubmit   = markClass && markSection && markDate && markStudents.length > 0 && !markConflict;
 
     return (
-      <div className="absolute inset-0 z-50 bg-slate-50 flex flex-col animate-in slide-in-from-right-8 duration-300">
+      <div className="w-full bg-slate-50 flex flex-col animate-in slide-in-from-right-8 duration-300">
         <div className="bg-white border-b border-slate-100 px-4 pt-4 pb-4 sticky top-0 z-10 shadow-sm">
           <div className="flex items-center gap-3">
             <button onClick={() => setView('OVERVIEW')} className="p-2 -ml-2 bg-slate-100 rounded-full text-slate-600">
@@ -371,7 +371,7 @@ export const StudentAttendanceManager: React.FC<Props> = ({ onBack }) => {
     ];
 
     return (
-      <div className="absolute inset-0 z-50 bg-slate-50 flex flex-col animate-in slide-in-from-right-8 duration-300">
+      <div className="w-full bg-slate-50 flex flex-col animate-in slide-in-from-right-8 duration-300">
         <div className="bg-white border-b border-slate-100 px-4 pt-4 pb-4 sticky top-0 z-10 shadow-sm">
           <div className="flex items-center gap-3 mb-4">
             <button onClick={() => setView('OVERVIEW')} className="p-2 -ml-2 bg-slate-100 rounded-full text-slate-600">
@@ -395,7 +395,7 @@ export const StudentAttendanceManager: React.FC<Props> = ({ onBack }) => {
           </div>
         </div>
 
-        <div className="flex-1 overflow-y-auto p-4 pb-28 space-y-3">
+        <div className="flex-1 overflow-y-auto p-4  space-y-3">
           {filteredRecords.length === 0 && (
             <div className="flex flex-col items-center py-16 text-slate-400">
               <ClipboardList size={32} className="mb-3 opacity-40"/>
@@ -458,13 +458,13 @@ export const StudentAttendanceManager: React.FC<Props> = ({ onBack }) => {
 
   /* ── OVERVIEW ─────────────────────────────────────────────────── */
   return (
-    <div className="absolute inset-0 z-50 bg-slate-50 flex flex-col animate-in slide-in-from-right-8 duration-300">
+    <div className="w-full bg-slate-50 flex flex-col animate-in slide-in-from-right-8 duration-300">
       <div className="bg-white border-b border-slate-100 px-4 pt-4 pb-4 sticky top-0 z-10 shadow-sm flex items-center gap-3">
         <button onClick={onBack} className="p-2 -ml-2 bg-slate-100 rounded-full text-slate-600"><ArrowLeft size={20}/></button>
         <h2 className="text-xl font-black text-slate-900 uppercase tracking-tight">Attendance</h2>
       </div>
 
-      <div className="flex-1 overflow-y-auto p-4 pb-28 space-y-4">
+      <div className="flex-1 overflow-y-auto p-4  space-y-4">
         {/* Summary */}
         <div className="grid grid-cols-3 gap-2">
           <div className="bg-indigo-600 rounded-2xl p-3 text-white text-center">

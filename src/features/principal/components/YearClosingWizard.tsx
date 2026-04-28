@@ -158,7 +158,7 @@ export const YearClosingWizard: React.FC<Props> = ({ onBack }) => {
 
   if (loading && step === 'PRE_CHECKS') {
     return (
-      <div className="absolute inset-0 z-50 bg-slate-50 flex items-center justify-center">
+      <div className="w-full bg-slate-50 flex items-center justify-center">
         <div className="w-8 h-8 border-2 border-slate-200 border-t-slate-600 rounded-full animate-spin" />
       </div>
     );
@@ -166,7 +166,7 @@ export const YearClosingWizard: React.FC<Props> = ({ onBack }) => {
 
   if (step === 'DONE' && result) {
     return (
-      <div className="absolute inset-0 z-50 bg-slate-50 flex flex-col items-center justify-center animate-in fade-in duration-500 p-8">
+      <div className="w-full bg-slate-50 flex flex-col items-center justify-center animate-in fade-in duration-500 p-8">
         <div className="w-20 h-20 bg-emerald-100 rounded-full flex items-center justify-center mb-6">
           <CheckCircle2 size={40} className="text-emerald-500" />
         </div>
@@ -199,7 +199,7 @@ export const YearClosingWizard: React.FC<Props> = ({ onBack }) => {
   }
 
   return (
-    <div className="absolute inset-0 z-50 bg-slate-50 flex flex-col animate-in slide-in-from-right-8 duration-300">
+    <div className="w-full bg-slate-50 flex flex-col animate-in slide-in-from-right-8 duration-300">
       {/* Header */}
       <div className="bg-white border-b border-slate-100 px-4 pt-4 pb-4 shadow-sm">
         <div className="flex items-center gap-3 mb-4">

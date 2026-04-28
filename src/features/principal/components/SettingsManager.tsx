@@ -157,14 +157,14 @@ export const SettingsManager: React.FC<Props> = ({ onBack }) => {
 
   // MENU VIEW
   if (view === 'MENU') return (
-    <div className="absolute inset-0 z-50 bg-slate-50 flex flex-col animate-in slide-in-from-right-8 duration-300">
+    <div className="w-full bg-slate-50 flex flex-col animate-in slide-in-from-right-8 duration-300">
       <div className="bg-white border-b border-slate-100 px-4 pt-4 pb-4 sticky top-0 z-10 shadow-sm flex items-center gap-3">
         <button onClick={onBack} className="p-2 -ml-2 bg-slate-100 rounded-full text-slate-600">
           <ArrowLeft size={20} />
         </button>
         <h2 className="text-xl font-black text-slate-900 uppercase tracking-tight">Settings</h2>
       </div>
-      <div className="flex-1 overflow-y-auto p-4 pb-28 space-y-2">
+      <div className="flex-1 overflow-y-auto p-4  space-y-2">
         {[
           { icon: Building2, title: 'School Info',    desc: 'School details & contact info',    iconBg: 'bg-blue-100',    iconColor: 'text-blue-600',    action: () => setView('SCHOOL_INFO') },
           { icon: Calendar,  title: 'Academic Year',  desc: 'View active & locked years',       iconBg: 'bg-indigo-100',  iconColor: 'text-indigo-600',  action: () => setView('ACADEMIC') },
@@ -191,9 +191,9 @@ export const SettingsManager: React.FC<Props> = ({ onBack }) => {
 
   // SCHOOL INFO VIEW
   if (view === 'SCHOOL_INFO') return (
-    <div className="absolute inset-0 z-50 bg-slate-50 flex flex-col animate-in slide-in-from-right-8 duration-300">
+    <div className="w-full bg-slate-50 flex flex-col animate-in slide-in-from-right-8 duration-300">
       {renderHeader('School Information')}
-      <div className="flex-1 overflow-y-auto p-4 pb-28 space-y-4">
+      <div className="flex-1 overflow-y-auto p-4  space-y-4">
         <div className="bg-white rounded-2xl border border-slate-100 shadow-sm p-4 space-y-4">
           <p className="text-[10px] font-black uppercase tracking-widest text-slate-400">Basic Info</p>
           {[
@@ -236,9 +236,9 @@ export const SettingsManager: React.FC<Props> = ({ onBack }) => {
 
   // ACADEMIC VIEW — read-only, sirf year cards + active/locked status
   if (view === 'ACADEMIC') return (
-    <div className="absolute inset-0 z-50 bg-slate-50 flex flex-col animate-in slide-in-from-right-8 duration-300">
+    <div className="w-full bg-slate-50 flex flex-col animate-in slide-in-from-right-8 duration-300">
       {renderHeader('Academic Year')}
-      <div className="flex-1 overflow-y-auto p-4 pb-28 space-y-4">
+      <div className="flex-1 overflow-y-auto p-4  space-y-4">
         <div className="bg-indigo-50 border border-indigo-200 rounded-2xl p-3">
           <p className="text-xs font-bold text-indigo-700">
             Naya academic year create karne ke liye "Year Closing Wizard" use karein.
@@ -298,9 +298,9 @@ export const SettingsManager: React.FC<Props> = ({ onBack }) => {
 
   // CLASSES VIEW
   if (view === 'CLASSES') return (
-    <div className="absolute inset-0 z-50 bg-slate-50 flex flex-col animate-in slide-in-from-right-8 duration-300">
+    <div className="w-full bg-slate-50 flex flex-col animate-in slide-in-from-right-8 duration-300">
       {renderHeader('Classes')}
-      <div className="flex-1 overflow-y-auto p-4 pb-28 space-y-4">
+      <div className="flex-1 overflow-y-auto p-4  space-y-4">
         {activeConfig && (
           <>
             <div className="bg-white rounded-2xl border border-slate-100 shadow-sm p-4 space-y-2">
@@ -352,9 +352,9 @@ export const SettingsManager: React.FC<Props> = ({ onBack }) => {
 
   // FEE STRUCT — list view
   if (view === 'FEE_STRUCT') return (
-    <div className="absolute inset-0 z-50 bg-slate-50 flex flex-col animate-in slide-in-from-right-8 duration-300">
+    <div className="w-full bg-slate-50 flex flex-col animate-in slide-in-from-right-8 duration-300">
       {renderHeader('Fee Structure')}
-      <div className="flex-1 overflow-y-auto p-4 pb-28 space-y-4">
+      <div className="flex-1 overflow-y-auto p-4  space-y-4">
         <button
           onClick={() => { setEditingFs(null); setView('FEE_STRUCT_EDIT'); }}
           className="w-full flex items-center justify-center gap-2 bg-emerald-600 text-white font-black text-xs uppercase tracking-widest py-4 rounded-2xl active:scale-95 transition-transform shadow-lg"
@@ -436,9 +436,9 @@ export const SettingsManager: React.FC<Props> = ({ onBack }) => {
 
   // PAYMENTS VIEW
   if (view === 'PAYMENTS') return (
-    <div className="absolute inset-0 z-50 bg-slate-50 flex flex-col animate-in slide-in-from-right-8 duration-300">
+    <div className="w-full bg-slate-50 flex flex-col animate-in slide-in-from-right-8 duration-300">
       {renderHeader('Payments')}
-      <div className="flex-1 overflow-y-auto p-4 pb-28 space-y-4">
+      <div className="flex-1 overflow-y-auto p-4  space-y-4">
         <div className="bg-white rounded-2xl border border-slate-100 shadow-sm p-4 space-y-3">
           <div className="flex items-center gap-2 mb-1">
             <CreditCard size={16} className="text-blue-600" />
@@ -501,9 +501,9 @@ export const SettingsManager: React.FC<Props> = ({ onBack }) => {
 
   // SECURITY VIEW
   if (view === 'SECURITY') return (
-    <div className="absolute inset-0 z-50 bg-slate-50 flex flex-col animate-in slide-in-from-right-8 duration-300">
+    <div className="w-full bg-slate-50 flex flex-col animate-in slide-in-from-right-8 duration-300">
       {renderHeader('Security')}
-      <div className="flex-1 overflow-y-auto p-4 pb-28 space-y-4">
+      <div className="flex-1 overflow-y-auto p-4  space-y-4">
         {session?.mustChangePassword && (
           <div className="bg-amber-50 border border-amber-200 rounded-2xl p-4 flex items-start gap-2">
             <ShieldCheck size={18} className="text-amber-700 shrink-0 mt-0.5" />
