@@ -389,83 +389,14 @@ export const DriverLayout: React.FC = () => {
         </div>
       )}
 
-      {!isTracking && vehicle && (
-        <>
-          {/* Routes Section */}
-          <div className="bg-white rounded-3xl shadow-sm border border-slate-100 p-5">
-            <div className="flex items-center justify-between mb-4">
-              <div>
-                <p className="text-[10px] font-black uppercase tracking-widest text-slate-400">Route</p>
-                <h3 className="text-lg font-black text-slate-900 mt-1">{vehicle.routeName || 'No Route Name'}</h3>
-              </div>
-              <button onClick={() => setShowAddWaypoint(true)}
-                className="w-10 h-10 flex items-center justify-center bg-blue-600 text-white rounded-full hover:bg-blue-700 transition-colors">
-                <Plus size={18} />
-              </button>
-            </div>
-
-            {stops.length > 0 ? (
-              <div className="space-y-2">
-                {stops.map((stop, idx) => (
-                  <div key={stop.id} className="flex items-center justify-between bg-slate-50 rounded-xl p-3">
-                    <div className="flex-1 min-w-0">
-                      <div className="font-extrabold text-slate-900 text-sm">{stop.name}</div>
-                      <div className="text-[10px] font-bold text-slate-400 mt-0.5">{stop.estimatedTime}</div>
-                      <div className="text-[9px] font-mono text-slate-500">{stop.lat.toFixed(4)}, {stop.lng.toFixed(4)}</div>
-                    </div>
-                    <button onClick={() => {
-                      setEditingStopId(stop.id);
-                      setEditStopName(stop.name);
-                      setEditStopLat(stop.lat.toString());
-                      setEditStopLng(stop.lng.toString());
-                    }} className="p-2 hover:bg-blue-100 text-blue-600 rounded-lg ml-2 shrink-0">
-                      <Edit2 size={14} />
-                    </button>
-                  </div>
-                ))}
-              </div>
-            ) : (
-              <div className="text-center py-6">
-                <p className="text-sm font-bold text-slate-400">No waypoints added yet</p>
-                <button onClick={() => setShowAddWaypoint(true)}
-                  className="mt-3 px-4 py-2 bg-blue-600 text-white font-black text-xs rounded-xl flex items-center justify-center gap-1 mx-auto">
-                  <Plus size={14} /> Add First Waypoint
-                </button>
-              </div>
-            )}
-          </div>
-
-          {/* Students Section */}
-          <div className="bg-white rounded-3xl shadow-sm border border-slate-100 p-5">
-            <div className="flex items-center gap-2 mb-4">
-              <Users size={18} className="text-blue-600" />
-              <div>
-                <p className="text-[10px] font-black uppercase tracking-widest text-slate-400">Students On Board</p>
-                <h3 className="text-lg font-black text-slate-900">{assignedStudents.length} Students</h3>
-              </div>
-            </div>
-
-            {assignedStudents.length > 0 ? (
-              <div className="space-y-2">
-                {assignedStudents.map(student => (
-                  <div key={student.id} className="flex items-center justify-between bg-emerald-50 border border-emerald-100 rounded-xl p-3">
-                    <div className="flex-1 min-w-0">
-                      <div className="font-extrabold text-slate-900 text-sm">{student.studentName}</div>
-                      <div className="text-[10px] font-bold text-slate-500 mt-0.5">{student.className} • {student.boardingStopName}</div>
-                    </div>
-                    <div className="w-2 h-2 rounded-full bg-emerald-500 shrink-0" />
-                  </div>
-                ))}
-              </div>
-            ) : (
-              <div className="text-center py-4">
-                <p className="text-sm font-bold text-slate-400">No students assigned to this vehicle</p>
-              </div>
-            )}
-          </div>
-
-          <div className="h-4" />
-        </>
+      {!isTracking && (
+        <div className="flex flex-col items-center justify-center py-8 text-center bg-white rounded-3xl border border-slate-100 shadow-sm">
+          <Bus size={44} className="text-slate-200 mb-3" />
+          <h3 className="font-extrabold text-slate-900">Ready to Go</h3>
+          <p className="text-xs font-bold text-slate-400 mt-1 max-w-[200px]">
+            Press Start to begin trip tracking. Use Route & Students tabs below.
+          </p>
+        </div>
       )}
 
       {/* Emergency confirm modal */}

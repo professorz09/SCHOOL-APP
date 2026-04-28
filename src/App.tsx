@@ -5,7 +5,7 @@ import { PrincipalLayout } from './features/principal';
 import { SuperAdminLayout } from './features/super-admin';
 import { TeacherLayout } from './features/teacher';
 import { StudentLayout } from './features/student';
-import { DriverLayout } from './features/driver';
+import { DriverLayout, DriverRouteView, DriverStudentsView } from './features/driver';
 import { ProfileView } from './views/ProfileView';
 import { useAuthStore } from './store/authStore';
 import { useUIStore } from './store/uiStore';
@@ -187,6 +187,8 @@ export default function App() {
     if (tab === 'BILLING'  && role === 'SUPER_ADMIN') return <BillingManager  onBack={goHome} />;
     if (tab === 'ATTENDANCE' && role === 'TEACHER') return <AttendanceManager  onBack={goHome} />;
     if (tab === 'NOTICES'    && role === 'TEACHER') return <TeacherNoticesView onBack={goHome} />;
+    if (role === 'DRIVER' && tab === 'ROUTE')    return <DriverRouteView />;
+    if (role === 'DRIVER' && tab === 'STUDENTS') return <DriverStudentsView />;
     if (role === 'DRIVER') return <DriverLayout />;
     return renderDashboard();
   };
