@@ -225,7 +225,7 @@ export const PrincipalDashboard: React.FC<Props> = ({ onNavigate }) => {
             onClick={() => onNavigate('TRANSPORT_MGMT')}
             className="text-xs font-black text-blue-600 uppercase tracking-wide"
           >
-            View Map
+            Locations
           </button>
         </div>
         <div className="bg-white rounded-2xl border border-slate-100 shadow-sm overflow-hidden divide-y divide-slate-50">

@@ -1,3 +1,16 @@
+// ─── Utilities ────────────────────────────────────────────────────────────────
+
+const calculateDistance = (lat1: number, lng1: number, lat2: number, lng2: number): number => {
+  const R = 6371000; // Earth radius in meters
+  const dLat = (lat2 - lat1) * Math.PI / 180;
+  const dLng = (lng2 - lng1) * Math.PI / 180;
+  const a = Math.sin(dLat / 2) * Math.sin(dLat / 2) +
+            Math.cos(lat1 * Math.PI / 180) * Math.cos(lat2 * Math.PI / 180) *
+            Math.sin(dLng / 2) * Math.sin(dLng / 2);
+  const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+  return R * c;
+};
+
 // ─── Types ────────────────────────────────────────────────────────────────────
 
 export type VehicleType = 'BUS' | 'VAN' | 'MINI_BUS';
@@ -8,6 +21,13 @@ export interface RouteStop {
   estimatedTime: string; // "07:45"
   lat: number;
   lng: number;
+  arrivedAt?: string; // ISO timestamp of arrival
+}
+
+export interface VehicleLocation {
+  lat: number;
+  lng: number;
+  timestamp: string; // ISO timestamp
 }
 
 export interface TransportVehicle {
@@ -21,6 +41,8 @@ export interface TransportVehicle {
   driverName: string;
   driverPhone: string;
   isActive: boolean;
+  currentLocation?: VehicleLocation;
+  lastStopIndex?: number; // Index of last reached stop
 }
 
 export interface StudentTransportAssignment {
@@ -274,13 +296,64 @@ export const transportService = {
     const vehicle = this.getVehicleById(assignment.vehicleId);
     if (!vehicle) return null;
 
-    // Simulate live status: first stop completed, second current, rest upcoming
+    const lastIdx = vehicle.lastStopIndex ?? -1;
     const stops = vehicle.stops.map((stop, i) => ({
       ...stop,
-      status: i === 0 ? 'COMPLETED' as const :
-              i === 1 ? 'CURRENT' as const : 'UPCOMING' as const,
+      status: i <= lastIdx ? 'COMPLETED' as const :
+              i === lastIdx + 1 ? 'CURRENT' as const : 'UPCOMING' as const,
     }));
 
     return { vehicle, assignment, stops };
+  },
+
+  // ── GPS & Real-time Location ────────────────────────────────────────────
+  updateVehicleLocation(vehicleId: string, lat: number, lng: number): void {
+    _vehicles = _vehicles.map(v =>
+      v.id === vehicleId
+        ? { ...v, currentLocation: { lat, lng, timestamp: new Date().toISOString() } }
+        : v
+    );
+  },
+
+  detectArrival(vehicleId: string, lat: number, lng: number, radiusMeters = 500): void {
+    const vehicle = _vehicles.find(v => v.id === vehicleId);
+    if (!vehicle) return;
+
+    const lastIdx = vehicle.lastStopIndex ?? -1;
+    const nextStop = vehicle.stops[lastIdx + 1];
+    if (!nextStop) return;
+
+    // Calculate distance between current GPS and next stop
+    const distance = calculateDistance(lat, lng, nextStop.lat, nextStop.lng);
+    if (distance <= radiusMeters) {
+      // Mark as arrived
+      _vehicles = _vehicles.map(v =>
+        v.id === vehicleId
+          ? {
+              ...v,
+              stops: v.stops.map((s, i) =>
+                i === lastIdx + 1 ? { ...s, arrivedAt: new Date().toISOString() } : s
+              ),
+              lastStopIndex: lastIdx + 1,
+            }
+          : v
+      );
+    }
+  },
+
+  addWaypoint(vehicleId: string, name: string, lat: number, lng: number, estimatedTime: string): RouteStop {
+    const stop: RouteStop = { id: `s${Date.now()}`, name, lat, lng, estimatedTime };
+    _vehicles = _vehicles.map(v =>
+      v.id === vehicleId ? { ...v, stops: [...v.stops, stop] } : v
+    );
+    return stop;
+  },
+
+  editWaypoint(vehicleId: string, stopId: string, data: Partial<RouteStop>): void {
+    _vehicles = _vehicles.map(v =>
+      v.id === vehicleId
+        ? { ...v, stops: v.stops.map(s => s.id === stopId ? { ...s, ...data } : s) }
+        : v
+    );
   },
 };

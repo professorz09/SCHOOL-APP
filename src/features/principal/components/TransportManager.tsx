@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import {
   ArrowLeft, Bus, Users, MapPin, Phone, Plus, Trash2, ChevronDown,
-  Edit2, Check, X, Navigation,
+  Edit2, Check, X, Navigation, Map, Activity, Clock, AlertCircle,
 } from 'lucide-react';
 import {
   transportService, TransportVehicle, StudentTransportAssignment, TransportStudent,
@@ -9,7 +9,7 @@ import {
 import { staffService } from '../../../services/staff.service';
 import { StaffMember } from '../../../types/principal.types';
 
-type Tab = 'VEHICLES' | 'DRIVERS' | 'ROUTES' | 'STUDENTS';
+type Tab = 'VEHICLES' | 'DRIVERS' | 'ROUTES' | 'STUDENTS' | 'LOCATIONS';
 
 interface Props { onBack: () => void; }
 
@@ -151,13 +151,14 @@ export const TransportManager: React.FC<Props> = ({ onBack }) => {
 
         {/* Tabs */}
         <div className="flex border-t border-slate-100 overflow-x-auto hide-scrollbar">
-          {(['VEHICLES', 'DRIVERS', 'ROUTES', 'STUDENTS'] as Tab[]).map(t => (
+          {(['VEHICLES', 'DRIVERS', 'LOCATIONS', 'ROUTES', 'STUDENTS'] as Tab[]).map(t => (
             <button key={t} onClick={() => setTab(t)}
               className={`shrink-0 px-4 py-3 text-[10px] font-black uppercase tracking-widest border-b-2 transition-colors ${
                 tab === t ? 'border-blue-600 text-blue-600' : 'border-transparent text-slate-400'
               }`}>
               {t === 'VEHICLES' && '🚌 Vehicles'}
               {t === 'DRIVERS' && '👨‍✈️ Drivers'}
+              {t === 'LOCATIONS' && '📍 Locations'}
               {t === 'ROUTES' && '🗺️ Routes'}
               {t === 'STUDENTS' && '👥 Students'}
             </button>
@@ -260,6 +261,107 @@ export const TransportManager: React.FC<Props> = ({ onBack }) => {
                 )}
               </div>
             ))}
+          </>
+        )}
+
+        {/* LOCATIONS TAB */}
+        {tab === 'LOCATIONS' && (
+          <>
+            <p className="text-[9px] font-black uppercase tracking-widest text-slate-400">Real-time Vehicle Locations</p>
+            {vehicles.map(v => {
+              const nextStopIdx = (v.lastStopIndex ?? -1) + 1;
+              const nextStop = v.stops[nextStopIdx];
+              const lastStop = v.lastStopIndex !== undefined && v.lastStopIndex >= 0 ? v.stops[v.lastStopIndex] : null;
+              const isActive = v.driverId && v.isActive;
+
+              return (
+                <div key={v.id} className={`rounded-2xl border shadow-sm p-4 space-y-3 ${
+                  isActive ? 'bg-white border-slate-100' : 'bg-slate-50 border-slate-100 opacity-60'
+                }`}>
+                  {/* Vehicle Header */}
+                  <div className="flex items-start justify-between">
+                    <div>
+                      <div className="font-extrabold text-slate-900 text-sm flex items-center gap-2">
+                        <Bus size={14} className="text-amber-600" />
+                        {v.vehicleNo}
+                      </div>
+                      <div className="text-[10px] font-bold text-slate-400 mt-1">{v.routeName || '—'}</div>
+                    </div>
+                    <div className={`w-3 h-3 rounded-full shrink-0 ${
+                      isActive ? 'bg-emerald-500 animate-pulse' : 'bg-slate-300'
+                    }`} />
+                  </div>
+
+                  {/* Driver Info */}
+                  {v.driverId && (
+                    <div className="bg-blue-50 border border-blue-100 rounded-xl p-2.5 space-y-1">
+                      <div className="flex items-center gap-2">
+                        <div className="w-2 h-2 rounded-full bg-blue-600" />
+                        <span className="text-sm font-black text-blue-900">{v.driverName}</span>
+                      </div>
+                      <a href={`tel:${v.driverPhone}`} className="text-[10px] font-bold text-blue-600 flex items-center gap-1">
+                        <Phone size={10} /> {v.driverPhone}
+                      </a>
+                    </div>
+                  )}
+
+                  {/* Current Location (Simulated GPS) */}
+                  {isActive && (
+                    <div className="bg-emerald-50 border border-emerald-100 rounded-xl p-2.5">
+                      <div className="flex items-center gap-2 mb-1">
+                        <MapPin size={12} className="text-emerald-600" />
+                        <span className="text-[9px] font-black uppercase tracking-widest text-emerald-700">Current Location</span>
+                      </div>
+                      <div className="text-[10px] font-mono text-emerald-900">
+                        {(28.6139 + Math.random() * 0.05).toFixed(4)}, {(77.2090 + Math.random() * 0.05).toFixed(4)}
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Progress */}
+                  <div className="border-t border-slate-100 pt-2.5">
+                    <div className="flex items-center justify-between mb-2">
+                      <span className="text-[9px] font-black uppercase tracking-widest text-slate-400">Progress</span>
+                      <span className="text-[9px] font-black text-blue-600 bg-blue-50 px-2 py-0.5 rounded-full">
+                        {nextStopIdx}/{v.stops.length}
+                      </span>
+                    </div>
+
+                    {lastStop && (
+                      <div className="flex items-center gap-2 mb-2 bg-slate-50 rounded-lg p-2">
+                        <Clock size={12} className="text-emerald-600 shrink-0" />
+                        <div className="flex-1 min-w-0">
+                          <div className="text-[10px] font-black text-emerald-700 line-through">{lastStop.name}</div>
+                          <div className="text-[8px] font-bold text-emerald-600">Reached at {lastStop.estimatedTime}</div>
+                        </div>
+                      </div>
+                    )}
+
+                    {nextStop && (
+                      <div className="flex items-center gap-2 bg-blue-50 rounded-lg p-2">
+                        <AlertCircle size={12} className="text-blue-600 shrink-0 animate-pulse" />
+                        <div className="flex-1 min-w-0">
+                          <div className="text-[10px] font-black text-blue-900">{nextStop.name}</div>
+                          <div className="text-[8px] font-bold text-blue-600">Next stop • ETA {nextStop.estimatedTime}</div>
+                        </div>
+                      </div>
+                    )}
+
+                    {nextStopIdx >= v.stops.length && (
+                      <div className="text-[9px] font-bold text-emerald-600 text-center py-2 bg-emerald-50 rounded-lg">
+                        ✓ Trip Completed
+                      </div>
+                    )}
+                  </div>
+
+                  {/* Students Count */}
+                  <div className="text-[10px] font-bold text-slate-600 flex items-center gap-2">
+                    <Users size={12} className="text-slate-400" />
+                    {getAssignedCount(v.id)} students on board
+                  </div>
+                </div>
+              );
+            })}
           </>
         )}
 
