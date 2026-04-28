@@ -62,9 +62,9 @@ export const NoticesManager: React.FC<Props> = ({ onBack }) => {
   );
 
   if (view === 'COMPOSE') return (
-    <div className="absolute inset-0 z-50 bg-slate-50 flex flex-col animate-in slide-in-from-right-8 duration-300">
+    <div className="w-full bg-slate-50 flex flex-col animate-in slide-in-from-right-8 duration-300">
       {renderHeader('New Notice', () => setView('LIST'))}
-      <div className="flex-1 overflow-y-auto p-4 pb-28 space-y-4">
+      <div className="flex-1 overflow-y-auto p-4  space-y-4">
         <div className="bg-white rounded-2xl border border-slate-100 shadow-sm p-4 space-y-4">
           <div>
             <label className="block text-[10px] font-black uppercase tracking-widest text-slate-500 mb-1.5">Send To</label>
@@ -119,11 +119,11 @@ export const NoticesManager: React.FC<Props> = ({ onBack }) => {
   );
 
   return (
-    <div className="absolute inset-0 z-50 bg-slate-50 flex flex-col animate-in slide-in-from-right-8 duration-300">
+    <div className="w-full bg-slate-50 flex flex-col animate-in slide-in-from-right-8 duration-300">
       {renderHeader('Notices', onBack,
         <button onClick={() => setView('COMPOSE')} className="p-2 bg-violet-500 text-white rounded-full shadow-md"><Plus size={18} /></button>
       )}
-      <div className="flex-1 overflow-y-auto p-4 pb-28 space-y-3">
+      <div className="flex-1 overflow-y-auto p-4  space-y-3">
         {notices.map(notice => (
           <div key={notice.id} className={`bg-white rounded-2xl border shadow-sm p-4 ${notice.pinned ? 'border-violet-200 bg-violet-50/30' : 'border-slate-100'}`}>
             <div className="flex items-start justify-between gap-2 mb-2">

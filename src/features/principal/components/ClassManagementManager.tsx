@@ -149,9 +149,9 @@ export const ClassManagementManager: React.FC<Props> = ({ onBack }) => {
 
   /* ── ADD PERMISSION ── */
   if (view === 'ADD_PERMISSION' && selectedClass) return (
-    <div className="absolute inset-0 z-50 bg-slate-50 flex flex-col animate-in slide-in-from-right-8 duration-300">
+    <div className="w-full bg-slate-50 flex flex-col animate-in slide-in-from-right-8 duration-300">
       {renderHeader('Assign Teacher', () => setView(selectedSection ? 'SECTION_DETAIL' : 'CLASS_DETAIL'))}
-      <div className="flex-1 overflow-y-auto p-4 pb-28 space-y-4">
+      <div className="flex-1 overflow-y-auto p-4  space-y-4">
         <div className="bg-white rounded-2xl border border-slate-100 shadow-sm p-4 space-y-4">
           <div>
             <label className="block text-[10px] font-black uppercase tracking-widest text-slate-500 mb-1.5">Class</label>
@@ -214,7 +214,7 @@ export const ClassManagementManager: React.FC<Props> = ({ onBack }) => {
 
   /* ── SECTION DETAIL ── */
   if (view === 'SECTION_DETAIL' && selectedClass && selectedSection) return (
-    <div className="absolute inset-0 z-50 bg-slate-50 flex flex-col animate-in slide-in-from-right-8 duration-300">
+    <div className="w-full bg-slate-50 flex flex-col animate-in slide-in-from-right-8 duration-300">
       {renderHeader(
         `${selectedClass.className} — Section ${selectedSection.section}`,
         () => setView('CLASS_DETAIL'),
@@ -222,7 +222,7 @@ export const ClassManagementManager: React.FC<Props> = ({ onBack }) => {
           <Plus size={18} />
         </button>
       )}
-      <div className="flex-1 overflow-y-auto p-4 pb-28 space-y-4">
+      <div className="flex-1 overflow-y-auto p-4  space-y-4">
         {/* Student count */}
         <div className="bg-white rounded-2xl border border-slate-100 shadow-sm p-4 text-center">
           <div className="text-3xl font-black text-indigo-600">{selectedSection.students.length}</div>
@@ -281,9 +281,9 @@ export const ClassManagementManager: React.FC<Props> = ({ onBack }) => {
 
   /* ── CLASS DETAIL ── */
   if (view === 'CLASS_DETAIL' && selectedClass) return (
-    <div className="absolute inset-0 z-50 bg-slate-50 flex flex-col animate-in slide-in-from-right-8 duration-300">
+    <div className="w-full bg-slate-50 flex flex-col animate-in slide-in-from-right-8 duration-300">
       {renderHeader(selectedClass.className, () => { setSelectedClass(null); setView('LIST'); })}
-      <div className="flex-1 overflow-y-auto p-4 pb-28 space-y-4">
+      <div className="flex-1 overflow-y-auto p-4  space-y-4">
         <div className="grid grid-cols-2 gap-3">
           <div className="bg-white rounded-2xl border border-slate-100 shadow-sm p-4 text-center">
             <div className="text-2xl font-black text-indigo-600">{selectedClass.studentCount}</div>
@@ -333,9 +333,9 @@ export const ClassManagementManager: React.FC<Props> = ({ onBack }) => {
 
   /* ── LIST ── */
   return (
-    <div className="absolute inset-0 z-50 bg-slate-50 flex flex-col animate-in slide-in-from-right-8 duration-300">
+    <div className="w-full bg-slate-50 flex flex-col animate-in slide-in-from-right-8 duration-300">
       {renderHeader('Class Management', onBack)}
-      <div className="flex-1 overflow-y-auto p-4 pb-28 space-y-3">
+      <div className="flex-1 overflow-y-auto p-4  space-y-3">
         <p className="text-[10px] font-black uppercase tracking-widest text-slate-400">Classes & Teacher Permissions</p>
         {classes.map(cls => (
           <button key={cls.className}

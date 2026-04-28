@@ -25,7 +25,7 @@ export const LogsViewer: React.FC<Props> = ({ onBack }) => {
   const visible = activeFilter === 'ALL' ? logs : logs.filter(l => l.entityType === activeFilter);
 
   return (
-    <div className="absolute inset-0 z-50 bg-slate-50 flex flex-col animate-in slide-in-from-right-8 duration-300">
+    <div className="w-full bg-slate-50 flex flex-col animate-in slide-in-from-right-8 duration-300">
       <div className="bg-white border-b border-slate-100 px-4 pt-4 pb-4 flex items-center justify-between sticky top-0 z-10 shadow-sm">
         <div className="flex items-center gap-3">
           <button onClick={onBack} className="p-2 -ml-2 bg-slate-100 rounded-full text-slate-600 hover:bg-slate-200 transition-colors">
@@ -54,7 +54,7 @@ export const LogsViewer: React.FC<Props> = ({ onBack }) => {
         </div>
       </div>
 
-      <div className="flex-1 overflow-y-auto p-4 pb-28 space-y-3">
+      <div className="flex-1 overflow-y-auto p-4  space-y-3">
         {isLoading && (
           <div className="flex flex-col items-center py-16 text-slate-400">
             <div className="w-8 h-8 border-2 border-slate-300 border-t-blue-500 rounded-full animate-spin mb-3" />

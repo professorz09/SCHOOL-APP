@@ -103,13 +103,13 @@ export const AdminsManager: React.FC<Props> = ({ onBack }) => {
   const statusColor = (s: string) => s === 'ACTIVE' ? 'text-emerald-700 bg-emerald-50' : s === 'SUSPENDED' ? 'text-rose-700 bg-rose-50' : 'text-slate-500 bg-slate-100';
 
   if (view === 'LIST') return (
-    <div className="absolute inset-0 z-50 bg-slate-50 flex flex-col animate-in slide-in-from-right-8 duration-300">
+    <div className="w-full bg-slate-50 flex flex-col animate-in slide-in-from-right-8 duration-300">
       {renderHeader('System Admins', onBack,
         <button onClick={() => setView('CREATE')} className="p-2 bg-rose-500 text-white rounded-full hover:bg-rose-600 transition-colors shadow-md">
           <Plus size={18} />
         </button>
       )}
-      <div className="flex-1 overflow-y-auto p-4 pb-28 space-y-4">
+      <div className="flex-1 overflow-y-auto p-4  space-y-4">
         <div className="relative">
           <Search size={16} className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-400" />
           <input value={search} onChange={e => setSearch(e.target.value)} placeholder="Search admins…"
@@ -215,9 +215,9 @@ export const AdminsManager: React.FC<Props> = ({ onBack }) => {
   );
 
   if (view === 'CREATE') return (
-    <div className="absolute inset-0 z-50 bg-slate-50 flex flex-col animate-in slide-in-from-right-8 duration-300">
+    <div className="w-full bg-slate-50 flex flex-col animate-in slide-in-from-right-8 duration-300">
       {renderHeader('Create Admin', () => setView('LIST'))}
-      <div className="flex-1 overflow-y-auto p-4 pb-28 space-y-4">
+      <div className="flex-1 overflow-y-auto p-4  space-y-4">
         <div className="bg-white rounded-2xl border border-slate-100 shadow-sm p-4 space-y-4">
           {[
             { label: 'Full Name *', key: 'name', placeholder: 'Dr. / Mr. / Ms.' },

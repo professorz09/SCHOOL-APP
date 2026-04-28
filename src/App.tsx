@@ -283,21 +283,21 @@ export default function App() {
   // ── Mobile layout ─────────────────────────────────────────────────────────
   return (
     <div className="h-dvh bg-slate-100 flex flex-col overflow-hidden">
-      <div className="w-full h-full bg-slate-50 relative flex flex-col overflow-hidden">
-        <Header role={role} />
+      <div className="w-full h-full bg-slate-50 flex flex-col overflow-hidden">
+        {tab === 'HOME' && <Header role={role} />}
 
-        <main className="flex-1 relative overflow-hidden">
-          <div className="absolute inset-0 overflow-y-auto px-5 pb-28 hide-scrollbar">
-            {renderTabContent()}
-          </div>
+        <main className="flex-1 overflow-y-auto px-5 pb-32 hide-scrollbar">
+          {renderTabContent()}
         </main>
 
-        <BottomNav role={role} currentTab={tab} setTab={setTab} />
+        <div className="fixed bottom-0 left-0 right-0 z-20">
+          <BottomNav role={role} currentTab={tab} setTab={setTab} />
+        </div>
 
         {/* Floating Role Switcher Button */}
         <button
           onClick={() => setShowSwitcher(true)}
-          className="absolute right-4 top-24 z-30 flex items-center gap-1.5 bg-slate-900 text-white text-[11px] font-black px-3 py-2 rounded-full shadow-lg active:scale-90 transition-transform"
+          className="fixed right-4 top-24 z-30 flex items-center gap-1.5 bg-slate-900 text-white text-[11px] font-black px-3 py-2 rounded-full shadow-lg active:scale-90 transition-transform"
         >
           {React.createElement(currentDemo?.icon ?? GraduationCap, { size: 13, className: 'text-indigo-300' })}
           {currentDemo?.label ?? role}

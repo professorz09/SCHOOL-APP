@@ -233,7 +233,7 @@ export const FeeLedger: React.FC<Props> = ({ onBack }) => {
 
   // ─── Loading ─────────────────────────────────────────────────────────────────
   if (loading) return (
-    <div className="absolute inset-0 z-50 bg-slate-50 flex items-center justify-center">
+    <div className="w-full bg-slate-50 flex items-center justify-center">
       <div className="w-8 h-8 border-2 border-slate-200 border-t-blue-600 rounded-full animate-spin" />
     </div>
   );
@@ -277,7 +277,7 @@ export const FeeLedger: React.FC<Props> = ({ onBack }) => {
     const pct           = totalDue > 0 ? Math.round((totalPaid / totalDue) * 100) : 100;
 
     return (
-      <div className="absolute inset-0 z-50 bg-slate-50 flex flex-col animate-in slide-in-from-right-8 duration-300">
+      <div className="w-full bg-slate-50 flex flex-col animate-in slide-in-from-right-8 duration-300">
         {/* Header */}
         <div className="bg-white border-b border-slate-100 px-4 pt-4 pb-4 shadow-sm sticky top-0 z-10">
           <div className="flex items-center gap-3 mb-4">
@@ -346,7 +346,7 @@ export const FeeLedger: React.FC<Props> = ({ onBack }) => {
           )}
         </div>
 
-        <div className="flex-1 overflow-y-auto p-4 pb-28 space-y-3">
+        <div className="flex-1 overflow-y-auto p-4  space-y-3">
 
           {/* ── COLLECT BUTTON (inside schedule tab) ──────────────────────── */}
           {detailTab === 'SCHEDULE' && (
@@ -675,7 +675,7 @@ export const FeeLedger: React.FC<Props> = ({ onBack }) => {
 
   // ─── LIST VIEW ────────────────────────────────────────────────────────────────
   return (
-    <div className="absolute inset-0 z-50 bg-slate-50 flex flex-col animate-in slide-in-from-right-8 duration-300">
+    <div className="w-full bg-slate-50 flex flex-col animate-in slide-in-from-right-8 duration-300">
 
       {/* Header */}
       <div className="bg-white border-b border-slate-100 shadow-sm">
@@ -733,7 +733,7 @@ export const FeeLedger: React.FC<Props> = ({ onBack }) => {
       </div>
 
       {/* List */}
-      <div className="flex-1 overflow-y-auto p-4 pb-28 space-y-2.5">
+      <div className="flex-1 overflow-y-auto p-4  space-y-2.5">
         {visibleStudents.length === 0 && (
           <div className="flex flex-col items-center py-16 text-slate-400">
             <Users size={32} className="mb-3 opacity-30" />
