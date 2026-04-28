@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import {
-  Power, CheckCircle2, Circle, AlertTriangle, Bus, Navigation, Clock, Plus, Edit2, Check, X, MapPin, Users,
+  Power, CheckCircle2, Circle, AlertTriangle, Bus, Navigation, Clock, MapPin,
 } from 'lucide-react';
 import { transportService, TransportVehicle, RouteStop, StudentTransportAssignment } from '../../services/transport.service';
 
@@ -20,15 +20,6 @@ export const DriverLayout: React.FC = () => {
   const [loading, setLoading] = useState(true);
   const [currentLat, setCurrentLat] = useState(INITIAL_LAT);
   const [currentLng, setCurrentLng] = useState(INITIAL_LNG);
-  const [showAddWaypoint, setShowAddWaypoint] = useState(false);
-  const [newWaypointName, setNewWaypointName] = useState('');
-  const [newWaypointLat, setNewWaypointLat] = useState('');
-  const [newWaypointLng, setNewWaypointLng] = useState('');
-  const [newWaypointTime, setNewWaypointTime] = useState('08:00');
-  const [editingStopId, setEditingStopId] = useState<string | null>(null);
-  const [editStopName, setEditStopName] = useState('');
-  const [editStopLat, setEditStopLat] = useState('');
-  const [editStopLng, setEditStopLng] = useState('');
   const [assignedStudents, setAssignedStudents] = useState<StudentTransportAssignment[]>([]);
 
   useEffect(() => {
@@ -46,16 +37,13 @@ export const DriverLayout: React.FC = () => {
   useEffect(() => {
     let interval: ReturnType<typeof setInterval>;
     if (isTracking && vehicle) {
-      // Simulate GPS updates moving towards next stop
       interval = setInterval(() => {
         setCurrentLat(prev => {
           const nextStop = stops[currentStopIndex];
           if (!nextStop) return prev;
           const diff = nextStop.lat - prev;
-          const newLat = prev + diff * 0.05; // Move 5% closer
-
+          const newLat = prev + diff * 0.05;
           if (vehicle && Math.abs(newLat - nextStop.lat) < 0.001) {
-            // Close enough to trigger arrival
             if (autoArrive) {
               setCurrentStopIndex(c => {
                 const next = c + 1;
@@ -67,7 +55,6 @@ export const DriverLayout: React.FC = () => {
           }
           return newLat;
         });
-
         setCurrentLng(prev => {
           const nextStop = stops[currentStopIndex];
           if (!nextStop) return prev;
@@ -90,42 +77,9 @@ export const DriverLayout: React.FC = () => {
     setShowEmergencyConfirm(false);
   };
 
-  const handleAddWaypoint = () => {
-    if (!vehicle || !newWaypointName.trim() || !newWaypointLat || !newWaypointLng) return;
-    const lat = parseFloat(newWaypointLat);
-    const lng = parseFloat(newWaypointLng);
-    if (isNaN(lat) || isNaN(lng)) return;
-
-    transportService.addWaypoint(vehicle.id, newWaypointName, lat, lng, newWaypointTime);
-    const updated = transportService.getVehicleById(vehicle.id);
-    if (updated) setVehicle(updated);
-    setStops(updated?.stops || []);
-    setNewWaypointName('');
-    setNewWaypointLat('');
-    setNewWaypointLng('');
-    setNewWaypointTime('08:00');
-    setShowAddWaypoint(false);
-  };
-
-  const handleEditWaypoint = () => {
-    if (!vehicle || !editingStopId || !editStopName.trim() || !editStopLat || !editStopLng) return;
-    const lat = parseFloat(editStopLat);
-    const lng = parseFloat(editStopLng);
-    if (isNaN(lat) || isNaN(lng)) return;
-
-    transportService.editWaypoint(vehicle.id, editingStopId, { name: editStopName, lat, lng });
-    const updated = transportService.getVehicleById(vehicle.id);
-    if (updated) setVehicle(updated);
-    setStops(updated?.stops || []);
-    setEditingStopId(null);
-    setEditStopName('');
-    setEditStopLat('');
-    setEditStopLng('');
-  };
-
   if (loading) {
     return (
-      <div className="flex items-center justify-center p-10 text-center bg-white rounded-3xl border border-slate-100 shadow-sm">
+      <div className="flex flex-col items-center justify-center p-10 text-center bg-white rounded-3xl border border-slate-100 shadow-sm">
         <div className="inline-block w-12 h-12 border-4 border-slate-200 border-t-blue-600 rounded-full animate-spin mb-3" />
         <p className="text-sm font-bold text-slate-600">Loading...</p>
       </div>
@@ -208,7 +162,7 @@ export const DriverLayout: React.FC = () => {
       {/* GPS Location Display */}
       {isTracking && (
         <div className="bg-blue-50 border border-blue-200 rounded-2xl p-3">
-          <div className="flex items-center gap-2 mb-2">
+          <div className="flex items-center gap-2 mb-1">
             <MapPin size={14} className="text-blue-600" />
             <p className="text-[10px] font-black uppercase tracking-widest text-blue-600">Current Location</p>
           </div>
@@ -234,7 +188,6 @@ export const DriverLayout: React.FC = () => {
               {stops.map((stop, index) => {
                 const isCompleted = index < currentStopIndex;
                 const isNext = index === currentStopIndex && !tripComplete;
-                const isLast = index === stops.length - 1;
 
                 return (
                   <div key={stop.id} className="relative flex items-center gap-4">
@@ -263,7 +216,7 @@ export const DriverLayout: React.FC = () => {
                             {autoArrive ? 'GPS detecting...' : 'Next stop'}
                           </span>
                         )}
-                        {isCompleted && !isLast && (
+                        {isCompleted && (
                           <span className="text-[9px] font-black text-emerald-500">Reached</span>
                         )}
                       </div>
@@ -275,117 +228,15 @@ export const DriverLayout: React.FC = () => {
                         Arrived
                       </button>
                     )}
-
-                    {isTracking && (
-                      <button onClick={() => {
-                        setEditingStopId(stop.id);
-                        setEditStopName(stop.name);
-                        setEditStopLat(stop.lat.toString());
-                        setEditStopLng(stop.lng.toString());
-                      }} className="p-1 text-slate-400 hover:text-blue-600">
-                        <Edit2 size={14} />
-                      </button>
-                    )}
                   </div>
                 );
               })}
             </div>
           </div>
 
-          {/* Add Waypoint Button */}
-          {!showAddWaypoint && (
-            <button onClick={() => setShowAddWaypoint(true)}
-              className="w-full mt-4 flex items-center justify-center gap-2 bg-blue-50 border border-blue-200 text-blue-600 py-2 rounded-2xl font-black text-xs hover:bg-blue-100 transition-colors">
-              <Plus size={14} /> Add Waypoint
-            </button>
-          )}
-        </div>
-      )}
-
-      {/* Edit Waypoint Modal */}
-      {editingStopId && (
-        <div className="bg-white rounded-3xl shadow-sm border border-slate-100 p-5 space-y-3">
-          <div className="flex items-center justify-between">
-            <p className="text-[10px] font-black uppercase tracking-widest text-slate-400">Edit Waypoint</p>
-            <button onClick={() => setEditingStopId(null)} className="p-1 text-slate-400">
-              <X size={16} />
-            </button>
-          </div>
-          <input value={editStopName} onChange={e => setEditStopName(e.target.value)}
-            placeholder="Location name"
-            className="w-full border border-slate-200 bg-slate-50 rounded-xl px-3 py-2 text-sm font-bold outline-none focus:border-blue-500" />
-          <div className="grid grid-cols-2 gap-2">
-            <input value={editStopLat} onChange={e => setEditStopLat(e.target.value)}
-              placeholder="Latitude"
-              className="border border-slate-200 bg-slate-50 rounded-xl px-3 py-2 text-sm font-bold outline-none focus:border-blue-500" />
-            <input value={editStopLng} onChange={e => setEditStopLng(e.target.value)}
-              placeholder="Longitude"
-              className="border border-slate-200 bg-slate-50 rounded-xl px-3 py-2 text-sm font-bold outline-none focus:border-blue-500" />
-          </div>
-          <div className="flex gap-2">
-            <button onClick={() => setEditingStopId(null)}
-              className="flex-1 py-2 bg-slate-100 text-slate-700 font-black rounded-xl text-sm">
-              Cancel
-            </button>
-            <button onClick={handleEditWaypoint}
-              className="flex-1 py-2 bg-blue-600 text-white font-black rounded-xl text-sm flex items-center justify-center gap-1">
-              <Check size={14} /> Save
-            </button>
-          </div>
-        </div>
-      )}
-
-      {/* Add Waypoint Form */}
-      {showAddWaypoint && (
-        <div className="bg-white rounded-3xl shadow-sm border border-slate-100 p-5 space-y-3">
-          <div className="flex items-center justify-between">
-            <p className="text-[10px] font-black uppercase tracking-widest text-slate-400">Add New Waypoint</p>
-            <button onClick={() => setShowAddWaypoint(false)} className="p-1 text-slate-400">
-              <X size={16} />
-            </button>
-          </div>
-          <div>
-            <label className="text-[9px] font-black uppercase tracking-widest text-slate-500 mb-1 block">Location Name</label>
-            <input value={newWaypointName} onChange={e => setNewWaypointName(e.target.value)}
-              placeholder="e.g., School Campus"
-              className="w-full border border-slate-200 bg-slate-50 rounded-xl px-3 py-2 text-sm font-bold outline-none focus:border-blue-500" />
-          </div>
-          <div>
-            <label className="text-[9px] font-black uppercase tracking-widest text-slate-500 mb-1 block">Use Current GPS</label>
-            <button onClick={() => { setNewWaypointLat(currentLat.toString()); setNewWaypointLng(currentLng.toString()); }}
-              className="w-full py-2 bg-blue-50 border border-blue-200 text-blue-600 font-black text-xs rounded-xl hover:bg-blue-100">
-              📍 Use Current Location
-            </button>
-          </div>
-          <div className="grid grid-cols-2 gap-2">
-            <div>
-              <label className="text-[9px] font-black uppercase tracking-widest text-slate-500 mb-1 block">Latitude</label>
-              <input value={newWaypointLat} onChange={e => setNewWaypointLat(e.target.value)}
-                placeholder="e.g., 28.6139"
-                className="w-full border border-slate-200 bg-slate-50 rounded-xl px-3 py-2 text-sm font-bold outline-none focus:border-blue-500" />
-            </div>
-            <div>
-              <label className="text-[9px] font-black uppercase tracking-widest text-slate-500 mb-1 block">Longitude</label>
-              <input value={newWaypointLng} onChange={e => setNewWaypointLng(e.target.value)}
-                placeholder="e.g., 77.2090"
-                className="w-full border border-slate-200 bg-slate-50 rounded-xl px-3 py-2 text-sm font-bold outline-none focus:border-blue-500" />
-            </div>
-          </div>
-          <div>
-            <label className="text-[9px] font-black uppercase tracking-widest text-slate-500 mb-1 block">Estimated Time</label>
-            <input type="time" value={newWaypointTime} onChange={e => setNewWaypointTime(e.target.value)}
-              className="w-full border border-slate-200 bg-slate-50 rounded-xl px-3 py-2 text-sm font-bold outline-none focus:border-blue-500" />
-          </div>
-          <div className="flex gap-2">
-            <button onClick={() => setShowAddWaypoint(false)}
-              className="flex-1 py-2.5 bg-slate-100 text-slate-700 font-black rounded-xl">
-              Cancel
-            </button>
-            <button onClick={handleAddWaypoint}
-              className="flex-1 py-2.5 bg-emerald-600 text-white font-black rounded-xl flex items-center justify-center gap-1">
-              <Plus size={14} /> Add
-            </button>
-          </div>
+          <p className="text-[9px] font-bold text-slate-400 text-center mt-4">
+            To edit stops, go to the Route tab →
+          </p>
         </div>
       )}
 
@@ -394,7 +245,7 @@ export const DriverLayout: React.FC = () => {
           <Bus size={44} className="text-slate-200 mb-3" />
           <h3 className="font-extrabold text-slate-900">Ready to Go</h3>
           <p className="text-xs font-bold text-slate-400 mt-1 max-w-[200px]">
-            Press Start to begin trip tracking. Use Route & Students tabs below.
+            Press Start to begin trip tracking. Edit stops in the Route tab.
           </p>
         </div>
       )}

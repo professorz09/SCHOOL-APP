@@ -417,43 +417,64 @@ export const StudentsManager: React.FC<Props> = ({ onBack, initialView }) => {
               <button onClick={onBack} className="p-2 -ml-2 bg-slate-100 rounded-full text-slate-600">
                 <ArrowLeft size={20} />
               </button>
-              <h2 className="text-xl font-black text-slate-900 uppercase tracking-tight">Admission</h2>
+              <div>
+                <h2 className="text-xl font-black text-slate-900 uppercase tracking-tight">Admission</h2>
+                <p className="text-[10px] font-bold text-slate-400">{filteredStudents.length} of {students.length} students</p>
+              </div>
             </div>
-            <button onClick={() => { setSubView('CREATE'); }} className="p-2 bg-indigo-500 text-white rounded-full shadow-md">
-              <Plus size={18} />
+            <button onClick={() => setSubView('CREATE')}
+              className="flex items-center gap-1.5 px-3 py-2 bg-indigo-600 text-white font-black text-xs rounded-xl shadow-md active:scale-95 transition-transform">
+              <Plus size={14} /> New
             </button>
           </div>
-          <div className="px-4 pb-4">
+          <div className="px-4 pb-3">
             <div className="relative">
-              <Search size={16} className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-400" />
-              <input value={search} onChange={e => setSearch(e.target.value)} placeholder="Search name / roll no…"
-                className="w-full bg-white border border-slate-200 rounded-2xl pl-11 pr-4 py-3 font-bold text-sm outline-none focus:border-indigo-500 shadow-sm" />
+              <Search size={15} className="absolute left-3.5 top-1/2 -translate-y-1/2 text-slate-400" />
+              <input value={search} onChange={e => setSearch(e.target.value)} placeholder="Search by name, roll no or admission no…"
+                className="w-full bg-slate-50 border border-slate-200 rounded-xl pl-10 pr-4 py-2.5 font-bold text-sm outline-none focus:border-indigo-500 focus:bg-white transition-colors" />
             </div>
           </div>
         </div>
 
-        <div className="flex-1 overflow-y-auto p-4 space-y-3">
+        <div className="flex-1 overflow-y-auto p-4">
           <div className="space-y-2">
-            {filteredStudents.map(student => (
-              <button key={student.id}
-                onClick={() => { setSelected(student); loadStudentData(student); setActiveProfileTab('INFO'); setSubView('PROFILE'); }}
-                className="w-full bg-white rounded-2xl border border-slate-100 shadow-sm p-4 text-left active:bg-slate-50 transition-colors">
-                <div className="flex items-center gap-3">
-                  <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-indigo-100 to-violet-100 text-indigo-700 flex items-center justify-center font-black text-sm shrink-0">
-                    {student.name.split(' ').map(w => w[0]).join('').slice(0, 2)}
+            {filteredStudents.map(student => {
+              const initials = student.name.split(' ').map(w => w[0]).join('').slice(0, 2);
+              return (
+                <button key={student.id}
+                  onClick={() => { setSelected(student); loadStudentData(student); setActiveProfileTab('INFO'); setSubView('PROFILE'); }}
+                  className="w-full bg-white rounded-2xl border border-slate-100 shadow-sm p-4 text-left active:bg-slate-50 transition-colors">
+                  <div className="flex items-center gap-3">
+                    <div className="w-11 h-11 rounded-xl bg-gradient-to-br from-indigo-400 to-violet-500 text-white flex items-center justify-center font-black text-sm shrink-0">
+                      {initials.toUpperCase()}
+                    </div>
+                    <div className="flex-1 min-w-0">
+                      <div className="font-extrabold text-slate-900 text-sm truncate">{student.name}</div>
+                      <div className="flex items-center gap-2 mt-0.5">
+                        <span className="text-[10px] font-bold text-slate-400">{student.className}-{student.section}</span>
+                        <span className="text-[9px] font-bold text-slate-300">·</span>
+                        <span className="text-[10px] font-bold text-indigo-500">{student.admissionNo}</span>
+                      </div>
+                    </div>
+                    <div className="flex flex-col items-end gap-1">
+                      <span className={`text-[9px] font-black px-2 py-0.5 rounded-full uppercase ${
+                        student.feeStatus === 'PAID' ? 'bg-emerald-100 text-emerald-700' :
+                        student.feeStatus === 'PARTIAL' ? 'bg-amber-100 text-amber-700' :
+                        'bg-rose-100 text-rose-600'
+                      }`}>
+                        {student.feeStatus}
+                      </span>
+                      <ChevronRight size={14} className="text-slate-300" />
+                    </div>
                   </div>
-                  <div className="flex-1 min-w-0">
-                    <div className="font-extrabold text-slate-900 text-sm truncate">{student.name}</div>
-                    <div className="text-[10px] font-bold text-slate-400 mt-0.5">{student.admissionNo} · {student.className}-{student.section}</div>
-                  </div>
-                  <ChevronRight size={18} className="text-slate-300" />
-                </div>
-              </button>
-            ))}
+                </button>
+              );
+            })}
             {filteredStudents.length === 0 && (
               <div className="flex flex-col items-center py-16 text-slate-400">
                 <Users size={32} className="mb-3 opacity-40" />
-                <p className="font-bold text-sm">No students found</p>
+                <p className="font-bold text-sm">{search ? 'No students found' : 'No students admitted yet'}</p>
+                {!search && <p className="text-xs font-bold mt-1 opacity-60">Tap New to admit the first student</p>}
               </div>
             )}
           </div>
@@ -527,46 +548,60 @@ export const StudentsManager: React.FC<Props> = ({ onBack, initialView }) => {
 
     // ── Student list in a section ──────────────────────────────────────────
     if (selectedClass && selectedSection) {
+      const filteredClassStudents = classStudents.filter(s =>
+        s.name.toLowerCase().includes(search.toLowerCase()) ||
+        s.rollNo.includes(search)
+      );
+
       return (
         <div className="w-full bg-slate-50 flex flex-col animate-in slide-in-from-right-8 duration-300">
-          <div className="bg-white border-b border-slate-100 px-4 pt-4 pb-4 flex items-center justify-between sticky top-0 z-10 shadow-sm">
-            <div className="flex items-center gap-3">
-              <button onClick={() => setSelectedSection(null)} className="p-2 -ml-2 bg-slate-100 rounded-full text-slate-600">
+          <div className="bg-white border-b border-slate-100 px-4 pt-4 pb-3 sticky top-0 z-10 shadow-sm">
+            <div className="flex items-center gap-3 mb-3">
+              <button onClick={() => { setSelectedSection(null); setSearch(''); }} className="p-2 -ml-2 bg-slate-100 rounded-full text-slate-600">
                 <ArrowLeft size={20} />
               </button>
               <div>
                 <h2 className="text-xl font-black text-slate-900 uppercase tracking-tight">
-                  {selectedClass}-{selectedSection} Students
+                  {selectedClass.replace('Class ', '')}-{selectedSection}
                 </h2>
                 <p className="text-[10px] font-bold text-slate-400">{classStudents.length} students</p>
               </div>
             </div>
+            <div className="relative">
+              <Search size={15} className="absolute left-3.5 top-1/2 -translate-y-1/2 text-slate-400" />
+              <input value={search} onChange={e => setSearch(e.target.value)}
+                placeholder="Search by name or roll no..."
+                className="w-full bg-slate-50 border border-slate-200 rounded-xl pl-10 pr-4 py-2.5 font-bold text-sm outline-none focus:border-indigo-500 focus:bg-white transition-colors" />
+            </div>
           </div>
 
-          <div className="flex-1 overflow-y-auto p-4 ">
+          <div className="flex-1 overflow-y-auto p-4">
             <div className="bg-white rounded-2xl border border-slate-100 shadow-sm overflow-hidden">
-              {classStudents.map((s, idx) => (
+              {filteredClassStudents.map((s, idx) => (
                 <button key={s.id}
                   onClick={() => { setSelected(s); loadStudentData(s); setActiveProfileTab('INFO'); setSubView('PROFILE'); }}
-                  className={`w-full flex items-center gap-4 px-4 py-3.5 text-left active:bg-slate-50 transition-colors ${idx < classStudents.length - 1 ? 'border-b border-slate-100' : ''}`}>
-                  {/* Avatar */}
+                  className={`w-full flex items-center gap-4 px-4 py-3.5 text-left active:bg-slate-50 transition-colors ${idx < filteredClassStudents.length - 1 ? 'border-b border-slate-100' : ''}`}>
                   <div className="w-10 h-10 rounded-full bg-indigo-100 text-indigo-700 flex items-center justify-center font-black text-sm shrink-0">
                     {s.name.split(' ').map(w => w[0]).join('').slice(0, 2)}
                   </div>
-                  {/* Name + Roll */}
                   <div className="flex-1">
                     <div className="font-extrabold text-slate-900 text-sm">{s.name}</div>
-                    <div className="text-[10px] font-bold text-slate-400 mt-0.5">ROLL: {s.rollNo.padStart(2, '0')}</div>
+                    <div className="text-[10px] font-bold text-slate-400 mt-0.5">Roll: {s.rollNo.padStart(2, '0')}</div>
                   </div>
-                  {/* Attendance Badge */}
-                  <div className={`px-3 py-1 rounded-lg text-[10px] font-black uppercase tracking-wider ${
+                  <div className={`px-2.5 py-1 rounded-lg text-[9px] font-black uppercase ${
                     s.attendancePercent >= 75 ? 'bg-emerald-100 text-emerald-700' : 'bg-rose-100 text-rose-600'
                   }`}>
-                    {s.attendancePercent >= 75 ? 'PRESENT' : 'ABSENT'}
+                    {s.attendancePercent}%
                   </div>
                   <ChevronRight size={16} className="text-slate-300" />
                 </button>
               ))}
+              {filteredClassStudents.length === 0 && (
+                <div className="flex flex-col items-center py-10 text-slate-400">
+                  <Users size={28} className="mb-2 opacity-40" />
+                  <p className="font-bold text-sm">No students found</p>
+                </div>
+              )}
             </div>
           </div>
         </div>
@@ -582,31 +617,31 @@ export const StudentsManager: React.FC<Props> = ({ onBack, initialView }) => {
             <button onClick={() => setSelectedClass(null)} className="p-2 -ml-2 bg-slate-100 rounded-full text-slate-600">
               <ArrowLeft size={20} />
             </button>
-            <h2 className="text-xl font-black text-slate-900 uppercase tracking-tight">
-              Class {clsNum} Sections
-            </h2>
+            <div>
+              <h2 className="text-xl font-black text-slate-900 uppercase tracking-tight">Class {clsNum}</h2>
+              <p className="text-[10px] font-bold text-slate-400">{sections.length} section{sections.length !== 1 ? 's' : ''}</p>
+            </div>
           </div>
 
-          <div className="flex-1 overflow-y-auto p-4 ">
+          <div className="flex-1 overflow-y-auto p-4">
             <div className="bg-white rounded-2xl border border-slate-100 shadow-sm overflow-hidden">
               {sections.map((section, idx) => {
                 const count = students.filter(s => s.className === selectedClass && s.section === section).length;
+                const sectionStudents = students.filter(s => s.className === selectedClass && s.section === section);
+                const highAtt = sectionStudents.filter(s => s.attendancePercent >= 75).length;
                 return (
                   <button key={section}
-                    onClick={() => setSelectedSection(section)}
+                    onClick={() => { setSelectedSection(section); setSearch(''); }}
                     className={`w-full flex items-center gap-4 px-4 py-4 text-left active:bg-slate-50 transition-colors ${idx < sections.length - 1 ? 'border-b border-slate-100' : ''}`}>
-                    {/* Section Avatar */}
-                    <div className="w-10 h-10 rounded-full bg-indigo-100 text-indigo-700 flex items-center justify-center font-black text-base shrink-0">
+                    <div className="w-11 h-11 rounded-xl bg-indigo-100 text-indigo-700 flex items-center justify-center font-black text-lg shrink-0">
                       {section}
                     </div>
-                    {/* Details */}
                     <div className="flex-1">
                       <div className="font-extrabold text-slate-900 text-sm">{clsNum}-{section}</div>
-                      <div className="text-[10px] font-bold text-slate-400 mt-0.5 uppercase">Section {section}</div>
+                      <div className="text-[10px] font-bold text-slate-400 mt-0.5">{count} students · {highAtt} good attendance</div>
                     </div>
-                    {/* Count Badge */}
-                    <div className="bg-indigo-50 text-indigo-700 text-[10px] font-black px-3 py-1 rounded-lg uppercase">
-                      {count} Students
+                    <div className="bg-indigo-50 text-indigo-700 text-[10px] font-black px-2.5 py-1 rounded-lg">
+                      {count}
                     </div>
                     <ChevronRight size={16} className="text-slate-300" />
                   </button>
@@ -621,45 +656,48 @@ export const StudentsManager: React.FC<Props> = ({ onBack, initialView }) => {
     // ── Class Directory (2×2 Grid) ─────────────────────────────────────────
     return (
       <div className="w-full bg-slate-50 flex flex-col animate-in slide-in-from-right-8 duration-300">
-        {/* Sticky header + search combined */}
         <div className="sticky top-0 z-10 bg-white border-b border-slate-100 shadow-sm">
-          <div className="px-4 pt-4 pb-3 flex items-center gap-3">
+          <div className="px-4 pt-4 pb-4 flex items-center gap-3">
             <button onClick={onBack} className="p-2 -ml-2 bg-slate-100 rounded-full text-slate-600">
               <ArrowLeft size={20} />
             </button>
-            <h2 className="text-xl font-black text-slate-900 uppercase tracking-tight">Students Directory</h2>
-          </div>
-          <div className="px-4 pb-4">
-            <div className="relative">
-              <Search size={16} className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-400" />
-              <input value={search} onChange={e => setSearch(e.target.value)}
-                placeholder="Search students, classes..."
-                className="w-full bg-slate-50 border border-slate-200 rounded-2xl pl-11 pr-4 py-3 font-bold text-sm outline-none focus:border-indigo-500" />
+            <div>
+              <h2 className="text-xl font-black text-slate-900 uppercase tracking-tight">Students Directory</h2>
+              <p className="text-[10px] font-bold text-slate-400">{students.length} total students · {classes.length} classes</p>
             </div>
           </div>
         </div>
 
         <div className="flex-1 overflow-y-auto p-4">
-          {/* 2x2 Grid of classes */}
           <div className="grid grid-cols-2 gap-3">
             {classes.map(cls => {
               const count = students.filter(s => s.className === cls).length;
               const clsNum = cls.replace('Class ', '');
+              const paid = students.filter(s => s.className === cls && s.feeStatus === 'PAID').length;
               return (
                 <button key={cls}
-                  onClick={() => setSelectedClass(cls)}
-                  className="bg-white rounded-2xl border border-slate-100 shadow-sm p-5 text-left active:scale-95 transition-transform flex flex-col items-start gap-1">
-                  <div className="w-12 h-12 rounded-xl bg-indigo-50 text-indigo-600 flex items-center justify-center font-black text-xl mb-2">
+                  onClick={() => { setSelectedClass(cls); setSearch(''); }}
+                  className="bg-white rounded-2xl border border-slate-100 shadow-sm p-4 text-left active:scale-95 transition-transform">
+                  <div className="w-12 h-12 rounded-xl bg-indigo-50 text-indigo-600 flex items-center justify-center font-black text-xl mb-3">
                     {clsNum}
                   </div>
                   <div className="font-black text-slate-900 text-sm">{cls}</div>
-                  <div className="text-[10px] font-black uppercase tracking-widest text-slate-400">
-                    {count} Students
+                  <div className="flex items-center gap-2 mt-1">
+                    <span className="text-[10px] font-black text-slate-400">{count} students</span>
+                    {paid > 0 && <span className="text-[9px] font-black text-emerald-600 bg-emerald-50 px-1.5 py-0.5 rounded-full">{paid} paid</span>}
                   </div>
                 </button>
               );
             })}
           </div>
+
+          {classes.length === 0 && (
+            <div className="flex flex-col items-center py-16 text-slate-400">
+              <Users size={32} className="mb-3 opacity-40" />
+              <p className="font-bold text-sm">No students yet</p>
+              <p className="text-xs font-bold mt-1 opacity-60">Add students via Admission section</p>
+            </div>
+          )}
         </div>
       </div>
     );

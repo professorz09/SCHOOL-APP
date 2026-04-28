@@ -17,6 +17,7 @@ export const DriverRouteView: React.FC = () => {
   const [newTime, setNewTime] = useState('08:00');
   const [newLat, setNewLat] = useState('');
   const [newLng, setNewLng] = useState('');
+  const [locating, setLocating] = useState(false);
   const [editRouteName, setEditRouteName] = useState(false);
   const [routeNameInput, setRouteNameInput] = useState('');
 
@@ -45,6 +46,20 @@ export const DriverRouteView: React.FC = () => {
     reload();
     setNewName(''); setNewLat(''); setNewLng(''); setNewTime('08:00');
     setShowAdd(false);
+  };
+
+  const handleUseCurrentLocation = () => {
+    if (!navigator.geolocation) return;
+    setLocating(true);
+    navigator.geolocation.getCurrentPosition(
+      (pos) => {
+        setNewLat(pos.coords.latitude.toFixed(6));
+        setNewLng(pos.coords.longitude.toFixed(6));
+        setLocating(false);
+      },
+      () => setLocating(false),
+      { enableHighAccuracy: true, timeout: 8000 },
+    );
   };
 
   const handleEditStop = () => {
@@ -197,6 +212,20 @@ export const DriverRouteView: React.FC = () => {
             className="w-full border border-slate-200 bg-slate-50 rounded-xl px-3 py-2 text-sm font-bold outline-none focus:border-blue-500" />
           <input type="time" value={newTime} onChange={e => setNewTime(e.target.value)}
             className="w-full border border-slate-200 bg-slate-50 rounded-xl px-3 py-2 text-sm font-bold outline-none focus:border-blue-500" />
+
+          {/* GPS or manual */}
+          <button onClick={handleUseCurrentLocation} disabled={locating}
+            className="w-full flex items-center justify-center gap-2 py-2 bg-blue-50 border border-blue-200 text-blue-700 font-black text-xs rounded-xl hover:bg-blue-100 transition-colors disabled:opacity-60">
+            <MapPin size={13} />
+            {locating ? 'Getting location...' : '📍 Use Current Location (1-tap)'}
+          </button>
+
+          <div className="flex items-center gap-2">
+            <div className="flex-1 h-px bg-slate-200" />
+            <span className="text-[9px] font-black text-slate-400 uppercase tracking-widest">or enter manually</span>
+            <div className="flex-1 h-px bg-slate-200" />
+          </div>
+
           <div className="grid grid-cols-2 gap-2">
             <input value={newLat} onChange={e => setNewLat(e.target.value)}
               placeholder="Latitude"

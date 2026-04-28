@@ -9,254 +9,333 @@ interface Props {
   onClose: () => void;
 }
 
+const PRINT_CSS = `
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { font-family: Arial, Helvetica, sans-serif; color: #222; background: white; }
+  .adm-page { width: 190mm; margin: 0 auto; padding: 10mm 14mm; background: white; }
+  @media print { .adm-page { margin: 0; padding: 10mm 14mm; } }
+
+  .adm-school-box { border: 2px solid #333; padding: 10px 18px; text-align: center; margin-bottom: 8px; }
+  .adm-school-name { font-size: 20px; font-weight: 900; letter-spacing: 1px; text-transform: uppercase; color: #111; }
+  .adm-school-address { font-size: 10px; font-style: italic; color: #444; margin-top: 3px; }
+  .adm-school-contact { font-size: 10px; color: #444; margin-top: 2px; }
+
+  .adm-title-bar { background: #f5f5f5; border: 1px solid #bbb; text-align: center; padding: 7px 0; margin-bottom: 10px; }
+  .adm-title { font-size: 13px; font-weight: 900; letter-spacing: 2px; text-transform: uppercase; color: #222; }
+
+  .adm-section { font-size: 9px; font-weight: 900; letter-spacing: 2px; color: #999; text-transform: uppercase;
+    margin: 10px 0 6px; border-bottom: 1px solid #ddd; padding-bottom: 3px; }
+
+  .adm-table { width: 100%; border-collapse: collapse; margin-bottom: 8px; }
+  .adm-photo { width: 88px; border: 2px dashed #aaa; text-align: center; vertical-align: middle; padding: 12px 6px;
+    font-size: 8px; font-weight: 700; color: #aaa; text-transform: uppercase; letter-spacing: 0.5px; line-height: 1.7; }
+  .adm-td { padding: 4px 8px; vertical-align: top; border-bottom: 1px solid #f0f0f0; }
+  .adm-td-last { padding: 4px 8px; vertical-align: top; }
+
+  .adm-lbl { font-size: 9px; font-weight: 700; color: #777; text-transform: uppercase; letter-spacing: 0.5px;
+    display: block; margin-bottom: 2px; }
+  .adm-val { font-size: 11px; font-weight: 600; color: #222; border-bottom: 1px solid #ccc;
+    min-height: 17px; padding-bottom: 1px; display: block; }
+
+  .adm-grid3 { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 10px; margin-bottom: 8px; }
+  .adm-grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-bottom: 8px; }
+  .adm-grid1 { margin-bottom: 8px; }
+  .adm-field { }
+
+  .adm-rte { display: flex; align-items: center; gap: 7px; margin: 6px 0 2px; font-size: 11px; font-weight: 700; color: #333; }
+  .adm-checkbox { width: 13px; height: 13px; border: 1.5px solid #555; display: inline-flex; align-items: center;
+    justify-content: center; flex-shrink: 0; font-size: 9px; font-weight: 900; }
+
+  .adm-sig-row { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 20px; margin-top: 28px; }
+  .adm-sig-box { text-align: center; }
+  .adm-sig-line { border-top: 1px solid #555; margin-top: 32px; padding-top: 4px; font-size: 10px; font-weight: 700; color: #555; }
+
+  .adm-footer { margin-top: 16px; padding-top: 8px; border-top: 1px solid #e0e0e0;
+    font-size: 9px; color: #aaa; text-align: center; }
+`;
+
 export const AdmissionFormPrint: React.FC<Props> = ({ student, schoolInfo, onClose }) => {
   const printRef = useRef<HTMLDivElement>(null);
 
   const handlePrint = () => {
-    const printWindow = window.open('', '', 'height=800,width=1000');
+    const printWindow = window.open('', '', 'height=900,width=1100');
     if (!printWindow) return;
-
     const content = printRef.current?.innerHTML || '';
     printWindow.document.write(`
       <!DOCTYPE html>
       <html>
         <head>
           <title>Admission Form - ${student.name}</title>
-          <style>
-            * { margin: 0; padding: 0; box-sizing: border-box; }
-            body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; color: #333; line-height: 1.6; }
-            @media print { body { margin: 0; padding: 0; } }
-            .page { width: 210mm; height: 297mm; margin: 0 auto; padding: 20mm; background: white; box-shadow: 0 0 10px rgba(0,0,0,0.1); }
-            @media print { .page { margin: 0; padding: 20mm; box-shadow: none; page-break-after: always; } }
-            .header { text-align: center; border-bottom: 3px solid #1e40af; padding-bottom: 15px; margin-bottom: 20px; }
-            .school-name { font-size: 24px; font-weight: 900; color: #1e40af; }
-            .school-tagline { font-size: 12px; color: #666; margin-top: 3px; }
-            .contact-info { font-size: 11px; color: #666; margin-top: 5px; }
-            .form-title { text-align: center; font-size: 16px; font-weight: 900; color: #1e40af; margin: 20px 0; text-transform: uppercase; }
-            .section { margin-bottom: 20px; }
-            .section-title { background: #f0f9ff; border-left: 4px solid #1e40af; padding: 8px 12px; font-weight: 900; font-size: 13px; color: #1e40af; text-transform: uppercase; margin-bottom: 12px; }
-            .form-row { display: grid; grid-template-columns: 1fr 1fr; gap: 15px; margin-bottom: 12px; }
-            .form-row.full { grid-template-columns: 1fr; }
-            .form-group { }
-            .form-label { font-size: 11px; font-weight: 900; color: #666; text-transform: uppercase; margin-bottom: 4px; letter-spacing: 0.5px; }
-            .form-value { font-size: 13px; font-weight: 600; color: #1e40af; padding: 6px; border-bottom: 1px solid #d1d5db; min-height: 24px; }
-            .signature-row { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 20px; margin-top: 40px; }
-            .signature-box { text-align: center; }
-            .signature-line { border-top: 1px solid #333; margin-top: 40px; padding-top: 5px; font-size: 11px; font-weight: 700; }
-            table { width: 100%; border-collapse: collapse; font-size: 12px; margin-top: 10px; }
-            th, td { border: 1px solid #d1d5db; padding: 8px; text-align: left; }
-            th { background: #f0f9ff; font-weight: 900; color: #1e40af; }
-            .footer { margin-top: 30px; padding-top: 15px; border-top: 1px solid #d1d5db; font-size: 10px; color: #666; text-align: center; }
-          </style>
+          <style>${PRINT_CSS}</style>
         </head>
         <body>
-          ${content}
+          <div class="adm-page">${content}</div>
         </body>
       </html>
     `);
     printWindow.document.close();
-    setTimeout(() => printWindow.print(), 250);
+    setTimeout(() => printWindow.print(), 300);
   };
+
+  const fmtDate = (d: string) => {
+    if (!d) return '';
+    try { return new Date(d).toLocaleDateString('en-IN', { day: '2-digit', month: '2-digit', year: 'numeric' }); }
+    catch { return d; }
+  };
+
+  const admCity = schoolInfo.city ? `, ${schoolInfo.city}` : '';
+  const admState = schoolInfo.state ? `, ${schoolInfo.state}` : '';
+  const admPin = schoolInfo.pin ? `, ${schoolInfo.pin}` : '';
+  const fullAddress = schoolInfo.address ? `${schoolInfo.address}${admCity}${admState}${admPin}` : '';
 
   return (
     <div className="fixed inset-0 bg-slate-900/50 backdrop-blur-sm z-50 flex items-end justify-center">
       <div className="bg-white w-full sm:max-w-2xl rounded-t-3xl sm:rounded-2xl h-screen sm:h-auto max-h-screen sm:max-h-[95vh] overflow-hidden flex flex-col shadow-2xl animate-in slide-in-from-bottom-8">
-        {/* Header */}
+
+        {/* Modal Header */}
         <div className="bg-white border-b border-slate-100 px-4 py-4 flex items-center justify-between sticky top-0 z-10 shadow-sm">
-          <h2 className="text-lg font-black text-slate-900">Admission Form</h2>
+          <div>
+            <h2 className="text-lg font-black text-slate-900">Admission Form</h2>
+            <p className="text-xs font-bold text-slate-400 mt-0.5">{student.name} · {student.admissionNo}</p>
+          </div>
           <div className="flex gap-2">
-            <button
-              onClick={handlePrint}
-              className="p-2 bg-blue-50 text-blue-600 rounded-full flex items-center justify-center active:scale-90 transition-transform"
-              title="Print to PDF"
-            >
-              <Printer size={18} />
+            <button onClick={handlePrint}
+              className="flex items-center gap-1.5 px-3 py-2 bg-blue-600 text-white font-black text-xs rounded-xl active:scale-90 transition-transform"
+              title="Print to PDF">
+              <Printer size={14} /> Print / PDF
             </button>
-            <button
-              onClick={onClose}
-              className="p-2 bg-slate-100 text-slate-600 rounded-full flex items-center justify-center active:scale-90 transition-transform"
-            >
+            <button onClick={onClose}
+              className="p-2 bg-slate-100 text-slate-600 rounded-xl active:scale-90 transition-transform">
               <X size={18} />
             </button>
           </div>
         </div>
 
-        {/* Scrollable Content */}
-        <div className="flex-1 overflow-y-auto p-4 bg-slate-50">
-          <div ref={printRef} className="bg-white p-8 max-w-4xl mx-auto">
-            {/* Header Section */}
-            <div className="header">
-              <div className="school-name">{schoolInfo.name || 'School Name'}</div>
-              <div className="school-tagline">{schoolInfo.tagline || 'School Tagline'}</div>
-              <div className="contact-info">
-                {schoolInfo.address && <div>{schoolInfo.address}</div>}
-                {schoolInfo.city && <div>{schoolInfo.city}, {schoolInfo.state} {schoolInfo.pin}</div>}
-                {schoolInfo.phone && <div>Phone: {schoolInfo.phone}</div>}
-                {schoolInfo.email && <div>Email: {schoolInfo.email}</div>}
-              </div>
-              <div className="contact-info" style={{ marginTop: '8px' }}>
-                <strong>Affiliation:</strong> {schoolInfo.affiliationBoard || 'CBSE'} | <strong>Code:</strong> {schoolInfo.schoolCode || 'N/A'}
-              </div>
-            </div>
+        {/* Preview Content */}
+        <div className="flex-1 overflow-y-auto bg-slate-100 p-3">
+          <style dangerouslySetInnerHTML={{ __html: `.adm-preview { ${PRINT_CSS.split('.adm-page')[0]} } ` + PRINT_CSS }} />
+          <div className="bg-white rounded-lg shadow-sm overflow-hidden">
+            <div ref={printRef} style={{ fontFamily: 'Arial, Helvetica, sans-serif', fontSize: '12px', color: '#222', padding: '16px 20px' }}>
 
-            {/* Form Title */}
-            <div className="form-title">Student Admission Form</div>
+              {/* School Box */}
+              <div className="adm-school-box">
+                <div className="adm-school-name">{schoolInfo.name || 'School Name'}</div>
+                {fullAddress && <div className="adm-school-address">{schoolInfo.city ? `Residential (${schoolInfo.city}): ` : ''}{fullAddress}</div>}
+                <div className="adm-school-contact">
+                  {schoolInfo.phone && `Phone: ${schoolInfo.phone}`}
+                  {schoolInfo.phone && schoolInfo.email && ' | '}
+                  {schoolInfo.email && `Email: ${schoolInfo.email}`}
+                </div>
+              </div>
 
-            {/* Admission Details */}
-            <div className="section">
-              <div className="section-title">Admission Details</div>
-              <div className="form-row">
-                <div className="form-group">
-                  <div className="form-label">Admission Number</div>
-                  <div className="form-value">{student.admissionNo}</div>
-                </div>
-                <div className="form-group">
-                  <div className="form-label">Admission Date</div>
-                  <div className="form-value">{new Date(student.admissionDate).toLocaleDateString('en-IN', { year: 'numeric', month: 'long', day: 'numeric' })}</div>
-                </div>
+              {/* Form Title */}
+              <div className="adm-title-bar">
+                <div className="adm-title">Student Admission Form</div>
               </div>
-              <div className="form-row">
-                <div className="form-group">
-                  <div className="form-label">Class</div>
-                  <div className="form-value">{student.className}</div>
-                </div>
-                <div className="form-group">
-                  <div className="form-label">Section</div>
-                  <div className="form-value">{student.section}</div>
-                </div>
-              </div>
-              {STREAM_CLASSES.has(student.className) && (
-                <div className="form-row">
-                  <div className="form-group">
-                    <div className="form-label">Stream</div>
-                    <div className="form-value">{student.stream || '—'}</div>
-                  </div>
-                </div>
-              )}
-              <div className="form-row">
-                <div className="form-group">
-                  <div className="form-label">Roll Number</div>
-                  <div className="form-value">{student.rollNo}</div>
-                </div>
-              </div>
-            </div>
 
-            {/* Personal Information */}
-            <div className="section">
-              <div className="section-title">Personal Information</div>
-              <div className="form-row">
-                <div className="form-group">
-                  <div className="form-label">Student Name</div>
-                  <div className="form-value">{student.name}</div>
-                </div>
-                <div className="form-group">
-                  <div className="form-label">Date of Birth</div>
-                  <div className="form-value">{new Date(student.dob).toLocaleDateString('en-IN', { year: 'numeric', month: 'long', day: 'numeric' })}</div>
-                </div>
-              </div>
-              <div className="form-row">
-                <div className="form-group">
-                  <div className="form-label">Gender</div>
-                  <div className="form-value">{student.gender}</div>
-                </div>
-                <div className="form-group">
-                  <div className="form-label">Blood Group</div>
-                  <div className="form-value">{student.bloodGroup}</div>
-                </div>
-              </div>
-              <div className="form-row full">
-                <div className="form-group">
-                  <div className="form-label">Address</div>
-                  <div className="form-value">{student.address}</div>
-                </div>
-              </div>
-              <div className="form-row">
-                <div className="form-group">
-                  <div className="form-label">Phone Number</div>
-                  <div className="form-value">{student.phone || '—'}</div>
-                </div>
-                <div className="form-group">
-                  <div className="form-label">Email Address</div>
-                  <div className="form-value">{student.email || '—'}</div>
-                </div>
-              </div>
-            </div>
+              {/* ── STUDENT INFORMATION ── */}
+              <div className="adm-section">Student Information</div>
 
-            {/* Guardian Information */}
-            <div className="section">
-              <div className="section-title">Guardian Information</div>
-              <div className="form-row">
-                <div className="form-group">
-                  <div className="form-label">Father's Name</div>
-                  <div className="form-value">{student.fatherName}</div>
-                </div>
-                <div className="form-group">
-                  <div className="form-label">Father's Occupation</div>
-                  <div className="form-value">{student.fatherOccupation || '—'}</div>
-                </div>
-              </div>
-              <div className="form-row">
-                <div className="form-group">
-                  <div className="form-label">Father's Phone</div>
-                  <div className="form-value">{student.fatherPhone}</div>
-                </div>
-                <div className="form-group">
-                  <div className="form-label">Father's Email</div>
-                  <div className="form-value">{student.fatherEmail || '—'}</div>
-                </div>
-              </div>
-              <div className="form-row">
-                <div className="form-group">
-                  <div className="form-label">Mother's Name</div>
-                  <div className="form-value">{student.motherName}</div>
-                </div>
-                <div className="form-group">
-                  <div className="form-label">Mother's Occupation</div>
-                  <div className="form-value">{student.motherOccupation || '—'}</div>
-                </div>
-              </div>
-              <div className="form-row">
-                <div className="form-group">
-                  <div className="form-label">Mother's Phone</div>
-                  <div className="form-value">{student.motherPhone}</div>
-                </div>
-              </div>
-            </div>
+              <table className="adm-table">
+                <tbody>
+                  <tr>
+                    <td className="adm-photo" rowSpan={4}>
+                      AFFIX<br />STUDENT<br />PHOTO<br />HERE
+                    </td>
+                    <td className="adm-td">
+                      <span className="adm-lbl">Student Name</span>
+                      <span className="adm-val">{student.name}</span>
+                    </td>
+                    <td className="adm-td">
+                      <span className="adm-lbl">Student ID</span>
+                      <span className="adm-val">{student.admissionNo}</span>
+                    </td>
+                    <td className="adm-td">
+                      <span className="adm-lbl">Roll Number</span>
+                      <span className="adm-val">{student.rollNo || ''}</span>
+                    </td>
+                  </tr>
+                  <tr>
+                    <td className="adm-td">
+                      <span className="adm-lbl">Date of Birth</span>
+                      <span className="adm-val">{fmtDate(student.dob)}</span>
+                    </td>
+                    <td className="adm-td">
+                      <span className="adm-lbl">Admission Date</span>
+                      <span className="adm-val">{fmtDate(student.admissionDate)}</span>
+                    </td>
+                    <td className="adm-td">
+                      <span className="adm-lbl">Gender</span>
+                      <span className="adm-val">{student.gender ? student.gender.charAt(0) + student.gender.slice(1).toLowerCase() : ''}</span>
+                    </td>
+                  </tr>
+                  <tr>
+                    <td className="adm-td">
+                      <span className="adm-lbl">Blood Group</span>
+                      <span className="adm-val">{student.bloodGroup || ''}</span>
+                    </td>
+                    <td className="adm-td">
+                      <span className="adm-lbl">Nationality</span>
+                      <span className="adm-val">Indian</span>
+                    </td>
+                    <td className="adm-td">
+                      <span className="adm-lbl">Religion</span>
+                      <span className="adm-val">{student.religion || ''}</span>
+                    </td>
+                  </tr>
+                  <tr>
+                    <td colSpan={3} className="adm-td-last">
+                      <span className="adm-lbl">Category</span>
+                      <span className="adm-val">{student.caste || ''}</span>
+                    </td>
+                  </tr>
+                </tbody>
+              </table>
 
-            {/* Academic Information */}
-            <div className="section">
-              <div className="section-title">Academic Information</div>
-              <div className="form-row">
-                <div className="form-group">
-                  <div className="form-label">Annual Fee</div>
-                  <div className="form-value">₹{student.totalFee?.toLocaleString('en-IN')}</div>
+              {/* Aadhaar / Birth Cert / PEN */}
+              <div className="adm-grid3">
+                <div className="adm-field">
+                  <span className="adm-lbl">Aadhar Number</span>
+                  <span className="adm-val">{student.aadhaarNo ? 'XXXX-XXXX-' + student.aadhaarNo.slice(-4) : ''}</span>
                 </div>
-                <div className="form-group">
-                  <div className="form-label">RTE Student</div>
-                  <div className="form-value">{student.rte ? 'Yes' : 'No'}</div>
+                <div className="adm-field">
+                  <span className="adm-lbl">Birth Certificate Number</span>
+                  <span className="adm-val">{student.birthCertNo || ''}</span>
+                </div>
+                <div className="adm-field">
+                  <span className="adm-lbl">PEN Number</span>
+                  <span className="adm-val">{student.penNumber || ''}</span>
                 </div>
               </div>
-            </div>
 
-            {/* Signature Section */}
-            <div className="signature-row">
-              <div className="signature-box">
-                <div style={{ minHeight: '60px' }} />
-                <div className="signature-line">Parent/Guardian Signature</div>
+              {/* RTE */}
+              <div className="adm-rte">
+                <div className="adm-checkbox">{student.rte ? '✓' : ''}</div>
+                <span>RTE (Right to Education) Student</span>
               </div>
-              <div className="signature-box">
-                <div style={{ minHeight: '60px' }} />
-                <div className="signature-line">Principal Signature</div>
-              </div>
-              <div className="signature-box">
-                <div style={{ minHeight: '60px' }} />
-                <div className="signature-line">Date</div>
-              </div>
-            </div>
 
-            {/* Footer */}
-            <div className="footer">
-              This is an automatically generated document. Signatures required for validity.
+              {/* ── ACADEMIC INFORMATION ── */}
+              <div className="adm-section">Academic Information</div>
+
+              <div className="adm-grid3">
+                <div className="adm-field">
+                  <span className="adm-lbl">Previous School</span>
+                  <span className="adm-val">&nbsp;</span>
+                </div>
+                <div className="adm-field">
+                  <span className="adm-lbl">Previous Class</span>
+                  <span className="adm-val">&nbsp;</span>
+                </div>
+                <div className="adm-field">
+                  <span className="adm-lbl">Previous Percentage</span>
+                  <span className="adm-val">&nbsp;</span>
+                </div>
+              </div>
+              <div className="adm-grid2">
+                <div className="adm-field">
+                  <span className="adm-lbl">Admission Class</span>
+                  <span className="adm-val">{student.className}{student.section ? `-${student.section}` : ''}</span>
+                </div>
+                <div className="adm-field">
+                  <span className="adm-lbl">Stream</span>
+                  <span className="adm-val">{STREAM_CLASSES.has(student.className) ? (student.stream || '') : ''}</span>
+                </div>
+              </div>
+
+              {/* ── FATHER'S INFORMATION ── */}
+              <div className="adm-section">Father's Information</div>
+
+              <div className="adm-grid2">
+                <div className="adm-field">
+                  <span className="adm-lbl">Father's Name</span>
+                  <span className="adm-val">{student.fatherName || ''}</span>
+                </div>
+                <div className="adm-field">
+                  <span className="adm-lbl">Father's Occupation</span>
+                  <span className="adm-val">{student.fatherOccupation || ''}</span>
+                </div>
+              </div>
+              <div className="adm-grid3">
+                <div className="adm-field">
+                  <span className="adm-lbl">Father's Phone</span>
+                  <span className="adm-val">{student.fatherPhone || ''}</span>
+                </div>
+                <div className="adm-field">
+                  <span className="adm-lbl">Father's Email</span>
+                  <span className="adm-val">{student.fatherEmail || ''}</span>
+                </div>
+                <div className="adm-field">
+                  <span className="adm-lbl">Father's Aadhar Number</span>
+                  <span className="adm-val">&nbsp;</span>
+                </div>
+              </div>
+
+              {/* ── MOTHER'S INFORMATION ── */}
+              <div className="adm-section">Mother's Information</div>
+
+              <div className="adm-grid2">
+                <div className="adm-field">
+                  <span className="adm-lbl">Mother's Name</span>
+                  <span className="adm-val">{student.motherName || ''}</span>
+                </div>
+                <div className="adm-field">
+                  <span className="adm-lbl">Mother's Occupation</span>
+                  <span className="adm-val">{student.motherOccupation || ''}</span>
+                </div>
+              </div>
+              <div className="adm-grid3">
+                <div className="adm-field">
+                  <span className="adm-lbl">Mother's Phone</span>
+                  <span className="adm-val">{student.motherPhone || ''}</span>
+                </div>
+                <div className="adm-field">
+                  <span className="adm-lbl">Mother's Email</span>
+                  <span className="adm-val">&nbsp;</span>
+                </div>
+                <div className="adm-field">
+                  <span className="adm-lbl">Mother's Aadhar Number</span>
+                  <span className="adm-val">&nbsp;</span>
+                </div>
+              </div>
+
+              {/* ── ADDRESS INFORMATION ── */}
+              <div className="adm-section">Address Information</div>
+
+              <div className="adm-grid1">
+                <div className="adm-field">
+                  <span className="adm-lbl">Permanent Address</span>
+                  <span className="adm-val">{student.address || ''}</span>
+                </div>
+              </div>
+              <div className="adm-grid2">
+                <div className="adm-field">
+                  <span className="adm-lbl">City / District</span>
+                  <span className="adm-val">&nbsp;</span>
+                </div>
+                <div className="adm-field">
+                  <span className="adm-lbl">State / Pin Code</span>
+                  <span className="adm-val">&nbsp;</span>
+                </div>
+              </div>
+
+              {/* Signature Row */}
+              <div className="adm-sig-row">
+                <div className="adm-sig-box">
+                  <div className="adm-sig-line">Parent / Guardian Signature</div>
+                </div>
+                <div className="adm-sig-box">
+                  <div className="adm-sig-line">Principal Signature</div>
+                </div>
+                <div className="adm-sig-box">
+                  <div className="adm-sig-line">Date</div>
+                </div>
+              </div>
+
+              {/* Footer */}
+              <div className="adm-footer">
+                This is a computer-generated document. Signatures required for validity.
+              </div>
+
             </div>
           </div>
         </div>
