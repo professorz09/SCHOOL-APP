@@ -3,7 +3,7 @@ import {
   Users, UserCheck, BookOpen, IndianRupee, Bus, CircleAlert,
   Wallet, MoreHorizontal, CircleCheckBig, MapPin, ChevronRight,
   Bell, ClipboardCheck, Clock, BanknoteIcon, Settings, ChevronUp,
-  UserCog, CalendarCheck,
+  UserCog, CalendarCheck, Sparkles,
 } from 'lucide-react';
 import { studentService } from '../../../services/student.service';
 import { staffService } from '../../../services/staff.service';
@@ -76,6 +76,7 @@ export const PrincipalDashboard: React.FC<Props> = ({ onNavigate }) => {
   ];
 
   const MORE_ACTIONS: { icon: React.ReactNode; label: string; view: PrincipalView; color: string }[] = [
+    { icon: <Sparkles size={22} />,       label: 'Tools',      view: 'TOOLS',            color: 'text-purple-600 bg-purple-50' },
     { icon: <Bell size={22} />,           label: 'Notices',    view: 'NOTICES',          color: 'text-sky-600 bg-sky-50' },
     { icon: <ClipboardCheck size={22} />, label: 'Approvals',  view: 'APPROVALS',        color: 'text-indigo-600 bg-indigo-50' },
     { icon: <UserCog size={22} />,        label: 'Admission',  view: 'ADMISSION',        color: 'text-indigo-600 bg-indigo-50' },
