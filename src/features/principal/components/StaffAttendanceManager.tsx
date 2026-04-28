@@ -375,7 +375,7 @@ export const StaffAttendanceManager: React.FC<Props> = ({ onBack }) => {
 
       {/* ── Floating Save button ── */}
       {!isLocked && (
-        <div className="absolute bottom-0 left-0 right-0 p-4 bg-white border-t border-slate-100">
+        <div className="fixed bottom-16 left-0 right-0 p-4 bg-white border-t border-slate-100 z-30">
           <button onClick={handleSave}
             className={`w-full py-4 font-black text-base rounded-2xl flex items-center justify-center gap-2 transition-all ${
               saved
@@ -392,7 +392,7 @@ export const StaffAttendanceManager: React.FC<Props> = ({ onBack }) => {
       )}
 
       {isLocked && (
-        <div className="absolute bottom-0 left-0 right-0 p-4 bg-white border-t border-slate-100">
+        <div className="fixed bottom-16 left-0 right-0 p-4 bg-white border-t border-slate-100 z-30">
           <div className="w-full py-3 bg-amber-50 border border-amber-200 rounded-2xl flex items-center justify-center gap-2">
             <Lock size={16} className="text-amber-500" />
             <span className="font-black text-amber-700 text-sm">Salary generated — record locked</span>

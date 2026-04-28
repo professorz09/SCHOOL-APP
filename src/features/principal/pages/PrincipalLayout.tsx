@@ -43,12 +43,15 @@ export type PrincipalView =
 
 export const PrincipalLayout: React.FC = () => {
   const [view, setView] = useState<PrincipalView>('DASHBOARD');
-  const setSubView = useUIStore(s => s.setSubView);
+  const { isSubView, setSubView } = useUIStore();
 
   const goTo = (v: PrincipalView) => { setView(v); setSubView(true); };
   const goBack = () => { setView('DASHBOARD'); setSubView(false); };
 
   useEffect(() => { setSubView(false); }, []);
+
+  // When footer HOME pressed, isSubView becomes false → reset to dashboard
+  useEffect(() => { if (!isSubView) setView('DASHBOARD'); }, [isSubView]);
 
   if (view === 'STUDENTS')      return <StudentsManager        onBack={goBack} />;
   if (view === 'ADMISSION')     return <StudentsManager        onBack={goBack} initialView="ADMISSION" />;

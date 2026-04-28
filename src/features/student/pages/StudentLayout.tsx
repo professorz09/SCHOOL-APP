@@ -52,11 +52,14 @@ export const StudentLayout: React.FC = () => {
   const [view, setView] = useState<StudentView>('DASHBOARD');
   const todaySchedule = useMemo(() => getTodaySchedule(), []);
   const initials = STUDENT_FULL.split(' ').map((w: string) => w[0]).join('').slice(0, 2).toUpperCase();
-  const setSubView = useUIStore(s => s.setSubView);
+  const { isSubView, setSubView } = useUIStore();
   const goTo = (v: StudentView) => { setView(v); setSubView(true); };
   const goBack = () => { setView('DASHBOARD'); setSubView(false); };
 
   useEffect(() => { setSubView(false); }, []);
+
+  // When footer HOME pressed, isSubView becomes false → reset to dashboard
+  useEffect(() => { if (!isSubView) setView('DASHBOARD'); }, [isSubView]);
 
   if (view === 'TIMETABLE')   return <TimetableView         onBack={goBack} />;
   if (view === 'RESULTS')     return <ResultsView           onBack={goBack} />;

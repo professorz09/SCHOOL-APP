@@ -147,7 +147,7 @@ export const DriverLayout: React.FC = () => {
   const studentCount = transportService.getAssignmentsByVehicle(vehicle.id).length;
 
   return (
-    <div className="flex flex-col gap-4 animate-in slide-in-from-bottom-4 duration-500 fade-in pt-4">
+    <div className="flex flex-col gap-4 animate-in slide-in-from-bottom-4 duration-500 fade-in pt-4 px-5">
 
       {/* Status card */}
       <div className={`rounded-3xl p-6 transition-colors duration-300 ${isTracking ? 'bg-blue-600' : 'bg-slate-900'}`}>
