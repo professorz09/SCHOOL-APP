@@ -352,7 +352,7 @@ export const AttendanceManager: React.FC<Props> = ({ onBack }) => {
         )}
 
         {/* Student list (read-only OR editable based on canEdit) */}
-        <div className="flex-1 overflow-y-auto pb-32">
+        <div className="flex-1 overflow-y-auto pb-40">
           {(selectedRecord || canEdit) && (
             <div className="p-4">
               <div className="bg-white rounded-2xl border border-slate-100 shadow-sm overflow-hidden">
@@ -385,7 +385,7 @@ export const AttendanceManager: React.FC<Props> = ({ onBack }) => {
 
         {/* Submit / Save buttons */}
         {canEdit && (
-          <div className="absolute bottom-0 left-0 right-0 p-4 bg-white border-t border-slate-100">
+          <div className="fixed bottom-16 left-0 right-0 p-4 bg-white border-t border-slate-100 z-30">
             {!selectedRecord ? (
               <button onClick={handleSubmit} disabled={isSubmitting}
                 className="w-full flex items-center justify-center gap-2 bg-blue-600 text-white font-black text-sm uppercase tracking-widest py-4 rounded-2xl active:scale-95 transition-transform shadow-lg disabled:opacity-50">

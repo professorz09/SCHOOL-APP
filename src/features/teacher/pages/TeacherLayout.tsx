@@ -31,11 +31,14 @@ const isCurrentPeriod = (startTime: string, endTime: string): boolean => {
 
 export const TeacherLayout: React.FC = () => {
   const [view, setView] = useState<TeacherView>('DASHBOARD');
-  const setSubView = useUIStore(s => s.setSubView);
+  const { isSubView, setSubView } = useUIStore();
   const goTo = (v: TeacherView) => { setView(v); setSubView(true); };
   const goBack = () => { setView('DASHBOARD'); setSubView(false); };
 
   useEffect(() => { setSubView(false); }, []);
+
+  // When footer HOME pressed, isSubView becomes false → reset to dashboard
+  useEffect(() => { if (!isSubView) setView('DASHBOARD'); }, [isSubView]);
   const session = useAuthStore(state => state.session);
   const teacherName = session?.name ?? 'Teacher';
   const todayClasses = useMemo(() => timetableService.getTodayForTeacher(MY_TEACHER_ID), []);
