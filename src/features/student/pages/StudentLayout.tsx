@@ -6,9 +6,11 @@ import { FeesView } from '../components/FeesView';
 import { TransportView } from '../components/TransportView';
 import { StudentNoticesView } from '../components/StudentNoticesView';
 import { StudentComplaintsView } from '../components/StudentComplaintsView';
+import { HomeworkView } from '../components/HomeworkView';
+import { AttendanceView } from '../components/AttendanceView';
 import {
   Calendar, Trophy, CreditCard, Bus, Bell,
-  BookOpen, Library, HeadphonesIcon, Clock, FileText,
+  BookOpen, UserCheck, HeadphonesIcon, Clock, FileText,
 } from 'lucide-react';
 import { timetableService, PERIOD_SLOTS } from '../../../services/timetable.service';
 import { useAuthStore } from '../../../store/authStore';
@@ -16,7 +18,7 @@ import { useAuthStore } from '../../../store/authStore';
 const MY_CLASS = '10-A';
 const SCHOOL_NAME = 'EduGrow School';
 
-type StudentView = 'DASHBOARD' | 'TIMETABLE' | 'RESULTS' | 'FEES' | 'TRANSPORT' | 'NOTICES' | 'COMPLAINTS';
+type StudentView = 'DASHBOARD' | 'TIMETABLE' | 'RESULTS' | 'FEES' | 'TRANSPORT' | 'NOTICES' | 'COMPLAINTS' | 'HOMEWORK' | 'ATTENDANCE';
 
 const getTodaySchedule = () => {
   const days = ['Sunday','Monday','Tuesday','Wednesday','Thursday','Friday','Saturday'];
@@ -68,16 +70,18 @@ export const StudentLayout: React.FC = () => {
   if (view === 'TRANSPORT')   return <TransportView         onBack={() => setView('DASHBOARD')} />;
   if (view === 'NOTICES')     return <StudentNoticesView    onBack={() => setView('DASHBOARD')} />;
   if (view === 'COMPLAINTS')  return <StudentComplaintsView onBack={() => setView('DASHBOARD')} />;
+  if (view === 'HOMEWORK')    return <HomeworkView          onBack={() => setView('DASHBOARD')} />;
+  if (view === 'ATTENDANCE')  return <AttendanceView        onBack={() => setView('DASHBOARD')} />;
 
   const MODULES: { icon: React.ReactNode; label: string; view: StudentView; iconColor: string }[] = [
-    { icon: <Calendar    size={22} />, label: 'Timetable', view: 'TIMETABLE',   iconColor: 'text-blue-600' },
-    { icon: <BookOpen    size={22} />, label: 'Homework',  view: 'TIMETABLE',   iconColor: 'text-indigo-600' },
-    { icon: <CreditCard  size={22} />, label: 'Fees',      view: 'FEES',        iconColor: 'text-blue-500' },
-    { icon: <Trophy      size={22} />, label: 'Results',   view: 'RESULTS',     iconColor: 'text-amber-500' },
-    { icon: <Bus         size={22} />, label: 'Transport', view: 'TRANSPORT',   iconColor: 'text-orange-500' },
-    { icon: <Bell        size={22} />, label: 'Notices',   view: 'NOTICES',     iconColor: 'text-blue-500' },
-    { icon: <Library     size={22} />, label: 'Library',   view: 'NOTICES',     iconColor: 'text-blue-600' },
-    { icon: <HeadphonesIcon size={22} />, label: 'Helpdesk', view: 'COMPLAINTS', iconColor: 'text-rose-500' },
+    { icon: <Calendar       size={22} />, label: 'Timetable',  view: 'TIMETABLE',  iconColor: 'text-blue-600' },
+    { icon: <BookOpen       size={22} />, label: 'Homework',   view: 'HOMEWORK',   iconColor: 'text-indigo-600' },
+    { icon: <CreditCard     size={22} />, label: 'Fees',       view: 'FEES',       iconColor: 'text-blue-500' },
+    { icon: <Trophy         size={22} />, label: 'Results',    view: 'RESULTS',    iconColor: 'text-amber-500' },
+    { icon: <Bus            size={22} />, label: 'Transport',  view: 'TRANSPORT',  iconColor: 'text-orange-500' },
+    { icon: <Bell           size={22} />, label: 'Notices',    view: 'NOTICES',    iconColor: 'text-blue-500' },
+    { icon: <UserCheck      size={22} />, label: 'Attendance', view: 'ATTENDANCE', iconColor: 'text-emerald-600' },
+    { icon: <HeadphonesIcon size={22} />, label: 'Helpdesk',   view: 'COMPLAINTS', iconColor: 'text-rose-500' },
   ];
 
   return (
