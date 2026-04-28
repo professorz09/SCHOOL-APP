@@ -1,5 +1,6 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { ToastContainer } from '../../../components/ui/Toast';
+import { useUIStore } from '../../../store/uiStore';
 import { PrincipalDashboard } from '../components/PrincipalDashboard';
 import { StudentsManager } from '../components/StudentsManager';
 import { StaffManager } from '../components/StaffManager';
@@ -40,9 +41,12 @@ export type PrincipalView =
 
 export const PrincipalLayout: React.FC = () => {
   const [view, setView] = useState<PrincipalView>('DASHBOARD');
+  const setSubView = useUIStore(s => s.setSubView);
 
-  const goTo = (v: PrincipalView) => setView(v);
-  const goBack = () => setView('DASHBOARD');
+  const goTo = (v: PrincipalView) => { setView(v); setSubView(true); };
+  const goBack = () => { setView('DASHBOARD'); setSubView(false); };
+
+  useEffect(() => { setSubView(false); }, []);
 
   if (view === 'STUDENTS')      return <StudentsManager        onBack={goBack} />;
   if (view === 'ADMISSION')     return <StudentsManager        onBack={goBack} initialView="ADMISSION" />;

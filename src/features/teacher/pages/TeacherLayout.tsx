@@ -1,5 +1,6 @@
 import React, { useState, useMemo, useEffect } from 'react';
 import { ToastContainer } from '../../../components/ui/Toast';
+import { useUIStore } from '../../../store/uiStore';
 import {
   Users, FileCheck2, ClipboardList, ScrollText, CircleAlert,
   TrendingUp, BookOpen, Calendar, IndianRupee, Bell, CalendarDays,
@@ -30,7 +31,11 @@ const isCurrentPeriod = (startTime: string, endTime: string): boolean => {
 
 export const TeacherLayout: React.FC = () => {
   const [view, setView] = useState<TeacherView>('DASHBOARD');
-  const goBack = () => setView('DASHBOARD');
+  const setSubView = useUIStore(s => s.setSubView);
+  const goTo = (v: TeacherView) => { setView(v); setSubView(true); };
+  const goBack = () => { setView('DASHBOARD'); setSubView(false); };
+
+  useEffect(() => { setSubView(false); }, []);
   const session = useAuthStore(state => state.session);
   const teacherName = session?.name ?? 'Teacher';
   const todayClasses = useMemo(() => timetableService.getTodayForTeacher(MY_TEACHER_ID), []);
@@ -88,7 +93,7 @@ export const TeacherLayout: React.FC = () => {
       <div className="bg-white rounded-2xl border border-slate-100 shadow-sm p-4">
         <div className="flex items-center justify-between mb-3">
           <p className="text-[10px] font-black uppercase tracking-widest text-slate-400">Today's Schedule</p>
-          <button onClick={() => setView('TIMETABLE')}
+          <button onClick={() => goTo('TIMETABLE')}
             className="text-[9px] font-black text-blue-500 uppercase tracking-widest">
             Full Week →
           </button>
@@ -126,7 +131,7 @@ export const TeacherLayout: React.FC = () => {
       <p className="text-[10px] font-black uppercase tracking-widest text-slate-400 -mb-1">Quick Actions</p>
       <div className="space-y-2">
         {modules.map(({ icon: Icon, label, view: v, color, desc }) => (
-          <button key={label} onClick={() => setView(v)}
+          <button key={label} onClick={() => goTo(v)}
             className="w-full flex items-center gap-4 bg-white rounded-2xl border border-slate-100 shadow-sm p-4 text-left active:scale-95 transition-transform">
             <div className={`w-11 h-11 rounded-xl flex items-center justify-center shrink-0 ${color}`}>
               <Icon size={22} />

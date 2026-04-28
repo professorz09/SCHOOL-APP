@@ -12,10 +12,13 @@ interface UIStore {
   toasts: Toast[];
   showToast: (message: string, type?: ToastType) => void;
   dismissToast: (id: string) => void;
+  isSubView: boolean;
+  setSubView: (v: boolean) => void;
 }
 
 export const useUIStore = create<UIStore>((set) => ({
   toasts: [],
+  isSubView: false,
 
   showToast: (message, type = 'success') => {
     const id = `toast-${Date.now()}`;
@@ -26,4 +29,5 @@ export const useUIStore = create<UIStore>((set) => ({
   },
 
   dismissToast: (id) => set(s => ({ toasts: s.toasts.filter(t => t.id !== id) })),
+  setSubView: (v) => set({ isSubView: v }),
 }));
