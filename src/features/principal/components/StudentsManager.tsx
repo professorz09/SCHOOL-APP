@@ -1,8 +1,10 @@
 import React, { useEffect, useState } from 'react';
 import {
   ArrowLeft, Plus, Search, Users, ChevronRight, User, Phone, Mail,
-  IndianRupee, BookOpen, Calendar, AlertCircle, CheckCircle2, Clock,
-  X, Save, Send, FileText, BarChart2, FolderOpen, Home, Copy, MapPin, FileCheck,
+  IndianRupee, BookOpen, Calendar, CheckCircle2,
+  X, FileText, BarChart2, FolderOpen, Copy, MapPin, FileCheck,
+  Bus, Briefcase, Droplets, GraduationCap, Shield, Heart,
+  CreditCard, Building2, TrendingUp, Home as HomeIcon,
 } from 'lucide-react';
 import { studentService } from '../../../services/student.service';
 import { Student, CreateStudentInput, FeeRecord, StudentAcademicRecord, STREAMS, STREAM_CLASSES, StudentStream } from '../../../types/principal.types';
@@ -11,6 +13,7 @@ import { useUIStore } from '../../../store/uiStore';
 import { authService, ParentUser } from '../../../services/auth.service';
 import { schoolInfoService } from '../../../services/schoolInfo.service';
 import { AdmissionFormPrint } from '../../../components/AdmissionFormPrint';
+import { transportService, TransportVehicle, StudentTransportAssignment } from '../../../services/transport.service';
 
 type MainView = 'MENU' | 'ADMISSION' | 'FEES' | 'CLASSES';
 type SubView = 'LIST' | 'CREATE' | 'PROFILE' | 'CLASS_DETAIL' | 'SECTION_DETAIL';
@@ -64,7 +67,8 @@ export const StudentsManager: React.FC<Props> = ({ onBack, initialView }) => {
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [feeRecords, setFeeRecords] = useState<FeeRecord[]>([]);
   const [academicRecord, setAcademicRecord] = useState<StudentAcademicRecord | null>(null);
-  const [activeProfileTab, setActiveProfileTab] = useState<'INFO' | 'ACADEMIC' | 'FEES' | 'ATTENDANCE' | 'DOCS'>('INFO');
+  const [activeProfileTab, setActiveProfileTab] = useState<'INFO' | 'FAMILY' | 'RESULTS' | 'FEES' | 'DOCS'>('INFO');
+  const [studentTransport, setStudentTransport] = useState<{ vehicle: TransportVehicle; assignment: StudentTransportAssignment } | null>(null);
   const [profileDocs, setProfileDocs] = useState<DocumentUpload[]>([
     { type: 'BIRTH_CERT',     name: 'Birth Certificate',   uploaded: false },
     { type: 'TRANSFER_CERT',  name: 'Transfer Certificate', uploaded: false },
@@ -92,6 +96,15 @@ export const StudentsManager: React.FC<Props> = ({ onBack, initialView }) => {
     ]);
     setFeeRecords(fees);
     setAcademicRecord(record);
+    try {
+      const assignment = transportService.getAssignmentForStudent(student.id);
+      if (assignment) {
+        const vehicle = transportService.getVehicleById(assignment.vehicleId);
+        setStudentTransport(vehicle ? { vehicle, assignment } : null);
+      } else {
+        setStudentTransport(null);
+      }
+    } catch { setStudentTransport(null); }
   };
 
   const handleCreate = async () => {
@@ -706,68 +719,117 @@ export const StudentsManager: React.FC<Props> = ({ onBack, initialView }) => {
   // ─── PROFILE (Student Details) ──────────────────────────────────────────
 
   if (subView === 'PROFILE' && selected) {
+    const initials = selected.name.split(' ').map(w => w[0]).join('').slice(0, 2).toUpperCase();
+    const fmtDob = selected.dob ? new Date(selected.dob).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' }) : '—';
+    const fmtAdm = selected.admissionDate ? new Date(selected.admissionDate).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' }) : '—';
+    const attGood = selected.attendancePercent >= 75;
+
+    const ProfileField = ({ label, value, icon: Icon }: { label: string; value: string | React.ReactNode; icon?: React.ElementType }) => (
+      <div className="flex items-start justify-between gap-3 py-2.5 border-b border-slate-50 last:border-0 last:pb-0">
+        <div className="flex items-center gap-1.5 shrink-0">
+          {Icon && <Icon size={10} className="text-slate-400" />}
+          <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">{label}</span>
+        </div>
+        <span className="text-[11px] font-bold text-slate-800 text-right leading-snug">{value || '—'}</span>
+      </div>
+    );
+
+    const SectionTitle = ({ icon: Icon, title }: { icon: React.ElementType; title: string }) => (
+      <div className="flex items-center gap-2 mb-3">
+        <div className="w-6 h-6 rounded-lg bg-indigo-50 flex items-center justify-center">
+          <Icon size={12} className="text-indigo-600" />
+        </div>
+        <p className="text-[10px] font-black uppercase tracking-widest text-slate-500">{title}</p>
+      </div>
+    );
+
     const tabList = [
-      { key: 'INFO' as const,       label: 'INFO' },
-      { key: 'ACADEMIC' as const,   label: 'RESULTS' },
-      { key: 'FEES' as const,       label: 'FEES' },
-      { key: 'ATTENDANCE' as const, label: 'ATTEND.' },
-      { key: 'DOCS' as const,       label: 'DOCS' },
+      { key: 'INFO' as const,    label: 'Info' },
+      { key: 'FAMILY' as const,  label: 'Family' },
+      { key: 'RESULTS' as const, label: 'Results' },
+      { key: 'FEES' as const,    label: 'Fees' },
+      { key: 'DOCS' as const,    label: 'Docs' },
     ];
 
     return (
       <div className="w-full bg-slate-50 flex flex-col animate-in slide-in-from-right-8 duration-300">
-        {/* Sticky Header */}
+
+        {/* ── Sticky Header ── */}
         <div className="sticky top-0 z-10 bg-white border-b border-slate-100 shadow-sm">
-          {/* Back + action row */}
+
+          {/* Top bar */}
           <div className="px-4 pt-4 pb-3 flex items-center justify-between">
-            <button onClick={() => setSubView('LIST')}
-              className="p-2 -ml-2 bg-slate-100 rounded-full text-slate-600">
+            <button onClick={() => setSubView('LIST')} className="p-2 -ml-2 bg-slate-100 rounded-full text-slate-600">
               <ArrowLeft size={20} />
             </button>
-            <button
-              onClick={() => setShowAdmissionForm(true)}
-              className="p-2 bg-blue-50 text-blue-600 rounded-full flex items-center justify-center active:scale-90 transition-transform"
-              title="View Admission Form"
-            >
-              <FileCheck size={20} />
-            </button>
+            <div className="flex items-center gap-2">
+              <button onClick={() => setShowAdmissionForm(true)}
+                className="flex items-center gap-1.5 px-3 py-2 bg-blue-50 text-blue-600 font-black text-[10px] uppercase tracking-widest rounded-xl active:scale-90 transition-transform">
+                <FileCheck size={13} /> Form
+              </button>
+            </div>
           </div>
 
-          {/* Profile Hero: Photo + Name + Roll/Class */}
-          <div className="px-4 pb-4 flex items-center gap-4">
-            {/* Avatar / Photo */}
-            <div className="w-20 h-20 rounded-2xl bg-gradient-to-br from-indigo-400 to-violet-500 flex items-center justify-center font-black text-white text-2xl shadow-md shrink-0">
-              {selected.name.split(' ').map(w => w[0]).join('').slice(0, 2).toUpperCase()}
-            </div>
-            {/* Info */}
-            <div className="flex-1 min-w-0">
-              <h2 className="text-lg font-black text-slate-900 leading-tight">{selected.name}</h2>
-              <div className="flex items-center gap-1.5 mt-1">
-                <span className="text-[10px] font-black uppercase tracking-widest text-indigo-600 bg-indigo-50 px-2 py-0.5 rounded-full">
-                  Roll #{selected.rollNo}
-                </span>
-                <span className="text-[10px] font-black uppercase tracking-widest text-slate-500 bg-slate-100 px-2 py-0.5 rounded-full">
-                  {selected.className}-{selected.section}
-                </span>
-              </div>
-              <div className="flex items-center gap-3 mt-2">
-                <div className="flex items-center gap-1 text-[10px] font-bold text-slate-400">
-                  <span>Adm:</span>
-                  <span className="text-slate-600">{selected.admissionNo}</span>
+          {/* Hero card */}
+          <div className="px-4 pb-4">
+            <div className="bg-gradient-to-r from-indigo-600 to-violet-700 rounded-2xl p-4 text-white">
+              <div className="flex items-start gap-4">
+                {/* Avatar */}
+                <div className="w-16 h-16 rounded-2xl bg-white/20 flex items-center justify-center font-black text-xl text-white shrink-0 border-2 border-white/30 overflow-hidden">
+                  {selected.photo
+                    ? <img src={selected.photo} alt={selected.name} className="w-full h-full object-cover" />
+                    : <span>{initials}</span>
+                  }
                 </div>
-                <span className={`text-[9px] font-black px-2 py-0.5 rounded-full uppercase ${
-                  selected.attendancePercent >= 75
-                    ? 'bg-emerald-100 text-emerald-700'
-                    : 'bg-rose-100 text-rose-600'
-                }`}>
-                  {selected.attendancePercent}% Att.
-                </span>
+                {/* Name + badges */}
+                <div className="flex-1 min-w-0">
+                  <h2 className="font-black text-base text-white leading-tight">{selected.name}</h2>
+                  <p className="text-[10px] font-bold text-white/60 mt-0.5">{selected.admissionNo}</p>
+                  <div className="flex flex-wrap gap-1.5 mt-2">
+                    <span className="text-[9px] font-black bg-white/20 text-white px-2 py-0.5 rounded-full">
+                      {selected.className}-{selected.section}
+                    </span>
+                    <span className="text-[9px] font-black bg-white/20 text-white px-2 py-0.5 rounded-full">
+                      Roll #{selected.rollNo}
+                    </span>
+                    {selected.stream && (
+                      <span className="text-[9px] font-black bg-white/20 text-white px-2 py-0.5 rounded-full">
+                        {selected.stream}
+                      </span>
+                    )}
+                    {selected.rte && (
+                      <span className="text-[9px] font-black bg-amber-400/80 text-white px-2 py-0.5 rounded-full">RTE</span>
+                    )}
+                  </div>
+                </div>
+              </div>
+
+              {/* Quick stats row */}
+              <div className="grid grid-cols-3 gap-2 mt-3 pt-3 border-t border-white/20">
+                <div className="text-center">
+                  <div className={`text-lg font-black ${attGood ? 'text-emerald-300' : 'text-rose-300'}`}>
+                    {selected.attendancePercent}%
+                  </div>
+                  <div className="text-[8px] font-bold text-white/50 uppercase">Attend.</div>
+                </div>
+                <div className="text-center">
+                  <div className="text-lg font-black text-white">
+                    ₹{(selected.paidFee / 1000).toFixed(0)}K
+                  </div>
+                  <div className="text-[8px] font-bold text-white/50 uppercase">Paid</div>
+                </div>
+                <div className="text-center">
+                  <div className="text-lg font-black text-rose-300">
+                    ₹{((selected.totalFee - selected.paidFee) / 1000).toFixed(0)}K
+                  </div>
+                  <div className="text-[8px] font-bold text-white/50 uppercase">Due</div>
+                </div>
               </div>
             </div>
           </div>
 
-          {/* Tab Pills */}
-          <div className="flex gap-2 overflow-x-auto hide-scrollbar px-4 pb-3">
+          {/* Tabs */}
+          <div className="flex gap-1 overflow-x-auto hide-scrollbar px-4 pb-3">
             {tabList.map(({ key, label }) => (
               <button key={key} onClick={() => setActiveProfileTab(key)}
                 className={`flex-shrink-0 px-4 py-1.5 rounded-full text-[11px] font-black uppercase tracking-widest transition-all ${
@@ -781,231 +843,353 @@ export const StudentsManager: React.FC<Props> = ({ onBack, initialView }) => {
           </div>
         </div>
 
-        <div className="flex-1 overflow-y-auto ">
-          <div className="p-4 space-y-4">
+        {/* ── Tab Content ── */}
+        <div className="flex-1 overflow-y-auto">
+          <div className="p-4 space-y-3">
+
+            {/* ── INFO TAB ─────────────────────────────── */}
             {activeProfileTab === 'INFO' && (
               <>
-                {/* Address */}
-                <div className="bg-white rounded-2xl border border-slate-100 shadow-sm p-4">
-                  <p className="text-[9px] font-black uppercase tracking-widest text-slate-400 flex items-center gap-1.5 mb-2">
-                    <MapPin size={10} /> Address
-                  </p>
-                  <p className="font-bold text-slate-900 text-sm">{selected.address || '—'}</p>
-                </div>
-
-                {/* Parent Grid */}
-                <div className="bg-white rounded-2xl border border-slate-100 shadow-sm p-4">
-                  <div className="grid grid-cols-2 gap-4 mb-4">
-                    <div>
-                      <p className="text-[9px] font-black uppercase tracking-widest text-slate-400 flex items-center gap-1 mb-1">
-                        <User size={9} /> Father's Name
-                      </p>
-                      <p className="font-bold text-slate-900 text-sm">{selected.fatherName || '—'}</p>
-                    </div>
-                    <div>
-                      <p className="text-[9px] font-black uppercase tracking-widest text-slate-400 flex items-center gap-1 mb-1">
-                        <User size={9} /> Mother's Name
-                      </p>
-                      <p className="font-bold text-slate-900 text-sm">{selected.motherName || '—'}</p>
-                    </div>
+                {/* Personal info quick chips */}
+                <div className="grid grid-cols-3 gap-2">
+                  <div className="bg-white rounded-2xl border border-slate-100 shadow-sm p-3 flex flex-col items-center gap-1">
+                    <Droplets size={16} className="text-rose-500" />
+                    <span className="text-sm font-black text-slate-900">{selected.bloodGroup}</span>
+                    <span className="text-[9px] font-bold text-slate-400">Blood</span>
                   </div>
-                  <div className="border-t border-slate-100 pt-3">
-                    <p className="text-[9px] font-black uppercase tracking-widest text-slate-400 flex items-center gap-1 mb-1">
-                      <Phone size={9} /> Father Mobile
-                    </p>
-                    <p className="font-bold text-slate-900 text-sm">{selected.fatherPhone || '—'}</p>
+                  <div className="bg-white rounded-2xl border border-slate-100 shadow-sm p-3 flex flex-col items-center gap-1">
+                    <User size={16} className="text-blue-500" />
+                    <span className="text-sm font-black text-slate-900">{selected.gender === 'MALE' ? 'Male' : selected.gender === 'FEMALE' ? 'Female' : 'Other'}</span>
+                    <span className="text-[9px] font-bold text-slate-400">Gender</span>
+                  </div>
+                  <div className="bg-white rounded-2xl border border-slate-100 shadow-sm p-3 flex flex-col items-center gap-1">
+                    <Calendar size={16} className="text-violet-500" />
+                    <span className="text-[11px] font-black text-slate-900 text-center leading-tight">{fmtDob}</span>
+                    <span className="text-[9px] font-bold text-slate-400">DOB</span>
                   </div>
                 </div>
 
-                {/* Aadhaar + RTE */}
+                {/* Academic identity */}
                 <div className="bg-white rounded-2xl border border-slate-100 shadow-sm p-4">
-                  <div className="grid grid-cols-2 gap-4">
-                    <div>
-                      <p className="text-[9px] font-black uppercase tracking-widest text-slate-400 mb-1">Aadhaar No</p>
-                      <p className="font-bold text-slate-900 text-sm">
-                        xxxx-xxxx-{(selected.aadhaarNo || '0000').slice(-4)}
-                      </p>
-                    </div>
-                    <div>
-                      <p className="text-[9px] font-black uppercase tracking-widest text-slate-400 mb-1">RTE Applied</p>
-                      <span className={`inline-block px-3 py-1 rounded-lg text-[10px] font-black uppercase ${
-                        selected.rte ? 'bg-emerald-100 text-emerald-700' : 'bg-slate-100 text-slate-500'
-                      }`}>
-                        {selected.rte ? 'YES' : 'NO'}
-                      </span>
-                    </div>
+                  <SectionTitle icon={GraduationCap} title="Academic Details" />
+                  <div className="space-y-0">
+                    <ProfileField label="Admission No." value={selected.admissionNo} />
+                    <ProfileField label="Roll Number" value={selected.rollNo} />
+                    <ProfileField label="Class & Section" value={`${selected.className} – ${selected.section}`} />
+                    {selected.stream && <ProfileField label="Stream" value={selected.stream} />}
+                    <ProfileField label="Admission Date" value={fmtAdm} />
+                    <ProfileField label="Academic Year" value={selected.academicYearId} />
                   </div>
                 </div>
 
-                {/* Personal Details */}
-                <div className="bg-white rounded-2xl border border-slate-100 shadow-sm p-4 space-y-3">
-                  <p className="text-[9px] font-black uppercase tracking-widest text-slate-400">Personal Details</p>
-                  {[
-                    { label: 'Admission No.', val: selected.admissionNo },
-                    { label: 'Date of Birth',  val: selected.dob },
-                    { label: 'Blood Group',    val: selected.bloodGroup },
-                    { label: 'Gender',         val: selected.gender },
-                    ...(STREAM_CLASSES.has(selected.className) ? [{ label: 'Stream', val: selected.stream || '—' }] : []),
-                    { label: 'Religion',       val: selected.religion || '—' },
-                    { label: 'Caste',          val: selected.caste || '—' },
-                    { label: 'PEN Number',     val: selected.penNumber || '—' },
-                    { label: 'Admission Date', val: selected.admissionDate },
-                  ].map(({ label, val }) => (
-                    <div key={label} className="flex items-center justify-between gap-2 border-b border-slate-50 pb-2 last:border-0 last:pb-0">
-                      <span className="text-[10px] font-bold text-slate-400 shrink-0">{label}</span>
-                      <span className="text-[11px] font-bold text-slate-800 text-right">{val}</span>
-                    </div>
-                  ))}
+                {/* Identity documents */}
+                <div className="bg-white rounded-2xl border border-slate-100 shadow-sm p-4">
+                  <SectionTitle icon={Shield} title="Identity & Documents" />
+                  <div className="space-y-0">
+                    <ProfileField label="Aadhaar No."
+                      value={selected.aadhaarNo ? `XXXX-XXXX-${selected.aadhaarNo.slice(-4)}` : '—'} />
+                    <ProfileField label="Birth Cert No." value={selected.birthCertNo} />
+                    <ProfileField label="PEN Number" value={selected.penNumber} />
+                    <ProfileField label="TC Number" value={selected.tcNumber} />
+                    <ProfileField label="Religion" value={selected.religion} />
+                    <ProfileField label="Category / Caste" value={selected.caste} />
+                    <ProfileField label="RTE Status"
+                      value={
+                        <span className={`px-2 py-0.5 rounded-full text-[9px] font-black uppercase ${selected.rte ? 'bg-amber-100 text-amber-700' : 'bg-slate-100 text-slate-500'}`}>
+                          {selected.rte ? 'RTE Admitted' : 'No'}
+                        </span>
+                      } />
+                  </div>
                 </div>
 
-                {/* Documents */}
-                {selected.docs.length > 0 && (
+                {/* Contact & address */}
+                <div className="bg-white rounded-2xl border border-slate-100 shadow-sm p-4">
+                  <SectionTitle icon={HomeIcon} title="Contact & Address" />
+                  <div className="space-y-0">
+                    {selected.phone && <ProfileField label="Phone" value={selected.phone} icon={Phone} />}
+                    {selected.email && <ProfileField label="Email" value={selected.email} icon={Mail} />}
+                    <ProfileField label="Address" value={selected.address} icon={MapPin} />
+                  </div>
+                </div>
+              </>
+            )}
+
+            {/* ── FAMILY TAB ───────────────────────────── */}
+            {activeProfileTab === 'FAMILY' && (
+              <>
+                {/* Father */}
+                <div className="bg-white rounded-2xl border border-slate-100 shadow-sm p-4">
+                  <div className="flex items-center gap-2 mb-3">
+                    <div className="w-8 h-8 rounded-xl bg-blue-50 text-blue-600 flex items-center justify-center font-black text-sm">F</div>
+                    <div>
+                      <p className="text-sm font-black text-slate-900">{selected.fatherName || 'Father'}</p>
+                      <p className="text-[9px] font-bold text-slate-400 uppercase tracking-widest">Father</p>
+                    </div>
+                  </div>
+                  <div className="space-y-0">
+                    <ProfileField label="Occupation" value={selected.fatherOccupation} icon={Briefcase} />
+                    <ProfileField label="Annual Income" value={selected.fatherIncome} icon={TrendingUp} />
+                    <ProfileField label="Phone" value={selected.fatherPhone} icon={Phone} />
+                    <ProfileField label="Email" value={selected.fatherEmail} icon={Mail} />
+                  </div>
+                </div>
+
+                {/* Mother */}
+                <div className="bg-white rounded-2xl border border-slate-100 shadow-sm p-4">
+                  <div className="flex items-center gap-2 mb-3">
+                    <div className="w-8 h-8 rounded-xl bg-rose-50 text-rose-500 flex items-center justify-center font-black text-sm">M</div>
+                    <div>
+                      <p className="text-sm font-black text-slate-900">{selected.motherName || 'Mother'}</p>
+                      <p className="text-[9px] font-bold text-slate-400 uppercase tracking-widest">Mother</p>
+                    </div>
+                  </div>
+                  <div className="space-y-0">
+                    <ProfileField label="Occupation" value={selected.motherOccupation} icon={Briefcase} />
+                    <ProfileField label="Phone" value={selected.motherPhone} icon={Phone} />
+                  </div>
+                </div>
+
+                {/* Guardian (only if filled) */}
+                {selected.guardianName && (
                   <div className="bg-white rounded-2xl border border-slate-100 shadow-sm p-4">
-                    <p className="text-[9px] font-black uppercase tracking-widest text-slate-400 flex items-center gap-1.5 mb-3">
-                      <FileText size={10} /> Uploaded Documents
-                    </p>
-                    <div className="grid grid-cols-2 gap-2">
-                      {selected.docs.map(doc => (
-                        <div key={doc.id}
-                          className="flex items-center gap-2 bg-indigo-50 border border-indigo-200 rounded-xl px-3 py-2">
-                          <CheckCircle2 size={14} className="text-indigo-600 shrink-0" />
-                          <span className="text-[10px] font-black text-indigo-700 truncate">{doc.name}</span>
-                        </div>
-                      ))}
+                    <div className="flex items-center gap-2 mb-3">
+                      <div className="w-8 h-8 rounded-xl bg-amber-50 text-amber-600 flex items-center justify-center font-black text-sm">G</div>
+                      <div>
+                        <p className="text-sm font-black text-slate-900">{selected.guardianName}</p>
+                        <p className="text-[9px] font-bold text-slate-400 uppercase tracking-widest">Guardian</p>
+                      </div>
+                    </div>
+                    <div className="space-y-0">
+                      <ProfileField label="Relation" value={selected.guardianRelation} />
+                      <ProfileField label="Phone" value={selected.guardianPhone} icon={Phone} />
                     </div>
                   </div>
                 )}
-                {selected.docs.length === 0 && (
-                  <div className="bg-white rounded-2xl border border-slate-100 shadow-sm p-4">
-                    <p className="text-[9px] font-black uppercase tracking-widest text-slate-400 flex items-center gap-1.5 mb-3">
-                      <FileText size={10} /> Uploaded Documents
-                    </p>
-                    <div className="flex flex-col items-center py-6 text-slate-400">
-                      <FolderOpen size={28} className="mb-2 opacity-40" />
-                      <p className="font-bold text-sm">No documents uploaded</p>
-                    </div>
+
+                {!selected.fatherName && !selected.motherName && (
+                  <div className="flex flex-col items-center py-12 text-slate-400">
+                    <User size={32} className="mb-3 opacity-40" />
+                    <p className="font-bold text-sm">No family info added</p>
+                    <p className="text-xs font-bold mt-1 opacity-60">Fill parent details during admission</p>
                   </div>
                 )}
               </>
             )}
 
-            {activeProfileTab === 'ACADEMIC' && (
-              <div className="bg-white rounded-2xl border border-slate-100 shadow-sm p-4">
-                <p className="text-[10px] font-black uppercase tracking-widest text-slate-400 mb-3">Exam Results</p>
-                <div className="space-y-2">
-                  {(academicRecord?.exams.length ?? 0) === 0 && (
+            {/* ── RESULTS TAB ──────────────────────────── */}
+            {activeProfileTab === 'RESULTS' && (
+              <>
+                {/* Attendance summary */}
+                <div className="bg-white rounded-2xl border border-slate-100 shadow-sm p-4">
+                  <SectionTitle icon={Calendar} title="Attendance" />
+                  <div className="flex items-center justify-between mb-4">
+                    <div>
+                      <div className={`text-3xl font-black ${attGood ? 'text-emerald-600' : 'text-rose-500'}`}>
+                        {selected.attendancePercent}%
+                      </div>
+                      <div className={`text-[10px] font-black uppercase mt-0.5 ${attGood ? 'text-emerald-600' : 'text-rose-500'}`}>
+                        {attGood ? 'Good Standing' : 'Below 75% — Low'}
+                      </div>
+                    </div>
+                    <div className={`w-16 h-16 rounded-full border-4 flex items-center justify-center ${attGood ? 'border-emerald-200' : 'border-rose-200'}`}>
+                      <div className={`w-10 h-10 rounded-full flex items-center justify-center ${attGood ? 'bg-emerald-100' : 'bg-rose-100'}`}>
+                        <Calendar size={18} className={attGood ? 'text-emerald-600' : 'text-rose-500'} />
+                      </div>
+                    </div>
+                  </div>
+                  {(academicRecord?.attendanceRecords.length ?? 0) === 0 ? (
+                    <div className="flex flex-col items-center py-4 text-slate-400">
+                      <p className="font-bold text-sm">No monthly data</p>
+                    </div>
+                  ) : (
+                    <div className="space-y-2">
+                      {academicRecord?.attendanceRecords.map(att => {
+                        const pct = att.total > 0 ? Math.round((att.present / att.total) * 100) : 0;
+                        return (
+                          <div key={att.month} className="flex items-center gap-3">
+                            <div className="w-12 text-[10px] font-bold text-slate-500 shrink-0">{att.month}</div>
+                            <div className="flex-1 bg-slate-100 rounded-full h-2.5">
+                              <div className={`h-2.5 rounded-full transition-all ${pct >= 75 ? 'bg-emerald-500' : 'bg-rose-400'}`}
+                                style={{ width: `${pct}%` }} />
+                            </div>
+                            <div className="w-14 text-right text-[10px] font-black text-slate-600 shrink-0">{att.present}/{att.total}</div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  )}
+                </div>
+
+                {/* Exam results */}
+                <div className="bg-white rounded-2xl border border-slate-100 shadow-sm p-4">
+                  <SectionTitle icon={BarChart2} title="Exam Results" />
+                  {(academicRecord?.exams.length ?? 0) === 0 ? (
                     <div className="flex flex-col items-center py-8 text-slate-400">
                       <BarChart2 size={28} className="mb-2 opacity-40" />
                       <p className="font-bold text-sm">No results yet</p>
+                      <p className="text-xs font-bold mt-1 opacity-60">Results will appear once uploaded by teacher</p>
+                    </div>
+                  ) : (
+                    <div className="space-y-2">
+                      {academicRecord?.exams.map(exam => {
+                        const pct = Math.round((exam.obtainedMarks / exam.maxMarks) * 100);
+                        return (
+                          <div key={exam.id} className="bg-slate-50 rounded-xl p-3">
+                            <div className="flex items-start justify-between mb-2">
+                              <div>
+                                <div className="font-black text-slate-900 text-sm">{exam.examName}</div>
+                                <div className="text-[10px] font-bold text-slate-400 mt-0.5">{exam.subject} · {exam.date}</div>
+                              </div>
+                              <div className="text-right">
+                                <div className={`text-lg font-black ${pct >= 75 ? 'text-emerald-600' : pct >= 50 ? 'text-amber-600' : 'text-rose-500'}`}>
+                                  {exam.grade}
+                                </div>
+                                <div className="text-[10px] font-bold text-slate-400">{exam.obtainedMarks}/{exam.maxMarks}</div>
+                              </div>
+                            </div>
+                            <div className="bg-white rounded-full h-1.5">
+                              <div className={`h-1.5 rounded-full ${pct >= 75 ? 'bg-emerald-500' : pct >= 50 ? 'bg-amber-400' : 'bg-rose-400'}`}
+                                style={{ width: `${pct}%` }} />
+                            </div>
+                          </div>
+                        );
+                      })}
                     </div>
                   )}
-                  {academicRecord?.exams.map(exam => (
-                    <div key={exam.id} className="flex items-center justify-between p-3 bg-slate-50 rounded-xl">
-                      <div>
-                        <div className="font-bold text-slate-800 text-xs">{exam.examName}</div>
-                        <div className="text-[10px] font-bold text-slate-400 mt-0.5">{exam.subject} · {exam.date}</div>
-                      </div>
-                      <div className="text-right">
-                        <div className="font-black text-slate-900 text-sm">{exam.obtainedMarks}/{exam.maxMarks}</div>
-                        <div className={`text-[10px] font-black mt-0.5 ${exam.grade.startsWith('A') ? 'text-emerald-600' : 'text-blue-600'}`}>{exam.grade}</div>
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              </div>
-            )}
-
-            {activeProfileTab === 'FEES' && (
-              <>
-                <div className="bg-white rounded-2xl border border-slate-100 shadow-sm p-4">
-                  <p className="text-[10px] font-black uppercase tracking-widest text-slate-400 mb-3">Fee Summary</p>
-                  <div className="flex gap-3">
-                    <div className="flex-1 text-center">
-                      <div className="text-lg font-black text-emerald-600">₹{(selected.paidFee / 1000).toFixed(0)}K</div>
-                      <div className="text-[9px] font-black text-slate-400 uppercase">Paid</div>
-                    </div>
-                    <div className="flex-1 text-center">
-                      <div className="text-lg font-black text-rose-500">₹{((selected.totalFee - selected.paidFee) / 1000).toFixed(0)}K</div>
-                      <div className="text-[9px] font-black text-slate-400 uppercase">Due</div>
-                    </div>
-                  </div>
-                </div>
-                <div className="space-y-2">
-                  {feeRecords.map(fee => (
-                    <div key={fee.id} className="bg-white rounded-2xl border border-slate-100 shadow-sm p-4">
-                      <div className="flex items-center justify-between">
-                        <div>
-                          <div className="font-bold text-slate-800 text-sm">{fee.description}</div>
-                          <div className="text-[10px] font-bold text-slate-400 mt-0.5">Due: {fee.dueDate}</div>
-                        </div>
-                        <div className="flex flex-col items-end gap-2">
-                          <span className="font-black text-slate-900 text-sm">₹{fee.amount.toLocaleString('en-IN')}</span>
-                          {fee.status !== PaymentStatus.PAID && (
-                            <button onClick={() => handleMarkFeePaid(fee.id)}
-                              className="text-[10px] font-black text-emerald-700 bg-emerald-50 px-2.5 py-1 rounded-lg">
-                              Mark Paid
-                            </button>
-                          )}
-                        </div>
-                      </div>
-                    </div>
-                  ))}
                 </div>
               </>
             )}
 
-            {activeProfileTab === 'ATTENDANCE' && (
-              <div className="bg-white rounded-2xl border border-slate-100 shadow-sm p-4">
-                <p className="text-[10px] font-black uppercase tracking-widest text-slate-400 mb-3">Attendance</p>
-                <div className="flex items-center justify-between mb-4">
-                  <span className="font-black text-slate-400 text-xs">Overall</span>
-                  <span className={`font-black text-2xl ${selected.attendancePercent >= 75 ? 'text-emerald-600' : 'text-rose-500'}`}>{selected.attendancePercent}%</span>
+            {/* ── FEES TAB ─────────────────────────────── */}
+            {activeProfileTab === 'FEES' && (
+              <>
+                {/* Summary */}
+                <div className="bg-gradient-to-br from-slate-800 to-slate-900 rounded-2xl p-5 text-white">
+                  <p className="text-[9px] font-black uppercase tracking-widest text-white/50 mb-3">Fee Overview</p>
+                  <div className="grid grid-cols-3 gap-3 text-center">
+                    <div>
+                      <div className="text-xl font-black text-white">₹{(selected.totalFee / 1000).toFixed(0)}K</div>
+                      <div className="text-[8px] font-bold text-white/40 uppercase mt-0.5">Total</div>
+                    </div>
+                    <div>
+                      <div className="text-xl font-black text-emerald-400">₹{(selected.paidFee / 1000).toFixed(0)}K</div>
+                      <div className="text-[8px] font-bold text-white/40 uppercase mt-0.5">Paid</div>
+                    </div>
+                    <div>
+                      <div className="text-xl font-black text-rose-400">₹{((selected.totalFee - selected.paidFee) / 1000).toFixed(0)}K</div>
+                      <div className="text-[8px] font-bold text-white/40 uppercase mt-0.5">Due</div>
+                    </div>
+                  </div>
+                  {/* Progress bar */}
+                  <div className="mt-4 bg-white/10 rounded-full h-2">
+                    <div className="h-2 rounded-full bg-emerald-400 transition-all"
+                      style={{ width: `${selected.totalFee > 0 ? Math.round((selected.paidFee / selected.totalFee) * 100) : 0}%` }} />
+                  </div>
+                  <div className="flex justify-between mt-1">
+                    <span className="text-[9px] font-bold text-white/40">0%</span>
+                    <span className="text-[9px] font-black text-emerald-400">
+                      {selected.totalFee > 0 ? Math.round((selected.paidFee / selected.totalFee) * 100) : 0}% paid
+                    </span>
+                    <span className="text-[9px] font-bold text-white/40">100%</span>
+                  </div>
                 </div>
-                {(academicRecord?.attendanceRecords.length ?? 0) === 0 && (
-                  <div className="flex flex-col items-center py-6 text-slate-400">
-                    <Calendar size={28} className="mb-2 opacity-40" />
-                    <p className="font-bold text-sm">No data</p>
+
+                {/* Records */}
+                {feeRecords.length === 0 ? (
+                  <div className="bg-white rounded-2xl border border-slate-100 shadow-sm flex flex-col items-center py-10 text-slate-400">
+                    <IndianRupee size={28} className="mb-2 opacity-40" />
+                    <p className="font-bold text-sm">No fee records</p>
+                  </div>
+                ) : (
+                  <div className="space-y-2">
+                    {feeRecords.map(fee => (
+                      <div key={fee.id} className="bg-white rounded-2xl border border-slate-100 shadow-sm p-4">
+                        <div className="flex items-start justify-between gap-3">
+                          <div className="flex-1">
+                            <div className="font-bold text-slate-800 text-sm">{fee.description}</div>
+                            <div className="text-[10px] font-bold text-slate-400 mt-0.5">Due: {fee.dueDate}</div>
+                            {fee.paidAt && (
+                              <div className="text-[10px] font-bold text-emerald-600 mt-0.5">Paid: {fee.paidAt}</div>
+                            )}
+                          </div>
+                          <div className="flex flex-col items-end gap-2 shrink-0">
+                            <span className="font-black text-slate-900 text-sm">₹{fee.amount.toLocaleString('en-IN')}</span>
+                            <span className={`text-[9px] font-black px-2 py-0.5 rounded-full uppercase ${
+                              fee.status === PaymentStatus.PAID ? 'bg-emerald-100 text-emerald-700' :
+                              fee.status === 'PARTIAL' ? 'bg-amber-100 text-amber-700' :
+                              'bg-rose-100 text-rose-600'
+                            }`}>{fee.status}</span>
+                            {fee.status !== PaymentStatus.PAID && (
+                              <button onClick={() => handleMarkFeePaid(fee.id)}
+                                className="text-[10px] font-black text-emerald-700 bg-emerald-50 border border-emerald-200 px-3 py-1 rounded-xl active:scale-95 transition-transform">
+                                Mark Paid
+                              </button>
+                            )}
+                          </div>
+                        </div>
+                      </div>
+                    ))}
                   </div>
                 )}
-                <div className="space-y-2">
-                  {academicRecord?.attendanceRecords.map(att => {
-                    const pct = att.total > 0 ? Math.round((att.present / att.total) * 100) : 0;
-                    return (
-                      <div key={att.month} className="flex items-center gap-3">
-                        <div className="w-20 text-[10px] font-bold text-slate-500 shrink-0">{att.month}</div>
-                        <div className="flex-1 bg-slate-100 rounded-full h-2">
-                          <div className={`h-2 rounded-full ${pct >= 75 ? 'bg-emerald-500' : 'bg-rose-400'}`} style={{ width: `${pct}%` }} />
-                        </div>
-                        <div className="text-[10px] font-black text-slate-600 shrink-0">{att.present}/{att.total}</div>
-                      </div>
-                    );
-                  })}
-                </div>
-              </div>
+              </>
             )}
 
+            {/* ── DOCS TAB ─────────────────────────────── */}
             {activeProfileTab === 'DOCS' && (
-              <div className="space-y-4">
-                {/* Already uploaded docs from student record */}
-                {selected.docs.length > 0 && (
-                  <div className="bg-white rounded-2xl border border-slate-100 shadow-sm p-4">
-                    <p className="text-[10px] font-black uppercase tracking-widest text-slate-400 mb-3">Previously Attached</p>
+              <>
+                {/* Transport assignment */}
+                <div className="bg-white rounded-2xl border border-slate-100 shadow-sm p-4">
+                  <SectionTitle icon={Bus} title="Transport Assignment" />
+                  {studentTransport ? (
+                    <div className="space-y-0">
+                      <ProfileField label="Vehicle No." value={studentTransport.vehicle.vehicleNo} />
+                      <ProfileField label="Type" value={studentTransport.vehicle.type} />
+                      <ProfileField label="Route" value={studentTransport.vehicle.routeName} />
+                      <ProfileField label="Boarding Stop" value={studentTransport.assignment.boardingStopName} />
+                      <ProfileField label="Driver" value={studentTransport.vehicle.driverName} />
+                      <ProfileField label="Driver Phone" value={studentTransport.vehicle.driverPhone} />
+                      <ProfileField label="Monthly Fee"
+                        value={`₹${studentTransport.assignment.monthlyAmount.toLocaleString('en-IN')}/mo`} />
+                    </div>
+                  ) : (
+                    <div className="flex flex-col items-center py-6 text-slate-400">
+                      <Bus size={28} className="mb-2 opacity-40" />
+                      <p className="font-bold text-sm">No transport assigned</p>
+                      <p className="text-xs font-bold mt-1 opacity-60">Assign via Transport Management</p>
+                    </div>
+                  )}
+                </div>
+
+                {/* Submitted documents */}
+                <div className="bg-white rounded-2xl border border-slate-100 shadow-sm p-4">
+                  <SectionTitle icon={FileText} title="Submitted Documents" />
+                  {selected.docs.length > 0 ? (
                     <div className="space-y-2">
                       {selected.docs.map(doc => (
                         <div key={doc.id} className="flex items-center gap-3 bg-emerald-50 border border-emerald-100 rounded-xl px-3 py-2.5">
-                          <CheckCircle2 size={16} className="text-emerald-600 shrink-0" />
-                          <span className="text-sm font-bold text-emerald-800 flex-1 truncate">{doc.name}</span>
-                          <span className="text-[9px] font-black text-emerald-600 bg-emerald-100 px-2 py-0.5 rounded-full">SAVED</span>
+                          <CheckCircle2 size={15} className="text-emerald-600 shrink-0" />
+                          <div className="flex-1 min-w-0">
+                            <span className="text-sm font-bold text-emerald-800 truncate block">{doc.name}</span>
+                            {doc.uploadedAt && (
+                              <span className="text-[9px] font-bold text-emerald-600">{doc.uploadedAt}</span>
+                            )}
+                          </div>
+                          <span className="text-[9px] font-black text-emerald-600 bg-emerald-100 px-2 py-0.5 rounded-full shrink-0">SAVED</span>
                         </div>
                       ))}
                     </div>
-                  </div>
-                )}
+                  ) : (
+                    <div className="flex flex-col items-center py-5 text-slate-400">
+                      <FolderOpen size={24} className="mb-2 opacity-40" />
+                      <p className="font-bold text-sm">No documents submitted</p>
+                    </div>
+                  )}
+                </div>
 
                 {/* Upload checklist */}
                 <div className="bg-white rounded-2xl border border-slate-100 shadow-sm p-4">
-                  <p className="text-[10px] font-black uppercase tracking-widest text-slate-400 mb-1">Document Checklist</p>
-                  <p className="text-[10px] font-bold text-slate-400 mb-3">Attach documents (max 2MB each)</p>
+                  <SectionTitle icon={CreditCard} title="Document Checklist" />
+                  <p className="text-[10px] font-bold text-slate-400 mb-3">Upload missing documents (max 2MB each)</p>
                   <div className="space-y-2">
                     {profileDocs.map(doc => (
                       <div key={doc.type} className="flex items-center justify-between bg-slate-50 rounded-xl p-3 border border-slate-200">
@@ -1013,20 +1197,28 @@ export const StudentsManager: React.FC<Props> = ({ onBack, initialView }) => {
                           {doc.uploaded
                             ? <CheckCircle2 size={16} className="text-emerald-600 shrink-0" />
                             : <div className="w-4 h-4 rounded border-2 border-slate-300 shrink-0" />}
-                          <span className={`text-sm font-bold ${doc.uploaded ? 'text-emerald-800' : 'text-slate-700'}`}>{doc.name}</span>
+                          <span className={`text-sm font-bold ${doc.uploaded ? 'text-emerald-800' : 'text-slate-700'}`}>
+                            {doc.name}
+                          </span>
                         </div>
                         <label className="cursor-pointer shrink-0">
-                          <input type="file" onChange={e => handleProfileDocUpload(e, doc.type)} className="hidden" accept="image/*,.pdf,.doc,.docx" />
-                          <span className={`text-[10px] font-black px-3 py-1.5 rounded-full transition-colors ${doc.uploaded ? 'bg-emerald-100 text-emerald-700' : 'bg-indigo-100 text-indigo-700 hover:bg-indigo-200'}`}>
-                            {doc.uploaded ? '✓ Done' : 'Attach'}
+                          <input type="file" onChange={e => handleProfileDocUpload(e, doc.type)} className="hidden"
+                            accept="image/*,.pdf,.doc,.docx" />
+                          <span className={`text-[10px] font-black px-3 py-1.5 rounded-full transition-colors ${
+                            doc.uploaded
+                              ? 'bg-emerald-100 text-emerald-700'
+                              : 'bg-indigo-100 text-indigo-700 hover:bg-indigo-200'
+                          }`}>
+                            {doc.uploaded ? '✓ Done' : 'Upload'}
                           </span>
                         </label>
                       </div>
                     ))}
                   </div>
                 </div>
-              </div>
+              </>
             )}
+
           </div>
         </div>
       </div>
