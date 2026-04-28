@@ -389,7 +389,7 @@ export const AttendanceManager: React.FC<Props> = ({ onBack }) => {
             {!selectedRecord ? (
               <button onClick={handleSubmit} disabled={isSubmitting}
                 className="w-full flex items-center justify-center gap-2 bg-blue-600 text-white font-black text-sm uppercase tracking-widest py-4 rounded-2xl active:scale-95 transition-transform shadow-lg disabled:opacity-50">
-                {isSubmitting ? 'Submitting…' : <><Save size={16}/> Submit Attendance</>}
+                {isSubmitting ? 'Submitting…' : <><Save size={16}/> Submit For Review</>}
               </button>
             ) : (
               <button onClick={handleSaveEdit}
