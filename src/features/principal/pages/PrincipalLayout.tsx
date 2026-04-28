@@ -18,6 +18,7 @@ import { YearClosingWizard } from '../components/YearClosingWizard';
 import { StaffAttendanceManager } from '../components/StaffAttendanceManager';
 import { TransportManager } from '../components/TransportManager';
 import { AttendanceHub } from '../components/AttendanceHub';
+import { ToolsManager } from '../components/ToolsManager';
 
 export type PrincipalView =
   | 'DASHBOARD'
@@ -37,7 +38,8 @@ export type PrincipalView =
   | 'YEAR_CLOSING'
   | 'STAFF_ATTENDANCE'
   | 'ATTENDANCE'
-  | 'TRANSPORT_MGMT';
+  | 'TRANSPORT_MGMT'
+  | 'TOOLS';
 
 export const PrincipalLayout: React.FC = () => {
   const [view, setView] = useState<PrincipalView>('DASHBOARD');
@@ -65,6 +67,7 @@ export const PrincipalLayout: React.FC = () => {
   if (view === 'STAFF_ATTENDANCE') return <StaffAttendanceManager onBack={goBack} />;
   if (view === 'ATTENDANCE')       return <AttendanceHub          onBack={goBack} />;
   if (view === 'TRANSPORT_MGMT')   return <TransportManager       onBack={goBack} />;
+  if (view === 'TOOLS')            return <ToolsManager           onBack={goBack} />;
 
   return (
     <>
