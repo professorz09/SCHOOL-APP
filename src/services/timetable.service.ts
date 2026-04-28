@@ -1,4 +1,4 @@
-export type TDay = 'Monday' | 'Tuesday' | 'Wednesday' | 'Thursday' | 'Friday' | 'Saturday';
+export type TDay = 'Monday' | 'Tuesday' | 'Wednesday' | 'Thursday' | 'Friday' | 'Saturday' | 'Sunday';
 export type SlotType = 'CLASS' | 'BREAK' | 'LUNCH' | 'ASSEMBLY' | 'FREE';
 
 export interface PeriodSlot {
@@ -36,7 +36,7 @@ export let PERIOD_SLOTS: PeriodSlot[] = [
   { slotId: 'p6', label: 'Period 6', startTime: '13:00', endTime: '13:45', type: 'CLASS', isFixed: false },
 ];
 
-export const DAYS: TDay[] = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
+export const DAYS: TDay[] = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'];
 
 const CLASS_SUBJECTS: Record<string, string[]> = {
   '8-A': ['Mathematics', 'Science', 'English', 'Hindi', 'Social Studies', 'Computer'],
@@ -161,7 +161,7 @@ export const timetableService = {
   getTodayForTeacher(teacherId: string, academicYearId = 'ay1'): (TimetableEntry & { slot: PeriodSlot })[] {
     const days = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
     const todayName = days[new Date().getDay()] as TDay;
-    const dayToUse: TDay = todayName === 'Sunday' ? 'Monday' : todayName;
+    const dayToUse: TDay = todayName;
     return _entries
       .filter(e => e.teacherId === teacherId && e.day === dayToUse && e.academicYearId === academicYearId)
       .map(e => ({ ...e, slot: PERIOD_SLOTS.find(s => s.slotId === e.slotId)! }))

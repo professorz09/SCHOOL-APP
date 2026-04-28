@@ -6,9 +6,11 @@ import { FeesView } from '../components/FeesView';
 import { TransportView } from '../components/TransportView';
 import { StudentNoticesView } from '../components/StudentNoticesView';
 import { StudentComplaintsView } from '../components/StudentComplaintsView';
+import { HomeworkView } from '../components/HomeworkView';
+import { AttendanceView } from '../components/AttendanceView';
 import {
   Calendar, Trophy, CreditCard, Bus, Bell,
-  BookOpen, Library, HeadphonesIcon, Clock, FileText,
+  BookOpen, UserCheck, HeadphonesIcon, Clock, FileText,
 } from 'lucide-react';
 import { timetableService, PERIOD_SLOTS } from '../../../services/timetable.service';
 import { useAuthStore } from '../../../store/authStore';
@@ -16,12 +18,12 @@ import { useAuthStore } from '../../../store/authStore';
 const MY_CLASS = '10-A';
 const SCHOOL_NAME = 'EduGrow School';
 
-type StudentView = 'DASHBOARD' | 'TIMETABLE' | 'RESULTS' | 'FEES' | 'TRANSPORT' | 'NOTICES' | 'COMPLAINTS';
+type StudentView = 'DASHBOARD' | 'TIMETABLE' | 'RESULTS' | 'FEES' | 'TRANSPORT' | 'NOTICES' | 'COMPLAINTS' | 'HOMEWORK' | 'ATTENDANCE';
 
 const getTodaySchedule = () => {
   const days = ['Sunday','Monday','Tuesday','Wednesday','Thursday','Friday','Saturday'];
   const todayName = days[new Date().getDay()];
-  const dayToUse = todayName === 'Sunday' || todayName === 'Saturday' ? 'Monday' : todayName;
+  const dayToUse = todayName;
   const weeklyMap = timetableService.getClassWeeklyMap(MY_CLASS);
   const entries = (weeklyMap as Record<string, typeof weeklyMap[keyof typeof weeklyMap]>)[dayToUse] ?? [];
   return entries
@@ -68,16 +70,18 @@ export const StudentLayout: React.FC = () => {
   if (view === 'TRANSPORT')   return <TransportView         onBack={() => setView('DASHBOARD')} />;
   if (view === 'NOTICES')     return <StudentNoticesView    onBack={() => setView('DASHBOARD')} />;
   if (view === 'COMPLAINTS')  return <StudentComplaintsView onBack={() => setView('DASHBOARD')} />;
+  if (view === 'HOMEWORK')    return <HomeworkView          onBack={() => setView('DASHBOARD')} />;
+  if (view === 'ATTENDANCE')  return <AttendanceView        onBack={() => setView('DASHBOARD')} />;
 
   const MODULES: { icon: React.ReactNode; label: string; view: StudentView; iconColor: string }[] = [
-    { icon: <Calendar    size={22} />, label: 'Timetable', view: 'TIMETABLE',   iconColor: 'text-blue-600' },
-    { icon: <BookOpen    size={22} />, label: 'Homework',  view: 'TIMETABLE',   iconColor: 'text-indigo-600' },
-    { icon: <CreditCard  size={22} />, label: 'Fees',      view: 'FEES',        iconColor: 'text-blue-500' },
-    { icon: <Trophy      size={22} />, label: 'Results',   view: 'RESULTS',     iconColor: 'text-amber-500' },
-    { icon: <Bus         size={22} />, label: 'Transport', view: 'TRANSPORT',   iconColor: 'text-orange-500' },
-    { icon: <Bell        size={22} />, label: 'Notices',   view: 'NOTICES',     iconColor: 'text-blue-500' },
-    { icon: <Library     size={22} />, label: 'Library',   view: 'NOTICES',     iconColor: 'text-blue-600' },
-    { icon: <HeadphonesIcon size={22} />, label: 'Helpdesk', view: 'COMPLAINTS', iconColor: 'text-rose-500' },
+    { icon: <Calendar       size={22} />, label: 'Timetable',  view: 'TIMETABLE',  iconColor: 'text-blue-600' },
+    { icon: <BookOpen       size={22} />, label: 'Homework',   view: 'HOMEWORK',   iconColor: 'text-indigo-600' },
+    { icon: <CreditCard     size={22} />, label: 'Fees',       view: 'FEES',       iconColor: 'text-blue-500' },
+    { icon: <Trophy         size={22} />, label: 'Results',    view: 'RESULTS',    iconColor: 'text-amber-500' },
+    { icon: <Bus            size={22} />, label: 'Transport',  view: 'TRANSPORT',  iconColor: 'text-orange-500' },
+    { icon: <Bell           size={22} />, label: 'Notices',    view: 'NOTICES',    iconColor: 'text-blue-500' },
+    { icon: <UserCheck      size={22} />, label: 'Attendance', view: 'ATTENDANCE', iconColor: 'text-emerald-600' },
+    { icon: <HeadphonesIcon size={22} />, label: 'Helpdesk',   view: 'COMPLAINTS', iconColor: 'text-rose-500' },
   ];
 
   return (
@@ -141,9 +145,8 @@ export const StudentLayout: React.FC = () => {
               return (
                 <div key={idx}
                   className={`flex items-center gap-3 px-4 py-3.5 ${idx < Math.min(todaySchedule.length, 4) - 1 ? 'border-b border-slate-50' : ''}`}>
-                  <div className={`w-10 h-10 rounded-xl flex flex-col items-center justify-center shrink-0 font-black text-[10px] leading-tight ${live ? 'bg-indigo-600 text-white' : 'bg-slate-100 text-slate-500'}`}>
-                    <span>Per</span>
-                    <span>{idx + 1}</span>
+                  <div className={`w-10 h-10 rounded-xl flex items-center justify-center shrink-0 font-black text-sm ${live ? 'bg-indigo-600 text-white' : 'bg-slate-100 text-slate-500'}`}>
+                    {idx + 1}
                   </div>
                   <div className="flex-1 min-w-0">
                     <div className={`font-extrabold text-sm ${live ? 'text-slate-900' : 'text-slate-400'}`}>
