@@ -31,8 +31,7 @@ const periodDot = (type: SlotType) => {
 
 const todayDayName = (): TDay => {
   const days = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
-  const n = days[new Date().getDay()];
-  return (n === 'Sunday' ? 'Monday' : n) as TDay;
+  return days[new Date().getDay()] as TDay;
 };
 
 const isCurrentPeriod = (startTime: string, endTime: string): boolean => {
@@ -132,7 +131,7 @@ export const TimetableView: React.FC<Props> = ({ onBack }) => {
                 <div className="flex items-start justify-between gap-2">
                   <div>
                     <div className={`font-extrabold text-sm ${live ? 'text-blue-900' : 'text-slate-900'}`}>
-                      {slot.isFixed ? slot.label : entry ? entry.subject : `${slot.label} – Free`}
+                      {slot.isFixed ? slot.label : entry ? entry.subject : 'Free'}
                     </div>
                     {entry && !slot.isFixed && (
                       <div className="text-[10px] font-bold text-slate-500 mt-0.5">{entry.teacherName}</div>

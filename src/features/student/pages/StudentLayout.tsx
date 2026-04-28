@@ -23,7 +23,7 @@ type StudentView = 'DASHBOARD' | 'TIMETABLE' | 'RESULTS' | 'FEES' | 'TRANSPORT' 
 const getTodaySchedule = () => {
   const days = ['Sunday','Monday','Tuesday','Wednesday','Thursday','Friday','Saturday'];
   const todayName = days[new Date().getDay()];
-  const dayToUse = todayName === 'Sunday' || todayName === 'Saturday' ? 'Monday' : todayName;
+  const dayToUse = todayName;
   const weeklyMap = timetableService.getClassWeeklyMap(MY_CLASS);
   const entries = (weeklyMap as Record<string, typeof weeklyMap[keyof typeof weeklyMap]>)[dayToUse] ?? [];
   return entries
@@ -145,9 +145,8 @@ export const StudentLayout: React.FC = () => {
               return (
                 <div key={idx}
                   className={`flex items-center gap-3 px-4 py-3.5 ${idx < Math.min(todaySchedule.length, 4) - 1 ? 'border-b border-slate-50' : ''}`}>
-                  <div className={`w-10 h-10 rounded-xl flex flex-col items-center justify-center shrink-0 font-black text-[10px] leading-tight ${live ? 'bg-indigo-600 text-white' : 'bg-slate-100 text-slate-500'}`}>
-                    <span>Per</span>
-                    <span>{idx + 1}</span>
+                  <div className={`w-10 h-10 rounded-xl flex items-center justify-center shrink-0 font-black text-sm ${live ? 'bg-indigo-600 text-white' : 'bg-slate-100 text-slate-500'}`}>
+                    {idx + 1}
                   </div>
                   <div className="flex-1 min-w-0">
                     <div className={`font-extrabold text-sm ${live ? 'text-slate-900' : 'text-slate-400'}`}>
