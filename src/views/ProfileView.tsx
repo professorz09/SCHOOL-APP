@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { User, Phone, Shield, LogOut, ChevronRight, Bell, Lock, GraduationCap, Briefcase, Car, Star, X, Save, Eye, EyeOff } from 'lucide-react';
+import { User, Phone, Shield, LogOut, ChevronRight, Lock, GraduationCap, Car, Star, X, Eye, EyeOff } from 'lucide-react';
 import { useAuthStore } from '../store/authStore';
 import { useUIStore } from '../store/uiStore';
 
@@ -31,11 +31,8 @@ const ROLE_ICON: Record<string, React.ReactNode> = {
 };
 
 export const ProfileView: React.FC = () => {
-  const { session, logout, setSession } = useAuthStore();
+  const { session, logout } = useAuthStore();
   const { showToast } = useUIStore();
-  const [isEditMode, setIsEditMode] = useState(false);
-  const [editName, setEditName] = useState(session?.name || '');
-  const [editMobile, setEditMobile] = useState(session?.mobileNumber || '');
   const [showChangePassword, setShowChangePassword] = useState(false);
   const [currentPassword, setCurrentPassword] = useState('');
   const [newPassword, setNewPassword] = useState('');
@@ -43,21 +40,6 @@ export const ProfileView: React.FC = () => {
   const [showPassword, setShowPassword] = useState(false);
 
   if (!session) return null;
-
-  const handleSaveProfile = () => {
-    if (!editName.trim()) {
-      showToast('Name cannot be empty', 'error');
-      return;
-    }
-    if (!editMobile.trim() || editMobile.length < 10) {
-      showToast('Valid mobile number required', 'error');
-      return;
-    }
-    const updated = { ...session, name: editName, mobileNumber: editMobile };
-    setSession(updated);
-    setIsEditMode(false);
-    showToast('Profile updated successfully');
-  };
 
   const handleChangePassword = () => {
     if (!currentPassword || !newPassword || !confirmPassword) {
@@ -114,71 +96,28 @@ export const ProfileView: React.FC = () => {
       </div>
 
       {/* Account Info */}
-      {!isEditMode ? (
-        <div className="bg-white rounded-2xl border border-slate-100 shadow-sm overflow-hidden">
-          <div className="flex items-center justify-between px-4 pt-4 pb-2">
-            <p className="text-[9px] font-black uppercase tracking-widest text-slate-400">Account Info</p>
-            {session.role !== 'PRINCIPAL' && (
-              <button onClick={() => { setEditName(session.name || ''); setEditMobile(session.mobileNumber || ''); setIsEditMode(true); }}
-                className="text-[9px] font-black text-indigo-600 hover:text-indigo-700">
-                Edit
-              </button>
-            )}
-          </div>
-          {[
-            { icon: User, label: 'Full Name', val: session.name || '—' },
-            { icon: Phone, label: 'Mobile Number', val: session.mobileNumber || '—' },
-            { icon: Shield, label: 'Role', val: roleLabel },
-          ].map(({ icon: Icon, label, val }, idx, arr) => (
-            <div key={label} className={`flex items-center gap-3 px-4 py-3.5 ${idx < arr.length - 1 ? 'border-b border-slate-50' : ''}`}>
-              <div className="w-8 h-8 rounded-xl bg-slate-50 flex items-center justify-center shrink-0">
-                <Icon size={15} className="text-slate-500" />
-              </div>
-              <div className="flex-1">
-                <div className="text-[9px] font-black uppercase tracking-widest text-slate-400">{label}</div>
-                <div className="font-bold text-slate-900 text-sm mt-0.5">{val}</div>
-              </div>
+      <div className="bg-white rounded-2xl border border-slate-100 shadow-sm overflow-hidden">
+        <p className="text-[9px] font-black uppercase tracking-widest text-slate-400 px-4 pt-4 pb-2">Account Info</p>
+        {[
+          { icon: User, label: 'Full Name', val: session.name || '—' },
+          { icon: Phone, label: 'Mobile Number', val: session.mobileNumber || '—' },
+          { icon: Shield, label: 'Role', val: roleLabel },
+        ].map(({ icon: Icon, label, val }, idx, arr) => (
+          <div key={label} className={`flex items-center gap-3 px-4 py-3.5 ${idx < arr.length - 1 ? 'border-b border-slate-50' : ''}`}>
+            <div className="w-8 h-8 rounded-xl bg-slate-50 flex items-center justify-center shrink-0">
+              <Icon size={15} className="text-slate-500" />
             </div>
-          ))}
-        </div>
-      ) : (
-        <div className="bg-white rounded-2xl border border-slate-100 shadow-sm overflow-hidden p-4 space-y-4">
-          <div className="flex items-center justify-between mb-3">
-            <p className="text-[9px] font-black uppercase tracking-widest text-slate-400">Edit Profile</p>
-            <button onClick={() => setIsEditMode(false)} className="p-1 text-slate-400 hover:text-slate-600">
-              <X size={16} />
-            </button>
+            <div className="flex-1">
+              <div className="text-[9px] font-black uppercase tracking-widest text-slate-400">{label}</div>
+              <div className="font-bold text-slate-900 text-sm mt-0.5">{val}</div>
+            </div>
           </div>
-          <div>
-            <label className="block text-[9px] font-black uppercase tracking-widest text-slate-500 mb-1.5">Full Name</label>
-            <input value={editName} onChange={e => setEditName(e.target.value)}
-              className="w-full border border-slate-200 bg-slate-50 rounded-xl px-4 py-3 font-bold text-sm outline-none focus:border-indigo-500" />
-          </div>
-          <div>
-            <label className="block text-[9px] font-black uppercase tracking-widest text-slate-500 mb-1.5">Mobile Number</label>
-            <input value={editMobile} onChange={e => setEditMobile(e.target.value)} placeholder="10-digit mobile"
-              className="w-full border border-slate-200 bg-slate-50 rounded-xl px-4 py-3 font-bold text-sm outline-none focus:border-indigo-500" />
-          </div>
-          <button onClick={handleSaveProfile}
-            className="w-full flex items-center justify-center gap-2 bg-indigo-600 text-white font-black text-sm py-3 rounded-xl hover:bg-indigo-700 transition-colors">
-            <Save size={16} /> Save Changes
-          </button>
-        </div>
-      )}
+        ))}
+      </div>
 
       {/* Settings Links */}
       <div className="bg-white rounded-2xl border border-slate-100 shadow-sm overflow-hidden">
         <p className="text-[9px] font-black uppercase tracking-widest text-slate-400 px-4 pt-4 pb-2">Settings</p>
-        <button disabled className="w-full flex items-center gap-3 px-4 py-3.5 border-b border-slate-50 active:bg-slate-50 transition-colors opacity-50 cursor-not-allowed">
-          <div className="w-8 h-8 rounded-xl bg-blue-50 flex items-center justify-center shrink-0">
-            <Bell size={15} className="text-blue-600" />
-          </div>
-          <div className="flex-1 text-left">
-            <div className="font-bold text-slate-900 text-sm">Notifications</div>
-            <div className="text-[9px] font-bold text-slate-400">Coming soon</div>
-          </div>
-          <ChevronRight size={16} className="text-slate-300" />
-        </button>
         <button onClick={() => setShowChangePassword(true)} className="w-full flex items-center gap-3 px-4 py-3.5 active:bg-slate-50 transition-colors hover:bg-slate-50">
           <div className="w-8 h-8 rounded-xl bg-violet-50 flex items-center justify-center shrink-0">
             <Lock size={15} className="text-violet-600" />
