@@ -147,7 +147,7 @@ export const StaffAttendanceManager: React.FC<Props> = ({ onBack }) => {
     setActiveStatus(null);
   };
 
-  // ── Summary counts — must be before any conditional return ────────────────
+  // ── ALL hooks BEFORE any conditional return ──────────────────────────────
   const counts = useMemo(() => {
     const c: Record<AttendanceStatus, number> = { PRESENT: 0, ABSENT: 0, HALF_DAY: 0, LEAVE: 0, LATE: 0, HOLIDAY: 0 };
     if (!record) return c;
@@ -155,6 +155,54 @@ export const StaffAttendanceManager: React.FC<Props> = ({ onBack }) => {
     return c;
   }, [record]);
 
+  const filtered = useMemo(() =>
+    record ? record.rows.filter(s =>
+      s.name.toLowerCase().includes(search.toLowerCase()) || s.role.toLowerCase().includes(search.toLowerCase())
+    ) : []
+  , [record, search]);
+
+  useEffect(() => {
+    if (!stripRef.current) return;
+    const todayEl = stripRef.current.querySelector('[data-today="true"]');
+    if (todayEl && 'scrollIntoView' in todayEl) {
+      (todayEl as HTMLElement).scrollIntoView({ behavior: 'auto', inline: 'end', block: 'nearest' });
+    }
+  }, [dateStrip]);
+
+  // ── Action handlers ───────────────────────────────────────────────────────
+  const isLocked = record?.isLocked ?? false;
+
+  const bulkSet = (status: AttendanceStatus) => {
+    if (isLocked) return;
+    setRecord(r => r ? ({ ...r, rows: r.rows.map(row => ({ ...row, status })) }) : r);
+    setSaved(false);
+  };
+
+  const clearAll = () => {
+    if (isLocked) return;
+    setRecord(r => r ? ({ ...r, rows: r.rows.map(row => ({ ...row, status: 'PRESENT' as AttendanceStatus })) }) : r);
+    setSaved(false);
+  };
+
+  const setRowStatus = (staffId: string, status: AttendanceStatus) => {
+    if (isLocked) return;
+    setRecord(r => r ? ({
+      ...r,
+      rows: r.rows.map(row => row.staffId === staffId ? { ...row, status } : row),
+    }) : r);
+    setActiveStatus(null);
+    setSaved(false);
+  };
+
+  const handleSave = () => {
+    if (isLocked || !record) return;
+    saveRecord(record);
+    setSaved(true);
+  };
+
+  const ROW_STATUSES: AttendanceStatus[] = ['PRESENT', 'ABSENT', 'HALF_DAY', 'LEAVE', 'LATE'];
+
+  // ── Loading state (after all hooks) ──────────────────────────────────────
   if (!record) {
     return (
       <div className="w-full bg-slate-50 flex flex-col animate-in slide-in-from-right-8 duration-300">
@@ -170,54 +218,6 @@ export const StaffAttendanceManager: React.FC<Props> = ({ onBack }) => {
       </div>
     );
   }
-
-  const isLocked = record.isLocked;
-
-  // ── Bulk actions ──────────────────────────────────────────────────────────
-  const bulkSet = (status: AttendanceStatus) => {
-    if (isLocked) return;
-    setRecord(r => r ? ({ ...r, rows: r.rows.map(row => ({ ...row, status })) }) : r);
-    setSaved(false);
-  };
-
-  const clearAll = () => {
-    if (isLocked) return;
-    setRecord(r => r ? ({ ...r, rows: r.rows.map(row => ({ ...row, status: 'PRESENT' as AttendanceStatus })) }) : r);
-    setSaved(false);
-  };
-
-  // ── Per-row status change ─────────────────────────────────────────────────
-  const setRowStatus = (staffId: string, status: AttendanceStatus) => {
-    if (isLocked) return;
-    setRecord(r => r ? ({
-      ...r,
-      rows: r.rows.map(row => row.staffId === staffId ? { ...row, status } : row),
-    }) : r);
-    setActiveStatus(null);
-    setSaved(false);
-  };
-
-  // ── Save ─────────────────────────────────────────────────────────────────
-  const handleSave = () => {
-    if (isLocked || !record) return;
-    saveRecord(record);
-    setSaved(true);
-  };
-
-
-  const ROW_STATUSES: AttendanceStatus[] = ['PRESENT', 'ABSENT', 'HALF_DAY', 'LEAVE', 'LATE'];
-
-  useEffect(() => {
-    if (!stripRef.current) return;
-    const todayEl = stripRef.current.querySelector('[data-today="true"]');
-    if (todayEl && 'scrollIntoView' in todayEl) {
-      (todayEl as HTMLElement).scrollIntoView({ behavior: 'auto', inline: 'end', block: 'nearest' });
-    }
-  }, [dateStrip]);
-
-  const filtered = record ? record.rows.filter(s =>
-    s.name.toLowerCase().includes(search.toLowerCase()) || s.role.toLowerCase().includes(search.toLowerCase())
-  ) : [];
 
   return (
     <div className="w-full bg-slate-50 flex flex-col animate-in slide-in-from-right-8 duration-300">
