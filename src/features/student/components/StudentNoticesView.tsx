@@ -1,70 +1,238 @@
 import React, { useEffect, useState } from 'react';
-import { ArrowLeft, Bell, Pin } from 'lucide-react';
-import { studentDashboardService } from '../../../services/studentDashboard.service';
+import {
+  ArrowLeft, Bell, Pin, ChevronDown, ChevronUp,
+  Clock, CheckCircle2, AlertCircle, Calendar, User,
+  BookOpen, Trophy, IndianRupee, Megaphone,
+} from 'lucide-react';
+import { studentDashboardService, HomeworkItem } from '../../../services/studentDashboard.service';
 import { StudentNotice } from '../../../types/student.types';
 
 interface Props { onBack: () => void; }
 
-const catColor = (c: string) => {
-  const map: Record<string, string> = {
-    EXAM: 'bg-rose-50 text-rose-700',
-    FEE: 'bg-emerald-50 text-emerald-700',
-    EVENT: 'bg-violet-50 text-violet-700',
-    GENERAL: 'bg-slate-100 text-slate-600',
-  };
-  return map[c] ?? 'bg-slate-100 text-slate-600';
+/* ── subject icons & colors ─────────────────────────── */
+const SUBJ_ICON: Record<string, string> = {
+  Mathematics: '📐', Science: '🔬', English: '📖',
+  Hindi: '✍️', 'Social Studies': '🌍', 'Computer Science': '💻',
+  'Physical Education': '⚽',
 };
 
+const NOTICE_ICON: Record<string, React.ReactNode> = {
+  EXAM:    <Trophy size={16} className="text-rose-500" />,
+  FEE:     <IndianRupee size={16} className="text-emerald-500" />,
+  EVENT:   <Calendar size={16} className="text-violet-500" />,
+  GENERAL: <Megaphone size={16} className="text-slate-500" />,
+};
+
+const HW_STATUS_CFG = {
+  PENDING:   { label: 'Pending',   icon: <Clock size={10}/>,         cls: 'text-amber-700 bg-amber-50 border-amber-200' },
+  SUBMITTED: { label: 'Submitted', icon: <CheckCircle2 size={10}/>,  cls: 'text-emerald-700 bg-emerald-50 border-emerald-200' },
+  OVERDUE:   { label: 'Overdue',   icon: <AlertCircle size={10}/>,   cls: 'text-rose-700 bg-rose-50 border-rose-200' },
+};
+
+const NOTICE_CAT_COLOR: Record<string, string> = {
+  EXAM:    'text-rose-700 bg-rose-50 border-rose-200',
+  FEE:     'text-emerald-700 bg-emerald-50 border-emerald-200',
+  EVENT:   'text-violet-700 bg-violet-50 border-violet-200',
+  GENERAL: 'text-slate-600 bg-slate-100 border-slate-200',
+};
+
+const formatDate = (d: string) =>
+  new Date(d).toLocaleDateString('en-IN', { day: 'numeric', month: 'short' });
+
+const daysLeft = (due: string) =>
+  Math.ceil((new Date(due).getTime() - Date.now()) / 86400000);
+
+/* ── Unified item type ──────────────────────────────── */
+type FeedItem =
+  | { kind: 'notice'; data: StudentNotice }
+  | { kind: 'homework'; data: HomeworkItem };
+
+type FilterKey = 'ALL' | 'NOTICES' | 'HOMEWORK';
+
+/* ── Homework Card ──────────────────────────────────── */
+const HomeworkCard: React.FC<{ hw: HomeworkItem }> = ({ hw }) => {
+  const [open, setOpen] = useState(false);
+  const scfg = HW_STATUS_CFG[hw.status];
+  const days = daysLeft(hw.dueDate);
+
+  return (
+    <div className={`bg-white rounded-2xl border shadow-sm overflow-hidden ${hw.status === 'OVERDUE' ? 'border-rose-100' : 'border-slate-100'}`}>
+      <div className="px-4 pt-3.5 pb-3">
+        {/* Subject + status */}
+        <div className="flex items-start justify-between gap-2 mb-2">
+          <div className="flex items-center gap-2 min-w-0">
+            <span className="text-xl shrink-0">{SUBJ_ICON[hw.subject] ?? '📝'}</span>
+            <div className="min-w-0">
+              <div className="text-[10px] font-black uppercase tracking-widest text-slate-400">{hw.subject}</div>
+              <div className="font-black text-slate-900 text-sm leading-tight">{hw.title}</div>
+            </div>
+          </div>
+          <span className={`flex items-center gap-1 text-[9px] font-black px-2 py-1 rounded-full border shrink-0 ${scfg.cls}`}>
+            {scfg.icon}{scfg.label}
+          </span>
+        </div>
+
+        {/* Meta */}
+        <div className="flex items-center gap-3 text-[10px] font-bold text-slate-400 mb-2">
+          <span className="flex items-center gap-1"><User size={10}/>{hw.teacher}</span>
+          <span className="flex items-center gap-1"><Calendar size={10}/>Due: {formatDate(hw.dueDate)}</span>
+          {hw.status === 'PENDING' && days >= 0 && (
+            <span className={`font-black ${days <= 1 ? 'text-rose-500' : 'text-amber-500'}`}>
+              {days === 0 ? 'Due Today!' : `${days}d left`}
+            </span>
+          )}
+          {hw.status === 'OVERDUE' && (
+            <span className="font-black text-rose-500">{Math.abs(days)}d overdue</span>
+          )}
+        </div>
+
+        <button onClick={() => setOpen(o => !o)}
+          className="flex items-center gap-1 text-[10px] font-black text-blue-600 uppercase tracking-wide">
+          {open ? <ChevronUp size={12}/> : <ChevronDown size={12}/>}
+          {open ? 'Hide Details' : 'View Details'}
+        </button>
+
+        {open && (
+          <div className="mt-3 bg-slate-50 rounded-xl p-3 border border-slate-100">
+            <div className="text-[10px] font-black uppercase tracking-widest text-slate-400 mb-1.5">Instructions</div>
+            <p className="text-xs font-medium text-slate-700 leading-relaxed">{hw.description}</p>
+            <div className="mt-2.5 flex items-center gap-3 text-[10px] font-bold text-slate-400 pt-2 border-t border-slate-100">
+              <span>Assigned: {formatDate(hw.assignedDate)}</span>
+              <span>·</span>
+              <span>Due: {formatDate(hw.dueDate)}</span>
+            </div>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+};
+
+/* ── Notice Card ────────────────────────────────────── */
+const NoticeCard: React.FC<{ notice: StudentNotice }> = ({ notice }) => {
+  const [open, setOpen] = useState(false);
+  const catCls = NOTICE_CAT_COLOR[notice.category] ?? NOTICE_CAT_COLOR['GENERAL'];
+
+  return (
+    <div className={`bg-white rounded-2xl border shadow-sm overflow-hidden ${notice.pinned ? 'border-violet-100' : 'border-slate-100'}`}>
+      <div className="px-4 pt-3.5 pb-3">
+        {/* Icon + category + date */}
+        <div className="flex items-start justify-between gap-2 mb-2">
+          <div className="flex items-center gap-2 min-w-0">
+            <div className="w-9 h-9 rounded-xl bg-slate-50 border border-slate-100 flex items-center justify-center shrink-0">
+              {NOTICE_ICON[notice.category] ?? <Bell size={16} className="text-slate-400"/>}
+            </div>
+            <div className="min-w-0">
+              <div className="flex items-center gap-1.5 mb-0.5">
+                {notice.pinned && <Pin size={10} className="text-violet-500 shrink-0"/>}
+                <span className={`text-[9px] font-black px-2 py-0.5 rounded-full border uppercase ${catCls}`}>
+                  {notice.category}
+                </span>
+              </div>
+              <div className="font-black text-slate-900 text-sm leading-tight">{notice.title}</div>
+            </div>
+          </div>
+          <span className="text-[10px] font-bold text-slate-400 shrink-0">{notice.sentAt}</span>
+        </div>
+
+        <button onClick={() => setOpen(o => !o)}
+          className="flex items-center gap-1 text-[10px] font-black text-blue-600 uppercase tracking-wide mb-0.5">
+          {open ? <ChevronUp size={12}/> : <ChevronDown size={12}/>}
+          {open ? 'Hide' : 'Read More'}
+        </button>
+
+        {open && (
+          <div className="mt-2 bg-slate-50 rounded-xl p-3 border border-slate-100">
+            <p className="text-xs font-medium text-slate-700 leading-relaxed">{notice.body}</p>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+};
+
+/* ── Main Component ─────────────────────────────────── */
 export const StudentNoticesView: React.FC<Props> = ({ onBack }) => {
-  const [notices, setNotices] = useState<StudentNotice[]>([]);
-  const [filter, setFilter] = useState<string>('ALL');
+  const [notices, setNotices]   = useState<StudentNotice[]>([]);
+  const [homework, setHomework] = useState<HomeworkItem[]>([]);
+  const [filter, setFilter]     = useState<FilterKey>('ALL');
 
-  useEffect(() => { studentDashboardService.getNotices().then(setNotices); }, []);
+  useEffect(() => {
+    studentDashboardService.getNotices().then(setNotices);
+    studentDashboardService.getHomework().then(setHomework);
+  }, []);
 
-  const categories = ['ALL', 'EXAM', 'FEE', 'EVENT', 'GENERAL'];
-  const filtered = filter === 'ALL' ? notices : notices.filter(n => n.category === filter);
-  const sorted = [...filtered].sort((a, b) => {
-    if (a.pinned && !b.pinned) return -1;
-    if (!a.pinned && b.pinned) return 1;
-    return new Date(b.sentAt).getTime() - new Date(a.sentAt).getTime();
-  });
+  const feed: FeedItem[] = [
+    ...notices.map(n => ({ kind: 'notice' as const, data: n })),
+    ...homework.map(h => ({ kind: 'homework' as const, data: h })),
+  ];
+
+  const filtered: FeedItem[] =
+    filter === 'ALL'      ? feed :
+    filter === 'NOTICES'  ? feed.filter(f => f.kind === 'notice') :
+    feed.filter(f => f.kind === 'homework');
+
+  const noticeCount  = feed.filter(f => f.kind === 'notice').length;
+  const hwCount      = feed.filter(f => f.kind === 'homework').length;
+
+  const FILTER_TABS: { key: FilterKey; label: string; count: number }[] = [
+    { key: 'ALL',      label: 'All',      count: feed.length },
+    { key: 'NOTICES',  label: 'Notices',  count: noticeCount },
+    { key: 'HOMEWORK', label: 'Homework', count: hwCount },
+  ];
 
   return (
     <div className="absolute inset-0 z-50 bg-slate-50 flex flex-col animate-in slide-in-from-right-8 duration-300">
-      <div className="bg-white border-b border-slate-100 px-4 pt-4 pb-4 flex items-center gap-3 sticky top-0 z-10 shadow-sm">
-        <button onClick={onBack} className="p-2 -ml-2 bg-slate-100 rounded-full text-slate-600"><ArrowLeft size={20} /></button>
-        <h2 className="text-xl font-black text-slate-900 uppercase tracking-tight">Notices</h2>
-      </div>
-      <div className="flex-1 overflow-y-auto p-4 pb-28 space-y-3">
-        <div className="flex gap-2 overflow-x-auto pb-1 hide-scrollbar">
-          {categories.map(c => (
-            <button key={c} onClick={() => setFilter(c)}
-              className={`flex-shrink-0 px-3 py-1.5 rounded-xl text-[10px] font-black uppercase tracking-widest transition-colors ${filter === c ? 'bg-slate-900 text-white' : 'bg-white text-slate-400 border border-slate-200'}`}>
-              {c}
+      {/* Header */}
+      <div className="bg-white border-b border-slate-100 px-4 pt-4 pb-4 sticky top-0 z-10 shadow-sm">
+        <div className="flex items-center gap-3 mb-4">
+          <button onClick={onBack} className="p-2 -ml-2 bg-slate-100 rounded-full text-slate-600">
+            <ArrowLeft size={20}/>
+          </button>
+          <h2 className="text-xl font-black text-slate-900 uppercase tracking-tight">Notices & Homework</h2>
+        </div>
+
+        {/* Stats row */}
+        <div className="grid grid-cols-2 gap-2 mb-4">
+          <div className="rounded-xl border border-blue-100 px-3 py-2 text-center bg-blue-50">
+            <div className="text-xl font-black text-blue-700 leading-none">{noticeCount}</div>
+            <div className="text-[9px] font-black uppercase tracking-widest mt-0.5 text-blue-500">Notices</div>
+          </div>
+          <div className="rounded-xl border border-amber-100 px-3 py-2 text-center bg-amber-50">
+            <div className="text-xl font-black text-amber-700 leading-none">{hwCount}</div>
+            <div className="text-[9px] font-black uppercase tracking-widest mt-0.5 text-amber-500">Homework</div>
+          </div>
+        </div>
+
+        {/* Filter tabs */}
+        <div className="flex gap-2">
+          {FILTER_TABS.map(t => (
+            <button key={t.key} onClick={() => setFilter(t.key)}
+              className={`flex-1 flex items-center justify-center gap-1.5 py-1.5 rounded-xl text-[10px] font-black uppercase tracking-widest transition-colors ${
+                filter === t.key ? 'bg-slate-900 text-white' : 'bg-white text-slate-400 border border-slate-200'
+              }`}>
+              {t.label}
+              <span className={`text-[9px] font-black px-1.5 py-0.5 rounded-full ${filter === t.key ? 'bg-white/20 text-white' : 'bg-slate-100 text-slate-500'}`}>
+                {t.count}
+              </span>
             </button>
           ))}
         </div>
+      </div>
 
-        {sorted.map(notice => (
-          <div key={notice.id}
-            className={`bg-white rounded-2xl border shadow-sm p-4 ${notice.pinned ? 'border-violet-200' : 'border-slate-100'}`}>
-            <div className="flex items-start justify-between gap-2 mb-2">
-              <div className="flex items-center gap-2">
-                {notice.pinned && <Pin size={11} className="text-violet-500 shrink-0" />}
-                <span className={`text-[9px] font-black px-2 py-0.5 rounded-full uppercase ${catColor(notice.category)}`}>{notice.category}</span>
-              </div>
-              <span className="text-[10px] font-bold text-slate-400 shrink-0">{notice.sentAt}</span>
-            </div>
-            <h3 className="font-extrabold text-slate-900 text-sm">{notice.title}</h3>
-            <p className="text-[11px] font-bold text-slate-500 mt-1 leading-relaxed">{notice.body}</p>
-          </div>
-        ))}
-
-        {sorted.length === 0 && (
+      {/* Feed */}
+      <div className="flex-1 overflow-y-auto p-4 pb-28 space-y-3">
+        {filtered.length === 0 && (
           <div className="flex flex-col items-center py-16 text-slate-400">
-            <Bell size={32} className="mb-3 opacity-40" />
-            <p className="font-bold text-sm">No notices</p>
+            <BookOpen size={32} className="mb-3 opacity-40"/>
+            <p className="font-bold text-sm">Nothing here</p>
           </div>
+        )}
+
+        {filtered.map((item, idx) =>
+          item.kind === 'notice'
+            ? <NoticeCard key={`n-${item.data.id ?? idx}`} notice={item.data}/>
+            : <HomeworkCard key={`h-${item.data.id}`} hw={item.data}/>
         )}
       </div>
     </div>

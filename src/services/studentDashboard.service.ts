@@ -2,6 +2,56 @@ import { TimetableDay, StudentExamResult, FeePaymentUpload, TransportStop, Stude
 import { sharedExamResults } from './sharedExamResults';
 import { sharedSchedule } from './sharedSchedule';
 
+export interface HomeworkItem {
+  id: string;
+  subject: string;
+  title: string;
+  description: string;
+  assignedDate: string;
+  dueDate: string;
+  status: 'PENDING' | 'SUBMITTED' | 'OVERDUE';
+  teacher: string;
+}
+
+const MOCK_HOMEWORK: HomeworkItem[] = [
+  {
+    id: 'h1', subject: 'Mathematics', teacher: 'Aarti Desai',
+    title: 'Chapter 7 – Coordinate Geometry Exercises',
+    description: 'Complete Exercise 7.1 Q1–Q15 and Exercise 7.2 Q1–Q10 from NCERT textbook. Show all working steps clearly.',
+    assignedDate: '2026-04-25', dueDate: '2026-04-29', status: 'PENDING',
+  },
+  {
+    id: 'h2', subject: 'Science', teacher: 'Sanjay Mehta',
+    title: 'Light – Reflection and Refraction Notes',
+    description: 'Write short notes on laws of reflection and total internal reflection. Draw labeled ray diagrams for concave and convex mirrors.',
+    assignedDate: '2026-04-24', dueDate: '2026-04-28', status: 'OVERDUE',
+  },
+  {
+    id: 'h3', subject: 'English', teacher: 'Priya Singh',
+    title: 'Essay – "My Aim in Life"',
+    description: 'Write a 300–350 word essay on "My Aim in Life". Use formal language, clear paragraphs (intro, body, conclusion), and proper grammar.',
+    assignedDate: '2026-04-23', dueDate: '2026-04-30', status: 'PENDING',
+  },
+  {
+    id: 'h4', subject: 'Hindi', teacher: 'Meera Jha',
+    title: 'पाठ 5 – प्रश्नोत्तर',
+    description: 'पाठ्यपुस्तक के पाठ 5 के सभी प्रश्नों के उत्तर अपनी उत्तर पुस्तिका में लिखें। उत्तर कम से कम 4–5 वाक्यों में होने चाहिए।',
+    assignedDate: '2026-04-22', dueDate: '2026-04-26', status: 'SUBMITTED',
+  },
+  {
+    id: 'h5', subject: 'Social Studies', teacher: 'Rao Kumar',
+    title: 'Map Work – Rivers of India',
+    description: 'On an outline map of India, mark and label: Ganga, Yamuna, Brahmaputra, Godavari, Krishna, and Cauvery rivers. Also mark their origin points.',
+    assignedDate: '2026-04-21', dueDate: '2026-04-27', status: 'SUBMITTED',
+  },
+  {
+    id: 'h6', subject: 'Computer Science', teacher: 'Ajay Tiwari',
+    title: 'Python – List & Dictionary Practice',
+    description: 'Write Python programs for: (1) sorting a list without built-in sort, (2) counting word frequency in a string using dictionary, (3) nested list manipulation.',
+    assignedDate: '2026-04-20', dueDate: '2026-04-25', status: 'SUBMITTED',
+  },
+];
+
 export interface UpcomingExam {
   id: string;
   title: string;
@@ -149,6 +199,10 @@ export const studentDashboardService = {
 
   async getFeeUploads(): Promise<FeePaymentUpload[]> {
     return [..._feeUploads];
+  },
+
+  async getHomework(): Promise<HomeworkItem[]> {
+    return [...MOCK_HOMEWORK];
   },
 
   async submitFeeScreenshot(amount: number, description: string, screenshotName: string): Promise<FeePaymentUpload> {

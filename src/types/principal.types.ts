@@ -173,6 +173,8 @@ export interface Approval {
   status: ApprovalStatus;
   createdAt: string;
   attachmentUrl: string | null;
+  studentId?: string;
+  rejectionReason?: string | null;
 }
 
 export interface LibraryBook {
