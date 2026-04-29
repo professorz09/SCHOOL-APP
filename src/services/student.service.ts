@@ -1,0 +1,588 @@
+// Supabase-backed student service. Admission flow:
+//   1. Duplicate check (Aadhaar / father+mother phone)
+//   2. Insert permanent students row
+//   3. Insert per-year student_academic_records row
+//   4. Provision parent Auth user (admin-api) using father phone
+//   5. Link parent ↔ student via parent_student_links
+//
+// Critical-field edits (name / dob / aadhaar) go through submit_change_request
+// RPC and are NOT applied directly. Mid-year class/section change goes through
+// record_class_movement RPC.
+
+import { supabase } from '../lib/supabase';
+import { useAuthStore } from '../store/authStore';
+import { adminApi } from '../lib/adminApi';
+import { logAudit } from '../lib/audit';
+import { PaymentStatus } from '../config/constants';
+import type {
+  Student, StudentAcademicRecord, FeeRecord, CreateStudentInput,
+  StudentDoc, ExamResult, AttendanceMonth,
+} from '../types/principal.types';
+
+function getSchoolId(): string {
+  const id = useAuthStore.getState().session?.schoolId;
+  if (!id) throw new Error('No school in session');
+  return id;
+}
+
+// Back-compat export: yearClosing.service.ts still imports MOCK_STUDENTS
+// from this module. Empty array — yearClosing has its own load path.
+export const MOCK_STUDENTS: Student[] = [];
+
+const STU_FIELDS =
+  'id, school_id, user_id, name, admission_no, roll_no, dob, gender, blood_group, ' +
+  'aadhaar_no, phone, email, address, photo, ' +
+  'father_name, father_phone, father_email, father_occupation, father_income, ' +
+  'mother_name, mother_phone, mother_occupation, ' +
+  'guardian_name, guardian_phone, guardian_relation, ' +
+  'religion, caste, pen_number, birth_cert_no, tc_number, ' +
+  'is_rte, is_active, status, admission_date, created_at';
+
+interface StudentRow {
+  id: string; school_id: string; user_id: string | null;
+  name: string; admission_no: string; roll_no: string | null;
+  dob: string | null; gender: string | null; blood_group: string | null;
+  aadhaar_no: string | null; phone: string | null; email: string | null;
+  address: string | null; photo: string | null;
+  father_name: string | null; father_phone: string | null; father_email: string | null;
+  father_occupation: string | null; father_income: string | null;
+  mother_name: string | null; mother_phone: string | null; mother_occupation: string | null;
+  guardian_name: string | null; guardian_phone: string | null; guardian_relation: string | null;
+  religion: string | null; caste: string | null; pen_number: string | null;
+  birth_cert_no: string | null; tc_number: string | null;
+  is_rte: boolean; is_active: boolean; status: string;
+  admission_date: string | null;
+}
+
+interface AcademicRecordRow {
+  id: string; student_id: string; academic_year_id: string;
+  class_name: string | null; section: string | null; roll_no: string | null;
+  fee_status: string; total_fee: number; paid_fee: number; attendance_percent: number;
+  status: string;
+}
+
+function recordToStudent(s: StudentRow, ar?: AcademicRecordRow | null): Student {
+  return {
+    id: s.id,
+    name: s.name,
+    rollNo: ar?.roll_no ?? s.roll_no ?? '',
+    admissionNo: s.admission_no,
+    className: ar?.class_name ?? '',
+    section: ar?.section ?? '',
+    dob: s.dob ?? '',
+    gender: (s.gender as Student['gender']) ?? 'OTHER',
+    bloodGroup: (s.blood_group as Student['bloodGroup']) ?? 'O+',
+    aadhaarNo: s.aadhaar_no ?? '',
+    phone: s.phone ?? '',
+    email: s.email ?? '',
+    address: s.address ?? '',
+    photo: s.photo ?? '',
+    religion: s.religion ?? '',
+    caste: s.caste ?? '',
+    penNumber: s.pen_number ?? '',
+    birthCertNo: s.birth_cert_no ?? '',
+    tcNumber: s.tc_number ?? '',
+    rte: s.is_rte,
+    fatherName: s.father_name ?? '',
+    fatherPhone: s.father_phone ?? '',
+    fatherOccupation: s.father_occupation ?? '',
+    fatherIncome: s.father_income ?? '',
+    fatherEmail: s.father_email ?? '',
+    motherName: s.mother_name ?? '',
+    motherPhone: s.mother_phone ?? '',
+    motherOccupation: s.mother_occupation ?? '',
+    guardianName: s.guardian_name ?? '',
+    guardianPhone: s.guardian_phone ?? '',
+    guardianRelation: s.guardian_relation ?? '',
+    academicYearId: ar?.academic_year_id ?? '',
+    admissionDate: s.admission_date ?? '',
+    feeStatus: (ar?.fee_status as PaymentStatus) ?? PaymentStatus.PENDING,
+    totalFee: Number(ar?.total_fee ?? 0),
+    paidFee: Number(ar?.paid_fee ?? 0),
+    attendancePercent: Number(ar?.attendance_percent ?? 0),
+    docs: [],
+  };
+}
+
+async function activeYearId(schoolId: string): Promise<string | null> {
+  const { data } = await supabase
+    .from('academic_years').select('id').eq('school_id', schoolId).eq('is_active', true).maybeSingle();
+  return (data as { id: string } | null)?.id ?? null;
+}
+
+const CRITICAL_FIELDS = new Set(['name', 'dob', 'aadhaarNo']);
+const FIELD_TO_DB: Record<string, string> = {
+  name: 'name', dob: 'dob', aadhaarNo: 'aadhaar_no',
+  rollNo: 'roll_no', gender: 'gender', bloodGroup: 'blood_group',
+  phone: 'phone', email: 'email', address: 'address', photo: 'photo',
+  religion: 'religion', caste: 'caste', penNumber: 'pen_number',
+  birthCertNo: 'birth_cert_no', tcNumber: 'tc_number', rte: 'is_rte',
+  fatherName: 'father_name', fatherPhone: 'father_phone', fatherEmail: 'father_email',
+  fatherOccupation: 'father_occupation', fatherIncome: 'father_income',
+  motherName: 'mother_name', motherPhone: 'mother_phone', motherOccupation: 'mother_occupation',
+  guardianName: 'guardian_name', guardianPhone: 'guardian_phone', guardianRelation: 'guardian_relation',
+  admissionDate: 'admission_date',
+};
+
+export const studentService = {
+  async getAll(): Promise<Student[]> {
+    const schoolId = getSchoolId();
+    const ayId = await activeYearId(schoolId);
+    const { data: stuData, error } = await supabase
+      .from('students').select(STU_FIELDS)
+      .eq('school_id', schoolId).eq('is_active', true)
+      .order('admission_no');
+    if (error) throw new Error(error.message);
+    const stu = (stuData ?? []) as unknown as StudentRow[];
+    if (!stu.length || !ayId) return stu.map(s => recordToStudent(s));
+
+    const { data: arData } = await supabase
+      .from('student_academic_records')
+      .select('id, student_id, academic_year_id, class_name, section, roll_no, fee_status, total_fee, paid_fee, attendance_percent, status')
+      .eq('academic_year_id', ayId)
+      .in('student_id', stu.map(s => s.id));
+    const arMap = new Map<string, AcademicRecordRow>();
+    ((arData ?? []) as AcademicRecordRow[]).forEach(r => arMap.set(r.student_id, r));
+    return stu.map(s => recordToStudent(s, arMap.get(s.id)));
+  },
+
+  async getById(id: string): Promise<Student | null> {
+    const schoolId = getSchoolId();
+    const { data, error } = await supabase
+      .from('students').select(STU_FIELDS)
+      .eq('id', id).eq('school_id', schoolId).maybeSingle();
+    if (error) throw new Error(error.message);
+    if (!data) return null;
+    const ayId = await activeYearId(schoolId);
+    let ar: AcademicRecordRow | null = null;
+    if (ayId) {
+      const { data: arData } = await supabase
+        .from('student_academic_records')
+        .select('id, student_id, academic_year_id, class_name, section, roll_no, fee_status, total_fee, paid_fee, attendance_percent, status')
+        .eq('student_id', id).eq('academic_year_id', ayId).maybeSingle();
+      ar = (arData as AcademicRecordRow | null) ?? null;
+    }
+    return recordToStudent(data as unknown as StudentRow, ar);
+  },
+
+  async create(input: CreateStudentInput): Promise<{ student: Student; parent: { mobile: string; reused: boolean } | null }> {
+    const schoolId = getSchoolId();
+
+    // Step 1: duplicate check. Use .limit(1) array probe (NOT .maybeSingle())
+    // because PostgREST returns an error when multiple rows match a maybeSingle()
+    // query — that would silently bypass the duplicate guard. We also surface
+    // any select-error explicitly so a transient query failure does not let an
+    // accidental dupe through.
+    const aadhaar = (input.aadhaarNo ?? '').replace(/\s+/g, '');
+    if (aadhaar) {
+      const { data: dups, error: dupErr } = await supabase
+        .from('students').select('id, name, admission_no')
+        .eq('school_id', schoolId).eq('aadhaar_no', aadhaar).limit(1);
+      if (dupErr) throw new Error(`Aadhaar duplicate-check failed: ${dupErr.message}`);
+      const dup = (dups ?? [])[0] as { name: string } | undefined;
+      if (dup) throw new Error(`Aadhaar already registered: ${dup.name}`);
+    }
+    const fatherPhone = (input.fatherPhone ?? '').replace(/\D/g, '').slice(-10);
+    if (fatherPhone) {
+      const { data: dups, error: dupErr } = await supabase
+        .from('students').select('id, name')
+        .eq('school_id', schoolId).eq('father_phone', fatherPhone).limit(1);
+      if (dupErr) throw new Error(`Father-phone duplicate-check failed: ${dupErr.message}`);
+      const dup = (dups ?? [])[0] as { name: string } | undefined;
+      if (dup) throw new Error(`Father phone already registered: ${dup.name}`);
+    }
+
+    // Step 2: provision parent auth account. Track whether the account is new
+    // or pre-existing so the UI can surface accurate credentials (default
+    // password = mobile only on first creation).
+    let parentUserId: string | null = null;
+    let parentReused: boolean | null = null;
+    if (fatherPhone) {
+      try {
+        const res = await adminApi.createSchoolUser({
+          mobile: fatherPhone, name: input.fatherName || 'Parent', role: 'PARENT',
+        });
+        parentUserId = res.userId;
+        parentReused = !!res.reused;
+      } catch (e) {
+        const msg = (e instanceof Error ? e.message : '') || '';
+        if (!/already exists/i.test(msg)) throw e;
+        parentReused = true;
+        // Fallback: if the admin endpoint threw "already exists" without
+        // returning a reused-user payload, look up the parent row by mobile
+        // so step 4 can still link parent ↔ student. RLS scopes this to the
+        // principal's own school.
+        const { data: existingParent } = await supabase
+          .from('users')
+          .select('id')
+          .eq('mobile_number', fatherPhone)
+          .eq('role', 'PARENT')
+          .maybeSingle();
+        if (existingParent && (existingParent as { id: string }).id) {
+          parentUserId = (existingParent as { id: string }).id;
+        }
+      }
+    }
+
+    // Step 3: insert permanent students row.
+    const stuPayload = {
+      school_id: schoolId,
+      user_id: null,
+      name: input.name,
+      admission_no: input.admissionNo,
+      roll_no: input.rollNo || null,
+      dob: input.dob || null,
+      gender: input.gender,
+      blood_group: input.bloodGroup,
+      aadhaar_no: aadhaar || null,
+      phone: input.phone || null,
+      email: input.email || null,
+      address: input.address || null,
+      photo: input.photo || null,
+      father_name: input.fatherName || null,
+      // Use the already-normalized father phone (digits-only, last 10) so the
+      // value persisted to DB matches the value used for duplicate detection
+      // and parent auth provisioning above. Inserting raw input.fatherPhone
+      // would let "+91 98765 43210" and "9876543210" coexist as distinct
+      // father numbers and bypass the duplicate check on subsequent admissions.
+      father_phone: fatherPhone || null,
+      father_email: input.fatherEmail || null,
+      father_occupation: input.fatherOccupation || null,
+      father_income: input.fatherIncome || null,
+      mother_name: input.motherName || null,
+      mother_phone: input.motherPhone || null,
+      mother_occupation: input.motherOccupation || null,
+      guardian_name: input.guardianName || null,
+      guardian_phone: input.guardianPhone || null,
+      guardian_relation: input.guardianRelation || null,
+      religion: input.religion || null,
+      caste: input.caste || null,
+      pen_number: input.penNumber || null,
+      birth_cert_no: input.birthCertNo || null,
+      tc_number: input.tcNumber || null,
+      is_rte: !!input.rte,
+      is_active: true,
+      status: 'ACTIVE',
+      admission_date: input.admissionDate || new Date().toISOString().slice(0, 10),
+    };
+    const { data: stuRow, error: stuErr } = await supabase
+      .from('students').insert(stuPayload).select(STU_FIELDS).single();
+    if (stuErr) throw new Error(stuErr.message);
+    const stu = stuRow as unknown as StudentRow;
+
+    // Step 4: link parent → student.
+    if (parentUserId) {
+      try {
+        await adminApi.linkParentStudent({
+          parentUserId, studentId: stu.id, relation: 'FATHER',
+        });
+      } catch { /* best-effort — parent may already be linked */ }
+    }
+
+    // Step 5: insert per-year academic record (active year).
+    const ayId = input.academicYearId || await activeYearId(schoolId);
+    let ar: AcademicRecordRow | null = null;
+    if (ayId) {
+      // Resolve section_id (best-effort).
+      let sectionId: string | null = null;
+      const { data: sec } = await supabase
+        .from('sections').select('id')
+        .eq('school_id', schoolId).eq('academic_year_id', ayId)
+        .eq('class_name', input.className).eq('section', input.section).maybeSingle();
+      sectionId = (sec as { id: string } | null)?.id ?? null;
+
+      const { data: arRow, error: arErr } = await supabase
+        .from('student_academic_records').insert({
+          student_id: stu.id,
+          academic_year_id: ayId,
+          section_id: sectionId,
+          class_name: input.className,
+          section: input.section,
+          roll_no: input.rollNo || null,
+          fee_status: 'PENDING',
+          total_fee: input.totalFee || 0,
+          paid_fee: 0,
+          attendance_percent: 0,
+          status: 'STUDYING',
+        })
+        .select('id, student_id, academic_year_id, class_name, section, roll_no, fee_status, total_fee, paid_fee, attendance_percent, status')
+        .single();
+      if (arErr) throw new Error(arErr.message);
+      ar = arRow as AcademicRecordRow;
+    }
+
+    await logAudit('student_admitted', 'student', stu.id, {
+      admissionNo: stu.admission_no, className: input.className, section: input.section,
+    });
+
+    return {
+      student: recordToStudent(stu, ar),
+      parent: fatherPhone && parentReused !== null
+        ? { mobile: fatherPhone, reused: parentReused }
+        : null,
+    };
+  },
+
+  /**
+   * Update a student. Critical fields (name/dob/aadhaarNo) MUST go through the
+   * approval flow → submit_change_request RPC. All other fields update directly.
+   * Class/section changes go through recordClassMovement.
+   */
+  async update(id: string, input: Partial<Student>): Promise<Student> {
+    const schoolId = getSchoolId();
+
+    // Reject critical-field direct edits (use requestCriticalChange instead).
+    for (const f of Object.keys(input)) {
+      if (CRITICAL_FIELDS.has(f)) {
+        throw new Error(`Field "${f}" requires approval — use requestCriticalChange()`);
+      }
+    }
+
+    // Class/section movements need recordClassMovement.
+    if (input.className !== undefined || input.section !== undefined) {
+      throw new Error('Class/section changes require recordClassMovement()');
+    }
+
+    const patch: Record<string, unknown> = { updated_at: new Date().toISOString() };
+    for (const [k, v] of Object.entries(input)) {
+      const dbCol = FIELD_TO_DB[k];
+      if (dbCol) patch[dbCol] = v;
+    }
+    if (Object.keys(patch).length > 1) {
+      const { error } = await supabase.from('students').update(patch).eq('id', id).eq('school_id', schoolId);
+      if (error) throw new Error(error.message);
+    }
+
+    // Per-year fields (rollNo, totalFee) on academic record.
+    if (input.totalFee !== undefined || input.rollNo !== undefined) {
+      const ayId = await activeYearId(schoolId);
+      if (ayId) {
+        const arPatch: Record<string, unknown> = {};
+        if (input.totalFee !== undefined) arPatch.total_fee = input.totalFee;
+        if (input.rollNo !== undefined) arPatch.roll_no = input.rollNo;
+        await supabase.from('student_academic_records').update(arPatch)
+          .eq('student_id', id).eq('academic_year_id', ayId);
+      }
+    }
+
+    await logAudit('student_updated', 'student', id, { fields: Object.keys(input) });
+    const fresh = await this.getById(id);
+    if (!fresh) throw new Error('Student not found after update');
+    return fresh;
+  },
+
+  /**
+   * Submit a critical-field change request. Goes through approvals queue;
+   * once approved, apply_change_request RPC writes to students table.
+   */
+  async requestCriticalChange(
+    studentId: string, field: string, _oldValue: string, newValue: string,
+    reason: string, proofUrl?: string,
+  ): Promise<void> {
+    const dbField = FIELD_TO_DB[field] ?? field;
+    // RPC signature: (p_student_id, p_field, p_new_value, p_reason, p_proof).
+    // Old value is captured by the RPC itself from the live students row.
+    const { error } = await supabase.rpc('submit_change_request', {
+      p_student_id: studentId,
+      p_field: dbField,
+      p_new_value: newValue,
+      p_reason: reason,
+      p_proof: proofUrl ?? null,
+    });
+    if (error) throw new Error(error.message);
+    await logAudit('student_change_requested', 'student', studentId, { field });
+  },
+
+  /**
+   * Mid-year class/section change. Records class movement; updates current
+   * year's academic record class+section.
+   */
+  async recordClassMovement(
+    studentId: string, newClass: string, newSection: string,
+    effectiveDate: string, reason: string,
+  ): Promise<void> {
+    const schoolId = getSchoolId();
+    const ayId = await activeYearId(schoolId);
+    if (!ayId) throw new Error('No active academic year');
+    const { error } = await supabase.rpc('record_class_movement', {
+      p_student_id: studentId,
+      p_year_id: ayId,
+      p_new_class: newClass,
+      p_new_section: newSection,
+      p_effective_date: effectiveDate,
+      p_reason: reason,
+    });
+    if (error) throw new Error(error.message);
+    await logAudit('student_class_changed', 'student', studentId, { newClass, newSection, effectiveDate });
+  },
+
+  /**
+   * Soft-delete (deactivate) — never hard-delete (DB trigger blocks it).
+   * Issues TC and freezes the user account.
+   */
+  async delete(id: string): Promise<void> {
+    const schoolId = getSchoolId();
+    const { data: row } = await supabase
+      .from('students').select('user_id').eq('id', id).eq('school_id', schoolId).maybeSingle();
+    const userId = (row as { user_id: string | null } | null)?.user_id ?? null;
+
+    const { error } = await supabase.from('students').update({
+      is_active: false, status: 'TC_ISSUED', updated_at: new Date().toISOString(),
+    }).eq('id', id).eq('school_id', schoolId);
+    if (error) throw new Error(error.message);
+
+    if (userId) {
+      try { await adminApi.setSchoolUserActive(userId, false); } catch { /* best-effort */ }
+    }
+    await logAudit('student_deactivated', 'student', id);
+  },
+
+  // ── Documents ───────────────────────────────────────────────────────────
+  async listDocuments(studentId: string): Promise<StudentDoc[]> {
+    const { data, error } = await supabase
+      .from('student_documents').select('id, doc_type, doc_url, uploaded_at')
+      .eq('student_id', studentId).order('uploaded_at', { ascending: false });
+    if (error) throw new Error(error.message);
+    return ((data ?? []) as { id: string; doc_type: string; doc_url: string; uploaded_at: string }[])
+      .map(d => ({
+        id: d.id,
+        name: d.doc_url.split('/').pop() || d.doc_type,
+        type: d.doc_type as StudentDoc['type'],
+        uploadedAt: d.uploaded_at,
+      }));
+  },
+
+  async addDocument(studentId: string, type: StudentDoc['type'], docUrl: string): Promise<void> {
+    const { error } = await supabase.from('student_documents').insert({
+      student_id: studentId, doc_type: type, doc_url: docUrl,
+    });
+    if (error) throw new Error(error.message);
+  },
+
+  // ── Per-year academic record (used by profile/results/attendance views) ──
+  async getAcademicRecord(studentId: string, academicYearId: string): Promise<StudentAcademicRecord | null> {
+    const { data: ar, error } = await supabase
+      .from('student_academic_records')
+      .select('id')
+      .eq('student_id', studentId).eq('academic_year_id', academicYearId).maybeSingle();
+    if (error) throw new Error(error.message);
+    if (!ar) return null;
+
+    // Exam results.
+    const { data: exams } = await supabase
+      .from('exam_results')
+      .select('id, exam_name, subject, max_marks, obtained_marks, grade, exam_date')
+      .eq('student_id', studentId).eq('academic_year_id', academicYearId);
+    const examList: ExamResult[] = ((exams ?? []) as {
+      id: string; exam_name: string; subject: string; max_marks: number;
+      obtained_marks: number; grade: string; exam_date: string;
+    }[]).map(e => ({
+      id: e.id,
+      examName: e.exam_name,
+      subject: e.subject,
+      maxMarks: Number(e.max_marks),
+      obtainedMarks: Number(e.obtained_marks),
+      grade: e.grade,
+      date: e.exam_date,
+    }));
+
+    // Fee records (from fee_installments).
+    const fees = await this.getFeeRecords(studentId);
+
+    // Attendance per month — group APPROVED attendance_records the student
+    // appears in via attendance_student_details, bucketed by YYYY-MM.
+    const { data: attRowsRaw } = await supabase
+      .from('attendance_student_details')
+      .select('is_present, attendance_records!inner(date, approval_status, academic_year_id)')
+      .eq('student_id', studentId);
+    const attRows = (attRowsRaw ?? []) as unknown as Array<{
+      is_present: boolean;
+      attendance_records:
+        | { date: string; approval_status: string; academic_year_id: string }
+        | { date: string; approval_status: string; academic_year_id: string }[]
+        | null;
+    }>;
+    const buckets = new Map<string, { present: number; absent: number; total: number }>();
+    for (const r of attRows) {
+      const rec = Array.isArray(r.attendance_records) ? r.attendance_records[0] : r.attendance_records;
+      if (!rec || rec.academic_year_id !== academicYearId || rec.approval_status !== 'APPROVED') continue;
+      const key = rec.date.slice(0, 7);
+      const b = buckets.get(key) ?? { present: 0, absent: 0, total: 0 };
+      b.total += 1;
+      if (r.is_present) b.present += 1; else b.absent += 1;
+      buckets.set(key, b);
+    }
+    const attendance: AttendanceMonth[] = Array.from(buckets.entries())
+      .sort(([a], [b]) => b.localeCompare(a))
+      .map(([key, v]) => ({
+        month: new Date(key + '-01').toLocaleDateString('en-IN', { month: 'short', year: 'numeric' }),
+        present: v.present, absent: v.absent, total: v.total,
+      }));
+
+    // Complaints filed by/about this student in this year.
+    const { data: comps } = await supabase
+      .from('complaints')
+      .select('id, subject, description, status, created_at, resolved_at, response, from_role, from_name')
+      .eq('from_user_id', studentId)
+      .order('created_at', { ascending: false });
+    const complaints = ((comps ?? []) as Array<{
+      id: string; subject: string; description: string | null; status: string;
+      created_at: string; resolved_at: string | null; response: string | null;
+      from_role: string; from_name: string | null;
+    }>).map(c => ({
+      id: c.id,
+      from: (c.from_role === 'TEACHER' || c.from_role === 'PARENT' ? c.from_role : 'STUDENT') as 'STUDENT' | 'TEACHER' | 'PARENT',
+      fromName: c.from_name ?? '',
+      subject: c.subject,
+      description: c.description ?? '',
+      status: c.status as 'OPEN' | 'IN_PROGRESS' | 'RESOLVED',
+      createdAt: c.created_at,
+      resolvedAt: c.resolved_at,
+      response: c.response,
+    }));
+
+    return {
+      studentId, academicYearId,
+      exams: examList,
+      feeRecords: fees,
+      attendanceRecords: attendance,
+      complaints,
+    };
+  },
+
+  // ── Fee records (legacy view; FeeLedger uses fee.service.ts directly) ───
+  async getFeeRecords(studentId: string): Promise<FeeRecord[]> {
+    const { data, error } = await supabase
+      .from('fee_installments')
+      .select('id, student_id, due_date, amount, paid_amount, status, fee_type, month')
+      .eq('student_id', studentId).order('due_date');
+    if (error) throw new Error(error.message);
+    const stuName = (await this.getById(studentId))?.name ?? '';
+    return ((data ?? []) as {
+      id: string; student_id: string; due_date: string;
+      amount: number; paid_amount: number; status: string;
+      fee_type: string; month: string;
+    }[]).map(f => ({
+      id: f.id,
+      studentId: f.student_id,
+      studentName: stuName,
+      amount: Number(f.amount),
+      dueDate: f.due_date,
+      paidAt: f.status === 'PAID' ? f.due_date : null,
+      status: (f.status === 'PAID' ? PaymentStatus.PAID :
+               f.status === 'PARTIAL' ? PaymentStatus.PENDING :
+               PaymentStatus.OVERDUE) as PaymentStatus,
+      transactionId: null,
+      screenshotUrl: null,
+      description: `${f.fee_type} ${f.month}`,
+    }));
+  },
+
+  async markFeePaid(_feeId: string, _transactionId: string): Promise<FeeRecord> {
+    throw new Error('Use feeService.recordPayment() instead');
+  },
+
+  async sendFeeReminder(_studentId: string): Promise<void> {
+    // No-op: in production this would fire an SMS/notification job.
+  },
+};
