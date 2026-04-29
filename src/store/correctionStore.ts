@@ -27,6 +27,7 @@ interface Actions {
   getCount(yearId: string): number;
   setCount(yearId: string, n: number): void;
   bumpCount(yearId: string): void;
+  resetAll(): void;
 }
 
 export const useCorrectionStore = create<State & Actions>((set, get) => ({
@@ -56,6 +57,9 @@ export const useCorrectionStore = create<State & Actions>((set, get) => ({
     set((s) => ({
       countsByYear: { ...s.countsByYear, [yearId]: (s.countsByYear[yearId] ?? 0) + 1 },
     }));
+  },
+  resetAll() {
+    set({ enabledByYear: {}, countsByYear: {} });
   },
 }));
 

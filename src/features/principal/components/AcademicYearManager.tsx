@@ -90,10 +90,17 @@ export const AcademicYearManager: React.FC<Props> = ({ onBack }) => {
     setCurrentEditingYear(yearId);
   }, [disableCorrection, enableCorrection, setCurrentEditingYear]);
 
-  // Hydrate audit counts for every closed year on mount / refresh
+  // Hydrate audit counts for every closed year. Re-runs whenever the set
+  // of closed-year ids changes (e.g. a year is closed, deleted, reopened),
+  // not just when the total list length changes — list length stays the
+  // same when an existing year transitions from open → closed.
+  const closedYearKey = useMemo(
+    () => academicYears.filter(y => isYearLocked(y.id)).map(y => y.id).sort().join('|'),
+    [academicYears, isYearLocked],
+  );
   useEffect(() => {
-    const closedIds = academicYears.filter(y => isYearLocked(y.id)).map(y => y.id);
-    if (closedIds.length === 0) return;
+    if (!closedYearKey) return;
+    const closedIds = closedYearKey.split('|');
     let cancelled = false;
     (async () => {
       for (const id of closedIds) {
@@ -105,7 +112,7 @@ export const AcademicYearManager: React.FC<Props> = ({ onBack }) => {
     })();
     return () => { cancelled = true; };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [academicYears.length]);
+  }, [closedYearKey]);
 
   // ─── Wizard finished → refresh + close ──────────────────────────────────
   const handleWizardCreated = async () => {
