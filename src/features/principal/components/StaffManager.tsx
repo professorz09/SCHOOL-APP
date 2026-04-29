@@ -484,6 +484,7 @@ export const StaffManager: React.FC<Props> = ({ onBack }) => {
   };
 
   const handleRelieve = async () => {
+    if (!relieveReason.trim()) { showToast('Reason is required when relieving staff', 'error'); return; }
     if (!selected) return;
     if (!relieveDate) { showToast('Date required', 'error'); return; }
     setRelieveBusy(true);
@@ -1076,9 +1077,9 @@ export const StaffManager: React.FC<Props> = ({ onBack }) => {
                     className="w-full border border-slate-200 bg-slate-50 rounded-xl px-3 py-3 font-bold text-sm outline-none focus:border-blue-500" />
                 </div>
                 <div>
-                  <label className="block text-[10px] font-black uppercase tracking-widest text-slate-500 mb-1.5">Reason</label>
+                  <label className="block text-[10px] font-black uppercase tracking-widest text-slate-500 mb-1.5">Reason *</label>
                   <textarea value={relieveReason} onChange={e => setRelieveReason(e.target.value)}
-                    rows={3} placeholder="Resignation / End of contract / Termination…"
+                    rows={3} required placeholder="Resignation / End of contract / Termination…"
                     className="w-full border border-slate-200 bg-slate-50 rounded-xl px-4 py-3 font-bold text-sm outline-none focus:border-blue-500 resize-none" />
                 </div>
               </div>
