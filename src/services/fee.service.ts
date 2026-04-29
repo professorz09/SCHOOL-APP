@@ -348,10 +348,16 @@ export const feeService = {
   /**
    * Record a parent payment. Atomic oldest-due-first allocation via the
    * record_fee_payment RPC; whatever's left becomes advance balance.
+   *
+   * `applyLateFee` (default TRUE) lets the RPC compute the configured late
+   * fee from the class' fee_structures.late_fee JSONB and insert a single
+   * aggregated 'Late Fee' installment dated yesterday so it sorts FIRST in
+   * the oldest-due-first allocation walk. Pass FALSE if the principal has
+   * explicitly waived the late fee for this collection.
    */
   async recordPayment(
     studentId: string, amount: number, method = 'CASH',
-    date?: string, note?: string, useAdvance = false,
+    date?: string, note?: string, useAdvance = false, applyLateFee = true,
   ): Promise<{ applied: number; advance: number; paymentId: string }> {
     if (amount <= 0) return { applied: 0, advance: 0, paymentId: '' };
 
@@ -367,6 +373,7 @@ export const feeService = {
       p_date: date ?? new Date().toISOString().slice(0, 10),
       p_note: note ?? null,
       p_use_advance: useAdvance,
+      p_apply_late_fee: applyLateFee,
     });
     if (error) throw new Error(error.message);
     const paymentId = data as string;
@@ -437,14 +444,23 @@ export const feeService = {
   },
 
   /**
-   * Generate a fee schedule for a student using the RPC. Heads/dueDates
-   * follow the JSONB shape in the migration.
+   * Generate (or regenerate) a fee schedule for a student via the
+   * `generate_student_fee_schedule` RPC. The RPC DELETEs all unpaid /
+   * non-written-off installments for the (student, year) BEFORE re-inserting,
+   * so calling this is the same as "regenerate schedule": already-paid rows
+   * are preserved, the rest are rebuilt from `heads` + `dueDates`.
+   *
+   * Heads/dueDates follow the JSONB shape in migration 0017. The optional
+   * discount params are forwarded to the RPC; the larger of the two wins
+   * per installment when both are set. RTE flips payer_type to GOVERNMENT.
    */
   async generateSchedule(
     studentId: string, academicYearId: string,
     heads: { name: string; amount: number; frequency: string; description?: string }[],
     dueDates: { month: string; date: string }[],
     isRte = false,
+    discountAmount = 0,
+    discountPct = 0,
   ): Promise<number> {
     const { data, error } = await supabase.rpc('generate_student_fee_schedule', {
       p_student_id: studentId,
@@ -452,10 +468,106 @@ export const feeService = {
       p_heads: heads,
       p_due_dates: dueDates,
       p_is_rte: isRte,
+      p_discount_amount: discountAmount,
+      p_discount_pct: discountPct,
     });
     if (error) throw new Error(error.message);
     await this.refreshAll();
     return Number(data) || 0;
+  },
+
+  /**
+   * Regenerate the schedule from a *fee_structures* row. Looks the
+   * structure up by id and forwards heads + monthly_due_dates to
+   * generateSchedule(). Convenience wrapper for principals using the
+   * "Regenerate Schedule" action in FeeLedger.
+   */
+  async regenerateScheduleFromStructure(
+    studentId: string, academicYearId: string, structureId: string,
+    isRte = false, discountAmount = 0, discountPct = 0,
+  ): Promise<number> {
+    const { data: row, error } = await supabase
+      .from('fee_structures')
+      .select('fee_heads, monthly_due_dates')
+      .eq('id', structureId).maybeSingle();
+    if (error) throw new Error(error.message);
+    if (!row) throw new Error('Fee structure not found');
+    const r = row as { fee_heads: unknown; monthly_due_dates: unknown };
+    return this.generateSchedule(
+      studentId, academicYearId,
+      (r.fee_heads as { name: string; amount: number; frequency: string }[]) ?? [],
+      (r.monthly_due_dates as { month: string; date: string }[]) ?? [],
+      isRte, discountAmount, discountPct,
+    );
+  },
+
+  /**
+   * Live preview of late fees the student currently owes per the configured
+   * fee_structures.late_fee policy. Returns the per-installment breakdown
+   * and the total. Safe for both principal (FeeLedger) and parent (FeesView)
+   * — RPC authorises by school for staff and by linked_student_ids() for
+   * the parent/student themselves.
+   */
+  async computeLateFeePreview(studentId: string): Promise<{
+    total: number;
+    perInstallment: { installmentId: string; dueDate: string; daysLate: number; lateFee: number; source: string }[];
+  }> {
+    const { data, error } = await supabase.rpc('preview_student_late_fees', {
+      p_student_id: studentId,
+    });
+    if (error) throw new Error(error.message);
+    type Row = { installment_id: string; due_date: string; days_late: number; late_fee: number; source: string };
+    const rows = (data ?? []) as Row[];
+    const perInstallment = rows
+      .filter(r => Number(r.late_fee) > 0)
+      .map(r => ({
+        installmentId: r.installment_id,
+        dueDate: r.due_date,
+        daysLate: Number(r.days_late),
+        lateFee: Number(r.late_fee),
+        source: r.source,
+      }));
+    const total = perInstallment.reduce((s, r) => s + r.lateFee, 0);
+    return { total, perInstallment };
+  },
+
+  /**
+   * Group installments of a student by academic_year_id, with the year
+   * label resolved via a Supabase lookup. Used by FeesView (parent) and
+   * FeeLedger (principal detail) to render per-year card stacks.
+   */
+  async getStudentInstallmentsByYear(studentId: string): Promise<Array<{
+    academicYearId: string;
+    yearLabel: string;
+    isActive: boolean;
+    installments: FeeInstallment[];
+  }>> {
+    const insts = this.getStudentInstallments(studentId);
+    const yearIds: string[] = Array.from(new Set(insts.map(i => i.academicYearId).filter((s): s is string => !!s)));
+    if (yearIds.length === 0) return [];
+    const { data, error } = await supabase
+      .from('academic_years')
+      .select('id, label, is_active, start_date')
+      .in('id', yearIds);
+    if (error) throw new Error(error.message);
+    type AY = { id: string; label: string; is_active: boolean; start_date: string };
+    const meta = new Map<string, AY>(((data ?? []) as AY[]).map(a => [a.id, a]));
+    return yearIds
+      .map(id => ({
+        academicYearId: id,
+        yearLabel: meta.get(id)?.label ?? 'Unknown year',
+        isActive: !!meta.get(id)?.is_active,
+        startDate: meta.get(id)?.start_date ?? '',
+        installments: insts.filter(i => i.academicYearId === id),
+      }))
+      // Active first, then most recent year first.
+      .sort((a, b) => {
+        if (a.isActive !== b.isActive) return a.isActive ? -1 : 1;
+        return (b.startDate || '').localeCompare(a.startDate || '');
+      })
+      .map(({ academicYearId, yearLabel, isActive, installments }) => ({
+        academicYearId, yearLabel, isActive, installments,
+      }));
   },
 
   // ── Transport schedule helpers (auto-create installments) ───────────────

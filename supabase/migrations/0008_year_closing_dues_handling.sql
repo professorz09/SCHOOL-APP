@@ -149,9 +149,9 @@ CREATE OR REPLACE FUNCTION public.commit_year_closing(
   p_new_label   TEXT,
   p_new_start   DATE,
   p_new_end     DATE,
-  p_new_board   TEXT,
-  p_new_medium  TEXT,
-  p_decisions   JSONB
+  p_new_board   TEXT  DEFAULT 'CBSE',
+  p_new_medium  TEXT  DEFAULT 'English',
+  p_decisions   JSONB DEFAULT '[]'::jsonb
 ) RETURNS JSONB
 LANGUAGE sql SECURITY DEFINER SET search_path = public AS $$
   SELECT public.commit_year_closing(
