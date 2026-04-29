@@ -391,6 +391,22 @@ export const transportService = {
       })
       .eq('student_id', studentId).eq('is_active', true);
 
+    // Cancel the prior assignment's future TRANSPORT installments from the
+    // effective date forward — otherwise the new schedule (added below)
+    // would double up on top of stale unpaid rows. Unpaid future rows are
+    // dropped; partially-paid ones are frozen with their amount locked at
+    // paid + writeoff and status flipped to CANCELLED so receipts stay
+    // intact. Runs only when there was a prior active assignment.
+    if (prior) {
+      try {
+        const { feeService } = await import('./fee.service');
+        await feeService.cancelTransportInstallmentsAfter(prior.id, startIso);
+      } catch (e) {
+        // eslint-disable-next-line no-console
+        console.warn('[transport] cancel prior installments failed:', e);
+      }
+    }
+
     const { data, error } = await supabase.from('student_transport_assignments').insert({
       student_id: studentId,
       academic_year_id: ayId,
@@ -495,12 +511,37 @@ export const transportService = {
     if (!input.effectiveDate) throw new Error('Effective date is required');
     if (input.newMonthlyAmount < 0) throw new Error('Monthly amount must be ≥ 0');
 
-    return this.assignStudent(
+    // Capture the prior assignment for the audit payload before assignStudent
+    // closes it — gives us the before/after delta in one log entry.
+    const before = await this.getAssignmentForStudent(input.studentId);
+
+    const result = await this.assignStudent(
       input.studentId, '', '',
       input.newVehicleId, input.newStopId, '',
       input.newMonthlyAmount, input.effectiveDate,
       undefined, input.endDate ?? null, input.reason,
     );
+
+    // Distinct audit event so the timeline can render "changed" rows
+    // differently from initial "assigned" rows.
+    await logAudit('transport_changed', 'student_transport_assignment', result.id, {
+      studentId: input.studentId,
+      effectiveDate: input.effectiveDate,
+      reason: input.reason,
+      from: before ? {
+        assignmentId: before.id,
+        vehicleId: before.vehicleId,
+        stopId: before.boardingStopId,
+        monthlyAmount: before.monthlyAmount,
+      } : null,
+      to: {
+        assignmentId: result.id,
+        vehicleId: input.newVehicleId,
+        stopId: input.newStopId,
+        monthlyAmount: input.newMonthlyAmount,
+      },
+    });
+    return result;
   },
 
   /**
