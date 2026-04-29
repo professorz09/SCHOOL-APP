@@ -1,8 +1,8 @@
-import React, { useEffect, useState, useCallback } from 'react';
+import React, { useEffect, useState, useCallback, useMemo } from 'react';
 import {
   ArrowLeft, Plus, Search, UserCheck, Phone, Mail, X, Save, Edit3,
   IndianRupee, FileText, Calendar, History, Upload, Eye, Trash2,
-  Loader2, BadgeAlert, BookOpen, AlertTriangle,
+  Loader2, BadgeAlert, BookOpen, AlertTriangle, CheckCircle2, Clock,
 } from 'lucide-react';
 import { staffService } from '../../../services/staff.service';
 import {
@@ -42,6 +42,242 @@ const todayIso = () => new Date().toISOString().split('T')[0];
 
 const monthLabel = (d: Date) =>
   d.toLocaleString('en-IN', { month: 'long', year: 'numeric' });
+
+const monthStart = (d: Date) => new Date(d.getFullYear(), d.getMonth(), 1);
+
+/** Yields first-of-month dates from `from` to `to` (both inclusive). */
+function* monthRange(from: Date, to: Date): Generator<Date> {
+  let cur = monthStart(from);
+  const end = monthStart(to);
+  while (cur <= end) {
+    yield new Date(cur);
+    cur = new Date(cur.getFullYear(), cur.getMonth() + 1, 1);
+  }
+}
+
+/** Returns the staff salary that was in effect on a given month-start, using
+ *  the salary history (most-recent effective_from <= monthStart). Falls back
+ *  to `currentSalary` when no history covers the month. */
+function expectedSalaryFor(
+  monthStartDate: Date,
+  history: { amount: number; effectiveFrom: string }[],
+  currentSalary: number,
+): number {
+  const sorted = [...history].sort((a, b) =>
+    a.effectiveFrom.localeCompare(b.effectiveFrom),
+  );
+  let amount = 0;
+  for (const h of sorted) {
+    if (new Date(h.effectiveFrom) <= monthStartDate) amount = h.amount;
+    else break;
+  }
+  return amount || currentSalary;
+}
+
+interface MonthRow {
+  label: string;
+  expected: number;
+  paid: number;
+  status: 'PAID' | 'PARTIAL' | 'PENDING';
+}
+
+/** Build an expected-vs-paid grid for the Salary tab. */
+function buildMonthlyGrid(
+  staff: StaffMember,
+  history: StaffSalaryHistoryEntry[],
+  payments: SalaryPayment[],
+): MonthRow[] {
+  if (!staff.joiningDate) return [];
+  const fromDate = new Date(staff.joiningDate);
+  const today = new Date();
+  const toDate = staff.relievingDate && new Date(staff.relievingDate) < today
+    ? new Date(staff.relievingDate)
+    : today;
+  if (fromDate > toDate) return [];
+
+  const paidByMonth = new Map<string, number>();
+  for (const p of payments) {
+    paidByMonth.set(p.month, (paidByMonth.get(p.month) ?? 0) + p.amount);
+  }
+
+  const rows: MonthRow[] = [];
+  for (const m of monthRange(fromDate, toDate)) {
+    const label = monthLabel(m);
+    const expected = expectedSalaryFor(m, history, staff.salary);
+    const paid = paidByMonth.get(label) ?? 0;
+    const status: MonthRow['status'] =
+      paid >= expected && expected > 0 ? 'PAID' :
+      paid > 0 ? 'PARTIAL' : 'PENDING';
+    rows.push({ label, expected, paid, status });
+  }
+  // Most-recent month at top.
+  return rows.reverse();
+}
+
+// ──────────────────────────────────────────────────────────────────────────
+// Salary tab — month-wise Expected vs Paid grid + amount-history panel.
+// Lifted out of <StaffManager/> so the heavy useMemo work doesn't re-run on
+// unrelated state changes (search, filters, modal toggles).
+// ──────────────────────────────────────────────────────────────────────────
+
+const monthRowColor: Record<MonthRow['status'], string> = {
+  PAID:    'bg-emerald-50 text-emerald-700 border-emerald-200',
+  PARTIAL: 'bg-amber-50 text-amber-700 border-amber-200',
+  PENDING: 'bg-rose-50 text-rose-700 border-rose-200',
+};
+
+const monthRowIcon = (s: MonthRow['status']) =>
+  s === 'PAID'    ? <CheckCircle2 size={11} className="text-emerald-500" /> :
+  s === 'PARTIAL' ? <AlertTriangle size={11} className="text-amber-500" /> :
+                    <Clock size={11} className="text-rose-500" />;
+
+interface SalaryTabProps {
+  staff: StaffMember;
+  salaryHistory: StaffSalaryHistoryEntry[];
+  paymentHistory: SalaryPayment[];
+  onEditSalary: () => void;
+  onOpenPayModal: (month: string, expected: number) => void;
+}
+
+const SalaryTab: React.FC<SalaryTabProps> = ({
+  staff, salaryHistory, paymentHistory, onEditSalary, onOpenPayModal,
+}) => {
+  const monthly = useMemo(
+    () => buildMonthlyGrid(staff, salaryHistory, paymentHistory),
+    [staff, salaryHistory, paymentHistory],
+  );
+  const totals = useMemo(() => {
+    const expected = monthly.reduce((a, m) => a + m.expected, 0);
+    const paid     = monthly.reduce((a, m) => a + m.paid, 0);
+    return { expected, paid, pending: Math.max(0, expected - paid) };
+  }, [monthly]);
+
+  const isRelieved = staff.status === 'RELIEVED';
+
+  return (
+    <>
+      <div className="bg-white rounded-2xl border border-slate-100 shadow-sm p-4">
+        <div className="flex items-start justify-between mb-1">
+          <p className="text-[10px] font-black uppercase tracking-widest text-slate-400">Current Salary</p>
+          {!isRelieved && (
+            <button onClick={onEditSalary} className="flex items-center gap-1 text-[10px] font-black text-blue-600">
+              <Edit3 size={11} /> Edit Salary
+            </button>
+          )}
+        </div>
+        <div className="text-3xl font-black text-emerald-600 tabular-nums">{fmtIN(staff.salary)}</div>
+        <div className="text-[10px] font-bold text-slate-400 mt-0.5">per month</div>
+        <div className="grid grid-cols-3 gap-2 mt-3">
+          <div className="bg-slate-50 rounded-xl p-2 text-center">
+            <div className="text-xs font-black text-slate-700 tabular-nums">{fmtIN(totals.expected)}</div>
+            <div className="text-[9px] font-black uppercase tracking-widest text-slate-400 mt-0.5">Expected</div>
+          </div>
+          <div className="bg-slate-50 rounded-xl p-2 text-center">
+            <div className="text-xs font-black text-emerald-600 tabular-nums">{fmtIN(totals.paid)}</div>
+            <div className="text-[9px] font-black uppercase tracking-widest text-slate-400 mt-0.5">Paid</div>
+          </div>
+          <div className="bg-slate-50 rounded-xl p-2 text-center">
+            <div className={`text-xs font-black tabular-nums ${totals.pending > 0 ? 'text-rose-600' : 'text-emerald-600'}`}>{fmtIN(totals.pending)}</div>
+            <div className="text-[9px] font-black uppercase tracking-widest text-slate-400 mt-0.5">Pending</div>
+          </div>
+        </div>
+        {!isRelieved && (
+          <button onClick={() => {
+            const cur = monthLabel(new Date());
+            const expected = monthly.find(m => m.label === cur)?.expected ?? staff.salary;
+            const paid = monthly.find(m => m.label === cur)?.paid ?? 0;
+            onOpenPayModal(cur, Math.max(0, expected - paid));
+          }}
+            className="mt-3 w-full py-3 bg-slate-900 text-white text-xs font-black rounded-xl uppercase tracking-wide active:scale-95 transition-transform">
+            Pay This Month
+          </button>
+        )}
+      </div>
+
+      <div className="bg-white rounded-2xl border border-slate-100 shadow-sm p-4">
+        <p className="text-[10px] font-black uppercase tracking-widest text-slate-400 mb-3">Monthly Expected vs Paid</p>
+        {monthly.length === 0 ? (
+          <p className="text-xs font-bold text-slate-400 py-3 text-center">No months to show yet — joining date is in the future.</p>
+        ) : (
+          <div className="space-y-2">
+            {monthly.map(row => {
+              const pending = Math.max(0, row.expected - row.paid);
+              return (
+                <div key={row.label} className="bg-slate-50 rounded-xl p-3">
+                  <div className="flex items-start justify-between gap-3">
+                    <div className="min-w-0 flex-1">
+                      <div className="font-black text-slate-800 text-sm">{row.label}</div>
+                      <div className={`inline-flex items-center gap-1 text-[9px] font-black px-2 py-0.5 rounded-full border mt-1 ${monthRowColor[row.status]}`}>
+                        {monthRowIcon(row.status)} {row.status}
+                      </div>
+                    </div>
+                    <div className="text-right shrink-0">
+                      <div className="text-[9px] font-black uppercase tracking-widest text-slate-400">Paid / Expected</div>
+                      <div className="text-xs font-black text-slate-800 tabular-nums">
+                        <span className={row.paid >= row.expected ? 'text-emerald-600' : 'text-slate-700'}>{fmtIN(row.paid)}</span>
+                        <span className="text-slate-400"> / </span>
+                        <span>{fmtIN(row.expected)}</span>
+                      </div>
+                      {pending > 0 && (
+                        <div className="text-[10px] font-black text-rose-600 mt-0.5 tabular-nums">{fmtIN(pending)} pending</div>
+                      )}
+                    </div>
+                  </div>
+                  {row.status !== 'PAID' && !isRelieved && (
+                    <button onClick={() => onOpenPayModal(row.label, pending || row.expected)}
+                      className="mt-2 w-full py-2 bg-slate-900 text-white text-[10px] font-black rounded-xl active:scale-95 transition-transform">
+                      Record Payment
+                    </button>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+        )}
+      </div>
+
+      <div className="bg-white rounded-2xl border border-slate-100 shadow-sm p-4">
+        <p className="text-[10px] font-black uppercase tracking-widest text-slate-400 mb-3">Salary Amount History</p>
+        {salaryHistory.length === 0 ? (
+          <p className="text-xs font-bold text-slate-400 py-3 text-center">No salary changes recorded.</p>
+        ) : (
+          <div className="space-y-2">
+            {salaryHistory.map(h => (
+              <div key={h.id} className="flex items-center justify-between bg-slate-50 rounded-xl p-3">
+                <div>
+                  <div className="font-black text-slate-800 text-sm tabular-nums">{fmtIN(h.amount)}</div>
+                  <div className="text-[10px] font-bold text-slate-400 mt-0.5">From {fmtDate(h.effectiveFrom)}{h.reason ? ` · ${h.reason}` : ''}</div>
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+
+      <div className="bg-white rounded-2xl border border-slate-100 shadow-sm p-4">
+        <p className="text-[10px] font-black uppercase tracking-widest text-slate-400 mb-3">Payment Log</p>
+        {paymentHistory.length === 0 ? (
+          <p className="text-xs font-bold text-slate-400 py-3 text-center">No payments yet.</p>
+        ) : (
+          <div className="space-y-2">
+            {paymentHistory.map(p => (
+              <div key={p.id} className="flex items-start justify-between bg-slate-50 rounded-xl p-3">
+                <div>
+                  <div className="font-black text-slate-800 text-sm">{p.month}</div>
+                  <div className="text-[10px] font-bold text-slate-400 mt-0.5">
+                    {fmtDate(p.paidAt)}{p.method ? ` · ${p.method.replace('_', ' ')}` : ''}{p.transactionId ? ` · ${p.transactionId}` : ''}
+                  </div>
+                  {p.note && <div className="text-[10px] font-bold text-slate-500 mt-0.5">{p.note}</div>}
+                </div>
+                <div className="font-black text-emerald-600 text-sm">{fmtIN(p.amount)}</div>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+    </>
+  );
+};
 
 const BLANK: Omit<StaffMember, 'id'> = {
   name: '', role: 'TEACHER', subject: '', phone: '', email: '', aadhaarNo: '',
@@ -131,22 +367,34 @@ export const StaffManager: React.FC<Props> = ({ onBack }) => {
   });
 
   const handleCreate = async () => {
-    if (!form.name) { showToast('Staff name required', 'error'); return; }
+    if (!form.name.trim()) { showToast('Staff name required', 'error'); return; }
+    if (!Number.isFinite(form.salary) || form.salary <= 0) {
+      showToast('Monthly salary must be greater than 0', 'error'); return;
+    }
+    if (!form.joiningDate) {
+      showToast('Joining date required', 'error'); return;
+    }
     setIsSubmitting(true);
     try {
       const member = await staffService.create(form);
-      // Seed initial salary-history row if a salary was entered.
-      if (form.salary > 0) {
-        try {
-          await staffService.updateSalary(
-            member.id, form.salary, form.joiningDate || todayIso(), 'Initial',
-          );
-        } catch (e) {
-          // Non-fatal: staff is created, history row missing is recoverable later
-          // via the Salary tab's Edit button.
-          // eslint-disable-next-line no-console
-          console.warn('[staff] initial salary history seed failed:', e);
-        }
+      // Seed the initial salary-history row. This is part of the create
+      // contract — if it fails the user must know so they can retry from
+      // the Salary tab. Staff row already exists; surface the error and
+      // still navigate the principal into the profile so they can fix it.
+      try {
+        await staffService.updateSalary(
+          member.id, form.salary, form.joiningDate, 'Initial',
+        );
+      } catch (e) {
+        showToast(
+          'Staff added, but the initial salary history row failed to save. ' +
+          'Open the Salary tab and tap "Edit Salary" to record it.',
+          'error',
+        );
+        setStaff(prev => [...prev, member]);
+        setSelected(member); setTab('SALARY'); setView('PROFILE');
+        setForm(BLANK);
+        return;
       }
       setStaff(prev => [...prev, member]);
       showToast(`${member.name} added to staff`);
@@ -586,67 +834,19 @@ export const StaffManager: React.FC<Props> = ({ onBack }) => {
           )}
 
           {tab === 'SALARY' && !tabLoading && (
-            <>
-              <div className="bg-white rounded-2xl border border-slate-100 shadow-sm p-4">
-                <div className="flex items-start justify-between mb-1">
-                  <p className="text-[10px] font-black uppercase tracking-widest text-slate-400">Current Salary</p>
-                  {selected.status !== 'RELIEVED' && (
-                    <button onClick={() => { setEditSalaryAmt(String(selected.salary)); setEditSalaryFrom(todayIso()); setEditSalaryReason(''); setEditSalaryOpen(true); }}
-                      className="flex items-center gap-1 text-[10px] font-black text-blue-600">
-                      <Edit3 size={11} /> Edit Salary
-                    </button>
-                  )}
-                </div>
-                <div className="text-3xl font-black text-emerald-600 tabular-nums">{fmtIN(selected.salary)}</div>
-                <div className="text-[10px] font-bold text-slate-400 mt-0.5">per month</div>
-                {selected.status !== 'RELIEVED' && (
-                  <button onClick={() => { setPayMonth(monthLabel(new Date())); setPayAmt(String(selected.salary)); setPayMethod('BANK_TRANSFER'); setPayTxn(''); setPayNote(''); setPayOpen(true); }}
-                    className="mt-3 w-full py-3 bg-slate-900 text-white text-xs font-black rounded-xl uppercase tracking-wide active:scale-95 transition-transform">
-                    Pay This Month
-                  </button>
-                )}
-              </div>
-
-              <div className="bg-white rounded-2xl border border-slate-100 shadow-sm p-4">
-                <p className="text-[10px] font-black uppercase tracking-widest text-slate-400 mb-3">Salary Amount History</p>
-                {salaryHistory.length === 0 ? (
-                  <p className="text-xs font-bold text-slate-400 py-3 text-center">No salary changes recorded.</p>
-                ) : (
-                  <div className="space-y-2">
-                    {salaryHistory.map(h => (
-                      <div key={h.id} className="flex items-center justify-between bg-slate-50 rounded-xl p-3">
-                        <div>
-                          <div className="font-black text-slate-800 text-sm tabular-nums">{fmtIN(h.amount)}</div>
-                          <div className="text-[10px] font-bold text-slate-400 mt-0.5">From {fmtDate(h.effectiveFrom)}{h.reason ? ` · ${h.reason}` : ''}</div>
-                        </div>
-                      </div>
-                    ))}
-                  </div>
-                )}
-              </div>
-
-              <div className="bg-white rounded-2xl border border-slate-100 shadow-sm p-4">
-                <p className="text-[10px] font-black uppercase tracking-widest text-slate-400 mb-3">Payment History</p>
-                {paymentHistory.length === 0 ? (
-                  <p className="text-xs font-bold text-slate-400 py-3 text-center">No payments yet.</p>
-                ) : (
-                  <div className="space-y-2">
-                    {paymentHistory.map(p => (
-                      <div key={p.id} className="flex items-start justify-between bg-slate-50 rounded-xl p-3">
-                        <div>
-                          <div className="font-black text-slate-800 text-sm">{p.month}</div>
-                          <div className="text-[10px] font-bold text-slate-400 mt-0.5">
-                            {fmtDate(p.paidAt)}{p.method ? ` · ${p.method.replace('_', ' ')}` : ''}{p.transactionId ? ` · ${p.transactionId}` : ''}
-                          </div>
-                          {p.note && <div className="text-[10px] font-bold text-slate-500 mt-0.5">{p.note}</div>}
-                        </div>
-                        <div className="font-black text-emerald-600 text-sm">{fmtIN(p.amount)}</div>
-                      </div>
-                    ))}
-                  </div>
-                )}
-              </div>
-            </>
+            <SalaryTab
+              staff={selected}
+              salaryHistory={salaryHistory}
+              paymentHistory={paymentHistory}
+              onEditSalary={() => { setEditSalaryAmt(String(selected.salary)); setEditSalaryFrom(todayIso()); setEditSalaryReason(''); setEditSalaryOpen(true); }}
+              onOpenPayModal={(month, expected) => {
+                setPayMonth(month);
+                setPayAmt(String(expected));
+                setPayMethod('BANK_TRANSFER');
+                setPayTxn(''); setPayNote('');
+                setPayOpen(true);
+              }}
+            />
           )}
 
           {tab === 'ATTENDANCE' && !tabLoading && (
