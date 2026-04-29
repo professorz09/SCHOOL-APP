@@ -197,6 +197,47 @@ Existing principals stuck in the loop need to complete the forced-change
 screen one more time after this migration is live; the flag will then
 persist on every subsequent login.
 
+## Migration 0018 — Atomic Academic Year + Sections RPC
+
+`supabase/migrations/0018_create_ay_with_sections.sql` introduces a single
+SECURITY DEFINER RPC, `create_academic_year_with_sections(p_label, p_start,
+p_end, p_board, p_medium, p_streams, p_sections)`, that the new Academic
+Year Setup Wizard calls. It inserts the AY row plus every section in the
+same transaction (or rolls everything back on failure), so a half-set-up
+year can never leak into the database. Validation enforces non-blank
+label, end-after-start dates, JSON-array shape for streams/sections, and
+non-negative capacity. The single-active-year trigger from 0017 takes
+care of deactivating the prior active year automatically.
+
+The legacy `create_academic_year(label, start, end, board, medium)` RPC
+from 0005 stays in place — `commit_year_closing` still composes its own
+behavior, and back-compat callers are unaffected.
+
+### Academic Year Setup Wizard
+
+`src/features/principal/components/AcademicYearWizard.tsx` is a 3-step
+modal launched from `AcademicYearManager`:
+
+1. **Basics** — label, start/end dates, board, medium, available streams
+   (Science/Commerce/Arts toggleable).
+2. **Pick classes** — toggle which classes (Nursery, LKG, UKG, Class 1
+   through Class 12) to enable for the year.
+3. **Sections & capacity** — per enabled class, add/remove sections (A,
+   B, …) with seat capacity. Class 11/12 also require a stream pick from
+   step-1's selected streams.
+
+The "Create" button is the only commit; it calls
+`academicYearService.createWithSections(...)` which forwards to the
+0018 RPC. `AcademicYearManager` now also surfaces a "+ Add Academic Year"
+button at the top of the year list (always visible) and a "Make Active"
+toggle on inactive non-locked year cards (with a confirmation modal that
+calls `useAcademicYear().setActiveYear(id)`).
+
+The legacy "Classes" entry in Settings is removed from the menu — class
+and section setup is now wizard-driven. The CLASSES view code remains in
+`SettingsManager.tsx` as a fallback while a future task introduces a
+dedicated post-wizard section editor.
+
 ## Migration 0017 — Full-flow database foundations
 
 `supabase/migrations/0017_full_flow_fixes.sql` lays the schema/RPC base every

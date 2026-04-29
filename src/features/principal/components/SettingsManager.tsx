@@ -182,7 +182,10 @@ export const SettingsManager: React.FC<Props> = ({ onBack, initialView }) => {
       <div className="flex-1 overflow-y-auto p-4  space-y-2">
         {[
           { icon: Building2, title: 'School Info',    desc: 'School details & contact info',    iconBg: 'bg-blue-100',    iconColor: 'text-blue-600',    action: () => setView('SCHOOL_INFO') },
-          { icon: BookOpen,  title: 'Classes',        desc: 'Class & section setup',            iconBg: 'bg-violet-100',  iconColor: 'text-violet-600',  action: () => setView('CLASSES') },
+          // Classes/sections are now set in the Academic Year wizard. The legacy
+          // CLASSES view is kept in this file but is no longer reachable from
+          // the menu — section editing post-wizard will get its own dedicated
+          // surface in a future task.
           { icon: IndianRupee, title: 'Fee Structure', desc: 'Class-wise fee configuration',   iconBg: 'bg-emerald-100', iconColor: 'text-emerald-600', action: () => setView('FEE_STRUCT') },
           { icon: CreditCard, title: 'Payments',      desc: 'UPI & QR code setup',             iconBg: 'bg-orange-100',  iconColor: 'text-orange-600',  action: () => setView('PAYMENTS') },
           { icon: Lock,      title: 'Security',       desc: 'Password & account security',     iconBg: 'bg-rose-100',    iconColor: 'text-rose-600',    action: () => setView('SECURITY') },
