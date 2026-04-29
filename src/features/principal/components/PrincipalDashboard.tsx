@@ -13,6 +13,7 @@ import { supabase } from '../../../lib/supabase';
 import { PrincipalView } from '../pages/PrincipalLayout';
 import { useAuthStore } from '../../../store/authStore';
 import { SchoolSetupChecklist } from './SchoolSetupChecklist';
+import { SalaryReminderCard } from './SalaryReminderCard';
 
 interface Props {
   onNavigate: (view: PrincipalView) => void;
@@ -231,6 +232,9 @@ export const PrincipalDashboard: React.FC<Props> = ({ onNavigate }) => {
           </div>
         </button>
       </div>
+
+      {/* ── Salary Reminder Widget ─────────────────────────────────────── */}
+      <SalaryReminderCard onNavigate={onNavigate} />
 
       {/* ── Alert Strip ────────────────────────────────────────────────── */}
       {(stats.openComplaints > 0 || stats.pendingApprovals > 0) && (

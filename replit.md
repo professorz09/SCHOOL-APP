@@ -437,3 +437,122 @@ the new fee-schedule signature reports exactly 7 named arguments.
 
 - **`onboard_school` ambiguous-column bug** — migration `0015_onboard_school_fix_ambiguous_code.sql` re-creates the `public.onboard_school(...)` RPC. The `RETURNS TABLE (... code TEXT, is_deleted BOOLEAN ...)` OUT names were shadowing same-named columns in the body, so `WHERE code = p_school_code AND is_deleted = false` raised `column reference "code" is ambiguous` at runtime. The body now aliases `public.schools s` / `public.users u` and qualifies every column reference. The function signature is unchanged so existing GRANTs are preserved.
 - **Keyboard closing after every keystroke** — `src/features/super-admin/components/SchoolsManager.tsx` had its small `Field` input wrapper declared INSIDE the parent's render body for both the CREATE and EDIT views. Each keystroke triggered `setForm` → re-render → a new `Field` function identity → React unmounted/remounted the underlying `<input>` → focus lost → mobile keyboard closed. `Field` is now declared at module scope, accepts `form` and `setForm` as props, and supports the EDIT view's `locked` flag. All call sites updated.
+
+## Migration 0021 — Staff salary lifecycle (Task #5)
+
+`supabase/migrations/0021_staff_salary_lifecycle.sql` extends the staff +
+salary subsystem in a purely additive way (re-runs are safe — every
+DDL uses `IF NOT EXISTS` / `DROP ... IF EXISTS` + `CREATE OR REPLACE`):
+
+1. **`salary_payments.method`** — new TEXT column with a CHECK constraint
+   restricting it to `CASH | BANK_TRANSFER | UPI | CHEQUE | OTHER`. Older
+   rows have `method = NULL`.
+2. **`record_salary_payment(staff, month, amount, note, method, txn_id)`**
+   re-created with two new optional params. Caller-supplied `txn_id` wins;
+   when omitted the RPC auto-generates `TXN-<yyyymmddHHMMSS>-<staff[0:4]>`
+   so legacy 4-arg callers keep working. Records the payment, mirrors a
+   matching `expenses` row (`category='SALARY'`), and writes the audit log
+   with `{ month, amount, method, txn }`.
+3. **`staff_status_history`** — new table `(id, staff_id, school_id,
+   old_status, new_status, reason, changed_by, changed_at)` plus a per-row
+   AFTER-UPDATE trigger on `staff.status` so every transition is captured
+   automatically. Existing rows are seeded with one `Initial` entry so the
+   profile Log tab is never blank. RLS mirrors staff: super admin / same-
+   school principal+teacher can SELECT; principals can write.
+4. **`set_staff_relieving_date(staff, date, reason)`** — flips
+   `staff.status` to `'RELIEVED'`, stamps `relieving_date / relieving_reason`,
+   and back-fills the latest `staff_status_history` row's `reason` (the
+   trigger captures the transition; the RPC adds context). Atomic.
+5. **`salary_reminders(school_id, year_month)`** — returns
+   `(staff_id, name, role, salary, paid_amount)` for active, non-suspended,
+   non-relieved staff (and not past their relieving date) whose total paid
+   for `year_month` is less than `staff.salary`. Drives the dashboard
+   reminder widget.
+6. **`staff_documents`** — new table `(id, staff_id, school_id, doc_type,
+   doc_name, doc_url, uploaded_by, uploaded_at)` with RLS letting the staff
+   member read their own docs and same-school principal/teacher manage
+   them. Mirrors the 0019 student-documents shape exactly.
+7. **`staff-documents` private Storage bucket** — 5 MB cap, image/PDF mime
+   whitelist, three policies (INSERT / SELECT / DELETE) keyed off the path
+   convention `<school_id>/<staff_id>/<doc_type>/<filename>`. Same-school
+   principals/teachers can write; the staff member can self-upload (e.g.
+   PAN); deletes are principal-only.
+
+## Task #5 — Staff salary system
+
+The staff module gained the following user-facing capabilities:
+
+- **`StaffStatus` adds `'RELIEVED'`** (TS-only union — DB column is free
+  TEXT). New `SalaryPaymentMethod` enum mirrors the DB CHECK. New types:
+  `StaffSalaryHistoryEntry`, `StaffStatusHistoryEntry`, `StaffDocument`,
+  `SalaryReminderRow`. `StaffMember` gains optional `relievingDate` /
+  `relievingReason`; `SalaryPayment` gains optional `method`.
+- **`staff.service`** picks up:
+  - `getSalaryHistory(staffId)` — reads `staff_salary_history` (created in
+    migration 0017) most-recent first.
+  - `updateSalary(staffId, amount, effectiveFrom, reason)` — calls the
+    `update_staff_salary` RPC which atomically bumps `staff.salary` AND
+    inserts a history row.
+  - `getPaymentHistory(staffId, _academicYearId?)` — pulls
+    `salary_payments` joined-flat (year filter is reserved; salary_payments
+    has no AY foreign key so filtering happens client-side via the AY date
+    window when needed).
+  - `recordSalaryPayment(staffId, month, amount, note, method?, txnId?)` —
+    extended signature; old 4-arg callers still work because the new
+    params default to NULL.
+  - `getSalaryReminders(yearMonth)` — calls the new `salary_reminders` RPC
+    and returns `{ staffId, name, role, salary, paid, pending }` rows.
+  - `setRelievingDate(staffId, date, reason)` and `getStatusHistory()`.
+  - `getDocuments(staffId)`, `uploadDocument`, `removeDocument`,
+    `getDocumentSignedUrl` — wire through the new
+    `services/staffStorage.service.ts` (mirrors student storage.service).
+    Upload-then-insert with best-effort orphan cleanup if the metadata
+    insert fails.
+- **`staff.service.create()` now seeds the initial salary history row** —
+  immediately after the staff insert, if the entered salary is > 0 the UI
+  calls `updateSalary(id, salary, joiningDate, 'Initial')` so the Salary
+  tab is never empty for new staff. Failure is logged but non-fatal.
+- **`StaffManager.tsx` PROFILE view is now 6 tabs** — Info / Salary /
+  Attendance / Classes / Docs / Log:
+  - **Info** — contact, salary/joined/classes summary, relieving banner
+    when set, plus "Set Relieving Date" + "Suspend / Reinstate" actions.
+  - **Salary** — current salary card with "Edit Salary" + "Pay This
+    Month" buttons; salary-amount history (effective-from + reason);
+    payment history (date · method · txn id · note · amount). Edit and
+    Pay are disabled for RELIEVED staff.
+  - **Attendance** — placeholder pointing to the existing Staff
+    Attendance screen (salary is fixed monthly per the simple model).
+  - **Classes** — chip list of `assignedClasses` for the active year.
+  - **Docs** — doc-type select + file picker (image/pdf, 5 MB max);
+    list with View (signed URL) + Delete actions.
+  - **Log** — `staff_status_history` entries with old → new status,
+    reason, and timestamp.
+- **`SalaryLedger.tsx` pay modal** picks up Method dropdown + optional
+  Txn ID, forwards both to the RPC. The "Record Payment" CTA is also
+  hidden for RELIEVED staff.
+- **`SalaryReminderCard.tsx`** — new dashboard widget (mounted just above
+  the Alert Strip in `PrincipalDashboard.tsx`). Shows `<N> staff pending
+  salary for <Month Year>` when at least one row is returned by
+  `salary_reminders`. Tapping it opens a bottom-sheet listing each row
+  with a one-tap quick-pay (uses the configured method) and a "Open
+  Salary Ledger" footer button. Auto-hides when the queue is empty.
+
+## Migration 0022 — Staff salary lifecycle fixes (post-review)
+
+Code-review follow-up to 0021. Purely additive (DROP-then-CREATE on the
+specific function / policies it owns):
+
+1. **`salary_reminders(school_id, year_month)` — month-aware filtering.**
+   The 0021 version filtered eligibility against `CURRENT_DATE` and forgot
+   to exclude staff who join AFTER the requested month. The RPC now parses
+   `p_year_month` (`'October 2025'` → `2025-10-01`) with
+   `to_date(..., 'FMMonth YYYY')`, derives `v_first` / `v_last`, and gates
+   `joining_date <= v_last` and `relieving_date >= v_first`. Unparseable
+   labels return zero rows (so the dashboard widget hides instead of
+   crashing).
+2. **`staff_documents` — split FOR ALL into separate INSERT / UPDATE /
+   DELETE policies.** 0021 let any same-school principal OR teacher delete
+   metadata, but the storage bucket only allowed principals (or super
+   admins) to delete the underlying object — a teacher delete would orphan
+   the private file. The DELETE policy is now principal-only, matching the
+   bucket. INSERT and UPDATE remain principal+teacher.

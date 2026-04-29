@@ -1,8 +1,10 @@
 import React, { useEffect, useState } from 'react';
 import { ArrowLeft, IndianRupee, CheckCircle2, Clock, AlertTriangle, Loader2 } from 'lucide-react';
 import { staffService } from '../../../services/staff.service';
-import { StaffMember } from '../../../types/principal.types';
+import { StaffMember, SalaryPaymentMethod } from '../../../types/principal.types';
 import { useUIStore } from '../../../store/uiStore';
+
+const PAY_METHODS: SalaryPaymentMethod[] = ['CASH', 'BANK_TRANSFER', 'UPI', 'CHEQUE', 'OTHER'];
 
 type SalaryStatus = 'PAID' | 'PARTIAL' | 'PENDING';
 
@@ -53,6 +55,8 @@ export const SalaryLedger: React.FC<Props> = ({ onBack }) => {
   const [payModal, setPayModal] = useState<SalaryRow | null>(null);
   const [payAmount, setPayAmount] = useState('');
   const [payNote, setPayNote] = useState('');
+  const [payMethod, setPayMethod] = useState<SalaryPaymentMethod>('BANK_TRANSFER');
+  const [payTxn, setPayTxn] = useState('');
   const [payBusy, setPayBusy] = useState(false);
   const [search, setSearch] = useState('');
 
@@ -82,10 +86,12 @@ export const SalaryLedger: React.FC<Props> = ({ onBack }) => {
     if (!Number.isFinite(amount) || amount <= 0) { showToast('Enter a valid amount', 'error'); return; }
     setPayBusy(true);
     try {
-      await staffService.recordSalaryPayment(selected.staff.id, payModal.month, amount, payNote);
+      await staffService.recordSalaryPayment(
+        selected.staff.id, payModal.month, amount, payNote, payMethod, payTxn || null,
+      );
       await reload();
       showToast(`₹${amount.toLocaleString('en-IN')} recorded for ${payModal.month}`);
-      setPayModal(null); setPayAmount(''); setPayNote('');
+      setPayModal(null); setPayAmount(''); setPayNote(''); setPayTxn('');
     } catch (e) {
       showToast(e instanceof Error ? e.message : 'Payment failed', 'error');
     } finally {
@@ -162,8 +168,12 @@ export const SalaryLedger: React.FC<Props> = ({ onBack }) => {
                   {row.note && <div className="text-[9px] font-bold text-slate-400 mt-0.5">{row.note}</div>}
                 </div>
               </div>
-              {row.status !== 'PAID' && selected.staff.status !== 'SUSPENDED' && (
-                <button onClick={() => { setPayModal(row); setPayAmount(String(Math.max(0, row.amount - row.paid))); setPayNote(''); }}
+              {row.status !== 'PAID' && selected.staff.status !== 'SUSPENDED' && selected.staff.status !== 'RELIEVED' && (
+                <button onClick={() => {
+                  setPayModal(row);
+                  setPayAmount(String(Math.max(0, row.amount - row.paid)));
+                  setPayNote(''); setPayTxn(''); setPayMethod('BANK_TRANSFER');
+                }}
                   className="mt-3 w-full py-2 bg-slate-900 text-white text-[10px] font-black rounded-xl">
                   Record Payment
                 </button>
@@ -186,8 +196,17 @@ export const SalaryLedger: React.FC<Props> = ({ onBack }) => {
                   placeholder="Amount"
                   className="flex-1 bg-transparent font-black text-slate-900 text-lg outline-none" />
               </div>
+              <div className="grid grid-cols-2 gap-3 mb-3">
+                <select value={payMethod} onChange={e => setPayMethod(e.target.value as SalaryPaymentMethod)}
+                  className="bg-slate-50 border border-slate-200 rounded-xl px-3 py-3 text-sm font-bold outline-none focus:border-blue-500">
+                  {PAY_METHODS.map(m => <option key={m} value={m}>{m.replace('_', ' ')}</option>)}
+                </select>
+                <input value={payTxn} onChange={e => setPayTxn(e.target.value)}
+                  placeholder="Txn ID (optional)"
+                  className="bg-slate-50 border border-slate-200 rounded-xl px-3 py-3 text-sm font-bold outline-none focus:border-blue-500" />
+              </div>
               <input value={payNote} onChange={e => setPayNote(e.target.value)}
-                placeholder="Note (e.g. Bank transfer, Cash)"
+                placeholder="Note (optional)"
                 className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-3 text-sm font-bold outline-none focus:border-blue-500 mb-4" />
               <button onClick={handlePay}
                 disabled={!payAmount || payBusy}
