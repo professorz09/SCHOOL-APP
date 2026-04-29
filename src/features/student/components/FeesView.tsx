@@ -359,7 +359,7 @@ export const FeesView: React.FC<Props> = ({ onBack }) => {
         <div className="mx-4 mt-4">
           <div className="bg-[#0d1b3e] rounded-3xl p-5 text-white shadow-xl">
             <p className="text-[10px] font-black uppercase tracking-widest text-blue-300 mb-1">
-              TOTAL DUE • CURRENT TERM
+              TOTAL OUTSTANDING • ALL YEARS
             </p>
             <div className="text-5xl font-black mb-2">
               ₹{feeSummary.total.toLocaleString('en-IN')}
