@@ -230,7 +230,7 @@ export const AcademicYearWizard: React.FC<Props> = ({
         <div className="flex-1 overflow-y-auto px-5 py-4 space-y-3">
           {/* ─── STEP 1: BASICS ─────────────────────────────────────── */}
           {step === 1 && (
-            <>
+            <div key="step-1" className="space-y-3 animate-in fade-in slide-in-from-right-4 duration-200">
               <div>
                 <label className="text-[10px] font-black uppercase tracking-widest text-slate-400">Label</label>
                 <input
@@ -306,12 +306,12 @@ export const AcademicYearWizard: React.FC<Props> = ({
                   })}
                 </div>
               </div>
-            </>
+            </div>
           )}
 
           {/* ─── STEP 2: PICK CLASSES ────────────────────────────────── */}
           {step === 2 && (
-            <>
+            <div key="step-2" className="space-y-3 animate-in fade-in slide-in-from-right-4 duration-200">
               <p className="text-[11px] font-bold text-slate-500 leading-relaxed">
                 Kaunsi classes is year ke liye chalu karni hain? Aap baad me wapas wizard chala kar nahi badal sakte —
                 section list ko alag se manage karne ke liye baad me feature aayega.
@@ -338,12 +338,18 @@ export const AcademicYearWizard: React.FC<Props> = ({
                   {enabledClasses.length} {enabledClasses.length === 1 ? 'class' : 'classes'} enabled
                 </p>
               )}
-            </>
+            </div>
           )}
 
           {/* ─── STEP 3: SECTIONS PER CLASS ──────────────────────────── */}
+          {/* Section letters are unique per (academic_year, class), enforced
+              by the existing UNIQUE(academic_year_id, class_name, section)
+              index. So Class 11 cannot have two "A" sections (e.g. one
+              Science, one Commerce); use distinct letters (A, B, …) and
+              assign streams individually. This matches the legacy DB
+              contract from migration 0001. */}
           {step === 3 && (
-            <>
+            <div key="step-3" className="space-y-3 animate-in fade-in slide-in-from-right-4 duration-200">
               <p className="text-[11px] font-bold text-slate-500 leading-relaxed">
                 Har class ke sections add karein, capacity set karein. Class 11/12 me stream chuna zaroori hai.
               </p>
@@ -420,7 +426,7 @@ export const AcademicYearWizard: React.FC<Props> = ({
                   <p className="text-[11px] font-black text-rose-700 leading-relaxed">{error}</p>
                 </div>
               )}
-            </>
+            </div>
           )}
         </div>
 
