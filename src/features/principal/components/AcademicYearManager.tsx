@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   ArrowLeft, Calendar, Lock, CheckCircle2, AlertTriangle,
   Sparkles, Plus, Power, Edit3, FileWarning, History,
@@ -7,13 +7,17 @@ import { useAcademicYear } from '../../../context/AcademicYearContext';
 import { useUIStore } from '../../../store/uiStore';
 import { yearClosingService } from '../../../services/yearClosing.service';
 import { useCorrectionStore } from '../../../store/correctionStore';
+import { useEditingYearStore } from '../../../store/editingYearStore';
 import type { PreClosingChecklist } from '../../../types/yearClosing.types';
 import { AcademicYearWizard } from './AcademicYearWizard';
 
 interface Props { onBack: () => void; }
 
 export const AcademicYearManager: React.FC<Props> = ({ onBack }) => {
-  const { academicYears, activeYear, isYearLocked, refresh: refreshAY, setActiveYear } = useAcademicYear();
+  const {
+    academicYears, activeYear, isYearLocked, refresh: refreshAY, setActiveYear,
+    setCurrentEditingYear,
+  } = useAcademicYear();
   const { showToast } = useUIStore();
 
   // ─── Wizard state ───────────────────────────────────────────────────────
@@ -60,8 +64,31 @@ export const AcademicYearManager: React.FC<Props> = ({ onBack }) => {
   // ─── Correction-mode store + audit counts ───────────────────────────────
   const enabledByYear = useCorrectionStore(s => s.enabledByYear);
   const countsByYear = useCorrectionStore(s => s.countsByYear);
-  const toggleCorrection = useCorrectionStore(s => s.toggle);
+  const enableCorrection = useCorrectionStore(s => s.enable);
+  const disableCorrection = useCorrectionStore(s => s.disable);
   const setCorrectionCount = useCorrectionStore(s => s.setCount);
+
+  // Exclusive correction toggle — turning correction ON for year X also
+  // turns OFF correction for any other year, and binds editing surfaces
+  // (attendance, tests, timetable, staff attendance) to year X via
+  // setCurrentEditingYear. Turning correction OFF clears the binding.
+  const handleToggleCorrection = useCallback((yearId: string) => {
+    const wasOn = !!useCorrectionStore.getState().enabledByYear[yearId];
+    if (wasOn) {
+      disableCorrection(yearId);
+      if (useEditingYearStore.getState().getEditingYearId() === yearId) {
+        setCurrentEditingYear(null);
+      }
+      return;
+    }
+    // Turn off any other correction year first (exclusive selection).
+    const others = Object.entries(useCorrectionStore.getState().enabledByYear)
+      .filter(([id, on]) => on && id !== yearId)
+      .map(([id]) => id);
+    others.forEach(id => disableCorrection(id));
+    enableCorrection(yearId);
+    setCurrentEditingYear(yearId);
+  }, [disableCorrection, enableCorrection, setCurrentEditingYear]);
 
   // Hydrate audit counts for every closed year on mount / refresh
   useEffect(() => {
@@ -188,7 +215,7 @@ export const AcademicYearManager: React.FC<Props> = ({ onBack }) => {
                 {locked && (
                   <button
                     type="button"
-                    onClick={() => toggleCorrection(year.id)}
+                    onClick={() => handleToggleCorrection(year.id)}
                     className={`px-2.5 py-1.5 rounded-full text-[10px] font-black flex items-center gap-1 ${
                       correctionOn
                         ? 'bg-amber-500 text-white hover:bg-amber-600'
@@ -215,7 +242,7 @@ export const AcademicYearManager: React.FC<Props> = ({ onBack }) => {
         );
       })}
     </div>
-  ), [academicYears, isYearLocked, enabledByYear, countsByYear, toggleCorrection]);
+  ), [academicYears, isYearLocked, enabledByYear, countsByYear, handleToggleCorrection]);
 
   // ─── MAIN page ───────────────────────────────────────────────────────────
   return (

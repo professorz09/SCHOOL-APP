@@ -21,6 +21,7 @@
 
 import { supabase } from '../lib/supabase';
 import { useAuthStore } from '../store/authStore';
+import { useEditingYearStore } from '../store/editingYearStore';
 import { logAudit } from '../lib/audit';
 import { generateText, stripJsonFence, GeminiUnavailableError } from '../lib/gemini';
 import type { PublishResultsInput, FinalExamPublishInput } from '../types/teacher.types';
@@ -79,6 +80,10 @@ async function getMyStaff(): Promise<{ staffId: string; subject: string }> {
 let _yearCache: { schoolId: string; yearId: string | null } | null = null;
 async function getActiveYearId(): Promise<string> {
   const schoolId = getSchoolId();
+  // Honor Correction Mode override — bypass cache so toggling correction
+  // for different years immediately routes queries to the right year.
+  const override = useEditingYearStore.getState().getEditingYearId();
+  if (override) return override;
   if (_yearCache && _yearCache.schoolId === schoolId && _yearCache.yearId) {
     return _yearCache.yearId;
   }

@@ -9,6 +9,7 @@
 
 import { supabase } from '../lib/supabase';
 import { useAuthStore } from '../store/authStore';
+import { useEditingYearStore } from '../store/editingYearStore';
 import { logAudit } from '../lib/audit';
 
 export type AttendanceApprovalStatus = 'PENDING' | 'APPROVED' | 'REJECTED';
@@ -52,6 +53,11 @@ function getUserId(): string {
 }
 
 async function getActiveYearId(): Promise<string> {
+  // Honor Correction Mode override when set — lets the principal edit a
+  // closed year's attendance through the same UI surface. See
+  // src/store/editingYearStore.ts for the override lifecycle.
+  const override = useEditingYearStore.getState().getEditingYearId();
+  if (override) return override;
   const schoolId = getSchoolId();
   const { data, error } = await supabase
     .from('academic_years').select('id')

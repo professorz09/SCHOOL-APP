@@ -1,6 +1,7 @@
 import React, { createContext, useContext, useState, useEffect, useCallback, ReactNode } from 'react';
 import { supabase } from '../lib/supabase';
 import { useAuthStore } from '../store/authStore';
+import { useEditingYearStore } from '../store/editingYearStore';
 import { logAudit } from '../lib/audit';
 import type { AcademicYearStatus } from '../types/yearClosing.types';
 
@@ -18,6 +19,16 @@ export interface AcademicYear {
 interface AcademicYearContextType {
   academicYears: AcademicYear[];
   activeYear: AcademicYear | null;
+  /**
+   * The year that editing surfaces (attendance, tests, timetable, staff
+   * attendance) should bind to. Equals `activeYear` by default. When
+   * Correction Mode is turned ON for a closed year, callers set this to
+   * that closed year via setCurrentEditingYear() so the same edit
+   * surfaces operate on closed-year data — gated by useEditGuard.
+   */
+  currentYear: AcademicYear | null;
+  currentEditingYearId: string | null;
+  setCurrentEditingYear: (id: string | null) => void;
   isLoading: boolean;
   refresh: () => Promise<void>;
   addAcademicYear: (year: Omit<AcademicYear, 'id' | 'isActive' | 'status'>) => Promise<string>;
@@ -83,6 +94,26 @@ export const AcademicYearProvider: React.FC<{ children: ReactNode }> = ({ childr
 
   const activeYear = academicYears.find(y => y.isActive) ?? null;
 
+  const [currentEditingYearId, setCurrentEditingYearIdState] = useState<string | null>(null);
+  // The year all edit surfaces should bind to. When Correction Mode is on
+  // for a closed year, that year overrides activeYear here AND in the
+  // editingYearStore (consumed by service-layer year resolvers).
+  const currentYear =
+    (currentEditingYearId
+      ? academicYears.find(y => y.id === currentEditingYearId) ?? null
+      : null) ?? activeYear;
+  const setCurrentEditingYear = useCallback((id: string | null) => {
+    setCurrentEditingYearIdState(id);
+    useEditingYearStore.getState().setEditingYear(id);
+  }, []);
+  // Auto-clear the override if the selected year disappears from the
+  // school's year list (e.g. deleted in another tab).
+  useEffect(() => {
+    if (currentEditingYearId && !academicYears.find(y => y.id === currentEditingYearId)) {
+      setCurrentEditingYear(null);
+    }
+  }, [academicYears, currentEditingYearId, setCurrentEditingYear]);
+
   const addAcademicYear = useCallback(async (
     newYear: Omit<AcademicYear, 'id' | 'isActive' | 'status'>,
   ): Promise<string> => {
@@ -128,7 +159,8 @@ export const AcademicYearProvider: React.FC<{ children: ReactNode }> = ({ childr
   return (
     <AcademicYearContext.Provider
       value={{
-        academicYears, activeYear, isLoading, refresh,
+        academicYears, activeYear, currentYear, currentEditingYearId,
+        setCurrentEditingYear, isLoading, refresh,
         addAcademicYear, setActiveYear, lockYear, removeAcademicYear, isYearLocked,
       }}
     >

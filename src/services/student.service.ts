@@ -11,6 +11,7 @@
 
 import { supabase } from '../lib/supabase';
 import { useAuthStore } from '../store/authStore';
+import { useEditingYearStore } from '../store/editingYearStore';
 import { adminApi } from '../lib/adminApi';
 import { logAudit } from '../lib/audit';
 import { PaymentStatus } from '../config/constants';
@@ -105,6 +106,16 @@ function recordToStudent(s: StudentRow, ar?: AcademicRecordRow | null): Student 
 }
 
 async function activeYearId(schoolId: string): Promise<string | null> {
+  // If Correction Mode binds editing surfaces to a specific (closed) year,
+  // honor that year so roster / academic-record reads align with the edit
+  // surface (Student Attendance etc.). Verify the year actually belongs to
+  // this school to prevent accidental cross-school binding.
+  const overrideId = useEditingYearStore.getState().getEditingYearId();
+  if (overrideId) {
+    const { data: ov } = await supabase
+      .from('academic_years').select('id').eq('id', overrideId).eq('school_id', schoolId).maybeSingle();
+    if ((ov as { id: string } | null)?.id) return overrideId;
+  }
   const { data } = await supabase
     .from('academic_years').select('id').eq('school_id', schoolId).eq('is_active', true).maybeSingle();
   return (data as { id: string } | null)?.id ?? null;
