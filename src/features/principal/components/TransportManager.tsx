@@ -2,9 +2,11 @@ import React, { useState, useEffect } from 'react';
 import {
   ArrowLeft, Bus, Users, MapPin, Phone, Plus, Trash2, ChevronDown,
   Edit2, Check, X, Navigation, Map, Activity, Clock, AlertCircle,
+  AlertTriangle, Shuffle,
 } from 'lucide-react';
 import {
   transportService, TransportVehicle, StudentTransportAssignment, TransportStudent,
+  TRANSPORT_CHANGE_REASONS,
 } from '../../../services/transport.service';
 import { staffService } from '../../../services/staff.service';
 import { StaffMember } from '../../../types/principal.types';
@@ -31,6 +33,72 @@ export const TransportManager: React.FC<Props> = ({ onBack }) => {
   const [selectedStudentId, setSelectedStudentId] = useState<string | null>(null);
   const [selectedVehicleId, setSelectedVehicleId] = useState<string | null>(null);
   const [selectedStopId, setSelectedStopId] = useState<string | null>(null);
+
+  // ── Bulk-reassign (vehicle out of service) modal ──────────────────────
+  const [bulkFromVehicleId, setBulkFromVehicleId] = useState<string | null>(null);
+  const [bulkToVehicleId, setBulkToVehicleId] = useState<string>('');
+  const [bulkToStopId, setBulkToStopId] = useState<string>('');
+  const [bulkEffectiveDate, setBulkEffectiveDate] = useState(
+    () => new Date().toISOString().slice(0, 10),
+  );
+  const [bulkReason, setBulkReason] = useState<string>('VEHICLE_BREAKDOWN');
+  const [bulkReasonNote, setBulkReasonNote] = useState('');
+  const [bulkBusy, setBulkBusy] = useState(false);
+  const [bulkError, setBulkError] = useState<string | null>(null);
+
+  const openBulkReassign = (vehicleId: string) => {
+    setBulkFromVehicleId(vehicleId);
+    setBulkToVehicleId('');
+    setBulkToStopId('');
+    setBulkEffectiveDate(new Date().toISOString().slice(0, 10));
+    setBulkReason('VEHICLE_BREAKDOWN');
+    setBulkReasonNote('');
+    setBulkError(null);
+  };
+  const closeBulkReassign = () => setBulkFromVehicleId(null);
+
+  const handleBulkReassign = async () => {
+    if (!bulkFromVehicleId) return;
+    if (!bulkToVehicleId || !bulkToStopId) {
+      setBulkError('Pick a target vehicle and stop.');
+      return;
+    }
+    if (!bulkEffectiveDate) {
+      setBulkError('Pick an effective date.');
+      return;
+    }
+    const reasonLabel =
+      TRANSPORT_CHANGE_REASONS.find(r => r.value === bulkReason)?.label ?? bulkReason;
+    const finalReason = bulkReasonNote.trim()
+      ? `${reasonLabel}: ${bulkReasonNote.trim()}`
+      : reasonLabel;
+
+    setBulkBusy(true); setBulkError(null);
+    try {
+      const { moved } = await transportService.bulkReassignVehicle({
+        fromVehicleId: bulkFromVehicleId,
+        toVehicleId: bulkToVehicleId,
+        toStopId: bulkToStopId,
+        effectiveDate: bulkEffectiveDate,
+        reason: finalReason,
+      });
+      await reloadAll();
+      closeBulkReassign();
+      // surface a quick confirmation via the existing AlertCircle line — alert() is already
+      // used elsewhere in this file for non-fatal info, keep it consistent.
+      alert(`Moved ${moved} student${moved === 1 ? '' : 's'} to the new vehicle.`);
+    } catch (e: unknown) {
+      setBulkError(e instanceof Error ? e.message : 'Could not reassign');
+    } finally {
+      setBulkBusy(false);
+    }
+  };
+
+  const bulkFromVehicle = bulkFromVehicleId ? vehicles.find(v => v.id === bulkFromVehicleId) : null;
+  const bulkToVehicle   = bulkToVehicleId    ? vehicles.find(v => v.id === bulkToVehicleId)    : null;
+  const bulkAffectedCount = bulkFromVehicleId
+    ? assignments.filter(a => a.vehicleId === bulkFromVehicleId).length
+    : 0;
 
   const reloadAll = async () => {
     await transportService.refreshAll();
@@ -202,10 +270,19 @@ export const TransportManager: React.FC<Props> = ({ onBack }) => {
                     <div className="font-extrabold text-slate-900 text-sm">{v.vehicleNo}</div>
                     <div className="text-[10px] font-bold text-slate-400">{v.type} · {v.capacity} capacity</div>
                   </div>
-                  <button onClick={() => handleDeleteVehicle(v.id)}
-                    className="p-2 hover:bg-rose-50 text-rose-400 rounded-lg">
-                    <Trash2 size={14} />
-                  </button>
+                  <div className="flex items-center gap-1">
+                    {getAssignedCount(v.id) > 0 && (
+                      <button onClick={() => openBulkReassign(v.id)}
+                        title="Move all students to another vehicle"
+                        className="p-2 hover:bg-amber-50 text-amber-500 rounded-lg">
+                        <Shuffle size={14} />
+                      </button>
+                    )}
+                    <button onClick={() => handleDeleteVehicle(v.id)}
+                      className="p-2 hover:bg-rose-50 text-rose-400 rounded-lg">
+                      <Trash2 size={14} />
+                    </button>
+                  </div>
                 </div>
                 <div className="flex items-center gap-2 text-[10px]">
                   <Bus size={12} className="text-slate-400" />
@@ -516,6 +593,114 @@ export const TransportManager: React.FC<Props> = ({ onBack }) => {
           </>
         )}
       </div>
+
+      {/* ── Bulk Reassign modal ────────────────────────────────────────── */}
+      {bulkFromVehicleId && bulkFromVehicle && (
+        <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-50 flex items-end sm:items-center justify-center p-4"
+             onClick={() => !bulkBusy && closeBulkReassign()}>
+          <div className="bg-white rounded-2xl border border-slate-200 shadow-2xl w-full max-w-md max-h-[90vh] overflow-y-auto"
+               onClick={e => e.stopPropagation()}>
+            <div className="px-4 py-3 border-b border-slate-100 flex items-center gap-2 sticky top-0 bg-white">
+              <AlertTriangle size={18} className="text-amber-500" />
+              <div className="flex-1">
+                <h3 className="font-black text-slate-900 text-sm uppercase tracking-tight">
+                  Move all students off {bulkFromVehicle.vehicleNo}
+                </h3>
+                <p className="text-[10px] font-bold text-slate-400">
+                  {bulkAffectedCount} active assignment{bulkAffectedCount === 1 ? '' : 's'} will be closed
+                </p>
+              </div>
+              <button onClick={closeBulkReassign} disabled={bulkBusy}
+                className="p-1 hover:bg-slate-100 rounded-lg disabled:opacity-50">
+                <X size={16} className="text-slate-500" />
+              </button>
+            </div>
+
+            <div className="p-4 space-y-3">
+              <div>
+                <label className="text-[9px] font-black uppercase tracking-widest text-slate-500">
+                  Target Vehicle
+                </label>
+                <select value={bulkToVehicleId}
+                  onChange={e => { setBulkToVehicleId(e.target.value); setBulkToStopId(''); }}
+                  className="w-full mt-1 bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 text-sm font-bold outline-none focus:border-blue-500">
+                  <option value="">— Select —</option>
+                  {vehicles.filter(v => v.id !== bulkFromVehicleId).map(v => (
+                    <option key={v.id} value={v.id}>{v.vehicleNo} ({v.type})</option>
+                  ))}
+                </select>
+              </div>
+
+              <div>
+                <label className="text-[9px] font-black uppercase tracking-widest text-slate-500">
+                  Target Stop
+                </label>
+                <select value={bulkToStopId} onChange={e => setBulkToStopId(e.target.value)}
+                  disabled={!bulkToVehicle}
+                  className="w-full mt-1 bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 text-sm font-bold outline-none focus:border-blue-500 disabled:opacity-50">
+                  <option value="">— Select —</option>
+                  {(bulkToVehicle?.stops ?? []).map(s => (
+                    <option key={s.id} value={s.id}>{s.name}</option>
+                  ))}
+                </select>
+              </div>
+
+              <div>
+                <label className="text-[9px] font-black uppercase tracking-widest text-slate-500">
+                  Effective Date
+                </label>
+                <input type="date" value={bulkEffectiveDate}
+                  onChange={e => setBulkEffectiveDate(e.target.value)}
+                  className="w-full mt-1 bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 text-sm font-bold outline-none focus:border-blue-500" />
+                <p className="text-[9px] font-bold text-slate-400 mt-1">
+                  Old assignments end on {bulkEffectiveDate
+                    ? new Date(new Date(bulkEffectiveDate).getTime() - 86400000).toLocaleDateString()
+                    : '—'} · new ones start {bulkEffectiveDate
+                    ? new Date(bulkEffectiveDate).toLocaleDateString() : '—'}
+                </p>
+              </div>
+
+              <div>
+                <label className="text-[9px] font-black uppercase tracking-widest text-slate-500">
+                  Reason *
+                </label>
+                <select value={bulkReason} onChange={e => setBulkReason(e.target.value)}
+                  className="w-full mt-1 bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 text-sm font-bold outline-none focus:border-blue-500">
+                  {TRANSPORT_CHANGE_REASONS.filter(r => r.value !== 'CANCEL_SERVICE').map(r => (
+                    <option key={r.value} value={r.value}>{r.label}</option>
+                  ))}
+                </select>
+                <input type="text" value={bulkReasonNote}
+                  onChange={e => setBulkReasonNote(e.target.value)}
+                  placeholder="Add a note (optional)"
+                  className="w-full mt-2 bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 text-xs font-bold outline-none focus:border-blue-500" />
+              </div>
+
+              <div className="bg-amber-50 border border-amber-200 rounded-xl p-3 text-[10px] font-bold text-amber-800">
+                Future-dated transport installments tied to this vehicle will be cancelled.
+                Already-paid receipts stay intact and will be visible in history.
+              </div>
+
+              {bulkError && (
+                <div className="bg-rose-50 border border-rose-200 rounded-xl p-3 text-xs font-bold text-rose-700">
+                  {bulkError}
+                </div>
+              )}
+            </div>
+
+            <div className="px-4 py-3 border-t border-slate-100 flex gap-2 sticky bottom-0 bg-white">
+              <button onClick={closeBulkReassign} disabled={bulkBusy}
+                className="flex-1 bg-slate-100 text-slate-700 font-black text-xs uppercase tracking-widest rounded-xl py-2.5 disabled:opacity-50">
+                Cancel
+              </button>
+              <button onClick={handleBulkReassign} disabled={bulkBusy}
+                className="flex-1 bg-amber-600 hover:bg-amber-700 text-white font-black text-xs uppercase tracking-widest rounded-xl py-2.5 disabled:opacity-50">
+                {bulkBusy ? 'Moving…' : `Move ${bulkAffectedCount}`}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 };
