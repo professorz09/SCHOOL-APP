@@ -187,6 +187,38 @@ export const yearClosingService = {
     if (error) throw new Error(error.message);
   },
 
+  // ── Close-only flow ──────────────────────────────────────────────────────
+  //
+  // Locks the academic year (is_closed = TRUE, is_active = FALSE) WITHOUT
+  // creating a new year and WITHOUT auto-promoting students. Use this for
+  // the year-closing flow surfaced in AcademicYearManager.
+  //
+  // After the close:
+  //   • Attendance / results / timetable for the year become read-only
+  //     (gated client-side via useEditGuard + Correction Mode).
+  //   • Failed / unassigned / TC students continue to be handled by the
+  //     Student Archive flow (Task #3).
+  //   • Outstanding fees stay on the locked year — no carry, no write-off.
+  //   • The principal opens the next year separately via AcademicYearWizard.
+  async closeAcademicYear(yearId: string): Promise<void> {
+    const { error } = await supabase.rpc('close_academic_year', { p_year_id: yearId });
+    if (error) throw new Error(error.message);
+    await logAudit('close_academic_year', 'academic_year', yearId, {
+      mode: 'manual_close_only',
+    });
+  },
+
+  async getCorrectionCount(yearId: string): Promise<number> {
+    const { count, error } = await supabase
+      .from('audit_logs')
+      .select('id', { count: 'exact', head: true })
+      .eq('action', 'YEAR_CORRECTION')
+      .eq('entity_type', 'academic_year')
+      .eq('entity_id', yearId);
+    if (error) return 0;
+    return count ?? 0;
+  },
+
   // ── PHASE 1: Pre-closing checklist ──────────────────────────────────────
 
   async getPreClosingChecklist(yearId: string): Promise<PreClosingChecklist> {
@@ -288,18 +320,18 @@ export const yearClosingService = {
     const blockers: string[] = [];
     const warnings: string[] = [];
 
-    // Outstanding fees are surfaced as a warning, not a blocker — the
-    // wizard's dues-handling choice (WRITEOFF / ARREARS) resolves them
-    // inside the atomic commit. Salary still blocks because there is no
-    // analogous absorption policy for unpaid wages.
+    // All financial / completion items are warnings — the principal may
+    // close a year with fees outstanding (left in place on the locked year)
+    // or salary unpaid (with explicit acknowledgment). Auto-promotion is
+    // no longer part of close, so there are no hard blockers here.
     if (feesTotal > 0) {
       warnings.push(
-        `₹${feesTotal.toLocaleString()} outstanding fees from ${feeStudents.length} student(s) — will be handled per the dues policy you select on the next step`,
+        `₹${feesTotal.toLocaleString()} outstanding fees from ${feeStudents.length} student(s) — will remain on the locked year`,
       );
     }
     if (salaryTotal > 0) {
-      blockers.push(
-        `₹${salaryTotal.toLocaleString()} pending salary for ${salaryPendingStaff.length} staff member(s)`,
+      warnings.push(
+        `₹${salaryTotal.toLocaleString()} pending salary for ${salaryPendingStaff.length} staff member(s) — clear from Salary Ledger before closing`,
       );
     }
     if (resultsPercentage < 95 && totalStudents > 0) {

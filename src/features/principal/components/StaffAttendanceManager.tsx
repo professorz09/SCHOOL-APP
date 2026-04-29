@@ -5,6 +5,8 @@ import {
 import { principalService, StaffAttendanceRow, StaffAttendanceStatus }
   from '../../../services/principal.service';
 import { useUIStore } from '../../../store/uiStore';
+import { useAcademicYear } from '../../../context/AcademicYearContext';
+import { useEditGuard } from '../../../store/correctionStore';
 
 // Re-export so other modules that previously consumed this file don't break.
 export type AttendanceStatus = StaffAttendanceStatus;
@@ -79,6 +81,9 @@ interface Props { onBack: () => void; }
 
 export const StaffAttendanceManager: React.FC<Props> = ({ onBack }) => {
   const { showToast } = useUIStore();
+  const { activeYear } = useAcademicYear();
+  const isYearClosed = !!activeYear && activeYear.status === 'LOCKED';
+  const editGuard = useEditGuard(activeYear?.id, isYearClosed);
   const stripRef = useRef<HTMLDivElement | null>(null);
   const [selectedDate, setSelectedDate] = useState<string>(today());
   const [record, setRecord] = useState<DayRecord | null>(null);
@@ -126,7 +131,10 @@ export const StaffAttendanceManager: React.FC<Props> = ({ onBack }) => {
   }, [dateStrip]);
 
   // ── Action handlers ───────────────────────────────────────────────────────
-  const isLocked = record?.isLocked ?? false;
+  // `isLocked`: per-day server-side lock (e.g. salary already calculated for
+  // this date). `editGuard.canEdit`: false when the active academic year is
+  // closed AND Correction Mode is OFF. Either bars edits.
+  const isLocked = (record?.isLocked ?? false) || !editGuard.canEdit;
 
   const bulkSet = (status: AttendanceStatus) => {
     if (isLocked) return;
@@ -152,10 +160,18 @@ export const StaffAttendanceManager: React.FC<Props> = ({ onBack }) => {
 
   const handleSave = async () => {
     if (isLocked || !record || isSaving) return;
+    if (!editGuard.canEdit) {
+      showToast('Year closed — pehle Correction Mode enable karein', 'error');
+      return;
+    }
     setIsSaving(true);
     try {
-      const savedAt = await principalService.saveStaffAttendance(record.date, record.rows);
-      setRecord(r => r ? { ...r, savedAt } : r);
+      const result = await editGuard.gate(
+        () => principalService.saveStaffAttendance(record.date, record.rows),
+        { entityType: 'staff_attendance', entityId: record.date },
+      );
+      if (result === undefined) return; // user cancelled the correction prompt
+      setRecord(r => r ? { ...r, savedAt: result } : r);
       setSaved(true);
       showToast('Attendance saved');
     } catch (e) {

@@ -9,6 +9,7 @@
 
 import { supabase } from '../lib/supabase';
 import { useAuthStore } from '../store/authStore';
+import { useCorrectionStore } from '../store/correctionStore';
 import { logAudit } from '../lib/audit';
 
 export type TDay = 'Monday' | 'Tuesday' | 'Wednesday' | 'Thursday' | 'Friday' | 'Saturday' | 'Sunday';
@@ -183,7 +184,13 @@ export const timetableService = {
 
   /** Validate then save (insert or update). Returns conflict reason on rejection. */
   async saveEntry(entry: Omit<TimetableEntry, 'id'> & { id?: string }): Promise<{ ok: boolean; conflict?: TimetableEntry; entry?: TimetableEntry; reason?: string }> {
-    if (_yearIsClosed) return { ok: false, reason: 'Academic year is closed' };
+    // Closed years are read-only unless the principal has explicitly
+    // turned Correction Mode ON for this year (per-year, in-memory).
+    // The UI useEditGuard prompts for a reason and writes the
+    // YEAR_CORRECTION audit row before this point.
+    if (_yearIsClosed && !(_activeYearId && useCorrectionStore.getState().isOn(_activeYearId))) {
+      return { ok: false, reason: 'Academic year is closed' };
+    }
     const teacher = _teachersCache.find(t => t.id === entry.teacherId);
     if (entry.teacherId && !teacher) return { ok: false, reason: 'Teacher is inactive or not found' };
 
@@ -239,6 +246,12 @@ export const timetableService = {
   },
 
   async deleteEntry(id: string): Promise<void> {
+    // Same closed-year + correction-mode guard as saveEntry — the service
+    // layer is the final enforcement boundary, even though the UI wraps
+    // this in useEditGuard.gate().
+    if (_yearIsClosed && !(_activeYearId && useCorrectionStore.getState().isOn(_activeYearId))) {
+      throw new Error('Academic year is closed');
+    }
     const { error } = await supabase.from('timetable_entries').delete().eq('id', id);
     if (error) throw new Error(error.message);
     await this.refreshAll();

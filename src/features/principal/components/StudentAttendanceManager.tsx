@@ -8,6 +8,8 @@ import { studentService } from '../../../services/student.service';
 import { Student } from '../../../types/principal.types';
 import { sharedAttendance, SharedAttendanceRecord, AttendanceStudentRecord } from '../../../services/sharedAttendance';
 import { useUIStore } from '../../../store/uiStore';
+import { useAcademicYear } from '../../../context/AcademicYearContext';
+import { useEditGuard } from '../../../store/correctionStore';
 
 interface Props { onBack: () => void; }
 
@@ -22,6 +24,9 @@ const todayStr  = () => new Date().toISOString().split('T')[0];
 
 export const StudentAttendanceManager: React.FC<Props> = ({ onBack }) => {
   const { showToast } = useUIStore();
+  const { activeYear } = useAcademicYear();
+  const isYearClosed = !!activeYear && activeYear.status === 'LOCKED';
+  const editGuard = useEditGuard(activeYear?.id, isYearClosed);
   const [students, setStudents] = useState<Student[]>([]);
   const [records, setRecords]   = useState<SharedAttendanceRecord[]>([]);
   const [view, setView]         = useState<View>('OVERVIEW');
@@ -124,9 +129,17 @@ export const StudentAttendanceManager: React.FC<Props> = ({ onBack }) => {
 
   const submitMark = async () => {
     if (!markClass || !markSection || !markDate || markStudents.length === 0) return;
+    if (!editGuard.canEdit) {
+      showToast('Year closed — pehle Correction Mode enable karein', 'error');
+      return;
+    }
     setIsSubmitting(true);
     try {
-      await sharedAttendance.submitPrincipal(markClass, markSection, markDate, markStudents);
+      const result = await editGuard.gate(
+        () => sharedAttendance.submitPrincipal(markClass, markSection, markDate, markStudents),
+        { entityType: 'student_attendance', entityId: `${markClass}/${markSection}/${markDate}` },
+      );
+      if (result === undefined) return; // user cancelled correction prompt
       await refreshRecords();
       showToast('Attendance marked & approved');
       setView('RECORDS');
@@ -156,9 +169,17 @@ export const StudentAttendanceManager: React.FC<Props> = ({ onBack }) => {
 
   const saveEdit = async () => {
     if (!editRecord) return;
+    if (!editGuard.canEdit) {
+      showToast('Year closed — pehle Correction Mode enable karein', 'error');
+      return;
+    }
     setIsSubmitting(true);
     try {
-      await sharedAttendance.updateStudents(editRecord.id, editStudents);
+      const result = await editGuard.gate(
+        () => sharedAttendance.updateStudents(editRecord.id, editStudents),
+        { entityType: 'student_attendance', entityId: editRecord.id },
+      );
+      if (result === undefined) return; // user cancelled correction prompt
       await refreshRecords();
       showToast('Attendance updated');
       setView('RECORDS');
@@ -171,10 +192,21 @@ export const StudentAttendanceManager: React.FC<Props> = ({ onBack }) => {
 
   const approveAfterEdit = async () => {
     if (!editRecord) return;
+    if (!editGuard.canEdit) {
+      showToast('Year closed — pehle Correction Mode enable karein', 'error');
+      return;
+    }
     setIsSubmitting(true);
     try {
-      await sharedAttendance.updateStudents(editRecord.id, editStudents);
-      await sharedAttendance.approve(editRecord.id);
+      const result = await editGuard.gate(
+        async () => {
+          await sharedAttendance.updateStudents(editRecord.id, editStudents);
+          await sharedAttendance.approve(editRecord.id);
+          return true;
+        },
+        { entityType: 'student_attendance', entityId: editRecord.id },
+      );
+      if (result === undefined) return; // user cancelled correction prompt
       await refreshRecords();
       showToast('Attendance approved');
       setView('RECORDS');
@@ -186,8 +218,16 @@ export const StudentAttendanceManager: React.FC<Props> = ({ onBack }) => {
   };
 
   const handleApprove = async (id: string) => {
+    if (!editGuard.canEdit) {
+      showToast('Year closed — pehle Correction Mode enable karein', 'error');
+      return;
+    }
     try {
-      await sharedAttendance.approve(id);
+      const result = await editGuard.gate(
+        () => sharedAttendance.approve(id),
+        { entityType: 'student_attendance', entityId: id },
+      );
+      if (result === undefined) return;
       await refreshRecords();
       showToast('Attendance approved');
     } catch (e) {
@@ -196,9 +236,17 @@ export const StudentAttendanceManager: React.FC<Props> = ({ onBack }) => {
   };
 
   const handleReject = async (id: string) => {
+    if (!editGuard.canEdit) {
+      showToast('Year closed — pehle Correction Mode enable karein', 'error');
+      return;
+    }
     const reason = window.prompt('Reason for rejection (optional):') ?? undefined;
     try {
-      await sharedAttendance.reject(id, reason || undefined);
+      const result = await editGuard.gate(
+        () => sharedAttendance.reject(id, reason || undefined),
+        { entityType: 'student_attendance', entityId: id, field: 'reject_reason', newValue: reason },
+      );
+      if (result === undefined) return;
       await refreshRecords();
       showToast('Attendance rejected');
     } catch (e) {

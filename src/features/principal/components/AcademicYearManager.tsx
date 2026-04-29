@@ -1,41 +1,22 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import {
   ArrowLeft, Calendar, Lock, CheckCircle2, AlertTriangle,
-  CreditCard, Users, Sparkles, Plus, X, Power,
+  Sparkles, Plus, Power, Edit3, FileWarning, History,
 } from 'lucide-react';
 import { useAcademicYear } from '../../../context/AcademicYearContext';
-import { useAuthStore } from '../../../store/authStore';
 import { useUIStore } from '../../../store/uiStore';
-import { useBillingStore } from '../../../store/billingStore';
 import { yearClosingService } from '../../../services/yearClosing.service';
-import { billingService } from '../../../services/billing.service';
-import type {
-  PreClosingChecklist, YearClosingConfig, StreamDefinition, YearClosingResult,
-} from '../../../types/yearClosing.types';
+import { useCorrectionStore } from '../../../store/correctionStore';
+import type { PreClosingChecklist } from '../../../types/yearClosing.types';
 import { AcademicYearWizard } from './AcademicYearWizard';
 
 interface Props { onBack: () => void; }
 
-type DuesHandling = 'WRITEOFF' | 'ARREARS';
-interface CarryForwardFlags {
-  staff: boolean; vehicles: boolean; feeStructure: boolean; timetable: boolean;
-}
-
-const DEFAULT_STREAMS: StreamDefinition[] = [
-  { id: '1', name: 'Science-PCM', capacity: 40, currentCount: 0 },
-  { id: '2', name: 'Science-PCB', capacity: 40, currentCount: 0 },
-  { id: '3', name: 'Commerce',    capacity: 40, currentCount: 0 },
-  { id: '4', name: 'Arts',        capacity: 40, currentCount: 0 },
-];
-
 export const AcademicYearManager: React.FC<Props> = ({ onBack }) => {
   const { academicYears, activeYear, isYearLocked, refresh: refreshAY, setActiveYear } = useAcademicYear();
   const { showToast } = useUIStore();
-  const { session } = useAuthStore();
-  const { createNextYear } = useBillingStore();
 
   // ─── Wizard state ───────────────────────────────────────────────────────
-  // Defaults derived from today; the wizard owns its own form state once open.
   const [showWizard, setShowWizard] = useState(false);
   const wizardDefaults = useMemo(() => {
     const today = new Date();
@@ -56,56 +37,48 @@ export const AcademicYearManager: React.FC<Props> = ({ onBack }) => {
     [academicYears, activatingId],
   );
 
-  // ─── Closing form state (when at least one year exists) ─────────────────
-  const [nextYearName, setNextYearName] = useState('');
-  const [nextStartDate, setNextStartDate] = useState('');
-  const [nextEndDate, setNextEndDate] = useState('');
-  const [board, setBoard] = useState('CBSE');
-  const [nextMedium, setNextMedium] = useState('English');
-  const [streams, setStreams] = useState<StreamDefinition[]>(DEFAULT_STREAMS);
-  const [outstandingHandling, setOutstandingHandling] = useState<DuesHandling>('WRITEOFF');
-  const [carryForward, setCarryForward] = useState<CarryForwardFlags>({
-    staff: true, vehicles: true, feeStructure: true, timetable: true,
-  });
-
+  // ─── Close-year flow ────────────────────────────────────────────────────
+  const [closingYearId, setClosingYearId] = useState<string | null>(null);
+  const [closing, setClosing] = useState(false);
   const [checklist, setChecklist] = useState<PreClosingChecklist | null>(null);
   const [checklistLoading, setChecklistLoading] = useState(false);
-  const [committing, setCommitting] = useState(false);
-  const [showConfirm, setShowConfirm] = useState(false);
-  const [doneResult, setDoneResult] = useState<YearClosingResult | null>(null);
-  const [error, setError] = useState('');
+  const [acknowledgedSalary, setAcknowledgedSalary] = useState(false);
+  const yearToClose = useMemo(
+    () => academicYears.find(y => y.id === closingYearId) ?? null,
+    [academicYears, closingYearId],
+  );
 
-  // ─── Auto-fill next-year defaults when active year present ──────────────
   useEffect(() => {
-    if (!activeYear) return;
-    if (nextYearName || nextStartDate || nextEndDate) return;
-    if (activeYear.endDate) {
-      const startD = new Date(activeYear.endDate);
-      startD.setDate(startD.getDate() + 1);
-      const endD = new Date(startD.getFullYear() + 1, startD.getMonth(), startD.getDate() - 1);
-      const yr = startD.getFullYear();
-      setNextYearName(`${yr}-${String(yr + 1).slice(-2)}`);
-      setNextStartDate(startD.toISOString().slice(0, 10));
-      setNextEndDate(endD.toISOString().slice(0, 10));
-    }
-    if (activeYear.board) setBoard(activeYear.board);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [activeYear?.id]);
-
-  // ─── Load pre-closing checklist for the active year ─────────────────────
-  useEffect(() => {
-    if (!activeYear) { setChecklist(null); return; }
+    if (!closingYearId) { setChecklist(null); setAcknowledgedSalary(false); return; }
     setChecklistLoading(true);
-    yearClosingService.getPreClosingChecklist(activeYear.id)
+    yearClosingService.getPreClosingChecklist(closingYearId)
       .then(setChecklist)
-      .catch(err => setError(err instanceof Error ? err.message : 'Checklist load failed'))
+      .catch(err => showToast(err instanceof Error ? err.message : 'Checklist load failed', 'error'))
       .finally(() => setChecklistLoading(false));
-  }, [activeYear?.id]);
+  }, [closingYearId, showToast]);
 
-  // Hard blocker: pending salary stops the close. We FAIL CLOSED — if the
-  // checklist hasn't loaded yet (or failed to load), we treat it as
-  // blocked so a transient checklist error can never bypass the rule.
-  const salaryBlocking = !checklist || checklist.salaryPending.total > 0;
+  // ─── Correction-mode store + audit counts ───────────────────────────────
+  const enabledByYear = useCorrectionStore(s => s.enabledByYear);
+  const countsByYear = useCorrectionStore(s => s.countsByYear);
+  const toggleCorrection = useCorrectionStore(s => s.toggle);
+  const setCorrectionCount = useCorrectionStore(s => s.setCount);
+
+  // Hydrate audit counts for every closed year on mount / refresh
+  useEffect(() => {
+    const closedIds = academicYears.filter(y => isYearLocked(y.id)).map(y => y.id);
+    if (closedIds.length === 0) return;
+    let cancelled = false;
+    (async () => {
+      for (const id of closedIds) {
+        try {
+          const n = await yearClosingService.getCorrectionCount(id);
+          if (!cancelled) setCorrectionCount(id, n);
+        } catch {/* swallow */}
+      }
+    })();
+    return () => { cancelled = true; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [academicYears.length]);
 
   // ─── Wizard finished → refresh + close ──────────────────────────────────
   const handleWizardCreated = async () => {
@@ -128,87 +101,24 @@ export const AcademicYearManager: React.FC<Props> = ({ onBack }) => {
     }
   };
 
-  // ─── Closing submit (single button: validate → save → simulate → commit) ─
-  const handleCommit = async () => {
-    if (!activeYear) return;
-    if (!nextYearName.trim()) { setError('Naye year ka label zaroori hai'); return; }
-    if (!nextStartDate || !nextEndDate) { setError('Start aur end date zaroori hain'); return; }
-    if (nextEndDate <= nextStartDate) { setError('End date start date ke baad honi chahiye'); return; }
-    if (!checklist) {
-      setError('Pre-closing checklist abhi load nahi hua. Thodi der baad try karein.');
+  // ─── Close confirmation ─────────────────────────────────────────────────
+  const handleConfirmClose = async () => {
+    if (!yearToClose) return;
+    if (!checklist) { showToast('Checklist abhi load nahi hua', 'error'); return; }
+    if (checklist.salaryPending.total > 0 && !acknowledgedSalary) {
+      showToast('Salary pending hai — acknowledge karein ya pehle clear karein', 'error');
       return;
     }
-    if (checklist.salaryPending.total > 0) {
-      setError('Pending salary clear karein pehle — yeh hard blocker hai');
-      return;
-    }
-    setCommitting(true);
-    setError('');
+    setClosing(true);
     try {
-      const cfg: YearClosingConfig = {
-        id: `cfg_${Date.now()}`,
-        fromYearId: activeYear.id,
-        nextYearName: nextYearName.trim(),
-        nextYearStartDate: nextStartDate,
-        nextYearEndDate: nextEndDate,
-        board,
-        nextYearMedium: nextMedium,
-        streams: streams.filter(s => s.capacity > 0),
-        outstandingDuesHandling: outstandingHandling,
-        carryForward,
-        status: 'PENDING_COMMIT',
-        createdDate: new Date().toISOString(),
-      };
-      const saved = yearClosingService.saveConfig(cfg);
-
-      // Safety net: simulate first to surface hard errors before mutating
-      // anything. Warnings (e.g. fees pending) are intentional and ignored
-      // here because the dues-policy radio already captures the principal's
-      // explicit choice.
-      const sim = await yearClosingService.simulateYearClosing(saved.id);
-      if (sim.errors.length > 0) {
-        setError(sim.errors.join(' · '));
-        setCommitting(false);
-        setShowConfirm(false);
-        return;
-      }
-
-      const result = await yearClosingService.commitYearClosing(saved.id);
+      await yearClosingService.closeAcademicYear(yearToClose.id);
       await refreshAY();
-
-      showToast(
-        `${activeYear.name} closed · ${result.newYearName} opened · ${result.summary.studentsPromoted} promoted`,
-      );
-
-      // Reset the close form fields so the auto-fill effect (keyed on
-      // activeYear.id, which just changed) re-runs and pre-fills defaults
-      // targeting the NEW active year.
-      setNextYearName(''); setNextStartDate(''); setNextEndDate('');
-
-      // Year close has SUCCEEDED at the DB level once we reach this point.
-      // Billing rollover is a follow-up step — if it fails (network blip,
-      // missing billing rows, etc.) we MUST NOT show the principal a
-      // generic failure or they will retry the close and hit a confusing
-      // "already locked" state. Surface it as a partial-success toast and
-      // still advance to the DONE screen.
-      if (session?.schoolId) {
-        try {
-          const currentBilling = await billingService.getCurrentYear(session.schoolId);
-          const carriedForward = outstandingHandling === 'ARREARS'
-            ? (currentBilling?.outstanding ?? 0) : 0;
-          await createNextYear(session.schoolId, carriedForward);
-        } catch (billingErr) {
-          const msg = billingErr instanceof Error ? billingErr.message : 'unknown error';
-          showToast(`Year closed, but billing rollover failed: ${msg}. Re-run from Fees section.`, 'error');
-        }
-      }
-
-      setDoneResult(result);
-      setShowConfirm(false);
+      showToast(`${yearToClose.name} closed (read-only). Naya year wizard se open karein.`);
+      setClosingYearId(null);
     } catch (e) {
-      setError(e instanceof Error ? e.message : 'Year close karne mein error');
+      showToast(e instanceof Error ? e.message : 'Year close mein error', 'error');
     } finally {
-      setCommitting(false);
+      setClosing(false);
     }
   };
 
@@ -218,6 +128,8 @@ export const AcademicYearManager: React.FC<Props> = ({ onBack }) => {
       {academicYears.map(year => {
         const locked = isYearLocked(year.id);
         const isActive = year.isActive;
+        const correctionOn = !!enabledByYear[year.id];
+        const correctionCount = countsByYear[year.id] ?? 0;
         return (
           <div
             key={year.id}
@@ -225,27 +137,32 @@ export const AcademicYearManager: React.FC<Props> = ({ onBack }) => {
               isActive ? 'border-emerald-300' : locked ? 'border-slate-200' : 'border-slate-100'
             }`}
           >
-            <div className="flex items-center justify-between">
-              <div>
-                <div className="flex items-center gap-2">
+            <div className="flex items-center justify-between gap-3">
+              <div className="min-w-0">
+                <div className="flex items-center gap-2 flex-wrap">
                   <span className="font-black text-slate-900">{year.name}</span>
                   {isActive && (
                     <span className="text-[9px] font-black uppercase tracking-widest px-2 py-0.5 rounded-full bg-emerald-100 text-emerald-700">
                       Active
                     </span>
                   )}
-                  {locked && !isActive && (
+                  {locked && (
                     <span className="text-[9px] font-black uppercase tracking-widest px-2 py-0.5 rounded-full bg-slate-100 text-slate-500 flex items-center gap-1">
                       <Lock size={9} /> Locked
+                    </span>
+                  )}
+                  {locked && correctionOn && (
+                    <span className="text-[9px] font-black uppercase tracking-widest px-2 py-0.5 rounded-full bg-amber-100 text-amber-700 flex items-center gap-1">
+                      <Edit3 size={9} /> Correction Mode
                     </span>
                   )}
                 </div>
                 <div className="text-[10px] font-bold text-slate-400 mt-1">
                   {year.startDate} → {year.endDate} · {year.board}
                 </div>
-                {year.closedDate && (
-                  <div className="text-[10px] font-bold text-slate-400">
-                    Closed: {year.closedDate}
+                {locked && correctionCount > 0 && (
+                  <div className="text-[10px] font-bold text-amber-700 mt-1 flex items-center gap-1">
+                    <History size={10} /> {correctionCount} correction{correctionCount === 1 ? '' : 's'} logged
                   </div>
                 )}
               </div>
@@ -259,20 +176,46 @@ export const AcademicYearManager: React.FC<Props> = ({ onBack }) => {
                     <Power size={10} /> Make Active
                   </button>
                 )}
-                <div
-                  className={`w-10 h-6 rounded-full flex items-center transition-all duration-300 ${
-                    isActive ? 'bg-emerald-500 justify-end' : 'bg-slate-200 justify-start'
-                  } px-1`}
-                >
-                  <div className="w-4 h-4 bg-white rounded-full shadow-sm" />
-                </div>
+                {!locked && (
+                  <button
+                    type="button"
+                    onClick={() => setClosingYearId(year.id)}
+                    className="px-2.5 py-1.5 rounded-full bg-rose-50 hover:bg-rose-100 text-rose-700 text-[10px] font-black flex items-center gap-1"
+                  >
+                    <Lock size={10} /> Close Year
+                  </button>
+                )}
+                {locked && (
+                  <button
+                    type="button"
+                    onClick={() => toggleCorrection(year.id)}
+                    className={`px-2.5 py-1.5 rounded-full text-[10px] font-black flex items-center gap-1 ${
+                      correctionOn
+                        ? 'bg-amber-500 text-white hover:bg-amber-600'
+                        : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
+                    }`}
+                  >
+                    <Edit3 size={10} /> {correctionOn ? 'Correction ON' : 'Correction OFF'}
+                  </button>
+                )}
               </div>
             </div>
+
+            {/* Sticky correction-mode banner */}
+            {locked && correctionOn && (
+              <div className="mt-3 bg-amber-50 border border-amber-200 rounded-xl px-3 py-2.5 flex items-start gap-2">
+                <FileWarning size={14} className="text-amber-600 mt-0.5 shrink-0" />
+                <p className="text-[10px] font-bold text-amber-800 leading-relaxed">
+                  Correction Mode ON — har edit pe reason poocha jayega aur audit log me
+                  permanently store hoga. Sirf real corrections ke liye use karein.
+                </p>
+              </div>
+            )}
           </div>
         );
       })}
     </div>
-  ), [academicYears, isYearLocked]);
+  ), [academicYears, isYearLocked, enabledByYear, countsByYear, toggleCorrection]);
 
   // ─── MAIN page ───────────────────────────────────────────────────────────
   return (
@@ -286,35 +229,12 @@ export const AcademicYearManager: React.FC<Props> = ({ onBack }) => {
           <p className="text-[10px] font-bold text-slate-400 mt-0.5">
             {academicYears.length === 0
               ? 'Pehla academic year setup karein'
-              : 'View years · close current · open next — sab ek jagah'}
+              : 'Years manage karein · close karein · correction mode toggle karein'}
           </p>
         </div>
       </div>
 
       <div className="flex-1 overflow-y-auto p-4 space-y-4 pb-24">
-        {/* ─── Inline success banner (after a successful close) ────────── */}
-        {doneResult && (
-          <div className="bg-emerald-50 border-2 border-emerald-200 rounded-2xl p-4 flex items-start gap-3 animate-in fade-in slide-in-from-top-2 duration-500">
-            <div className="w-9 h-9 bg-emerald-100 rounded-full flex items-center justify-center shrink-0">
-              <CheckCircle2 size={18} className="text-emerald-600" />
-            </div>
-            <div className="flex-1 min-w-0">
-              <p className="font-black text-slate-900 text-sm">{doneResult.newYearName} is now active</p>
-              <p className="text-[11px] font-bold text-slate-600 mt-0.5">
-                Purana year locked · {doneResult.summary.studentsPromoted} promoted ·{' '}
-                {doneResult.summary.studentsDetained} detained · {doneResult.summary.streamsAssigned} streams
-              </p>
-            </div>
-            <button
-              onClick={() => setDoneResult(null)}
-              className="text-emerald-600 hover:text-emerald-800 shrink-0 p-1"
-              aria-label="Dismiss"
-            >
-              <X size={16} />
-            </button>
-          </div>
-        )}
-
         {/* ─── ZERO YEARS: friendly empty state, wizard is the entry point ─ */}
         {academicYears.length === 0 ? (
           <div className="bg-white rounded-2xl border-2 border-rose-200 shadow-sm p-6 text-center space-y-4">
@@ -351,280 +271,134 @@ export const AcademicYearManager: React.FC<Props> = ({ onBack }) => {
               {yearList}
             </div>
 
-            {/* ─── Closing form (only when an active year exists) ─────── */}
-            {activeYear && !isYearLocked(activeYear.id) && (
-              <div className="bg-white rounded-2xl border-2 border-blue-200 shadow-sm p-4 space-y-4">
-                <div className="flex items-center gap-2">
-                  <Sparkles size={18} className="text-blue-600" />
-                  <p className="text-sm font-black text-slate-900">Naya Year + Promote Students</p>
-                </div>
-                <p className="text-[11px] font-bold text-slate-500 leading-relaxed">
-                  Yeh ek action: <span className="font-black">{activeYear.name}</span> lock hoga (read-only),
-                  naya year create hoga, students automatically promote honge.
+            {/* ─── Info banner about close-only flow ────────────────────── */}
+            <div className="bg-blue-50 border border-blue-200 rounded-2xl p-4 text-[11px] font-bold text-blue-800 leading-relaxed flex items-start gap-2">
+              <CheckCircle2 size={14} className="mt-0.5 shrink-0 text-blue-600" />
+              <div>
+                <p className="font-black text-blue-900 mb-1">Close vs. Open</p>
+                <p>
+                  "Close Year" sirf year ko lock karta hai (read-only). Students automatically promote
+                  nahi honge — Student Archive (Failed / Unassigned / TC) ka manual flow chalu rehta
+                  hai. Naya year banane ke liye upar "Add Academic Year" use karein.
                 </p>
-
-                {/* Pre-checks summary (inline, non-blocking unless salary) */}
-                {checklistLoading && (
-                  <div className="text-[11px] font-bold text-slate-400">Loading checklist…</div>
-                )}
-                {checklist && (
-                  <div className="grid grid-cols-2 gap-2">
-                    <div className={`p-3 rounded-xl border ${
-                      checklist.feesPending.total === 0 ? 'bg-emerald-50 border-emerald-200' : 'bg-amber-50 border-amber-200'
-                    }`}>
-                      <div className="flex items-center gap-1.5">
-                        <CreditCard size={12} className={checklist.feesPending.total === 0 ? 'text-emerald-600' : 'text-amber-600'} />
-                        <span className="text-[9px] font-black uppercase tracking-widest text-slate-500">Fees Pending</span>
-                      </div>
-                      <div className={`text-sm font-black mt-1 ${checklist.feesPending.total === 0 ? 'text-emerald-700' : 'text-amber-700'}`}>
-                        {checklist.feesPending.total === 0
-                          ? 'All clear'
-                          : `₹${checklist.feesPending.total.toLocaleString()} · ${checklist.feesPending.count} stu`}
-                      </div>
-                    </div>
-                    <div className={`p-3 rounded-xl border ${
-                      checklist.salaryPending.total === 0 ? 'bg-emerald-50 border-emerald-200' : 'bg-rose-50 border-rose-200'
-                    }`}>
-                      <div className="flex items-center gap-1.5">
-                        <Users size={12} className={checklist.salaryPending.total === 0 ? 'text-emerald-600' : 'text-rose-600'} />
-                        <span className="text-[9px] font-black uppercase tracking-widest text-slate-500">Salary Pending</span>
-                      </div>
-                      <div className={`text-sm font-black mt-1 ${checklist.salaryPending.total === 0 ? 'text-emerald-700' : 'text-rose-700'}`}>
-                        {checklist.salaryPending.total === 0
-                          ? 'All clear'
-                          : `₹${checklist.salaryPending.total.toLocaleString()} · ${checklist.salaryPending.count} staff`}
-                      </div>
-                    </div>
-                  </div>
-                )}
-                {salaryBlocking && (
-                  <div className="p-3 bg-rose-50 border border-rose-200 rounded-xl flex items-start gap-2">
-                    <AlertTriangle size={14} className="text-rose-600 mt-0.5 shrink-0" />
-                    <p className="text-[11px] font-black text-rose-700 leading-relaxed">
-                      Pending salary hard blocker hai. Pehle Salary Ledger me clear karein.
-                    </p>
-                  </div>
-                )}
-
-                {/* New year details */}
-                <div className="space-y-2">
-                  <p className="text-[10px] font-black uppercase tracking-widest text-slate-400">Naye Year Ki Details</p>
-                  <div>
-                    <label className="text-[10px] font-black uppercase tracking-widest text-slate-400">Label</label>
-                    <input
-                      type="text"
-                      placeholder="e.g. 2027-28"
-                      value={nextYearName}
-                      onChange={e => setNextYearName(e.target.value)}
-                      className="w-full mt-1 border border-slate-200 bg-slate-50 rounded-xl px-3 py-2.5 font-bold text-sm outline-none focus:border-slate-900"
-                    />
-                  </div>
-                  <div className="grid grid-cols-2 gap-2">
-                    <div>
-                      <label className="text-[10px] font-black uppercase tracking-widest text-slate-400">Start Date</label>
-                      <input
-                        type="date"
-                        value={nextStartDate}
-                        onChange={e => setNextStartDate(e.target.value)}
-                        className="w-full mt-1 border border-slate-200 bg-slate-50 rounded-xl px-3 py-2.5 font-bold text-sm outline-none focus:border-slate-900"
-                      />
-                    </div>
-                    <div>
-                      <label className="text-[10px] font-black uppercase tracking-widest text-slate-400">End Date</label>
-                      <input
-                        type="date"
-                        value={nextEndDate}
-                        onChange={e => setNextEndDate(e.target.value)}
-                        className="w-full mt-1 border border-slate-200 bg-slate-50 rounded-xl px-3 py-2.5 font-bold text-sm outline-none focus:border-slate-900"
-                      />
-                    </div>
-                  </div>
-                  <div className="grid grid-cols-2 gap-2">
-                    <div>
-                      <label className="text-[10px] font-black uppercase tracking-widest text-slate-400">Board</label>
-                      <select
-                        value={board}
-                        onChange={e => setBoard(e.target.value)}
-                        className="w-full mt-1 border border-slate-200 bg-slate-50 rounded-xl px-3 py-2.5 font-bold text-sm outline-none focus:border-slate-900"
-                      >
-                        <option value="CBSE">CBSE</option>
-                        <option value="ICSE">ICSE</option>
-                        <option value="State">State Board</option>
-                        <option value="IB">IB</option>
-                        <option value="IGCSE">IGCSE</option>
-                        {board === 'RBSE' && <option value="RBSE">RBSE (legacy)</option>}
-                      </select>
-                    </div>
-                    <div>
-                      <label className="text-[10px] font-black uppercase tracking-widest text-slate-400">Medium</label>
-                      <select
-                        value={nextMedium}
-                        onChange={e => setNextMedium(e.target.value)}
-                        className="w-full mt-1 border border-slate-200 bg-slate-50 rounded-xl px-3 py-2.5 font-bold text-sm outline-none focus:border-slate-900"
-                      >
-                        <option value="English">English</option>
-                        <option value="Hindi">Hindi</option>
-                        <option value="Hinglish">Hinglish</option>
-                        <option value="Other">Other</option>
-                      </select>
-                    </div>
-                  </div>
-                </div>
-
-                {/* Stream capacities */}
-                <div className="space-y-2">
-                  <p className="text-[10px] font-black uppercase tracking-widest text-slate-400">Class 11 Streams</p>
-                  <p className="text-[11px] font-bold text-slate-500 leading-relaxed">
-                    Class 10 ke promote hone wale students in streams me assign honge. Capacity 0 = stream skip.
-                  </p>
-                  {streams.map((stream, idx) => (
-                    <div key={idx} className="flex gap-2 items-center">
-                      <input
-                        type="text"
-                        value={stream.name}
-                        disabled
-                        className="flex-1 border border-slate-200 bg-slate-100 rounded-xl px-3 py-2 font-bold text-slate-700 text-sm"
-                      />
-                      <input
-                        type="number"
-                        min="0"
-                        value={stream.capacity}
-                        onChange={e => {
-                          const updated = [...streams];
-                          updated[idx] = { ...updated[idx], capacity: parseInt(e.target.value) || 0 };
-                          setStreams(updated);
-                        }}
-                        className="w-20 border border-slate-200 bg-slate-50 rounded-xl px-3 py-2 font-bold text-sm outline-none focus:border-slate-900"
-                        placeholder="Cap"
-                      />
-                    </div>
-                  ))}
-                </div>
-
-                {/* Outstanding dues policy */}
-                <div className="space-y-2">
-                  <p className="text-[10px] font-black uppercase tracking-widest text-slate-400">Outstanding Dues</p>
-                  {([
-                    { value: 'WRITEOFF' as DuesHandling, label: 'Write off (bad debt)' },
-                    { value: 'ARREARS'  as DuesHandling, label: 'Carry as arrears to new year' },
-                  ]).map(opt => (
-                    <label key={opt.value} className="flex items-center gap-2 cursor-pointer">
-                      <input
-                        type="radio"
-                        name="outstanding"
-                        value={opt.value}
-                        checked={outstandingHandling === opt.value}
-                        onChange={e => setOutstandingHandling(e.target.value as DuesHandling)}
-                        className="w-4 h-4"
-                      />
-                      <span className="text-sm font-bold text-slate-700">{opt.label}</span>
-                    </label>
-                  ))}
-                </div>
-
-                {/* Carry forward */}
-                <div className="space-y-2">
-                  <p className="text-[10px] font-black uppercase tracking-widest text-slate-400">Carry Forward</p>
-                  {([
-                    { key: 'staff' as const,        label: 'Staff assignments' },
-                    { key: 'vehicles' as const,     label: 'Vehicles & routes' },
-                    { key: 'feeStructure' as const, label: 'Fee structure' },
-                    { key: 'timetable' as const,    label: 'Timetable' },
-                  ]).map(item => (
-                    <label key={item.key} className="flex items-center gap-2 cursor-pointer">
-                      <input
-                        type="checkbox"
-                        checked={carryForward[item.key]}
-                        onChange={e => setCarryForward({ ...carryForward, [item.key]: e.target.checked })}
-                        className="w-4 h-4"
-                      />
-                      <span className="text-sm font-bold text-slate-700">{item.label}</span>
-                    </label>
-                  ))}
-                </div>
-
-                {error && (
-                  <div className="p-3 bg-rose-50 border border-rose-200 rounded-xl flex items-start justify-between gap-2">
-                    <p className="text-[11px] font-bold text-rose-700 flex-1">{error}</p>
-                    <button onClick={() => setError('')} className="text-rose-400 hover:text-rose-600 shrink-0">
-                      <X size={14} />
-                    </button>
-                  </div>
-                )}
-
-                <button
-                  onClick={() => setShowConfirm(true)}
-                  disabled={committing || salaryBlocking}
-                  className="w-full disabled:opacity-50 disabled:cursor-not-allowed text-white font-black text-sm rounded-xl py-3 bg-rose-600 hover:bg-rose-700 flex items-center justify-center gap-2"
-                >
-                  <Lock size={16} />
-                  Close {activeYear.name} & Open {nextYearName || 'New Year'}
-                </button>
               </div>
-            )}
-
-            {/* If active year is locked or absent, just inform */}
-            {activeYear && isYearLocked(activeYear.id) && (
-              <div className="bg-slate-100 border border-slate-200 rounded-2xl p-4 text-[11px] font-bold text-slate-500">
-                Active year {activeYear.name} already locked hai. Naya year create karne ke liye DB admin se baat karein.
-              </div>
-            )}
-            {!activeYear && academicYears.length > 0 && (
-              <div className="bg-amber-50 border border-amber-200 rounded-2xl p-4 text-[11px] font-bold text-amber-700">
-                Koi active year set nahi hai. Sabhi years locked dikh rahe hain — DB admin se baat karein.
-              </div>
-            )}
+            </div>
           </>
         )}
       </div>
 
-      {/* ─── Confirmation modal ──────────────────────────────────────────── */}
-      {showConfirm && activeYear && (
+      {/* ─── Close-year confirmation modal ──────────────────────────────── */}
+      {yearToClose && (
         <div
           className="fixed inset-0 bg-black/50 z-50 flex items-end sm:items-center justify-center p-4"
-          onClick={() => !committing && setShowConfirm(false)}
+          onClick={() => !closing && setClosingYearId(null)}
         >
           <div
-            className="bg-white rounded-3xl w-full max-w-sm p-5 space-y-4"
+            className="bg-white rounded-3xl w-full max-w-sm p-5 space-y-4 max-h-[90vh] overflow-y-auto"
             onClick={e => e.stopPropagation()}
           >
             <div className="flex items-center gap-3">
               <div className="w-10 h-10 bg-rose-100 rounded-full flex items-center justify-center">
-                <AlertTriangle size={20} className="text-rose-600" />
+                <Lock size={20} className="text-rose-600" />
               </div>
               <div>
-                <h3 className="font-black text-slate-900 text-base">Confirm Year Close</h3>
-                <p className="text-[10px] font-bold text-slate-400">Yeh action irreversible hai</p>
+                <h3 className="font-black text-slate-900 text-base">Close {yearToClose.name}</h3>
+                <p className="text-[10px] font-bold text-slate-400">Year permanently lock ho jayega</p>
               </div>
             </div>
-            <div className="text-[12px] font-bold text-slate-700 leading-relaxed space-y-2">
-              <p>
-                <span className="font-black text-rose-700">{activeYear.name}</span> permanently lock ho jayega
-                (read-only).
-              </p>
-              <p>
-                <span className="font-black text-emerald-700">{nextYearName}</span> active ho jayega aur students
-                automatically promote honge.
-              </p>
-              <p className="text-[11px] text-slate-500">
-                Dues policy: <span className="font-black uppercase">{outstandingHandling}</span>
-              </p>
-            </div>
+
+            {checklistLoading && (
+              <div className="text-[11px] font-bold text-slate-400">Checklist load ho raha hai…</div>
+            )}
+
+            {checklist && (
+              <div className="space-y-2">
+                <p className="text-[10px] font-black uppercase tracking-widest text-slate-400">Pre-Close Checklist</p>
+
+                {/* Always-show items */}
+                <div className="space-y-1.5">
+                  <ChecklistRow
+                    ok={checklist.attendanceCompletion.percentage >= 90}
+                    label={`Attendance: ${Math.round(checklist.attendanceCompletion.percentage)}% recorded`}
+                    detail={`${checklist.attendanceCompletion.completed}/${checklist.attendanceCompletion.total} students`}
+                  />
+                  <ChecklistRow
+                    ok={checklist.resultsCompletion.percentage >= 95}
+                    label={`Results: ${Math.round(checklist.resultsCompletion.percentage)}% entered`}
+                    detail={`${checklist.resultsCompletion.completed}/${checklist.resultsCompletion.total} students`}
+                  />
+                  <ChecklistRow
+                    ok={checklist.salaryPending.total === 0}
+                    label="Salary paid"
+                    detail={
+                      checklist.salaryPending.total === 0
+                        ? 'All clear'
+                        : `₹${checklist.salaryPending.total.toLocaleString()} pending · ${checklist.salaryPending.count} staff`
+                    }
+                  />
+                  <ChecklistRow
+                    ok={checklist.feesPending.total === 0}
+                    label="Fees collected"
+                    detail={
+                      checklist.feesPending.total === 0
+                        ? 'All clear'
+                        : `₹${checklist.feesPending.total.toLocaleString()} outstanding · ${checklist.feesPending.count} students`
+                    }
+                  />
+                </div>
+
+                {checklist.warnings.length > 0 && (
+                  <div className="bg-amber-50 border border-amber-200 rounded-xl p-3 mt-2">
+                    <div className="flex items-start gap-2">
+                      <AlertTriangle size={14} className="text-amber-600 shrink-0 mt-0.5" />
+                      <div className="text-[11px] font-bold text-amber-800 leading-relaxed space-y-1">
+                        {checklist.warnings.map((w, i) => <p key={i}>• {w}</p>)}
+                      </div>
+                    </div>
+                  </div>
+                )}
+
+                {checklist.salaryPending.total > 0 && (
+                  <label className="flex items-start gap-2 cursor-pointer bg-rose-50 border border-rose-200 rounded-xl p-3">
+                    <input
+                      type="checkbox"
+                      checked={acknowledgedSalary}
+                      onChange={e => setAcknowledgedSalary(e.target.checked)}
+                      className="w-4 h-4 mt-0.5"
+                    />
+                    <span className="text-[11px] font-bold text-rose-800 leading-relaxed">
+                      Mujhe pata hai ki salary pending hai aur main phir bhi year close karna chahta hoon.
+                    </span>
+                  </label>
+                )}
+
+                <div className="bg-slate-50 border border-slate-200 rounded-xl p-3 text-[11px] font-bold text-slate-600 leading-relaxed">
+                  Close ke baad attendance / results / timetable read-only ho jayenge. Student
+                  promotion alag se Student Archive flow se hota hai. Naya year banane ke liye
+                  wizard use karein.
+                </div>
+              </div>
+            )}
+
             <div className="flex gap-2">
               <button
-                onClick={() => setShowConfirm(false)}
-                disabled={committing}
+                onClick={() => setClosingYearId(null)}
+                disabled={closing}
                 className="flex-1 py-2.5 border border-slate-200 text-slate-600 font-black rounded-xl text-sm disabled:opacity-50"
               >
                 Cancel
               </button>
               <button
-                onClick={() => { void handleCommit(); }}
-                disabled={committing}
-                className="flex-1 py-2.5 bg-rose-600 text-white font-black rounded-xl text-sm disabled:opacity-60 flex items-center justify-center gap-2"
+                onClick={() => { void handleConfirmClose(); }}
+                disabled={
+                  closing
+                  || !checklist
+                  || (checklist.salaryPending.total > 0 && !acknowledgedSalary)
+                }
+                className="flex-1 py-2.5 bg-rose-600 text-white font-black rounded-xl text-sm disabled:opacity-50 flex items-center justify-center gap-2"
               >
-                {committing && <div className="w-3.5 h-3.5 border-2 border-white/30 border-t-white rounded-full animate-spin" />}
-                {committing ? 'Closing…' : 'Confirm'}
+                {closing && <div className="w-3.5 h-3.5 border-2 border-white/30 border-t-white rounded-full animate-spin" />}
+                {closing ? 'Closing…' : 'Close Year'}
               </button>
             </div>
           </div>
@@ -696,3 +470,24 @@ export const AcademicYearManager: React.FC<Props> = ({ onBack }) => {
     </div>
   );
 };
+
+// ─── Helper: single checklist row ────────────────────────────────────────────
+const ChecklistRow: React.FC<{ ok: boolean; label: string; detail: string }> = ({ ok, label, detail }) => (
+  <div className={`flex items-center justify-between gap-2 px-3 py-2 rounded-lg border text-[11px] ${
+    ok ? 'bg-emerald-50 border-emerald-100' : 'bg-amber-50 border-amber-100'
+  }`}>
+    <div className="flex items-center gap-2 min-w-0">
+      {ok ? (
+        <CheckCircle2 size={12} className="text-emerald-600 shrink-0" />
+      ) : (
+        <AlertTriangle size={12} className="text-amber-600 shrink-0" />
+      )}
+      <span className={`font-bold truncate ${ok ? 'text-emerald-800' : 'text-amber-800'}`}>
+        {label}
+      </span>
+    </div>
+    <span className={`font-black tabular-nums shrink-0 ${ok ? 'text-emerald-600' : 'text-amber-600'}`}>
+      {detail}
+    </span>
+  </div>
+);
