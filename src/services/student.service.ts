@@ -385,6 +385,22 @@ export const studentService = {
       throw new Error('Class/section changes require recordClassMovement()');
     }
 
+    // Snapshot old values for the changed fields *before* the UPDATE so
+    // the audit log can show "old → new". We only need columns that the
+    // patch actually touches, so the projection stays tight.
+    const dbCols = Object.entries(input)
+      .map(([k]) => FIELD_TO_DB[k])
+      .filter((c): c is string => !!c);
+    let oldValues: Record<string, unknown> = {};
+    if (dbCols.length > 0) {
+      const { data: prevRow } = await supabase
+        .from('students').select(dbCols.join(', '))
+        .eq('id', id).eq('school_id', schoolId).maybeSingle();
+      if (prevRow && typeof prevRow === 'object') {
+        oldValues = prevRow as Record<string, unknown>;
+      }
+    }
+
     const patch: Record<string, unknown> = { updated_at: new Date().toISOString() };
     for (const [k, v] of Object.entries(input)) {
       const dbCol = FIELD_TO_DB[k];
@@ -407,7 +423,21 @@ export const studentService = {
       }
     }
 
-    await logAudit('student_updated', 'student', id, { fields: Object.keys(input) });
+    // Build a structured changes[] so the Activity Logs viewer can render
+    // a real before/after diff instead of just listing field names.
+    const changes: Array<{ field: string; oldValue: unknown; newValue: unknown }> = [];
+    for (const [k, v] of Object.entries(input)) {
+      const dbCol = FIELD_TO_DB[k];
+      if (!dbCol) continue;
+      const oldV = oldValues[dbCol];
+      if (oldV === v) continue;
+      changes.push({ field: k, oldValue: oldV ?? null, newValue: (v as unknown) ?? null });
+    }
+
+    await logAudit('student_updated', 'student', id, {
+      fields: Object.keys(input),
+      changes,
+    });
     const fresh = await this.getById(id);
     if (!fresh) throw new Error('Student not found after update');
     return fresh;
@@ -446,6 +476,13 @@ export const studentService = {
     const schoolId = getSchoolId();
     const ayId = await activeYearId(schoolId);
     if (!ayId) throw new Error('No active academic year');
+    // Snapshot old class/section so the audit shows "10-A → 10-B".
+    const { data: prev } = await supabase
+      .from('student_academic_records').select('class_name, section')
+      .eq('student_id', studentId).eq('academic_year_id', ayId).maybeSingle();
+    const oldClass = (prev as { class_name: string | null } | null)?.class_name ?? null;
+    const oldSection = (prev as { section: string | null } | null)?.section ?? null;
+
     const { error } = await supabase.rpc('record_class_movement', {
       p_student_id: studentId,
       p_year_id: ayId,
@@ -455,7 +492,13 @@ export const studentService = {
       p_reason: reason,
     });
     if (error) throw new Error(error.message);
-    await logAudit('student_class_changed', 'student', studentId, { newClass, newSection, effectiveDate });
+    await logAudit('student_class_changed', 'student', studentId, {
+      newClass, newSection, effectiveDate, reason,
+      changes: [
+        { field: 'class', oldValue: oldClass, newValue: newClass },
+        { field: 'section', oldValue: oldSection, newValue: newSection },
+      ],
+    });
   },
 
   /**

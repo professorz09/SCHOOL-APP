@@ -1025,7 +1025,14 @@ export const principalService = {
     // round-trip as updates.
     const isUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(input.id);
     let id = input.id;
+    let prevSnap: Record<string, unknown> | null = null;
     if (isUuid) {
+      // Capture the previous structure so the audit log can show a real diff.
+      const { data: prev } = await supabase
+        .from('fee_structures')
+        .select('name, class_name, fee_heads, monthly_due_dates, late_fee')
+        .eq('id', input.id).eq('school_id', schoolId).maybeSingle();
+      prevSnap = (prev ?? null) as Record<string, unknown> | null;
       const { error } = await supabase
         .from('fee_structures').update(payload).eq('id', input.id).eq('school_id', schoolId);
       if (error) throw new Error(error.message);
@@ -1035,7 +1042,25 @@ export const principalService = {
       if (error) throw new Error(error.message);
       id = (data as { id: string }).id;
     }
-    await logAudit('fee_structure_saved', 'fee_structures', id, { name: input.name });
+    // Build a compact changes[] only for the fields that actually moved,
+    // so the Activity Logs viewer can render before/after.
+    const newSnap: Record<string, unknown> = {
+      name: input.name,
+      class_name: input.className,
+      fee_heads: input.feeHeads,
+      monthly_due_dates: input.monthlyDueDates,
+      late_fee: input.lateFee,
+    };
+    const changes = prevSnap
+      ? Object.keys(newSnap)
+          .filter(k => JSON.stringify(prevSnap![k]) !== JSON.stringify(newSnap[k]))
+          .map(k => ({ field: k, oldValue: prevSnap![k] ?? null, newValue: newSnap[k] }))
+      : [];
+    await logAudit('fee_structure_saved', 'fee_structures', id, {
+      name: input.name,
+      mode: prevSnap ? 'update' : 'create',
+      changes,
+    });
     return { ...input, id };
   },
 
