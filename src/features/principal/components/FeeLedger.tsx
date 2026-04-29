@@ -280,7 +280,12 @@ export const FeeLedger: React.FC<Props> = ({ onBack }) => {
         selected.studentId, amount, METHOD_LABEL[paymentMethod],
         undefined, paymentNote || undefined, false, applyLateFee,
       );
-      if (result.applied <= 0 && result.advance <= 0) {
+      // Treat the RPC's persisted paymentId as the source of truth: if the
+      // RPC committed a payment row, the collection succeeded — even if the
+      // cache-derived applied/advance counters end up at zero (e.g. when an
+      // auto-inserted Late Fee absorbed the entire amount). Only short-circuit
+      // when there is no paymentId AND nothing measurably moved.
+      if (!result.paymentId && result.applied <= 0 && result.advance <= 0) {
         showToast('Nothing applied', 'error');
         return;
       }
