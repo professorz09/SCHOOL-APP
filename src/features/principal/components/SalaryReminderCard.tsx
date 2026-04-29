@@ -28,15 +28,21 @@ export const SalaryReminderCard: React.FC<Props> = ({ onNavigate }) => {
   const [rows, setRows] = useState<SalaryReminderRow[]>([]);
   const [open, setOpen] = useState(false);
   const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState<string | null>(null);
   const [payingId, setPayingId] = useState<string | null>(null);
   const [method, setMethod] = useState<SalaryPaymentMethod>('BANK_TRANSFER');
 
   const load = async () => {
     setLoading(true);
+    setLoadError(null);
     try {
       const data = await staffService.getSalaryReminders(month);
       setRows(data);
     } catch (e) {
+      // Surface to UI so the principal knows the widget is degraded; the
+      // dashboard itself stays functional.
+      const msg = e instanceof Error ? e.message : 'Could not load salary reminders';
+      setLoadError(msg);
       // eslint-disable-next-line no-console
       console.warn('[salary-reminder] load failed:', e);
     } finally {
@@ -61,7 +67,20 @@ export const SalaryReminderCard: React.FC<Props> = ({ onNavigate }) => {
     }
   };
 
-  if (loading || rows.length === 0) return null;
+  if (loading) return null;
+
+  if (loadError) return (
+    <div className="w-full bg-rose-50 border border-rose-200 rounded-2xl p-3 flex items-center gap-3">
+      <BanknoteIcon size={18} className="text-rose-500 shrink-0" />
+      <div className="flex-1 min-w-0">
+        <p className="text-[11px] font-black text-rose-800">Salary reminders unavailable</p>
+        <p className="text-[10px] font-bold text-rose-600 truncate">{loadError}</p>
+      </div>
+      <button onClick={load} className="text-[10px] font-black text-rose-700 underline shrink-0">Retry</button>
+    </div>
+  );
+
+  if (rows.length === 0) return null;
 
   return (
     <>
