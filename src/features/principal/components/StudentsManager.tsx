@@ -152,11 +152,22 @@ export const StudentsManager: React.FC<Props> = ({ onBack, initialView }) => {
     // Fetch docs from `student_documents` directly — getAll/getById return
     // an empty docs[] for performance, so the profile DOCS tab needs its
     // own load to show real storage-backed rows after refresh/reopen.
-    const [fees, record, docs] = await Promise.all([
+    //
+    // Each call is isolated with allSettled so one failure (e.g. an
+    // unassigned student has no academic record / empty academicYearId,
+    // which would otherwise reject on the UUID cast) cannot blank the
+    // whole profile.
+    const hasYear = !!student.academicYearId;
+    const [feesRes, recordRes, docsRes] = await Promise.allSettled([
       studentService.getFeeRecords(student.id),
-      studentService.getAcademicRecord(student.id, student.academicYearId),
-      studentService.listDocuments(student.id).catch(() => [] as StudentDoc[]),
+      hasYear
+        ? studentService.getAcademicRecord(student.id, student.academicYearId)
+        : Promise.resolve(null),
+      studentService.listDocuments(student.id),
     ]);
+    const fees = feesRes.status === 'fulfilled' ? feesRes.value : [];
+    const record = recordRes.status === 'fulfilled' ? recordRes.value : null;
+    const docs = docsRes.status === 'fulfilled' ? docsRes.value : [];
     setFeeRecords(fees);
     setAcademicRecord(record);
     setProfileDocsLive(docs);
