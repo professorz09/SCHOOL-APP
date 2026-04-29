@@ -25,7 +25,7 @@ type ArchiveTab = 'ACTIVE' | 'INACTIVE' | 'TC_ISSUED' | 'ALUMNI' | 'UNASSIGNED';
 const ARCHIVE_TABS: Array<{ key: ArchiveTab; label: string; icon: React.ComponentType<{ size?: number; className?: string }>; tone: string }> = [
   { key: 'ACTIVE',     label: 'Active',     icon: UserCheck,    tone: 'emerald' },
   { key: 'UNASSIGNED', label: 'Unassigned', icon: AlertTriangle, tone: 'amber' },
-  { key: 'INACTIVE',   label: 'Inactive',   icon: UserX,        tone: 'slate' },
+  { key: 'INACTIVE',   label: 'Failed/Suspended', icon: UserX,   tone: 'slate' },
   { key: 'TC_ISSUED',  label: 'TC Issued',  icon: FileCheck,    tone: 'rose' },
   { key: 'ALUMNI',     label: 'Alumni',     icon: Award,        tone: 'indigo' },
 ];
