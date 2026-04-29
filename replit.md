@@ -645,3 +645,24 @@ forgot to clean up future TRANSPORT installments, and there was no
   active assignment from the cached `getAssignmentForStudent` and
   continues to work unchanged — the new history endpoint will be wired
   into that view in a follow-up if requested.
+
+### Migration 0026 — post-review hardening
+
+- `bulk_close_transport_assignments` redefined with a strict role gate:
+  super admin OR same-school **PRINCIPAL only** (parents, students,
+  teachers, drivers explicitly excluded even if they share school_id).
+- `transport.service.assignStudent` now calls
+  `feeService.cancelTransportInstallmentsAfter(prior.id, effectiveDate)`
+  immediately after closing the prior active row, so a mid-year change
+  rewrites the OLD assignment's future TRANSPORT installments instead
+  of leaving them duplicated alongside the new ones.
+- `transport.service.changeStudentTransport` now emits a distinct
+  `transport_changed` audit event with a structured `{from, to}` delta
+  payload, separate from the `transport_assigned` event the inner
+  `assignStudent` call writes.
+- `addTransportFeeSchedule` is idempotent on retry — it deletes any
+  unpaid + un-writeoff TRANSPORT rows for the same `assignmentId`
+  before re-inserting the full month range.
+- `assignStudent` snapshots the soon-to-be-closed prior row and
+  re-activates it if the new INSERT fails, so the close + insert pair
+  cannot strand a student transport-less.
