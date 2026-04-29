@@ -193,18 +193,21 @@ export const FeeLedger: React.FC<Props> = ({ onBack }) => {
     setRegenDiscountPct('');
     setRegenStructureId('');
     setRegenModal(true);
+    // selected.className is composed as `${class}-${section}` (see line ~127),
+    // but fee_structures.className is just the class portion. Strip the
+    // `-Section` suffix before comparing so the auto-suggest actually fires.
+    const baseClass = selected.className.split('-')[0]?.trim() ?? selected.className;
     if (feeStructures.length === 0) {
       try {
         const rows = await principalService.getFeeStructures();
         setFeeStructures(rows);
-        // Pre-select the structure matching the student's class if any.
-        const match = rows.find(r => r.className === selected.className);
+        const match = rows.find(r => r.className === baseClass);
         if (match) setRegenStructureId(match.id);
       } catch (e) {
         showToast(e instanceof Error ? e.message : 'Could not load fee structures', 'error');
       }
     } else {
-      const match = feeStructures.find(r => r.className === selected.className);
+      const match = feeStructures.find(r => r.className === baseClass);
       if (match) setRegenStructureId(match.id);
     }
   };

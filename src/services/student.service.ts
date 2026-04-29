@@ -878,12 +878,14 @@ export const studentService = {
       if (feeErr) throw new Error(`Fee schedule failed: ${feeErr.message}`);
       // Read back the rows the RPC just (re)inserted for this (student,
       // year) so we can report the actual count + amount, not an estimate.
+      // No payer_type filter: an RTE student's schedule may legitimately
+      // route part of the load to GOVT, and the toast should still reflect
+      // the full installment count + total written.
       const { data: installments } = await supabase
         .from('fee_installments')
         .select('amount')
         .eq('student_id', input.studentId)
-        .eq('academic_year_id', ayId)
-        .eq('payer_type', 'PARENT');
+        .eq('academic_year_id', ayId);
       const rows = (installments ?? []) as { amount: number }[];
       scheduleSummary = {
         installmentCount: rows.length,
