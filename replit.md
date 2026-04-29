@@ -202,12 +202,19 @@ persist on every subsequent login.
 `supabase/migrations/0020_late_fee_compute.sql` is purely additive:
 
 1. **`preview_student_late_fees(student_id) → TABLE`** — for every overdue,
-   unpaid PARENT installment of the student, looks up the
-   `fee_structures.late_fee` JSONB for the matching class+active year and
-   computes the per-installment late fee (FIXED amount or PERCENTAGE of
-   outstanding, capped by `maxCap`, gated by `gracePeriodDays`). Returns
-   `(installment_id, due_date, days_late, late_fee, source)` rows. Authorised
-   for staff in the same school OR the linked parent/student themselves.
+   unpaid PARENT installment of the student **across ALL academic years**,
+   joins each row to the class the student was in for THAT specific year
+   (via `student_academic_records`) and the most-recently-updated
+   `fee_structures.late_fee` JSONB for that (school, year, class). Computes
+   the per-installment late fee (FIXED amount or PERCENTAGE of outstanding,
+   capped by `maxCap`, gated by `gracePeriodDays`) using each row's own
+   year's policy, so carry-forward dues from prior years still accrue.
+   Type values are case-normalised — `'PERCENTAGE'`/`'PERCENT'`/`'percent'`
+   all take the percent branch; everything else falls through to fixed.
+   The `source` column is canonicalised to exactly `'PERCENTAGE'` or
+   `'FIXED'`. Returns `(installment_id, due_date, days_late, late_fee,
+   source)` rows. Authorised for staff in the same school OR the linked
+   parent/student themselves.
 2. **`record_fee_payment(...)` extended with `p_apply_late_fee BOOLEAN
    DEFAULT TRUE`** — when TRUE, the RPC computes the total liability via
    `preview_student_late_fees`, subtracts any already-accrued, still-unpaid
@@ -261,7 +268,17 @@ UI consumers:
   (Tuition / Transport / Exam / Other). The active year card stays
   prominent with the existing big total + UPI CTA at the top; older years
   collapse by default and only the PARENT-payer rows are shown
-  (GOVERNMENT-paid RTE schedule remains hidden from families).
+  (GOVERNMENT-paid RTE schedule remains hidden from families). The "Total
+  Outstanding" header and Fee Breakdown card now aggregate **all** fee
+  types (Tuition + Transport + Exam + Other, where Other includes any
+  accrued Late Fee rows) **across all academic years** — `getParentDue
+  Summary` returns `{ tuition, transport, exam, other, total }` and the
+  card renders a line per non-zero type.
+
+After a payment is recorded in `FeeLedger`, the Schedule tab's per-year
+accordions are re-loaded immediately (`reloadYearGroups(studentId)` runs
+inside `handlePayment`) so totals/status reflect the freshly-allocated
+amount without requiring re-selection.
 
 ## Migration 0019 — Student documents storage + roll-uniqueness RPCs (Task #3)
 
