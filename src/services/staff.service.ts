@@ -206,7 +206,7 @@ export const staffService = {
     if (input.salary > 0) {
       const { error: seedErr } = await supabase.rpc('update_staff_salary', {
         p_staff_id: row.id,
-        p_amount: input.salary,
+        p_new_amount: input.salary,
         p_effective_from: input.joiningDate || todayIso(),
         p_reason: 'Initial',
       });
