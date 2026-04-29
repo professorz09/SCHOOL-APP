@@ -35,7 +35,13 @@ DECLARE
   v_stream   TEXT;
   v_capacity INT;
   v_count    INT := 0;
+  v_stream_required BOOLEAN;
+  v_streams_text TEXT[];
 BEGIN
+  -- Materialize p_streams once as a TEXT[] so per-section membership checks
+  -- below can use a fast `= ANY(...)` test without re-scanning JSONB.
+  SELECT array_agg(value::TEXT) INTO v_streams_text
+  FROM jsonb_array_elements_text(p_streams);
   IF auth.uid() IS NULL THEN RAISE EXCEPTION 'unauthenticated'; END IF;
   IF NOT public.is_principal() THEN RAISE EXCEPTION 'principal only'; END IF;
   IF v_school IS NULL THEN RAISE EXCEPTION 'no school for caller'; END IF;
@@ -83,6 +89,23 @@ BEGIN
     END IF;
     IF v_capacity < 0 THEN
       RAISE EXCEPTION 'capacity cannot be negative (got % for %-%)', v_capacity, v_class, v_section;
+    END IF;
+
+    -- Class 11/12 sections must have a stream, and that stream must be one of
+    -- the streams enabled for this academic year. Mirrors the wizard's UI
+    -- guard so non-UI callers can't bypass it. For all other classes we
+    -- ignore any stream value (treat as null).
+    v_stream_required := v_class IN ('Class 11', 'Class 12');
+    IF v_stream_required THEN
+      IF v_stream IS NULL THEN
+        RAISE EXCEPTION 'stream is required for % section %', v_class, v_section;
+      END IF;
+      IF v_streams_text IS NULL OR NOT (v_stream = ANY(v_streams_text)) THEN
+        RAISE EXCEPTION 'stream % is not in this year''s streams (% %-%)',
+          v_stream, v_streams_text, v_class, v_section;
+      END IF;
+    ELSE
+      v_stream := NULL;
     END IF;
 
     INSERT INTO public.sections
