@@ -1,15 +1,15 @@
 import React, { useEffect, useState, useMemo, useCallback } from 'react';
 import {
-  ArrowLeft, IndianRupee, CheckCircle2, AlertCircle, Plus, CreditCard, Clock, CalendarPlus,
+  ArrowLeft, IndianRupee, CheckCircle2, AlertCircle, Plus, CreditCard, Clock, CalendarPlus, Settings,
 } from 'lucide-react';
 import { useBillingStore } from '../../../store/billingStore';
 import { useUIStore } from '../../../store/uiStore';
 import {
   Payment, SchoolBillingBreakdown, PaymentAllocationPreview,
 } from '../../../types/billing.types';
-import { PLAN_COLORS } from '../../../config/constants';
+import { PLAN_COLORS, PLAN_PRICES, BillingPlan } from '../../../config/constants';
 
-type View = 'LIST' | 'SCHOOL_DETAIL' | 'RECORD_PAYMENT';
+type View = 'LIST' | 'SCHOOL_DETAIL' | 'RECORD_PAYMENT' | 'SETUP_BILLING';
 type PayMethod = Payment['method'];
 
 interface Props { onBack: () => void; }
@@ -49,6 +49,11 @@ export const BillingManager: React.FC<Props> = ({ onBack }) => {
   const [schoolPayments, setSchoolPayments]   = useState<Payment[]>([]);
   const [creatingNextYear, setCreatingNextYear] = useState(false);
 
+  const [setupPlan, setSetupPlan]             = useState<BillingPlan>(BillingPlan.STANDARD);
+  const [setupStartDate, setSetupStartDate]   = useState(() => new Date().toISOString().split('T')[0]);
+  const [setupAmount, setSetupAmount]         = useState('');
+  const [settingUp, setSettingUp]             = useState(false);
+
   const [amount, setAmount]                   = useState('');
   const [txnId, setTxnId]                     = useState('');
   const [method, setMethod]                   = useState<PayMethod>('NEFT');
@@ -61,10 +66,8 @@ export const BillingManager: React.FC<Props> = ({ onBack }) => {
     fetchAll().catch(e => showToast(e instanceof Error ? e.message : 'Failed to load billing data', 'error'));
   }, []);
 
-  // ── Aggregated list-view stats: roll up across ALL years per school ──────
-  // The dashboard cards used to reflect only the latest year, masking
-  // historical carry-forward. We now aggregate across every year so the
-  // "Outstanding" pill matches the per-school detail screen.
+  // Aggregate every billing year per school so the list-view "Outstanding"
+  // pill matches the per-school detail breakdown.
   const perSchoolAgg = useMemo(() => {
     const map = new Map<string, { paid: number; due: number; outstanding: number; latestYearLabel: string | null; latestStartDate: string | null }>();
     for (const y of billingYears) {
@@ -83,10 +86,8 @@ export const BillingManager: React.FC<Props> = ({ onBack }) => {
 
   const schoolList = schoolBillings.map(sb => {
     const agg = perSchoolAgg.get(sb.schoolId);
-    // IMPORTANT: outstanding is the GROSS year-row outstanding only.
-    // schedule-level advance_balance is parked credit that the RPC has not
-    // applied to any year — it sits separately and is shown as a credit
-    // pill, not netted into outstanding (architect review #2).
+    // `outstanding` is the gross sum of year-row outstanding. Schedule-level
+    // `advance_balance` is shown separately as a credit pill, not netted in.
     return {
       billing: sb,
       paid: agg?.paid ?? 0,
@@ -135,12 +136,9 @@ export const BillingManager: React.FC<Props> = ({ onBack }) => {
   const latestYear = breakdown && breakdown.years.length > 0
     ? breakdown.years[breakdown.years.length - 1]
     : null;
-  // "Create Next Billing Year" is permitted whenever a schedule exists.
-  // The RPC carries the latest year's outstanding (positive = arrears,
-  // negative = advance) into the new year's `carried_forward`, so blocking
-  // on outstanding > 0 would prevent legitimate annual rollovers with
-  // arrears (architect review #3). We just surface a heads-up below the
-  // button when there's a non-zero amount about to roll over.
+  // Allowed whenever a schedule exists — `create_next_billing_year` carries
+  // the latest year's outstanding (arrears or advance) into the new year, so
+  // gating on a clean balance would block legitimate annual rollovers.
   const canCreateNextYear = !!breakdown;
   const carryForwardHint = breakdown && latestYear && latestYear.outstanding !== 0
     ? latestYear.outstanding > 0
@@ -159,6 +157,43 @@ export const BillingManager: React.FC<Props> = ({ onBack }) => {
       showToast(e instanceof Error ? e.message : 'Could not create next year', 'error');
     } finally {
       setCreatingNextYear(false);
+    }
+  };
+
+  const openSetupBilling = (sb: { schoolId: string; annualAmount: number; plan: BillingPlan }) => {
+    setSelectedId(sb.schoolId);
+    setSetupPlan(sb.plan ?? BillingPlan.STANDARD);
+    setSetupStartDate(new Date().toISOString().split('T')[0]);
+    setSetupAmount('');
+    setView('SETUP_BILLING');
+  };
+
+  const handleSetupBilling = async () => {
+    if (!selectedRow || !selectedId) return;
+    const customAmount = setupAmount.trim()
+      ? parseInt(setupAmount.replace(/,/g, ''), 10)
+      : undefined;
+    if (customAmount !== undefined && (Number.isNaN(customAmount) || customAmount <= 0)) {
+      showToast('Annual amount must be a positive number', 'error');
+      return;
+    }
+    setSettingUp(true);
+    try {
+      await useBillingStore.getState().setupSchoolBilling(
+        selectedId,
+        selectedRow.billing.schoolName,
+        setupPlan,
+        setupStartDate,
+        customAmount,
+      );
+      await fetchAll();
+      await loadSchoolDetail(selectedId);
+      showToast('Billing schedule created');
+      setView('SCHOOL_DETAIL');
+    } catch (e) {
+      showToast(e instanceof Error ? e.message : 'Could not create billing schedule', 'error');
+    } finally {
+      setSettingUp(false);
     }
   };
 
@@ -383,11 +418,27 @@ export const BillingManager: React.FC<Props> = ({ onBack }) => {
             ) : years.length === 0 ? (
               <div className="px-4 py-8 text-center">
                 <IndianRupee size={24} className="mx-auto mb-2 text-slate-300" />
-                <p className="text-xs font-bold text-slate-400">
-                  {breakdown
-                    ? 'No billing years yet — create the first one below.'
-                    : 'No billing schedule for this school. Set the plan and start date from the Schools tab.'}
-                </p>
+                {breakdown ? (
+                  <p className="text-xs font-bold text-slate-400">
+                    No billing years yet — create the first one below.
+                  </p>
+                ) : (
+                  <>
+                    <p className="text-xs font-bold text-slate-500">
+                      No billing schedule yet for this school.
+                    </p>
+                    <p className="text-[10px] font-bold text-slate-400 mt-1 mb-3">
+                      Pick a plan and start date to begin charging fees.
+                    </p>
+                    <button
+                      onClick={() => openSetupBilling(selectedRow.billing)}
+                      className="inline-flex items-center gap-1.5 bg-emerald-600 text-white text-[11px] font-black px-3 py-2 rounded-full active:scale-95 transition-transform"
+                    >
+                      <Settings size={13} />
+                      Set Up Billing
+                    </button>
+                  </>
+                )}
               </div>
             ) : (
               <div className="overflow-x-auto">
@@ -527,6 +578,91 @@ export const BillingManager: React.FC<Props> = ({ onBack }) => {
               </div>
             )}
           </div>
+        </div>
+      </div>
+    );
+  }
+
+  // ── SETUP BILLING view (legacy schools without a schedule) ──────────────
+  if (view === 'SETUP_BILLING' && selectedRow) {
+    const { billing } = selectedRow;
+    const planAmount = setupAmount.trim()
+      ? parseInt(setupAmount.replace(/,/g, ''), 10) || 0
+      : PLAN_PRICES[setupPlan];
+
+    return (
+      <div className="w-full bg-slate-50 flex flex-col animate-in slide-in-from-right-8 duration-300">
+        <Header title="Set Up Billing" back={() => setView('SCHOOL_DETAIL')} />
+        <div className="flex-1 overflow-y-auto px-4 pt-4 space-y-4 pb-6">
+
+          <div className="bg-white rounded-2xl border border-slate-100 shadow-sm p-4">
+            <div className="font-extrabold text-slate-900 truncate">{billing.schoolName}</div>
+            <div className="text-[11px] font-bold text-slate-500 mt-0.5">
+              First-time billing setup
+            </div>
+          </div>
+
+          <div className="bg-white rounded-2xl border border-slate-100 shadow-sm p-4 space-y-3">
+            <div>
+              <label className="text-[10px] font-black uppercase tracking-widest text-slate-500">
+                Plan
+              </label>
+              <div className="grid grid-cols-3 gap-2 mt-2">
+                {(Object.values(BillingPlan) as BillingPlan[]).map((p) => (
+                  <button key={p} onClick={() => setSetupPlan(p)}
+                    className={`px-2 py-2 rounded-xl text-[11px] font-black transition-colors ${
+                      setupPlan === p
+                        ? 'bg-emerald-600 text-white'
+                        : 'bg-slate-100 text-slate-600'
+                    }`}>
+                    {p}
+                    <div className={`text-[9px] font-bold mt-0.5 ${
+                      setupPlan === p ? 'text-emerald-100' : 'text-slate-400'
+                    }`}>
+                      {fmt(PLAN_PRICES[p])}/yr
+                    </div>
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            <div>
+              <label className="text-[10px] font-black uppercase tracking-widest text-slate-500">
+                Billing Start Date
+              </label>
+              <input type="date" value={setupStartDate}
+                onChange={(e) => setSetupStartDate(e.target.value)}
+                className="w-full mt-1.5 px-3 py-2 rounded-xl border border-slate-200 text-sm font-bold text-slate-900" />
+            </div>
+
+            <div>
+              <label className="text-[10px] font-black uppercase tracking-widest text-slate-500">
+                Annual Amount (optional)
+              </label>
+              <input type="text" inputMode="numeric" value={setupAmount}
+                onChange={(e) => setSetupAmount(e.target.value.replace(/[^\d]/g, ''))}
+                placeholder={`Default: ${fmtFull(PLAN_PRICES[setupPlan])}`}
+                className="w-full mt-1.5 px-3 py-2 rounded-xl border border-slate-200 text-sm font-bold text-slate-900 placeholder:text-slate-400 placeholder:font-normal" />
+              <p className="text-[10px] font-bold text-slate-400 mt-1">
+                Leave blank to use the standard plan price.
+              </p>
+            </div>
+          </div>
+
+          <div className="bg-emerald-50 border border-emerald-100 rounded-2xl p-3">
+            <div className="text-[10px] font-black uppercase tracking-widest text-emerald-700">
+              First Year Will Be Created
+            </div>
+            <div className="text-sm font-extrabold text-emerald-900 mt-1">
+              {fmtFull(planAmount)} due — starting {fmtDate(setupStartDate)}
+            </div>
+          </div>
+
+          <button onClick={handleSetupBilling}
+            disabled={settingUp || !setupStartDate}
+            className="w-full bg-emerald-600 text-white font-black py-3 rounded-2xl active:scale-95 transition-transform disabled:opacity-40 disabled:cursor-not-allowed">
+            {settingUp ? 'Creating…' : 'Create Billing Schedule'}
+          </button>
         </div>
       </div>
     );
