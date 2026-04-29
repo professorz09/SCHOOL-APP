@@ -484,19 +484,44 @@ export const BillingManager: React.FC<Props> = ({ onBack }) => {
             ) : (
               <div className="space-y-2">
                 {schoolPayments.map(p => (
-                  <div key={p.id} className="bg-white rounded-2xl border border-slate-100 shadow-sm px-4 py-3 flex items-center gap-3">
-                    <div className="w-9 h-9 rounded-xl bg-emerald-50 text-emerald-600 flex items-center justify-center shrink-0">
-                      <CheckCircle2 size={16} />
-                    </div>
-                    <div className="flex-1 min-w-0">
-                      <div className="font-extrabold text-slate-900 text-sm">{fmtFull(p.amount)}</div>
-                      <div className="flex items-center gap-1.5 mt-0.5">
-                        <span className={`text-[9px] font-black px-1.5 py-0.5 rounded-full ${METHOD_COLORS[p.method]}`}>{p.method}</span>
-                        <span className="text-[9px] font-bold text-slate-400 truncate">{p.txnId}</span>
+                  <div key={p.id} className="bg-white rounded-2xl border border-slate-100 shadow-sm px-4 py-3">
+                    <div className="flex items-center gap-3">
+                      <div className="w-9 h-9 rounded-xl bg-emerald-50 text-emerald-600 flex items-center justify-center shrink-0">
+                        <CheckCircle2 size={16} />
                       </div>
-                      {p.notes && <div className="text-[9px] text-slate-400 mt-0.5">{p.notes}</div>}
+                      <div className="flex-1 min-w-0">
+                        <div className="font-extrabold text-slate-900 text-sm">{fmtFull(p.amount)}</div>
+                        <div className="flex items-center gap-1.5 mt-0.5">
+                          <span className={`text-[9px] font-black px-1.5 py-0.5 rounded-full ${METHOD_COLORS[p.method]}`}>{p.method}</span>
+                          <span className="text-[9px] font-bold text-slate-400 truncate">{p.txnId}</span>
+                        </div>
+                        {p.notes && <div className="text-[9px] text-slate-400 mt-0.5">{p.notes}</div>}
+                      </div>
+                      <div className="text-[10px] font-bold text-slate-400 shrink-0">{fmtDate(p.paidAt)}</div>
                     </div>
-                    <div className="text-[10px] font-bold text-slate-400 shrink-0">{fmtDate(p.paidAt)}</div>
+
+                    {/* Per-payment allocation breakdown (oldest-first) */}
+                    {(p.allocations.length > 0 || p.parkedAdvance > 0) && (
+                      <div className="mt-2 ml-12 pt-2 border-t border-slate-100">
+                        <div className="text-[9px] font-black uppercase tracking-wider text-slate-400 mb-1">
+                          Applied to
+                        </div>
+                        <div className="space-y-0.5">
+                          {p.allocations.map((a, i) => (
+                            <div key={`${a.yearId}-${i}`} className="flex items-center justify-between text-[10px] font-bold">
+                              <span className="text-slate-600 truncate">{a.yearLabel || 'Year'}</span>
+                              <span className="text-emerald-700 shrink-0 ml-2">{fmtFull(a.amountApplied)}</span>
+                            </div>
+                          ))}
+                          {p.parkedAdvance > 0 && (
+                            <div className="flex items-center justify-between text-[10px] font-bold">
+                              <span className="text-violet-600 truncate">Advance credit (parked)</span>
+                              <span className="text-violet-600 shrink-0 ml-2">{fmtFull(p.parkedAdvance)}</span>
+                            </div>
+                          )}
+                        </div>
+                      </div>
+                    )}
                   </div>
                 ))}
               </div>

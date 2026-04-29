@@ -34,16 +34,24 @@ Service additions in `src/services/billing.service.ts`:
 UI rebuild in `src/features/super-admin/components/BillingManager.tsx`:
 
 - **List view** rolls "Outstanding" up across **all** years per school
-  (was: latest year only) and nets out parked advance credit. Schools
-  with credit get a violet "+₹X credit" badge alongside the plan pill.
+  (was: latest year only). Parked advance credit is **not** subtracted
+  from outstanding — schools with credit get an additional violet
+  "+₹X credit" badge alongside the plan pill so the two figures stay
+  visually independent.
 - **School detail** drops the single "Year Summary" card in favour of a
   Year / Annual / Paid / Outstanding / Status table that highlights the
   latest year, shows carry-forward c/f notes inline, and surfaces the
-  schedule's advance balance as a dedicated violet row.
-- **"Create Next Billing Year"** card sits below the table. Disabled
-  until `totalOutstanding === 0`; copy explains why when blocked. The
-  empty-state branch (no years yet for an existing schedule) flips the
-  button label to "Create First Year".
+  schedule's advance balance as a dedicated violet row. A separate
+  retry-able error state (vs the legacy no-schedule empty state)
+  disambiguates load failures.
+- **"Create Next Billing Year"** card sits below the table and is
+  enabled whenever a schedule exists — `create_next_billing_year`
+  already carries arrears or advance forward via `v_carried`, so
+  blocking on `totalOutstanding === 0` would prevent legitimate annual
+  rollovers. When the latest year still has a non-zero balance, an
+  inline carry-forward heads-up explains what will happen. The
+  empty-state branch (no years yet) flips the button to
+  "Create First Year".
 - **Add Payment** screen runs `previewAllocation` on every amount change
   (debounced 200 ms) and renders the per-year line items above the
   Transaction ID input, including a "parked as advance credit" footer
@@ -51,6 +59,11 @@ UI rebuild in `src/features/super-admin/components/BillingManager.tsx`:
   + audit log + advance-balance bump are still RPC-side). The school
   summary now shows the total cross-year outstanding instead of a
   single year's.
+- **Payment history** rows now expose the per-payment allocation
+  breakdown beneath the amount: each row lists which billing years the
+  RPC applied funds to (with year label + amount) and surfaces any
+  surplus parked as advance credit, so super admins can audit the
+  oldest-first split without consulting the audit log.
 - Auditing is unchanged: both `record_school_payment` and
   `create_next_billing_year` already write `log_audit` entries inside
   the RPC, so the UI doesn't double-log.

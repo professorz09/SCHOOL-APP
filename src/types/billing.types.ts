@@ -67,13 +67,35 @@ export interface BillingYear {
   outstanding: number;      // totalDue - totalPaid
 }
 
+/**
+ * One row from `school_payment_allocations`: how much of a single
+ * `school_payments` row the RPC applied to a specific billing year.
+ */
+export interface PaymentAllocation {
+  yearId: string;
+  yearLabel: string;
+  amountApplied: number;
+}
+
 export interface Payment {
   id: string;
   schoolId: string;
+  /**
+   * Back-compat: the first allocation's billing year, or `''` if the
+   * entire payment was parked as advance credit. Prefer iterating
+   * `allocations` for the full split.
+   */
   yearId: string;
   amount: number;
   paidAt: string;           // YYYY-MM-DD
   txnId: string;
   method: 'UPI' | 'NEFT' | 'CHEQUE' | 'CASH';
   notes: string;
+  /** Per-year split written by `record_school_payment` (oldest-first). */
+  allocations: PaymentAllocation[];
+  /**
+   * Surplus that landed in `school_billing_schedules.advance_balance`
+   * instead of any year row. Computed as `amount - sum(allocations.amountApplied)`.
+   */
+  parkedAdvance: number;
 }
