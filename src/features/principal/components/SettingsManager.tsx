@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { ArrowLeft, Plus, Trash2, ChevronDown, ChevronUp, Save, QrCode, CreditCard, CheckCircle2, Lock, Eye, EyeOff, ShieldCheck, IndianRupee, Edit2, Building2, BookOpen, ChevronRight, X, Download, Database } from 'lucide-react';
+import { ArrowLeft, Plus, Trash2, ChevronDown, ChevronUp, Save, QrCode, CreditCard, CheckCircle2, Lock, Eye, EyeOff, ShieldCheck, IndianRupee, Edit2, Building2, BookOpen, ChevronRight, X, Download, Database, History } from 'lucide-react';
 import { supabase } from '../../../lib/supabase';
 import { principalService } from '../../../services/principal.service';
 import { AcademicYearConfig, ClassConfig } from '../../../types/principal.types';
@@ -8,8 +8,9 @@ import { authService } from '../../../services/auth.service';
 import { useAuthStore } from '../../../store/authStore';
 import { schoolInfoService, SchoolInfo } from '../../../services/schoolInfo.service';
 import { FeeStructureForm, FeeStructureItem } from './FeeStructureForm';
+import { AuditLogsViewer } from './AuditLogsViewer';
 
-type View = 'MENU' | 'SCHOOL_INFO' | 'CLASSES' | 'FEE_STRUCT' | 'FEE_STRUCT_EDIT' | 'PAYMENTS' | 'SECURITY' | 'DATA_EXPORT';
+type View = 'MENU' | 'SCHOOL_INFO' | 'CLASSES' | 'FEE_STRUCT' | 'FEE_STRUCT_EDIT' | 'PAYMENTS' | 'SECURITY' | 'DATA_EXPORT' | 'ACTIVITY_LOG';
 
 interface Props { onBack: () => void; initialView?: View; }
 
@@ -189,6 +190,7 @@ export const SettingsManager: React.FC<Props> = ({ onBack, initialView }) => {
           { icon: IndianRupee, title: 'Fee Structure', desc: 'Class-wise fee configuration',   iconBg: 'bg-emerald-100', iconColor: 'text-emerald-600', action: () => setView('FEE_STRUCT') },
           { icon: CreditCard, title: 'Payments',      desc: 'UPI & QR code setup',             iconBg: 'bg-orange-100',  iconColor: 'text-orange-600',  action: () => setView('PAYMENTS') },
           { icon: Lock,      title: 'Security',       desc: 'Password & account security',     iconBg: 'bg-rose-100',    iconColor: 'text-rose-600',    action: () => setView('SECURITY') },
+          { icon: History,   title: 'Activity Logs',  desc: 'Who changed what · old → new · date/time',  iconBg: 'bg-violet-100',  iconColor: 'text-violet-600',  action: () => setView('ACTIVITY_LOG') },
           { icon: Database,  title: 'Download Data',  desc: 'Operational JSON snapshot — not a full DB backup',  iconBg: 'bg-cyan-100',    iconColor: 'text-cyan-600',    action: () => setView('DATA_EXPORT') },
         ].map(({ icon: Icon, title, desc, iconBg, iconColor, action }) => (
           <button key={title} onClick={action}
@@ -521,6 +523,9 @@ export const SettingsManager: React.FC<Props> = ({ onBack, initialView }) => {
       </div>
     </div>
   );
+
+  // ACTIVITY LOG VIEW
+  if (view === 'ACTIVITY_LOG') return <AuditLogsViewer onBack={() => setView('MENU')} />;
 
   // DATA EXPORT VIEW
   if (view === 'DATA_EXPORT') return <DataExportPanel onBack={() => setView('MENU')} schoolId={session?.schoolId ?? null} showToast={showToast} />;
