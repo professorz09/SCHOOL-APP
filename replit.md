@@ -197,6 +197,51 @@ Existing principals stuck in the loop need to complete the forced-change
 screen one more time after this migration is live; the flag will then
 persist on every subsequent login.
 
+## Migration 0017 — Full-flow database foundations
+
+`supabase/migrations/0017_full_flow_fixes.sql` lays the schema/RPC base every
+"Full School App Flow" feature task depends on. All changes are additive and
+re-runnable; the file applies cleanly via `npm run db:apply` (verified end-to-end
+against the live project).
+
+What it changes:
+
+- **Staff salary system** — `staff.relieving_date` + `staff.relieving_reason`
+  columns; new `staff_salary_history` table (per-effective-date trail); new
+  `update_staff_salary(staff_id, new_amount, effective_from, reason)` RPC that
+  bumps `staff.salary` and inserts a history row in one transaction.
+- **Sections** — added `stream` (nullable) and `capacity` (default 45).
+- **Transport history** — `student_transport_assignments` gets `reason` and
+  `changed_by` (it already had `start_date`/`end_date`).
+- **Academic years** — new `streams` JSONB column (default
+  `["Science","Commerce","Arts"]`); BEFORE-INSERT/UPDATE trigger
+  `academic_years_single_active` enforces "only one active year per school"
+  by deactivating siblings whenever a row flips to `is_active = TRUE`.
+- **Roll-number uniqueness** — partial UNIQUE index
+  `sar_year_section_roll_uniq` on `student_academic_records (academic_year_id,
+  section_id, roll_no)` (where both section_id and roll_no are non-null). A
+  one-shot UPDATE NULLs out duplicate roll_nos within the same section before
+  the index is built, so existing dirty data never blocks the migration.
+- **Class-movement history** — `student_class_movements` gains `old_section_id`,
+  `new_section_id`, `old_class_name`, `new_class_name`, and `changed_by` so the
+  RPC can record richer context. `record_class_movement` is re-created to
+  populate the new columns + write an audit log entry.
+- **Fee-schedule discounts + RTE** — `generate_student_fee_schedule` was dropped
+  (signature change) and re-created with two extra params:
+  `p_discount_amount NUMERIC` (₹ off per installment) and `p_discount_pct
+  NUMERIC` (percent off per installment). The larger of the two wins per head.
+  `p_is_rte` (existing) keeps forcing `payer_type = 'GOVERNMENT'` for monthly
+  heads. EXECUTE re-granted to `authenticated`.
+- **Surplus school-payment credit** — `school_billing_schedules.advance_balance`
+  added; `record_school_payment` re-created so leftover credit (after paying
+  every outstanding year oldest-first) is parked in the schedule's
+  `advance_balance` instead of overpaying the latest year. The schools.payment_status
+  refresh and audit log behaviour are unchanged.
+
+Verified post-apply: every column / table / index / trigger / RPC exists, the
+single-active-year trigger flips other years to inactive in a smoke test, and
+the new fee-schedule signature reports exactly 7 named arguments.
+
 ## Super Admin "Add School" form fixes
 
 - **`onboard_school` ambiguous-column bug** — migration `0015_onboard_school_fix_ambiguous_code.sql` re-creates the `public.onboard_school(...)` RPC. The `RETURNS TABLE (... code TEXT, is_deleted BOOLEAN ...)` OUT names were shadowing same-named columns in the body, so `WHERE code = p_school_code AND is_deleted = false` raised `column reference "code" is ambiguous` at runtime. The body now aliases `public.schools s` / `public.users u` and qualifies every column reference. The function signature is unchanged so existing GRANTs are preserved.
