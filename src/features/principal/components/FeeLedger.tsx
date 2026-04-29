@@ -99,6 +99,7 @@ export const FeeLedger: React.FC<Props> = ({ onBack }) => {
   // Late-fee preview shown inside the pay modal. Refreshed every time the
   // modal opens; principal can opt out via the "Skip late fee" checkbox.
   const [lateFeeTotal, setLateFeeTotal]     = useState(0);
+  const [lateFeeBreakdown, setLateFeeBreakdown] = useState<{ installmentId: string; dueDate: string; daysLate: number; lateFee: number; source: string }[]>([]);
   const [applyLateFee, setApplyLateFee]     = useState(true);
 
   // Per-year grouping for the schedule tab.
@@ -171,14 +172,14 @@ export const FeeLedger: React.FC<Props> = ({ onBack }) => {
   // intentionally skip the call when the modal is closed to avoid a
   // wasteful RPC on every keystroke.
   useEffect(() => {
-    if (!payModal || !selected) { setLateFeeTotal(0); setApplyLateFee(true); return; }
+    if (!payModal || !selected) { setLateFeeTotal(0); setLateFeeBreakdown([]); setApplyLateFee(true); return; }
     let cancelled = false;
     (async () => {
       try {
-        const { total } = await feeService.computeLateFeePreview(selected.studentId);
-        if (!cancelled) { setLateFeeTotal(total); setApplyLateFee(true); }
+        const { total, perInstallment } = await feeService.computeLateFeePreview(selected.studentId);
+        if (!cancelled) { setLateFeeTotal(total); setLateFeeBreakdown(perInstallment); setApplyLateFee(true); }
       } catch {
-        if (!cancelled) setLateFeeTotal(0);
+        if (!cancelled) { setLateFeeTotal(0); setLateFeeBreakdown([]); }
       }
     })();
     return () => { cancelled = true; };
@@ -722,13 +723,33 @@ export const FeeLedger: React.FC<Props> = ({ onBack }) => {
                 </div>
               )}
 
-              {/* Late-fee preview — recomputed every time the modal opens */}
+              {/* Late-fee preview — recomputed every time the modal opens.
+                  Per-installment breakdown helps the principal explain to the
+                  parent exactly which dues triggered the late fee and by how
+                  many days they are overdue. */}
               {lateFeeTotal > 0 && (
                 <div className={`rounded-xl px-3 py-2.5 mb-3 border ${applyLateFee ? 'bg-amber-50 border-amber-200' : 'bg-slate-50 border-slate-200'}`}>
-                  <div className="flex items-center justify-between mb-1.5">
+                  <div className="flex items-center justify-between mb-2">
                     <span className={`text-[10px] font-black ${applyLateFee ? 'text-amber-700' : 'text-slate-500 line-through'}`}>Late Fee (overdue dues)</span>
                     <span className={`text-sm font-black ${applyLateFee ? 'text-amber-700' : 'text-slate-400 line-through'}`}>+₹{lateFeeTotal.toLocaleString('en-IN')}</span>
                   </div>
+                  {lateFeeBreakdown.filter(b => b.lateFee > 0).length > 0 && (
+                    <ul className={`mb-2 divide-y ${applyLateFee ? 'divide-amber-200' : 'divide-slate-200'} max-h-32 overflow-y-auto`}>
+                      {lateFeeBreakdown.filter(b => b.lateFee > 0).map(b => {
+                        const inst = selected?.installments.find(i => i.id === b.installmentId);
+                        const label = inst ? `${inst.month} · ${FEE_TYPE_LABEL[inst.feeType]}` : `Due ${new Date(b.dueDate).toLocaleDateString('en-IN', { day: 'numeric', month: 'short' })}`;
+                        return (
+                          <li key={b.installmentId} className="flex items-center justify-between py-1">
+                            <div className="flex flex-col">
+                              <span className={`text-[11px] font-bold ${applyLateFee ? 'text-amber-800' : 'text-slate-500 line-through'}`}>{label}</span>
+                              <span className={`text-[9px] font-semibold ${applyLateFee ? 'text-amber-600' : 'text-slate-400'}`}>{b.daysLate} {b.daysLate === 1 ? 'day' : 'days'} late · {/PERCENT/i.test(b.source) ? '% of due' : 'flat'}</span>
+                            </div>
+                            <span className={`text-[11px] font-black ${applyLateFee ? 'text-amber-700' : 'text-slate-400 line-through'}`}>+₹{b.lateFee.toLocaleString('en-IN')}</span>
+                          </li>
+                        );
+                      })}
+                    </ul>
+                  )}
                   <label className="flex items-center gap-2 text-[10px] font-bold text-slate-500 cursor-pointer">
                     <input type="checkbox" checked={!applyLateFee}
                       onChange={e => setApplyLateFee(!e.target.checked)}
