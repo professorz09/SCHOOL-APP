@@ -157,6 +157,10 @@ export const StudentClassAssignmentModal: React.FC<Props> = ({ student, onClose,
       showToast(`Roll ${rollNo} is taken in ${className}-${section}`, 'error');
       return;
     }
+    if (!selectedStructure) {
+      showToast('Pick a fee structure — every assigned student needs a fee schedule', 'error');
+      return;
+    }
     if (transportEnabled && (!vehicleId || !stopId)) {
       showToast('Choose a vehicle and stop or disable transport', 'error');
       return;
@@ -169,7 +173,7 @@ export const StudentClassAssignmentModal: React.FC<Props> = ({ student, onClose,
         section,
         rollNo: rollNo.trim(),
         totalFee,
-        feeStructure: selectedStructure ? {
+        feeStructure: {
           heads: selectedStructure.feeHeads.map(h => ({
             name: h.name, amount: h.amount, frequency: h.frequency, description: h.description,
           })),
@@ -177,7 +181,7 @@ export const StudentClassAssignmentModal: React.FC<Props> = ({ student, onClose,
           isRte,
           discountAmount,
           discountPct,
-        } : undefined,
+        },
         transport: transportEnabled ? {
           vehicleId, stopId, monthlyAmount: transportAmount,
         } : undefined,
@@ -265,7 +269,7 @@ export const StudentClassAssignmentModal: React.FC<Props> = ({ student, onClose,
               onChange={e => setStructureId(e.target.value)}
               disabled={loadingMeta}
               className="w-full mt-1 px-3 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-sm font-bold">
-              <option value="">— No fee schedule —</option>
+              <option value="">— Choose a fee schedule (required) —</option>
               {matchingStructures.map(s => (
                 <option key={s.id} value={s.id}>{s.name} ({s.className})</option>
               ))}

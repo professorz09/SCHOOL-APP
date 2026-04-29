@@ -108,6 +108,9 @@ export const StudentsManager: React.FC<Props> = ({ onBack, initialView }) => {
   const [archiveTab, setArchiveTab] = useState<ArchiveTab>('ACTIVE');
   const [archiveLoading, setArchiveLoading] = useState(false);
   const [archiveStudents, setArchiveStudents] = useState<Student[]>([]);
+  const [archiveCounts, setArchiveCounts] = useState<Record<ArchiveTab, number>>({
+    ACTIVE: 0, INACTIVE: 0, TC_ISSUED: 0, ALUMNI: 0, UNASSIGNED: 0,
+  });
   const [assignTarget, setAssignTarget] = useState<Student | null>(null);
   const [tcModal, setTcModal] = useState<{ student: Student; tcNumber: string; reason: string } | null>(null);
   const [profileDocsLive, setProfileDocsLive] = useState<StudentDoc[]>([]);
@@ -119,8 +122,20 @@ export const StudentsManager: React.FC<Props> = ({ onBack, initialView }) => {
   const refreshArchive = React.useCallback(async () => {
     setArchiveLoading(true);
     try {
-      const rows = await studentService.getStudentsByArchiveStatus(archiveTab);
-      setArchiveStudents(rows);
+      // Load every bucket in parallel so the sub-tabs can show live counts
+      // and the active tab gets its rows from the same fetch — no extra
+      // round-trip.
+      const buckets: ArchiveTab[] = ['ACTIVE', 'INACTIVE', 'TC_ISSUED', 'ALUMNI', 'UNASSIGNED'];
+      const results = await Promise.all(
+        buckets.map(b => studentService.getStudentsByArchiveStatus(b).catch(() => [])),
+      );
+      const counts: Record<ArchiveTab, number> = {
+        ACTIVE: 0, INACTIVE: 0, TC_ISSUED: 0, ALUMNI: 0, UNASSIGNED: 0,
+      };
+      buckets.forEach((b, i) => { counts[b] = results[i].length; });
+      setArchiveCounts(counts);
+      const activeIdx = buckets.indexOf(archiveTab);
+      setArchiveStudents(activeIdx >= 0 ? results[activeIdx] : []);
     } catch (e) {
       const msg = e instanceof Error ? e.message : 'Failed to load archive';
       showToast(msg, 'error');
@@ -650,17 +665,24 @@ export const StudentsManager: React.FC<Props> = ({ onBack, initialView }) => {
             </button>
           </div>
 
-          {/* Sub-tabs */}
+          {/* Sub-tabs with live counts */}
           <div className="px-2 pb-2 flex gap-1 overflow-x-auto no-scrollbar">
-            {ARCHIVE_TABS.map(({ key, label, icon: Icon, tone }) => (
-              <button key={key} onClick={() => setArchiveTab(key)}
-                className={`shrink-0 flex items-center gap-1.5 px-3 py-2 rounded-xl text-[11px] font-black transition-all
-                  ${archiveTab === key
-                    ? `bg-${tone}-600 text-white shadow-sm`
-                    : `bg-slate-50 text-slate-600 hover:bg-slate-100`}`}>
-                <Icon size={13} />{label}
-              </button>
-            ))}
+            {ARCHIVE_TABS.map(({ key, label, icon: Icon, tone }) => {
+              const count = archiveCounts[key] ?? 0;
+              const active = archiveTab === key;
+              return (
+                <button key={key} onClick={() => setArchiveTab(key)}
+                  className={`shrink-0 flex items-center gap-1.5 px-3 py-2 rounded-xl text-[11px] font-black transition-all
+                    ${active
+                      ? `bg-${tone}-600 text-white shadow-sm`
+                      : `bg-slate-50 text-slate-600 hover:bg-slate-100`}`}>
+                  <Icon size={13} />{label}
+                  <span className={`ml-0.5 px-1.5 py-0.5 rounded-full text-[9px] font-black ${
+                    active ? 'bg-white/20 text-white' : 'bg-slate-200 text-slate-600'
+                  }`}>{count}</span>
+                </button>
+              );
+            })}
           </div>
 
           <div className="px-4 pb-3">
