@@ -10,6 +10,7 @@
 import { supabase } from '../lib/supabase';
 import { useAuthStore } from '../store/authStore';
 import { useCorrectionStore } from '../store/correctionStore';
+import { useEditingYearStore } from '../store/editingYearStore';
 import { logAudit } from '../lib/audit';
 
 export type TDay = 'Monday' | 'Tuesday' | 'Wednesday' | 'Thursday' | 'Friday' | 'Saturday' | 'Sunday';
@@ -82,6 +83,18 @@ interface EntryRow {
 }
 
 async function _loadActiveYear(schoolId: string): Promise<void> {
+  // Honor Correction Mode override when set — load the closed year being
+  // corrected instead of the school's currently-active year.
+  const override = useEditingYearStore.getState().getEditingYearId();
+  if (override) {
+    const { data } = await supabase
+      .from('academic_years').select('id, is_closed')
+      .eq('school_id', schoolId).eq('id', override).maybeSingle();
+    const ay = data as { id: string; is_closed: boolean } | null;
+    _activeYearId = ay?.id ?? null;
+    _yearIsClosed = !!ay?.is_closed;
+    return;
+  }
   const { data } = await supabase
     .from('academic_years').select('id, is_closed')
     .eq('school_id', schoolId).eq('is_active', true).maybeSingle();

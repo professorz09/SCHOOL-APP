@@ -24,9 +24,9 @@ const todayStr  = () => new Date().toISOString().split('T')[0];
 
 export const StudentAttendanceManager: React.FC<Props> = ({ onBack }) => {
   const { showToast } = useUIStore();
-  const { activeYear } = useAcademicYear();
-  const isYearClosed = !!activeYear && activeYear.status === 'LOCKED';
-  const editGuard = useEditGuard(activeYear?.id, isYearClosed);
+  const { currentYear } = useAcademicYear();
+  const isYearClosed = !!currentYear && currentYear.status === 'LOCKED';
+  const editGuard = useEditGuard(currentYear?.id, isYearClosed);
   const [students, setStudents] = useState<Student[]>([]);
   const [records, setRecords]   = useState<SharedAttendanceRecord[]>([]);
   const [view, setView]         = useState<View>('OVERVIEW');

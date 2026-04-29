@@ -41,9 +41,9 @@ interface Props { onBack: () => void; }
 export const TestsManager: React.FC<Props> = ({ onBack }) => {
   const { showToast } = useUIStore();
   const teacherName = useAuthStore(s => s.session?.name ?? 'Teacher');
-  const { activeYear } = useAcademicYear();
-  const isYearClosed = !!activeYear && activeYear.status === 'LOCKED';
-  const editGuard = useEditGuard(activeYear?.id, isYearClosed);
+  const { currentYear } = useAcademicYear();
+  const isYearClosed = !!currentYear && currentYear.status === 'LOCKED';
+  const editGuard = useEditGuard(currentYear?.id, isYearClosed);
   const [view, setView]      = useState<View>('LIST');
   const [exams, setExams]    = useState<TestSchedule[]>([]);
   const [classes, setClasses] = useState<TeacherClass[]>([]);

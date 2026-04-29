@@ -36,9 +36,9 @@ interface Props { onBack: () => void; }
 
 export const TimetableManager: React.FC<Props> = ({ onBack }) => {
   const { showToast } = useUIStore();
-  const { activeYear } = useAcademicYear();
-  const isYearClosed = !!activeYear && activeYear.status === 'LOCKED';
-  const editGuard = useEditGuard(activeYear?.id, isYearClosed);
+  const { currentYear } = useAcademicYear();
+  const isYearClosed = !!currentYear && currentYear.status === 'LOCKED';
+  const editGuard = useEditGuard(currentYear?.id, isYearClosed);
   const [selectedClass, setSelectedClass] = useState('10-A');
   const [activeDay, setActiveDay] = useState<TDay>('Monday');
   const [entries, setEntries] = useState<TimetableEntry[]>([]);
