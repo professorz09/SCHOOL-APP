@@ -1,5 +1,8 @@
 import { create } from 'zustand';
-import { SchoolBilling, BillingYear, Payment } from '../types/billing.types';
+import {
+  SchoolBilling, BillingYear, Payment,
+  SchoolBillingBreakdown, PaymentAllocationPreview,
+} from '../types/billing.types';
 import { billingService } from '../services/billing.service';
 import { BillingPlan } from '../config/constants';
 
@@ -19,6 +22,8 @@ interface BillingStore {
     notes: string,
   ) => Promise<{ year: BillingYear; payment: Payment }>;
   getSchoolPayments: (schoolId: string) => Promise<Payment[]>;
+  getBillingBreakdown: (schoolId: string) => Promise<SchoolBillingBreakdown | null>;
+  previewAllocation: (schoolId: string, amount: number) => Promise<PaymentAllocationPreview>;
   setupSchoolBilling: (
     schoolId: string,
     schoolName: string,
@@ -66,6 +71,11 @@ export const useBillingStore = create<BillingStore>((set) => ({
   },
 
   getSchoolPayments: (schoolId) => billingService.getPaymentsForSchool(schoolId),
+
+  getBillingBreakdown: (schoolId) => billingService.getBillingBreakdown(schoolId),
+
+  previewAllocation: (schoolId, amount) =>
+    billingService.previewAllocation(schoolId, amount),
 
   setupSchoolBilling: async (schoolId, schoolName, plan, startDate, customAmount) => {
     await billingService.setupSchoolBilling(schoolId, schoolName, plan, startDate, customAmount);

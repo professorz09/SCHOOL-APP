@@ -1,8 +1,12 @@
-import React, { useEffect, useState } from 'react';
-import { ArrowLeft, IndianRupee, CheckCircle2, AlertCircle, Plus, CreditCard, Clock } from 'lucide-react';
+import React, { useEffect, useState, useMemo, useCallback } from 'react';
+import {
+  ArrowLeft, IndianRupee, CheckCircle2, AlertCircle, Plus, CreditCard, Clock, CalendarPlus,
+} from 'lucide-react';
 import { useBillingStore } from '../../../store/billingStore';
 import { useUIStore } from '../../../store/uiStore';
-import { SchoolBilling, BillingYear, Payment } from '../../../types/billing.types';
+import {
+  Payment, SchoolBillingBreakdown, PaymentAllocationPreview,
+} from '../../../types/billing.types';
 import { PLAN_COLORS } from '../../../config/constants';
 
 type View = 'LIST' | 'SCHOOL_DETAIL' | 'RECORD_PAYMENT';
@@ -15,7 +19,7 @@ const fmt = (n: number) =>
   : n >= 1000   ? `₹${(n / 1000).toFixed(0)}K`
   : `₹${n}`;
 
-const fmtFull = (n: number) => `₹${n.toLocaleString('en-IN')}`;
+const fmtFull = (n: number) => `₹${Math.abs(n).toLocaleString('en-IN')}`;
 
 const fmtDate = (d: string) => {
   const dt = new Date(d);
@@ -30,68 +34,182 @@ const METHOD_COLORS: Record<PayMethod, string> = {
 };
 
 export const BillingManager: React.FC<Props> = ({ onBack }) => {
-  const { schoolBillings, billingYears, fetchAll, recordPayment, getSchoolPayments } = useBillingStore();
+  const {
+    schoolBillings, billingYears,
+    fetchAll, recordPayment, getSchoolPayments,
+    getBillingBreakdown, previewAllocation, createNextYear,
+  } = useBillingStore();
   const { showToast } = useUIStore();
 
-  const [view, setView]           = useState<View>('LIST');
-  const [selectedId, setSelectedId] = useState<string | null>(null);
-  const [schoolPayments, setSchoolPayments] = useState<Payment[]>([]);
-  const [amount, setAmount]       = useState('');
-  const [txnId, setTxnId]         = useState('');
-  const [method, setMethod]       = useState<PayMethod>('NEFT');
-  const [notes, setNotes]         = useState('');
-  const [submitting, setSubmitting] = useState(false);
+  const [view, setView]                       = useState<View>('LIST');
+  const [selectedId, setSelectedId]           = useState<string | null>(null);
+  const [breakdown, setBreakdown]             = useState<SchoolBillingBreakdown | null>(null);
+  const [breakdownLoading, setBreakdownLoading] = useState(false);
+  const [breakdownError, setBreakdownError]   = useState<string | null>(null);
+  const [schoolPayments, setSchoolPayments]   = useState<Payment[]>([]);
+  const [creatingNextYear, setCreatingNextYear] = useState(false);
+
+  const [amount, setAmount]                   = useState('');
+  const [txnId, setTxnId]                     = useState('');
+  const [method, setMethod]                   = useState<PayMethod>('NEFT');
+  const [notes, setNotes]                     = useState('');
+  const [submitting, setSubmitting]           = useState(false);
+  const [allocPreview, setAllocPreview]       = useState<PaymentAllocationPreview | null>(null);
+  const [previewLoading, setPreviewLoading]   = useState(false);
 
   useEffect(() => {
     fetchAll().catch(e => showToast(e instanceof Error ? e.message : 'Failed to load billing data', 'error'));
   }, []);
 
-  // ── Derived data ──────────────────────────────────────────────────────────
+  // ── Aggregated list-view stats: roll up across ALL years per school ──────
+  // The dashboard cards used to reflect only the latest year, masking
+  // historical carry-forward. We now aggregate across every year so the
+  // "Outstanding" pill matches the per-school detail screen.
+  const perSchoolAgg = useMemo(() => {
+    const map = new Map<string, { paid: number; due: number; outstanding: number; latestYearLabel: string | null; latestStartDate: string | null }>();
+    for (const y of billingYears) {
+      const cur = map.get(y.schoolId) ?? { paid: 0, due: 0, outstanding: 0, latestYearLabel: null, latestStartDate: null };
+      cur.paid += y.totalPaid;
+      cur.due  += y.totalDue;
+      cur.outstanding += Math.max(0, y.outstanding);
+      if (!cur.latestStartDate || y.startDate > cur.latestStartDate) {
+        cur.latestStartDate = y.startDate;
+        cur.latestYearLabel = y.yearLabel;
+      }
+      map.set(y.schoolId, cur);
+    }
+    return map;
+  }, [billingYears]);
 
-  // Latest billing year per school
-  const latestYearMap = billingYears.reduce<Record<string, BillingYear>>((acc, y) => {
-    const prev = acc[y.schoolId];
-    if (!prev || y.startDate > prev.startDate) acc[y.schoolId] = y;
-    return acc;
-  }, {});
+  const schoolList = schoolBillings.map(sb => {
+    const agg = perSchoolAgg.get(sb.schoolId);
+    // IMPORTANT: outstanding is the GROSS year-row outstanding only.
+    // schedule-level advance_balance is parked credit that the RPC has not
+    // applied to any year — it sits separately and is shown as a credit
+    // pill, not netted into outstanding (architect review #2).
+    return {
+      billing: sb,
+      paid: agg?.paid ?? 0,
+      due:  agg?.due  ?? sb.annualAmount,
+      outstanding: agg?.outstanding ?? sb.annualAmount,
+      latestYearLabel: agg?.latestYearLabel ?? null,
+    };
+  });
 
-  const schoolList = schoolBillings.map(sb => ({
-    billing: sb,
-    year: latestYearMap[sb.schoolId] ?? null,
-  }));
+  const totalCollected   = billingYears.reduce((s, y) => s + y.totalPaid, 0);
+  const totalOutstanding = schoolList.reduce((s, x) => s + x.outstanding, 0);
+  const overdueCount     = schoolList.filter(x => x.outstanding > 0).length;
 
-  const totalCollected = billingYears.reduce((s, y) => s + y.totalPaid, 0);
-  const totalOutstanding = billingYears.reduce((s, y) => s + y.outstanding, 0);
-  const overdueCount = schoolList.filter(s => (s.year?.outstanding ?? 0) > 0).length;
+  // ── Selected school ──────────────────────────────────────────────────────
+  const selectedRow = selectedId ? schoolList.find(s => s.billing.schoolId === selectedId) : null;
 
-  // ── Selected school ────────────────────────────────────────────────────────
-
-  const selected = selectedId ? schoolList.find(s => s.billing.schoolId === selectedId) : null;
+  const loadSchoolDetail = useCallback(async (schoolId: string) => {
+    setBreakdownLoading(true);
+    setBreakdownError(null);
+    try {
+      const [bd, payments] = await Promise.all([
+        getBillingBreakdown(schoolId),
+        getSchoolPayments(schoolId),
+      ]);
+      setBreakdown(bd);
+      setSchoolPayments(payments);
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : 'Failed to load school billing';
+      setBreakdownError(msg);
+      showToast(msg, 'error');
+    } finally {
+      setBreakdownLoading(false);
+    }
+  }, [getBillingBreakdown, getSchoolPayments, showToast]);
 
   const openSchool = async (schoolId: string) => {
     setSelectedId(schoolId);
-    const payments = await getSchoolPayments(schoolId);
-    setSchoolPayments(payments);
+    setBreakdown(null);
+    setSchoolPayments([]);
+    setBreakdownError(null);
     setView('SCHOOL_DETAIL');
+    await loadSchoolDetail(schoolId);
   };
 
-  // ── Record payment ─────────────────────────────────────────────────────────
+  // Latest year is the LAST one in breakdown.years (sorted ASC by start_date).
+  const latestYear = breakdown && breakdown.years.length > 0
+    ? breakdown.years[breakdown.years.length - 1]
+    : null;
+  // "Create Next Billing Year" is permitted whenever a schedule exists.
+  // The RPC carries the latest year's outstanding (positive = arrears,
+  // negative = advance) into the new year's `carried_forward`, so blocking
+  // on outstanding > 0 would prevent legitimate annual rollovers with
+  // arrears (architect review #3). We just surface a heads-up below the
+  // button when there's a non-zero amount about to roll over.
+  const canCreateNextYear = !!breakdown;
+  const carryForwardHint = breakdown && latestYear && latestYear.outstanding !== 0
+    ? latestYear.outstanding > 0
+      ? `Arrears of ${fmtFull(latestYear.outstanding)} from ${latestYear.yearLabel} will be carried forward.`
+      : `Advance of ${fmtFull(latestYear.outstanding)} from ${latestYear.yearLabel} will be carried forward as credit.`
+    : null;
+
+  const handleCreateNextYear = async () => {
+    if (!selectedId) return;
+    setCreatingNextYear(true);
+    try {
+      const y = await createNextYear(selectedId, 0);
+      showToast(`Created billing year ${y.yearLabel}`);
+      await loadSchoolDetail(selectedId);
+    } catch (e) {
+      showToast(e instanceof Error ? e.message : 'Could not create next year', 'error');
+    } finally {
+      setCreatingNextYear(false);
+    }
+  };
+
+  // ── Record-payment view ──────────────────────────────────────────────────
+  // Re-compute the allocation preview whenever the amount changes (debounced
+  // through a tiny 200ms timer to avoid hammering the DB on every keystroke).
+  useEffect(() => {
+    if (view !== 'RECORD_PAYMENT' || !selectedId) return;
+    const num = parseInt(amount.replace(/,/g, ''), 10);
+    if (!Number.isFinite(num) || num <= 0) {
+      setAllocPreview(null);
+      return;
+    }
+    let cancelled = false;
+    setPreviewLoading(true);
+    const t = window.setTimeout(async () => {
+      try {
+        const p = await previewAllocation(selectedId, num);
+        if (!cancelled) setAllocPreview(p);
+      } catch (e) {
+        if (!cancelled) {
+          setAllocPreview(null);
+          showToast(e instanceof Error ? e.message : 'Preview failed', 'error');
+        }
+      } finally {
+        if (!cancelled) setPreviewLoading(false);
+      }
+    }, 200);
+    return () => { cancelled = true; window.clearTimeout(t); };
+  }, [amount, view, selectedId, previewAllocation, showToast]);
 
   const handlePay = async () => {
+    if (!selectedId || !latestYear) {
+      showToast('No billing year for this school', 'error');
+      return;
+    }
     const num = parseInt(amount.replace(/,/g, ''), 10);
     if (!num || num <= 0) { showToast('Enter a valid amount', 'error'); return; }
     if (!txnId.trim())    { showToast('Enter transaction ID', 'error'); return; }
-    if (!selected?.year)  { showToast('No billing year found', 'error'); return; }
 
     setSubmitting(true);
     try {
-      await recordPayment(selected.billing.schoolId, selected.year.id, num, txnId.trim(), method, notes.trim());
-      // Refresh payments
-      const updated = await getSchoolPayments(selected.billing.schoolId);
-      setSchoolPayments(updated);
-      showToast(`₹${num.toLocaleString('en-IN')} recorded for ${selected.billing.schoolName}`);
+      // The yearId arg is back-compat noise — the RPC walks oldest-first
+      // regardless. Pass latestYear.id so the response can resolve a year
+      // for any legacy callers that still inspect the return value.
+      await recordPayment(selectedId, latestYear.id, num, txnId.trim(), method, notes.trim());
+      showToast(`${fmtFull(num)} recorded for ${selectedRow?.billing.schoolName ?? 'school'}`);
       setAmount(''); setTxnId(''); setNotes('');
+      setAllocPreview(null);
       setView('SCHOOL_DETAIL');
+      await loadSchoolDetail(selectedId);
     } catch (e) {
       showToast(e instanceof Error ? e.message : 'Payment failed', 'error');
     } finally {
@@ -99,28 +217,24 @@ export const BillingManager: React.FC<Props> = ({ onBack }) => {
     }
   };
 
-  // ── Shared header ──────────────────────────────────────────────────────────
-
+  // ── Shared header ────────────────────────────────────────────────────────
   const Header = ({ title, back, right }: { title: string; back: () => void; right?: React.ReactNode }) => (
     <div className="bg-white border-b border-slate-100 px-4 pt-4 pb-4 flex items-center justify-between sticky top-0 z-10 shadow-sm">
-      <div className="flex items-center gap-3">
-        <button onClick={back} className="p-2 -ml-2 bg-slate-100 rounded-full text-slate-600">
+      <div className="flex items-center gap-3 min-w-0">
+        <button onClick={back} className="p-2 -ml-2 bg-slate-100 rounded-full text-slate-600 shrink-0">
           <ArrowLeft size={20} />
         </button>
-        <h2 className="text-xl font-black text-slate-900 uppercase tracking-tight">{title}</h2>
+        <h2 className="text-xl font-black text-slate-900 uppercase tracking-tight truncate">{title}</h2>
       </div>
       {right}
     </div>
   );
 
-  // ── LIST view ──────────────────────────────────────────────────────────────
-
+  // ── LIST view ────────────────────────────────────────────────────────────
   if (view === 'LIST') return (
     <div className="w-full bg-slate-50 flex flex-col animate-in slide-in-from-right-8 duration-300">
       <Header title="Billing" back={onBack} />
       <div className="flex-1 overflow-y-auto ">
-
-        {/* Stats */}
         <div className="grid grid-cols-3 gap-2 px-4 pt-3 pb-2">
           {[
             { label: 'Collected', value: fmt(totalCollected),   color: 'text-emerald-600', bg: 'bg-emerald-50' },
@@ -134,7 +248,6 @@ export const BillingManager: React.FC<Props> = ({ onBack }) => {
           ))}
         </div>
 
-        {/* Overdue alert */}
         {overdueCount > 0 && (
           <div className="mx-4 mb-2 flex items-center gap-2 bg-rose-50 border border-rose-200 rounded-2xl px-4 py-3">
             <AlertCircle size={16} className="text-rose-500 shrink-0" />
@@ -142,40 +255,35 @@ export const BillingManager: React.FC<Props> = ({ onBack }) => {
           </div>
         )}
 
-        {/* Schools list */}
         <div className="px-4 space-y-2 pt-1">
-          {schoolList.map(({ billing, year }) => {
-            const paid = year?.totalPaid ?? 0;
-            const due = year?.totalDue ?? billing.annualAmount;
-            const out = year?.outstanding ?? billing.annualAmount;
-            const settled = out === 0;
+          {schoolList.map(({ billing, paid, due, outstanding, latestYearLabel }) => {
+            const settled = outstanding === 0;
             const pct = due > 0 ? Math.min(100, Math.round((paid / due) * 100)) : 0;
-
             return (
               <button key={billing.schoolId}
                 onClick={() => openSchool(billing.schoolId)}
                 className="w-full bg-white rounded-2xl border border-slate-100 shadow-sm px-4 py-4 text-left active:scale-[0.98] transition-transform">
                 <div className="flex items-start gap-3">
-                  {/* Avatar */}
                   <div className="w-11 h-11 rounded-2xl bg-slate-100 text-slate-700 flex items-center justify-center font-black text-sm shrink-0">
                     {billing.schoolName.split(' ').map(w => w[0]).join('').slice(0, 2).toUpperCase()}
                   </div>
-
                   <div className="flex-1 min-w-0">
                     <div className="flex items-center justify-between gap-2">
                       <span className="font-extrabold text-slate-900 text-sm truncate">{billing.schoolName}</span>
                       {settled
                         ? <span className="text-[10px] font-black text-emerald-600 bg-emerald-50 px-2 py-0.5 rounded-full shrink-0">PAID</span>
-                        : <span className="text-sm font-black text-rose-600 shrink-0">{fmt(out)}</span>
+                        : <span className="text-sm font-black text-rose-600 shrink-0">{fmt(outstanding)}</span>
                       }
                     </div>
-
                     <div className="flex items-center gap-2 mt-1">
                       <span className={`text-[10px] font-black px-2 py-0.5 rounded-full ${PLAN_COLORS[billing.plan]}`}>{billing.plan}</span>
-                      <span className="text-[10px] font-bold text-slate-400">{year?.yearLabel ?? '—'}</span>
+                      <span className="text-[10px] font-bold text-slate-400">{latestYearLabel ?? '—'}</span>
+                      {billing.advanceBalance > 0 && (
+                        <span className="text-[10px] font-black text-violet-700 bg-violet-50 px-2 py-0.5 rounded-full">
+                          +{fmt(billing.advanceBalance)} credit
+                        </span>
+                      )}
                     </div>
-
-                    {/* Progress bar */}
                     <div className="mt-2 h-1.5 bg-slate-100 rounded-full overflow-hidden">
                       <div className={`h-full rounded-full transition-all ${settled ? 'bg-emerald-500' : 'bg-blue-500'}`}
                         style={{ width: `${pct}%` }} />
@@ -201,28 +309,28 @@ export const BillingManager: React.FC<Props> = ({ onBack }) => {
     </div>
   );
 
-  // ── SCHOOL DETAIL view ─────────────────────────────────────────────────────
-
-  if (view === 'SCHOOL_DETAIL' && selected) {
-    const { billing, year } = selected;
-    const paid = year?.totalPaid ?? 0;
-    const due  = year?.totalDue  ?? billing.annualAmount;
-    const out  = year?.outstanding ?? billing.annualAmount;
-    const pct  = due > 0 ? Math.min(100, Math.round((paid / due) * 100)) : 0;
+  // ── SCHOOL DETAIL view ──────────────────────────────────────────────────
+  if (view === 'SCHOOL_DETAIL' && selectedRow) {
+    const { billing } = selectedRow;
+    const years = breakdown?.years ?? [];
+    const totalPaidAcrossYears = years.reduce((s, y) => s + y.totalPaid, 0);
+    const totalDueAcrossYears  = years.reduce((s, y) => s + y.totalDue,  0);
 
     return (
       <div className="w-full bg-slate-50 flex flex-col animate-in slide-in-from-right-8 duration-300">
         <Header title={billing.schoolName}
-          back={() => { setView('LIST'); setSelectedId(null); }}
+          back={() => { setView('LIST'); setSelectedId(null); setBreakdown(null); }}
           right={
-            <button onClick={() => setView('RECORD_PAYMENT')}
-              className="flex items-center gap-1.5 bg-blue-600 text-white text-[11px] font-black px-3 py-2 rounded-full active:scale-90 transition-transform">
-              <Plus size={13} /> Add Payment
-            </button>
+            years.length > 0 ? (
+              <button onClick={() => setView('RECORD_PAYMENT')}
+                className="flex items-center gap-1.5 bg-blue-600 text-white text-[11px] font-black px-3 py-2 rounded-full active:scale-90 transition-transform">
+                <Plus size={13} /> Add Payment
+              </button>
+            ) : null
           }
         />
 
-        <div className="flex-1 overflow-y-auto  space-y-3 px-4 pt-3">
+        <div className="flex-1 overflow-y-auto space-y-3 px-4 pt-3 pb-6">
 
           {/* Plan info card */}
           <div className="bg-white rounded-2xl border border-slate-100 shadow-sm p-4">
@@ -239,48 +347,126 @@ export const BillingManager: React.FC<Props> = ({ onBack }) => {
                 <div className="text-[9px] font-black uppercase text-slate-400 mb-0.5">Billing Since</div>
                 <div className="font-black text-slate-900">{fmtDate(billing.billingStartDate)}</div>
               </div>
-              {(year?.carriedForward ?? 0) > 0 && (
-                <div className="col-span-2">
-                  <div className="text-[9px] font-black uppercase text-slate-400 mb-0.5">Carried Forward</div>
-                  <div className="font-black text-amber-600">+{fmtFull(year!.carriedForward)} (prev year)</div>
-                </div>
-              )}
             </div>
+            {billing.advanceBalance > 0 && (
+              <div className="mt-3 flex items-center justify-between gap-2 bg-violet-50 border border-violet-100 rounded-xl px-3 py-2">
+                <span className="text-[10px] font-black uppercase tracking-widest text-violet-600">Advance Credit</span>
+                <span className="font-black text-violet-700 text-sm">+{fmtFull(billing.advanceBalance)}</span>
+              </div>
+            )}
           </div>
 
-          {/* Year summary */}
-          {year && (
-            <div className="bg-white rounded-2xl border border-slate-100 shadow-sm p-4">
-              <div className="flex items-center justify-between mb-3">
-                <span className="text-[10px] font-black uppercase tracking-widest text-slate-400">Year {year.yearLabel}</span>
-                {out === 0
-                  ? <span className="text-[10px] font-black text-emerald-600 bg-emerald-50 px-2 py-0.5 rounded-full flex items-center gap-1"><CheckCircle2 size={10} /> Settled</span>
-                  : <span className="text-[10px] font-black text-rose-600 bg-rose-50 px-2 py-0.5 rounded-full flex items-center gap-1"><Clock size={10} /> Outstanding</span>
-                }
-              </div>
-              <div className="grid grid-cols-3 gap-2 mb-3">
-                <div className="bg-slate-50 rounded-xl p-2 text-center">
-                  <div className="font-black text-slate-900 text-sm">{fmt(due)}</div>
-                  <div className="text-[9px] font-black text-slate-400 uppercase mt-0.5">Total Due</div>
-                </div>
-                <div className="bg-emerald-50 rounded-xl p-2 text-center">
-                  <div className="font-black text-emerald-700 text-sm">{fmt(paid)}</div>
-                  <div className="text-[9px] font-black text-emerald-600 uppercase mt-0.5">Paid</div>
-                </div>
-                <div className={`rounded-xl p-2 text-center ${out > 0 ? 'bg-rose-50' : 'bg-slate-50'}`}>
-                  <div className={`font-black text-sm ${out > 0 ? 'text-rose-600' : 'text-slate-400'}`}>{out > 0 ? fmt(out) : '—'}</div>
-                  <div className={`text-[9px] font-black uppercase mt-0.5 ${out > 0 ? 'text-rose-500' : 'text-slate-400'}`}>Balance</div>
-                </div>
-              </div>
+          {/* Per-year breakdown table */}
+          <div className="bg-white rounded-2xl border border-slate-100 shadow-sm overflow-hidden">
+            <div className="flex items-center justify-between px-4 pt-4 pb-2">
+              <span className="text-[10px] font-black uppercase tracking-widest text-slate-400">
+                Billing Years ({years.length})
+              </span>
+              {breakdown && (
+                <span className="text-[10px] font-black text-slate-500">
+                  {fmtFull(totalPaidAcrossYears)} / {fmtFull(totalDueAcrossYears)}
+                </span>
+              )}
+            </div>
 
-              {/* Progress */}
-              <div className="h-2 bg-slate-100 rounded-full overflow-hidden">
-                <div className={`h-full rounded-full transition-all ${out === 0 ? 'bg-emerald-500' : 'bg-blue-500'}`}
-                  style={{ width: `${pct}%` }} />
+            {breakdownLoading ? (
+              <div className="px-4 py-8 text-center text-xs font-bold text-slate-400">Loading…</div>
+            ) : breakdownError ? (
+              <div className="px-4 py-8 text-center">
+                <AlertCircle size={24} className="mx-auto mb-2 text-rose-400" />
+                <p className="text-xs font-bold text-rose-600">{breakdownError}</p>
+                <button onClick={() => selectedId && loadSchoolDetail(selectedId)}
+                  className="mt-2 text-[10px] font-black text-blue-600 underline">
+                  Retry
+                </button>
               </div>
-              <div className="flex justify-between mt-1.5">
-                <span className="text-[9px] font-bold text-slate-400">{pct}% paid</span>
-                <span className="text-[9px] font-bold text-slate-400">{year.startDate} → {year.endDate}</span>
+            ) : years.length === 0 ? (
+              <div className="px-4 py-8 text-center">
+                <IndianRupee size={24} className="mx-auto mb-2 text-slate-300" />
+                <p className="text-xs font-bold text-slate-400">
+                  {breakdown
+                    ? 'No billing years yet — create the first one below.'
+                    : 'No billing schedule for this school. Set the plan and start date from the Schools tab.'}
+                </p>
+              </div>
+            ) : (
+              <div className="overflow-x-auto">
+                <table className="w-full text-xs">
+                  <thead className="bg-slate-50">
+                    <tr className="text-left text-[9px] font-black uppercase tracking-widest text-slate-500">
+                      <th className="px-4 py-2">Year</th>
+                      <th className="px-3 py-2 text-right">Annual</th>
+                      <th className="px-3 py-2 text-right">Paid</th>
+                      <th className="px-3 py-2 text-right">Outstanding</th>
+                      <th className="px-3 py-2 text-right">Status</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {years.map((y, idx) => {
+                      const settled = y.outstanding <= 0;
+                      const isLatest = idx === years.length - 1;
+                      return (
+                        <tr key={y.id}
+                          className={`border-t border-slate-100 ${isLatest ? 'bg-blue-50/40' : ''}`}>
+                          <td className="px-4 py-3">
+                            <div className="font-black text-slate-900">{y.yearLabel}</div>
+                            <div className="text-[9px] font-bold text-slate-400">
+                              {fmtDate(y.startDate)} – {fmtDate(y.endDate)}
+                            </div>
+                            {y.carriedForward !== 0 && (
+                              <div className={`text-[9px] font-black mt-0.5 ${y.carriedForward > 0 ? 'text-amber-600' : 'text-emerald-600'}`}>
+                                {y.carriedForward > 0 ? '+' : ''}{fmtFull(y.carriedForward)} c/f
+                              </div>
+                            )}
+                          </td>
+                          <td className="px-3 py-3 text-right font-bold text-slate-700">{fmtFull(y.annualAmount)}</td>
+                          <td className="px-3 py-3 text-right font-bold text-emerald-700">{fmtFull(y.totalPaid)}</td>
+                          <td className={`px-3 py-3 text-right font-black ${settled ? 'text-slate-400' : 'text-rose-600'}`}>
+                            {settled ? '—' : fmtFull(y.outstanding)}
+                          </td>
+                          <td className="px-3 py-3 text-right">
+                            {settled
+                              ? <span className="inline-flex items-center gap-1 text-[10px] font-black text-emerald-600 bg-emerald-50 px-2 py-0.5 rounded-full"><CheckCircle2 size={10} /> Paid</span>
+                              : <span className="inline-flex items-center gap-1 text-[10px] font-black text-rose-600 bg-rose-50 px-2 py-0.5 rounded-full"><Clock size={10} /> Due</span>
+                            }
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </div>
+
+          {/* Create-next-year action */}
+          {breakdown && !breakdownError && (
+            <div className="bg-white rounded-2xl border border-slate-100 shadow-sm p-4">
+              <div className="flex items-start gap-3">
+                <div className="w-10 h-10 rounded-xl bg-emerald-50 text-emerald-600 flex items-center justify-center shrink-0">
+                  <CalendarPlus size={18} />
+                </div>
+                <div className="flex-1">
+                  <div className="font-black text-slate-900 text-sm">Next Billing Year</div>
+                  <div className="text-[10px] font-bold text-slate-500 mt-0.5">
+                    {years.length === 0
+                      ? `Open the first billing year for this school (${fmtFull(billing.annualAmount)} annual).`
+                      : `Roll over to a new ${billing.plan.toLowerCase()} year (${fmtFull(billing.annualAmount)} annual).`}
+                  </div>
+                  {carryForwardHint && (
+                    <div className={`text-[10px] font-black mt-1 ${
+                      latestYear && latestYear.outstanding > 0 ? 'text-amber-600' : 'text-violet-600'
+                    }`}>
+                      {carryForwardHint}
+                    </div>
+                  )}
+                  <button onClick={handleCreateNextYear}
+                    disabled={creatingNextYear || !canCreateNextYear}
+                    className="mt-2 inline-flex items-center gap-1.5 bg-emerald-600 text-white text-[11px] font-black px-3 py-2 rounded-full active:scale-95 transition-transform disabled:opacity-40 disabled:cursor-not-allowed">
+                    <CalendarPlus size={13} />
+                    {creatingNextYear ? 'Creating…' : years.length === 0 ? 'Create First Year' : 'Create Next Year'}
+                  </button>
+                </div>
               </div>
             </div>
           )}
@@ -306,7 +492,7 @@ export const BillingManager: React.FC<Props> = ({ onBack }) => {
                       <div className="font-extrabold text-slate-900 text-sm">{fmtFull(p.amount)}</div>
                       <div className="flex items-center gap-1.5 mt-0.5">
                         <span className={`text-[9px] font-black px-1.5 py-0.5 rounded-full ${METHOD_COLORS[p.method]}`}>{p.method}</span>
-                        <span className="text-[9px] font-bold text-slate-400">{p.txnId}</span>
+                        <span className="text-[9px] font-bold text-slate-400 truncate">{p.txnId}</span>
                       </div>
                       {p.notes && <div className="text-[9px] text-slate-400 mt-0.5">{p.notes}</div>}
                     </div>
@@ -321,32 +507,34 @@ export const BillingManager: React.FC<Props> = ({ onBack }) => {
     );
   }
 
-  // ── RECORD PAYMENT view ────────────────────────────────────────────────────
-
-  if (view === 'RECORD_PAYMENT' && selected) {
-    const { billing, year } = selected;
-    const out = year?.outstanding ?? billing.annualAmount;
+  // ── RECORD PAYMENT view ─────────────────────────────────────────────────
+  if (view === 'RECORD_PAYMENT' && selectedRow && breakdown) {
+    const { billing } = selectedRow;
+    const totalOut = breakdown.totalOutstanding;
 
     return (
       <div className="w-full bg-slate-50 flex flex-col animate-in slide-in-from-right-8 duration-300">
         <Header title="Add Payment" back={() => setView('SCHOOL_DETAIL')} />
-        <div className="flex-1 overflow-y-auto  px-4 pt-4 space-y-4">
+        <div className="flex-1 overflow-y-auto px-4 pt-4 space-y-4 pb-6">
 
-          {/* School summary */}
           <div className="bg-white rounded-2xl border border-slate-100 shadow-sm p-4 flex items-center gap-3">
             <div className="w-11 h-11 rounded-2xl bg-slate-100 flex items-center justify-center font-black text-sm text-slate-700">
               {billing.schoolName.split(' ').map(w => w[0]).join('').slice(0, 2).toUpperCase()}
             </div>
-            <div>
-              <div className="font-extrabold text-slate-900">{billing.schoolName}</div>
-              <div className="text-xs font-bold text-rose-600 mt-0.5">Outstanding: {fmtFull(out)}</div>
+            <div className="flex-1 min-w-0">
+              <div className="font-extrabold text-slate-900 truncate">{billing.schoolName}</div>
+              <div className="text-xs font-bold text-rose-600 mt-0.5">
+                Outstanding: {fmtFull(totalOut)}
+              </div>
+              {billing.advanceBalance > 0 && (
+                <div className="text-[10px] font-black text-violet-700 mt-0.5">
+                  Existing advance credit: {fmtFull(billing.advanceBalance)}
+                </div>
+              )}
             </div>
           </div>
 
-          {/* Form */}
           <div className="bg-white rounded-2xl border border-slate-100 shadow-sm p-4 space-y-4">
-
-            {/* Amount */}
             <div>
               <label className="block text-[10px] font-black uppercase tracking-widest text-slate-500 mb-1.5">
                 Amount (₹) *
@@ -359,15 +547,49 @@ export const BillingManager: React.FC<Props> = ({ onBack }) => {
                   className="w-full border border-slate-200 bg-slate-50 rounded-xl pl-8 pr-4 py-3 font-black text-sm outline-none focus:border-blue-500 focus:bg-white transition-colors"
                 />
               </div>
-              {out > 0 && (
-                <button onClick={() => setAmount(String(out))}
+              {totalOut > 0 && (
+                <button onClick={() => setAmount(String(totalOut))}
                   className="mt-1.5 text-[10px] font-black text-blue-600 underline">
-                  Pay full balance ({fmtFull(out)})
+                  Pay full balance ({fmtFull(totalOut)})
                 </button>
               )}
             </div>
 
-            {/* Transaction ID */}
+            {/* Allocation preview — read-only mirror of the RPC's oldest-first walk */}
+            {allocPreview && allocPreview.totalAmount > 0 && (
+              <div className="bg-blue-50 border border-blue-100 rounded-xl p-3 space-y-2">
+                <div className="flex items-center justify-between">
+                  <span className="text-[10px] font-black uppercase tracking-widest text-blue-700">
+                    How this payment will be applied
+                  </span>
+                  {previewLoading && <span className="text-[9px] font-bold text-blue-400">Updating…</span>}
+                </div>
+                {allocPreview.allocations.length === 0 && allocPreview.advanceCredit > 0 && (
+                  <p className="text-xs font-bold text-violet-700">
+                    All years are settled — entire {fmtFull(allocPreview.totalAmount)} will be parked as advance credit.
+                  </p>
+                )}
+                {allocPreview.allocations.map((a) => (
+                  <div key={a.yearId} className="flex items-center justify-between text-xs">
+                    <span className="font-black text-slate-700">
+                      {a.yearLabel}
+                      {a.willClose
+                        ? <span className="ml-1.5 text-[9px] font-black text-emerald-600 bg-emerald-100 px-1.5 py-0.5 rounded-full">closes</span>
+                        : <span className="ml-1.5 text-[9px] font-black text-amber-700 bg-amber-100 px-1.5 py-0.5 rounded-full">partial</span>
+                      }
+                    </span>
+                    <span className="font-black text-slate-900">{fmtFull(a.amountApplied)}</span>
+                  </div>
+                ))}
+                {allocPreview.advanceCredit > 0 && allocPreview.allocations.length > 0 && (
+                  <div className="flex items-center justify-between text-xs pt-1 border-t border-blue-200">
+                    <span className="font-black text-violet-700">Parked as advance credit</span>
+                    <span className="font-black text-violet-700">{fmtFull(allocPreview.advanceCredit)}</span>
+                  </div>
+                )}
+              </div>
+            )}
+
             <div>
               <label className="block text-[10px] font-black uppercase tracking-widest text-slate-500 mb-1.5">
                 Transaction ID *
@@ -378,7 +600,6 @@ export const BillingManager: React.FC<Props> = ({ onBack }) => {
               />
             </div>
 
-            {/* Method */}
             <div>
               <label className="block text-[10px] font-black uppercase tracking-widest text-slate-500 mb-2">
                 Payment Method
@@ -395,7 +616,6 @@ export const BillingManager: React.FC<Props> = ({ onBack }) => {
               </div>
             </div>
 
-            {/* Notes */}
             <div>
               <label className="block text-[10px] font-black uppercase tracking-widest text-slate-500 mb-1.5">
                 Notes (optional)
