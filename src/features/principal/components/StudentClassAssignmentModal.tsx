@@ -167,7 +167,7 @@ export const StudentClassAssignmentModal: React.FC<Props> = ({ student, onClose,
     }
     setSubmitting(true);
     try {
-      await studentService.assignStudentToClass({
+      const summary = await studentService.assignStudentToClass({
         studentId: student.id,
         className,
         section,
@@ -186,7 +186,13 @@ export const StudentClassAssignmentModal: React.FC<Props> = ({ student, onClose,
           vehicleId, stopId, monthlyAmount: transportAmount,
         } : undefined,
       });
-      showToast(`${student.name} assigned to ${className}-${section} (Roll ${rollNo})`);
+      // Surface the freshly-generated schedule details in the success toast
+      // ("12 installments totalling ₹61,000") so the principal immediately
+      // knows what was created.
+      const scheduleLine = summary && summary.installmentCount > 0
+        ? ` · ${summary.installmentCount} installment${summary.installmentCount === 1 ? '' : 's'} totalling ₹${summary.totalAmount.toLocaleString('en-IN')}`
+        : '';
+      showToast(`${student.name} assigned to ${className}-${section} (Roll ${rollNo})${scheduleLine}`);
       onSuccess();
       onClose();
     } catch (e) {

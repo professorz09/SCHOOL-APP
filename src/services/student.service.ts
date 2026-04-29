@@ -792,7 +792,9 @@ export const studentService = {
    * idempotent (upsert / RPC / transportService assignment all
    * deactivate-then-insert).
    */
-  async assignStudentToClass(input: AssignStudentInput): Promise<void> {
+  async assignStudentToClass(
+    input: AssignStudentInput,
+  ): Promise<{ installmentCount: number; totalAmount: number } | null> {
     const schoolId = getSchoolId();
     const ayId = await activeYearId(schoolId);
     if (!ayId) throw new Error('No active academic year — create one first');
@@ -859,7 +861,10 @@ export const studentService = {
       if (error) throw new Error(`Insert academic record failed: ${error.message}`);
     }
 
-    // Step 3: generate fee schedule.
+    // Step 3: generate fee schedule. Capture the inserted installment
+    // count + total amount so the caller can show a meaningful success
+    // toast ("12 installments totalling ₹61,000").
+    let scheduleSummary: { installmentCount: number; totalAmount: number } | null = null;
     if (input.feeStructure) {
       const { error: feeErr } = await supabase.rpc('generate_student_fee_schedule', {
         p_student_id: input.studentId,
@@ -871,6 +876,19 @@ export const studentService = {
         p_discount_pct: input.feeStructure.discountPct ?? 0,
       });
       if (feeErr) throw new Error(`Fee schedule failed: ${feeErr.message}`);
+      // Read back the rows the RPC just (re)inserted for this (student,
+      // year) so we can report the actual count + amount, not an estimate.
+      const { data: installments } = await supabase
+        .from('fee_installments')
+        .select('amount')
+        .eq('student_id', input.studentId)
+        .eq('academic_year_id', ayId)
+        .eq('payer_type', 'PARENT');
+      const rows = (installments ?? []) as { amount: number }[];
+      scheduleSummary = {
+        installmentCount: rows.length,
+        totalAmount: rows.reduce((s, r) => s + Number(r.amount ?? 0), 0),
+      };
     }
 
     // Step 4: transport assignment (handled by transport service).
@@ -894,7 +912,10 @@ export const studentService = {
       rollNo: input.rollNo,
       hasFeeStructure: !!input.feeStructure,
       hasTransport: !!input.transport,
+      installmentCount: scheduleSummary?.installmentCount ?? 0,
+      scheduleTotal:    scheduleSummary?.totalAmount     ?? 0,
     });
+    return scheduleSummary;
   },
 
   /**
