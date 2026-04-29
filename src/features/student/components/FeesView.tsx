@@ -1,7 +1,7 @@
 import React, { useEffect, useRef, useState } from 'react';
 import {
   ArrowLeft, Upload, CheckCircle2, QrCode, Zap, AlertTriangle, Wallet, Loader,
-  Image as ImageIcon, X,
+  Image as ImageIcon, X, ChevronDown, Calendar, BookOpen, Bus, Receipt as ReceiptIcon,
 } from 'lucide-react';
 import {
   studentDashboardService,
@@ -10,10 +10,27 @@ import {
 } from '../../../services/studentDashboard.service';
 import { FeePaymentUpload } from '../../../types/student.types';
 import { useUIStore } from '../../../store/uiStore';
-import { feeService, FeeInstallment, PaymentRecord } from '../../../services/fee.service';
+import { feeService, FeeInstallment, FeeType, PaymentRecord } from '../../../services/fee.service';
 import { studentService } from '../../../services/student.service';
 
 type View = 'MAIN' | 'QR_PAY' | 'HISTORY';
+type YearGroup = { academicYearId: string; yearLabel: string; isActive: boolean; installments: FeeInstallment[] };
+
+const FEE_TYPE_LABEL: Record<FeeType, string> = {
+  TUITION: 'Tuition Fee', TRANSPORT: 'Transport Fee', EXAM: 'Exam Fee', OTHER: 'Other Fees',
+};
+const FEE_TYPE_ICON: Record<FeeType, React.ReactNode> = {
+  TUITION:   <BookOpen size={14} />,
+  TRANSPORT: <Bus size={14} />,
+  EXAM:      <ReceiptIcon size={14} />,
+  OTHER:     <Wallet size={14} />,
+};
+const FEE_TYPE_COLOR: Record<FeeType, string> = {
+  TUITION:   'bg-indigo-100 text-indigo-700',
+  TRANSPORT: 'bg-orange-100 text-orange-700',
+  EXAM:      'bg-violet-100 text-violet-700',
+  OTHER:     'bg-slate-100 text-slate-600',
+};
 
 interface Props { onBack: () => void; }
 
@@ -47,6 +64,8 @@ export const FeesView: React.FC<Props> = ({ onBack }) => {
   const [feeSummary, setFeeSummary] = useState({ tuition: 0, transport: 0, total: 0 });
   const [isRte, setIsRte] = useState(false);
   const [installments, setInstallments] = useState<FeeInstallment[]>([]);
+  const [yearGroups, setYearGroups] = useState<YearGroup[]>([]);
+  const [collapsedYears, setCollapsedYears] = useState<Record<string, boolean>>({});
   const [advanceBalance, setAdvanceBalance] = useState(0);
   const [paidTill, setPaidTill] = useState<{ lastClearedMonth: string | null; allCleared: boolean }>({ lastClearedMonth: null, allCleared: false });
   const [history, setHistory] = useState<PaymentRecord[]>([]);
@@ -76,13 +95,32 @@ export const FeesView: React.FC<Props> = ({ onBack }) => {
           .filter(i => Math.max(0, i.amount - i.paidAmount - i.writeOffAmount) > 0)
           .sort((a, b) => new Date(a.dueDate).getTime() - new Date(b.dueDate).getTime())[0] ?? null;
 
-        const [uploadsRows, studentRow] = await Promise.all([
+        const [uploadsRows, studentRow, allGroupsRaw] = await Promise.all([
           studentDashboardService.getFeeUploads(),
           studentService.getById(sid).catch(() => null),
+          feeService.getStudentInstallmentsByYear(sid).catch(() => []),
         ]);
         if (cancelled) return;
 
+        // Parents only see their PARENT-payer rows; the GOVERNMENT-paid RTE
+        // schedule is hidden from the family view.
+        const parentGroups: YearGroup[] = allGroupsRaw
+          .map(g => ({
+            academicYearId: g.academicYearId,
+            yearLabel: g.yearLabel,
+            isActive: g.isActive,
+            installments: g.installments.filter(i => i.payerType === 'PARENT'),
+          }))
+          .filter(g => g.installments.length > 0);
+
         setInstallments(insts);
+        setYearGroups(parentGroups);
+        // Auto-collapse every non-active year on first load.
+        setCollapsedYears(prev => {
+          const next: Record<string, boolean> = { ...prev };
+          parentGroups.forEach(g => { if (next[g.academicYearId] === undefined) next[g.academicYearId] = !g.isActive; });
+          return next;
+        });
         setFeeSummary(feeService.getParentDueSummary(sid));
         setAdvanceBalance(feeService.getAdvanceBalance(sid));
         setPaidTill(feeService.getPaidTillMonth(sid));
@@ -412,34 +450,82 @@ export const FeesView: React.FC<Props> = ({ onBack }) => {
           </div>
         )}
 
-        {/* ── Installment Schedule ───────────────────────────────────────── */}
-        {installments.length > 0 && (
-          <div className="mx-4 mt-5">
-            <h3 className="text-sm font-black text-slate-900 uppercase tracking-wide mb-3">INSTALLMENT SCHEDULE</h3>
-            <div className="bg-white rounded-2xl border border-slate-100 shadow-sm overflow-hidden">
-              {installments
-                .slice()
-                .sort((a, b) => new Date(a.dueDate).getTime() - new Date(b.dueDate).getTime())
-                .map((inst, idx, arr) => {
-                  return (
-                    <div key={inst.id}
-                      className={`flex items-center justify-between p-4 ${idx < arr.length - 1 ? 'border-b border-slate-100' : ''}`}>
-                      <div>
-                        <div className="font-bold text-slate-900 text-sm">{inst.month}</div>
-                        <div className="text-[10px] font-bold text-slate-400 mt-0.5">
-                          {inst.feeType === 'TUITION' ? 'Tuition' : 'Transport'} · Due {inst.dueDate}
-                        </div>
-                      </div>
-                      <div className="text-right">
-                        <div className="font-black text-slate-900 text-sm">₹{inst.amount.toLocaleString()}</div>
-                        <span className={`text-[9px] font-black px-2 py-0.5 rounded-full uppercase ${instStatusColor(inst.status)}`}>
-                          {inst.status}
-                        </span>
-                      </div>
+        {/* ── Per-Year Cards (grouped by fee type) ───────────────────────── */}
+        {yearGroups.length > 0 && (
+          <div className="mx-4 mt-5 space-y-3">
+            <h3 className="text-sm font-black text-slate-900 uppercase tracking-wide">YEAR-WISE SCHEDULE</h3>
+
+            {yearGroups.map(group => {
+              const collapsed = !!collapsedYears[group.academicYearId];
+              const yearTotal = group.installments.reduce((a, i) => a + i.amount, 0);
+              const yearPaid  = group.installments.reduce((a, i) => a + i.paidAmount, 0);
+              const yearDue   = group.installments.reduce((a, i) => a + Math.max(0, i.amount - i.paidAmount - i.writeOffAmount), 0);
+              // Bucket the year's installments by fee type, then sort each
+              // bucket by due date so months render chronologically.
+              const buckets: Record<FeeType, FeeInstallment[]> = { TUITION: [], TRANSPORT: [], EXAM: [], OTHER: [] };
+              group.installments.forEach(i => { buckets[i.feeType].push(i); });
+              const orderedTypes: FeeType[] = (['TUITION', 'TRANSPORT', 'EXAM', 'OTHER'] as FeeType[])
+                .filter(t => buckets[t] && buckets[t].length > 0);
+
+              return (
+                <div key={group.academicYearId}
+                  className={`rounded-2xl border shadow-sm overflow-hidden ${group.isActive ? 'bg-white border-blue-200 ring-2 ring-blue-100' : 'bg-white border-slate-100'}`}>
+                  <button
+                    onClick={() => setCollapsedYears(prev => ({ ...prev, [group.academicYearId]: !prev[group.academicYearId] }))}
+                    className="w-full flex items-center justify-between p-4 active:scale-[0.99] transition-transform">
+                    <div className="flex items-center gap-2 min-w-0">
+                      <Calendar size={16} className={group.isActive ? 'text-blue-600' : 'text-slate-400'} />
+                      <span className="font-black text-slate-900 text-sm truncate">{group.yearLabel}</span>
+                      {group.isActive && <span className="text-[8px] font-black bg-blue-600 text-white px-2 py-0.5 rounded-full">CURRENT</span>}
                     </div>
-                  );
-                })}
-            </div>
+                    <div className="flex items-center gap-3 shrink-0">
+                      <div className="text-right">
+                        {yearDue > 0
+                          ? <div className="text-[11px] font-black text-rose-600">₹{yearDue.toLocaleString('en-IN')} due</div>
+                          : <div className="text-[11px] font-black text-emerald-600">Cleared</div>}
+                        <div className="text-[9px] font-bold text-slate-400">Paid ₹{yearPaid.toLocaleString('en-IN')} / ₹{yearTotal.toLocaleString('en-IN')}</div>
+                      </div>
+                      <ChevronDown size={16} className={`text-slate-400 transition-transform ${collapsed ? '-rotate-90' : ''}`} />
+                    </div>
+                  </button>
+
+                  {!collapsed && (
+                    <div className="border-t border-slate-100">
+                      {orderedTypes.map(t => {
+                        const items = buckets[t]
+                          .slice()
+                          .sort((a, b) => new Date(a.dueDate).getTime() - new Date(b.dueDate).getTime());
+                        return (
+                          <div key={t} className="border-b border-slate-100 last:border-0">
+                            <div className="px-4 pt-3 pb-1 flex items-center gap-1.5">
+                              <span className={`flex items-center gap-1 text-[9px] font-black px-2 py-0.5 rounded-full ${FEE_TYPE_COLOR[t]}`}>
+                                {FEE_TYPE_ICON[t]} {FEE_TYPE_LABEL[t]}
+                              </span>
+                              <span className="text-[9px] font-bold text-slate-400">· {items.length} installment{items.length !== 1 ? 's' : ''}</span>
+                            </div>
+                            {items.map((inst, idx) => (
+                              <div key={inst.id}
+                                className={`flex items-center justify-between px-4 py-3 ${idx < items.length - 1 ? 'border-b border-slate-50' : ''}`}>
+                                <div>
+                                  <div className="font-bold text-slate-900 text-sm">{inst.month}</div>
+                                  <div className="text-[10px] font-bold text-slate-400 mt-0.5">Due {inst.dueDate}</div>
+                                </div>
+                                <div className="text-right">
+                                  <div className="font-black text-slate-900 text-sm">₹{inst.amount.toLocaleString('en-IN')}</div>
+                                  <span className={`text-[9px] font-black px-2 py-0.5 rounded-full uppercase ${instStatusColor(inst.status)}`}>
+                                    {inst.status}
+                                  </span>
+                                </div>
+                              </div>
+                            ))}
+                          </div>
+                        );
+                      })}
+                    </div>
+                  )}
+                </div>
+              );
+            })}
           </div>
         )}
 

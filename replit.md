@@ -197,6 +197,72 @@ Existing principals stuck in the loop need to complete the forced-change
 screen one more time after this migration is live; the flag will then
 persist on every subsequent login.
 
+## Migration 0020 — Late-fee preview + Schedule regeneration (Task #4)
+
+`supabase/migrations/0020_late_fee_compute.sql` is purely additive:
+
+1. **`preview_student_late_fees(student_id) → TABLE`** — for every overdue,
+   unpaid PARENT installment of the student, looks up the
+   `fee_structures.late_fee` JSONB for the matching class+active year and
+   computes the per-installment late fee (FIXED amount or PERCENTAGE of
+   outstanding, capped by `maxCap`, gated by `gracePeriodDays`). Returns
+   `(installment_id, due_date, days_late, late_fee, source)` rows. Authorised
+   for staff in the same school OR the linked parent/student themselves.
+2. **`record_fee_payment(...)` extended with `p_apply_late_fee BOOLEAN
+   DEFAULT TRUE`** — when TRUE, the RPC computes the total liability via
+   `preview_student_late_fees`, subtracts any already-accrued, still-unpaid
+   `OTHER`/'Late Fee' rows for that (student, year), and only inserts the
+   positive **delta** as a single aggregated installment dated
+   `CURRENT_DATE - 1`, BEFORE running the existing oldest-due-first
+   allocation walk. This makes late-fee accrual idempotent across repeated
+   payment attempts on unchanged overdues while still picking up new accrual
+   when days pass or new installments fall overdue. The new param has a
+   default so legacy 6-arg callers keep working.
+
+Migration 0008 was made idempotent in the same pass: the 7-arg
+`commit_year_closing` shim now declares the same defaults as the original
+0007 definition, so re-running the combined `_apply.sql` no longer trips
+"cannot remove parameter defaults from existing function".
+
+## Task #4 — Fee schedule regeneration & per-year student view
+
+The fee module gained the following user-facing capabilities:
+
+- **`fee.service.generateSchedule()` is now 7-arg** — `discountAmount` and
+  `discountPct` are forwarded to `generate_student_fee_schedule` (the larger
+  of the two wins per installment).
+- **`fee.service.regenerateScheduleFromStructure(studentId, yearId,
+  structureId, isRte, discountAmt, discountPct)`** — convenience wrapper that
+  reads `fee_heads` + `monthly_due_dates` from a `fee_structures` row and
+  invokes the same RPC. The RPC DELETEs unpaid/non-written-off rows for the
+  (student, year) before reinserting, so already-paid history is preserved.
+- **`fee.service.computeLateFeePreview(studentId)`** — calls the new
+  `preview_student_late_fees` RPC and returns
+  `{ total, perInstallment[] }`.
+- **`fee.service.recordPayment(...)` accepts a 7th `applyLateFee` flag**
+  (default TRUE) that propagates to the RPC.
+- **`fee.service.getStudentInstallmentsByYear(studentId)`** — groups the
+  cached installments by `academicYearId` and resolves the year label via a
+  Supabase lookup, sorted active-first then most-recent.
+
+UI consumers:
+
+- **Principal `FeeLedger`** — student detail Schedule tab now renders
+  per-year accordions (label + ACTIVE badge + paid/due totals). The pay
+  modal shows a live late-fee preview with a "Skip late fee for this
+  collection" checkbox. A new **Regenerate** button opens a sheet that picks
+  a fee structure (auto-suggesting the one matching the student's class),
+  optional flat-₹ / % discount, and an RTE toggle, with a warning that
+  unpaid rows will be replaced. Receipt modal now offers **Download PDF**
+  (lazy-loaded `jspdf` + `html2canvas` capture of the on-screen receipt
+  card) alongside the existing Print and Close buttons.
+- **Parent/Student `FeesView`** — the flat installment list was replaced
+  with a stack of per-year cards, each grouped internally by fee type
+  (Tuition / Transport / Exam / Other). The active year card stays
+  prominent with the existing big total + UPI CTA at the top; older years
+  collapse by default and only the PARENT-payer rows are shown
+  (GOVERNMENT-paid RTE schedule remains hidden from families).
+
 ## Migration 0019 — Student documents storage + roll-uniqueness RPCs (Task #3)
 
 `supabase/migrations/0019_student_documents_storage.sql` is purely additive:

@@ -1,13 +1,17 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import {
   ArrowLeft, IndianRupee, CheckCircle2, AlertTriangle, Clock, X,
   ShieldCheck, Search, Printer, Banknote, Smartphone, CreditCard,
   Building2, FileCheck, ChevronRight, Receipt, TrendingDown, Users, Filter,
+  RefreshCw, Download, ChevronDown,
 } from 'lucide-react';
 import { feeService, FeeInstallment, FeeStatus, FeeType, PaymentRecord, GovernmentPaymentRecord } from '../../../services/fee.service';
 import { studentService } from '../../../services/student.service';
+import { principalService, FeeStructureRecord } from '../../../services/principal.service';
 import { useUIStore } from '../../../store/uiStore';
 import { FeePaymentSubmissionsQueue } from './FeePaymentSubmissionsQueue';
+
+type YearGroup = { academicYearId: string; yearLabel: string; isActive: boolean; installments: FeeInstallment[] };
 
 type PaymentMethod = 'CASH' | 'UPI' | 'NET_BANKING' | 'CHEQUE' | 'ONLINE';
 type ListTab = 'ALL' | 'DUE' | 'CLEARED';
@@ -78,6 +82,7 @@ export const FeeLedger: React.FC<Props> = ({ onBack }) => {
   const [writeOffModal, setWriteOffModal]   = useState<FeeInstallment | null>(null);
   const [govtPayModal, setGovtPayModal]     = useState(false);
   const [receiptModal, setReceiptModal]     = useState<PaymentRecord | null>(null);
+  const [regenModal, setRegenModal]         = useState(false);
 
   // Form states
   const [payAmount, setPayAmount]           = useState('');
@@ -90,6 +95,27 @@ export const FeeLedger: React.FC<Props> = ({ onBack }) => {
   const [govtNote, setGovtNote]             = useState('');
   const [paymentTransactions, setPaymentTransactions] = useState<PaymentRecord[]>(() => feeService.getPaymentHistory());
   const [govtTransactions, setGovtTransactions] = useState<GovernmentPaymentRecord[]>(() => feeService.getGovernmentPayments());
+
+  // Late-fee preview shown inside the pay modal. Refreshed every time the
+  // modal opens; principal can opt out via the "Skip late fee" checkbox.
+  const [lateFeeTotal, setLateFeeTotal]     = useState(0);
+  const [applyLateFee, setApplyLateFee]     = useState(true);
+
+  // Per-year grouping for the schedule tab.
+  const [yearGroups, setYearGroups]         = useState<YearGroup[]>([]);
+  const [collapsedYears, setCollapsedYears] = useState<Record<string, boolean>>({});
+
+  // Fee structures for the regenerate modal — loaded lazily on open.
+  const [feeStructures, setFeeStructures]   = useState<FeeStructureRecord[]>([]);
+  const [regenStructureId, setRegenStructureId] = useState('');
+  const [regenIsRte, setRegenIsRte]         = useState(false);
+  const [regenDiscountAmt, setRegenDiscountAmt] = useState('');
+  const [regenDiscountPct, setRegenDiscountPct] = useState('');
+  const [regenSubmitting, setRegenSubmitting]   = useState(false);
+
+  // Receipt PDF — reference the on-screen card and capture it via html2canvas
+  // → jspdf when the user clicks "Download PDF". Both libs are lazy-imported.
+  const receiptCardRef = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => {
     (async () => {
@@ -113,6 +139,137 @@ export const FeeLedger: React.FC<Props> = ({ onBack }) => {
     setSelected(updated);
   };
 
+  // Reload the per-year grouping for the selected student's schedule tab.
+  // Run on every selection change AND after every write, so the schedule
+  // tab stays in sync with the cache that recordPayment / regenerate
+  // already refreshed.
+  const reloadYearGroups = async (studentId: string) => {
+    try {
+      const groups = await feeService.getStudentInstallmentsByYear(studentId);
+      setYearGroups(groups);
+      // Default: only the most recent (active or first) year is expanded.
+      setCollapsedYears(prev => {
+        const next: Record<string, boolean> = { ...prev };
+        groups.forEach((g, idx) => {
+          if (next[g.academicYearId] === undefined) next[g.academicYearId] = idx > 0;
+        });
+        return next;
+      });
+    } catch (e) {
+      // Non-fatal — schedule tab will fall back to the legacy flat list.
+      // eslint-disable-next-line no-console
+      console.warn('Failed to load per-year fee groups', e);
+    }
+  };
+
+  useEffect(() => {
+    if (!selected) { setYearGroups([]); return; }
+    void reloadYearGroups(selected.studentId);
+  }, [selected?.studentId]);
+
+  // Fetch a fresh late-fee preview every time the pay modal opens. We
+  // intentionally skip the call when the modal is closed to avoid a
+  // wasteful RPC on every keystroke.
+  useEffect(() => {
+    if (!payModal || !selected) { setLateFeeTotal(0); setApplyLateFee(true); return; }
+    let cancelled = false;
+    (async () => {
+      try {
+        const { total } = await feeService.computeLateFeePreview(selected.studentId);
+        if (!cancelled) { setLateFeeTotal(total); setApplyLateFee(true); }
+      } catch {
+        if (!cancelled) setLateFeeTotal(0);
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [payModal, selected?.studentId]);
+
+  // Lazy-load fee structures the first time the regenerate modal opens.
+  const openRegenModal = async () => {
+    if (!selected) return;
+    setRegenIsRte(selected.isRte);
+    setRegenDiscountAmt('');
+    setRegenDiscountPct('');
+    setRegenStructureId('');
+    setRegenModal(true);
+    if (feeStructures.length === 0) {
+      try {
+        const rows = await principalService.getFeeStructures();
+        setFeeStructures(rows);
+        // Pre-select the structure matching the student's class if any.
+        const match = rows.find(r => r.className === selected.className);
+        if (match) setRegenStructureId(match.id);
+      } catch (e) {
+        showToast(e instanceof Error ? e.message : 'Could not load fee structures', 'error');
+      }
+    } else {
+      const match = feeStructures.find(r => r.className === selected.className);
+      if (match) setRegenStructureId(match.id);
+    }
+  };
+
+  const handleRegenerate = async () => {
+    if (!selected || !regenStructureId) {
+      showToast('Pick a fee structure first', 'error');
+      return;
+    }
+    const yearId = yearGroups.find(g => g.isActive)?.academicYearId
+      ?? selected.installments.find(i => !!i.academicYearId)?.academicYearId
+      ?? '';
+    if (!yearId) {
+      showToast('No active academic year for this student', 'error');
+      return;
+    }
+    setRegenSubmitting(true);
+    try {
+      const inserted = await feeService.regenerateScheduleFromStructure(
+        selected.studentId, yearId, regenStructureId,
+        regenIsRte,
+        Number(regenDiscountAmt) || 0,
+        Number(regenDiscountPct) || 0,
+      );
+      const updated = feeService.getStudentFeeProfile(
+        selected.studentId, selected.name, selected.className,
+        selected.admissionNo, selected.isRte,
+      );
+      updateStudent(updated);
+      await reloadYearGroups(selected.studentId);
+      setRegenModal(false);
+      showToast(`Schedule regenerated · ${inserted} installments`);
+    } catch (e) {
+      showToast(e instanceof Error ? e.message : 'Regenerate failed', 'error');
+    } finally {
+      setRegenSubmitting(false);
+    }
+  };
+
+  const handleDownloadPdf = async (r: PaymentRecord) => {
+    const node = receiptCardRef.current;
+    if (!node) { showToast('Receipt not ready', 'error'); return; }
+    try {
+      const [{ default: html2canvas }, jspdfMod] = await Promise.all([
+        import('html2canvas'),
+        import('jspdf'),
+      ]);
+      const jsPDF = (jspdfMod as { jsPDF: new (o: object) => { addImage: (d: string, t: string, x: number, y: number, w: number, h: number) => void; save: (n: string) => void; internal: { pageSize: { getWidth: () => number; getHeight: () => number } } } }).jsPDF;
+      const canvas = await html2canvas(node, { scale: 2, backgroundColor: '#ffffff', useCORS: true });
+      const img = canvas.toDataURL('image/png');
+      const pdf = new jsPDF({ orientation: 'portrait', unit: 'pt', format: 'a4' });
+      const pageW = pdf.internal.pageSize.getWidth();
+      const pageH = pdf.internal.pageSize.getHeight();
+      // Fit into a 60-pt margin while preserving aspect ratio.
+      const ratio  = canvas.width / canvas.height;
+      const maxW   = pageW - 80;
+      const maxH   = pageH - 80;
+      const drawW  = ratio >= maxW / maxH ? maxW : maxH * ratio;
+      const drawH  = ratio >= maxW / maxH ? maxW / ratio : maxH;
+      pdf.addImage(img, 'PNG', (pageW - drawW) / 2, 40, drawW, drawH);
+      pdf.save(`receipt-${r.receiptNo}.pdf`);
+    } catch (e) {
+      showToast(e instanceof Error ? e.message : 'PDF export failed', 'error');
+    }
+  };
+
   const handlePayment = async () => {
     if (!selected || !payAmount) return;
     const amount = Number(payAmount);
@@ -120,7 +277,7 @@ export const FeeLedger: React.FC<Props> = ({ onBack }) => {
     try {
       const result = await feeService.recordPayment(
         selected.studentId, amount, METHOD_LABEL[paymentMethod],
-        undefined, paymentNote || undefined,
+        undefined, paymentNote || undefined, false, applyLateFee,
       );
       if (result.applied <= 0 && result.advance <= 0) {
         showToast('Nothing applied', 'error');
@@ -341,6 +498,10 @@ export const FeeLedger: React.FC<Props> = ({ onBack }) => {
               {t === 'SCHEDULE' ? 'Fee Schedule' : 'Payment History'}
             </button>
           ))}
+          <button onClick={openRegenModal}
+            className={`${selected.isRte ? '' : 'ml-auto'} my-2 flex items-center gap-1 bg-amber-50 text-amber-700 text-[10px] font-black px-3 py-1.5 rounded-xl border border-amber-200 active:scale-95 transition-transform`}>
+            <RefreshCw size={11} /> Regenerate
+          </button>
           {selected.isRte && (
             <button onClick={() => setGovtPayModal(true)}
               className="ml-auto my-2 flex items-center gap-1 bg-blue-50 text-blue-700 text-[10px] font-black px-3 py-1.5 rounded-xl border border-blue-200 active:scale-95 transition-transform">
@@ -359,10 +520,44 @@ export const FeeLedger: React.FC<Props> = ({ onBack }) => {
             </button>
           )}
 
-          {/* ── FEE SCHEDULE ─────────────────────────────────────────────── */}
-          {detailTab === 'SCHEDULE' && selected.installments
-            .sort((a, b) => new Date(a.dueDate).getTime() - new Date(b.dueDate).getTime())
-            .map(inst => {
+          {/* ── FEE SCHEDULE — grouped by academic year ───────────────────── */}
+          {detailTab === 'SCHEDULE' && (yearGroups.length > 0
+            ? yearGroups
+            : [{
+                academicYearId: '__legacy__',
+                yearLabel: 'Current Year',
+                isActive: true,
+                installments: selected.installments,
+              }]
+          ).map(group => {
+            const collapsed = !!collapsedYears[group.academicYearId];
+            const yearTotal = group.installments.reduce((a, i) => a + i.amount, 0);
+            const yearPaid  = group.installments.reduce((a, i) => a + i.paidAmount, 0);
+            const yearDue   = group.installments.reduce((a, i) => a + Math.max(0, i.amount - i.paidAmount - i.writeOffAmount), 0);
+            return (
+              <div key={group.academicYearId} className="space-y-3">
+                <button
+                  onClick={() => setCollapsedYears(prev => ({ ...prev, [group.academicYearId]: !prev[group.academicYearId] }))}
+                  className="w-full flex items-center justify-between bg-white border border-slate-200 rounded-2xl px-4 py-3 active:scale-[0.99] transition-transform">
+                  <div className="flex items-center gap-2 min-w-0">
+                    <span className="font-black text-slate-900 text-sm truncate">{group.yearLabel}</span>
+                    {group.isActive && <span className="text-[8px] font-black bg-emerald-100 text-emerald-700 px-2 py-0.5 rounded-full">ACTIVE</span>}
+                    <span className="text-[10px] font-bold text-slate-400">· {group.installments.length} items</span>
+                  </div>
+                  <div className="flex items-center gap-3 shrink-0">
+                    <div className="text-right">
+                      <div className="text-[10px] font-black text-emerald-600">Paid ₹{yearPaid.toLocaleString('en-IN')}</div>
+                      {yearDue > 0 && <div className="text-[10px] font-black text-rose-500">Due ₹{yearDue.toLocaleString('en-IN')}</div>}
+                      {yearDue === 0 && <div className="text-[10px] font-black text-slate-400">of ₹{yearTotal.toLocaleString('en-IN')}</div>}
+                    </div>
+                    <ChevronDown size={16} className={`text-slate-400 transition-transform ${collapsed ? '-rotate-90' : ''}`} />
+                  </div>
+                </button>
+
+                {!collapsed && group.installments
+                  .slice()
+                  .sort((a, b) => new Date(a.dueDate).getTime() - new Date(b.dueDate).getTime())
+                  .map(inst => {
               const due = inst.amount - inst.paidAmount - inst.writeOffAmount;
               const receipt = feeService.getPaymentRecordByInstallmentId(inst.id);
               return (
@@ -418,8 +613,10 @@ export const FeeLedger: React.FC<Props> = ({ onBack }) => {
                   </div>
                 </div>
               );
-            })
-          }
+                  })}
+              </div>
+            );
+          })}
 
           {/* ── PAYMENT HISTORY ───────────────────────────────────────────── */}
           {detailTab === 'HISTORY' && (() => {
@@ -524,6 +721,23 @@ export const FeeLedger: React.FC<Props> = ({ onBack }) => {
                   <span className="text-sm font-black text-violet-700">₹{advance.toLocaleString('en-IN')}</span>
                 </div>
               )}
+
+              {/* Late-fee preview — recomputed every time the modal opens */}
+              {lateFeeTotal > 0 && (
+                <div className={`rounded-xl px-3 py-2.5 mb-3 border ${applyLateFee ? 'bg-amber-50 border-amber-200' : 'bg-slate-50 border-slate-200'}`}>
+                  <div className="flex items-center justify-between mb-1.5">
+                    <span className={`text-[10px] font-black ${applyLateFee ? 'text-amber-700' : 'text-slate-500 line-through'}`}>Late Fee (overdue dues)</span>
+                    <span className={`text-sm font-black ${applyLateFee ? 'text-amber-700' : 'text-slate-400 line-through'}`}>+₹{lateFeeTotal.toLocaleString('en-IN')}</span>
+                  </div>
+                  <label className="flex items-center gap-2 text-[10px] font-bold text-slate-500 cursor-pointer">
+                    <input type="checkbox" checked={!applyLateFee}
+                      onChange={e => setApplyLateFee(!e.target.checked)}
+                      className="accent-amber-600" />
+                    Skip late fee for this collection
+                  </label>
+                </div>
+              )}
+
               <p className="text-[10px] font-bold text-slate-400 mb-3">Auto-allocated to oldest dues first. Excess stored as advance credit.</p>
 
               <textarea value={paymentNote} onChange={e => setPaymentNote(e.target.value)}
@@ -612,7 +826,7 @@ export const FeeLedger: React.FC<Props> = ({ onBack }) => {
                 </button>
               </div>
 
-              <div className="border-2 border-dashed border-slate-200 rounded-2xl p-5 mb-4">
+              <div ref={receiptCardRef} className="border-2 border-dashed border-slate-200 rounded-2xl p-5 mb-4 bg-white">
                 <div className="text-center mb-4 pb-4 border-b border-slate-100">
                   <div className="font-black text-slate-900 text-lg uppercase tracking-wide">EduGrow School</div>
                   <div className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">Fee Receipt</div>
@@ -665,10 +879,81 @@ export const FeeLedger: React.FC<Props> = ({ onBack }) => {
                 )}
               </div>
 
-              <div className="flex gap-3">
-                <button onClick={() => handlePrintReceipt(receiptModal)} className="flex-1 py-3 bg-slate-100 text-slate-900 font-black rounded-xl flex items-center justify-center gap-2"><Printer size={15} /> Print PDF</button>
-                <button onClick={() => setReceiptModal(null)} className="flex-1 py-3 bg-indigo-600 text-white font-black rounded-xl">Close</button>
+              <div className="grid grid-cols-3 gap-2">
+                <button onClick={() => handleDownloadPdf(receiptModal)} className="py-3 bg-emerald-600 text-white font-black rounded-xl flex items-center justify-center gap-1.5 text-sm"><Download size={14} /> PDF</button>
+                <button onClick={() => handlePrintReceipt(receiptModal)} className="py-3 bg-slate-100 text-slate-900 font-black rounded-xl flex items-center justify-center gap-1.5 text-sm"><Printer size={14} /> Print</button>
+                <button onClick={() => setReceiptModal(null)} className="py-3 bg-indigo-600 text-white font-black rounded-xl text-sm">Close</button>
               </div>
+            </div>
+          </div>
+        )}
+
+        {/* ── REGENERATE SCHEDULE MODAL ─────────────────────────────────────── */}
+        {regenModal && (
+          <div className="absolute inset-0 bg-slate-900/60 backdrop-blur-sm z-50 flex items-end">
+            <div className="w-full bg-white rounded-t-3xl p-6 pb-8 animate-in slide-in-from-bottom-8 max-h-[85vh] overflow-y-auto">
+              <div className="flex justify-between items-center mb-4">
+                <div>
+                  <h3 className="text-lg font-black text-slate-900">Regenerate Schedule</h3>
+                  <p className="text-[10px] font-bold text-slate-400">{selected.name} · {selected.className}</p>
+                </div>
+                <button onClick={() => setRegenModal(false)} className="w-8 h-8 bg-slate-100 rounded-full flex items-center justify-center">
+                  <X size={16} className="text-slate-500" />
+                </button>
+              </div>
+
+              <div className="bg-amber-50 border border-amber-200 rounded-xl p-3 mb-4 flex gap-2">
+                <AlertTriangle size={16} className="text-amber-600 shrink-0 mt-0.5" />
+                <p className="text-[11px] font-bold text-amber-800">
+                  All <span className="font-black">unpaid</span> installments for the active year will be replaced.
+                  Already-paid and written-off rows are kept untouched.
+                </p>
+              </div>
+
+              <p className="text-[10px] font-black uppercase tracking-widest text-slate-400 mb-2">Fee Structure</p>
+              {feeStructures.length === 0 ? (
+                <div className="bg-slate-50 border border-slate-200 rounded-xl p-3 text-center text-[11px] font-bold text-slate-400 mb-4">
+                  Loading fee structures…
+                </div>
+              ) : (
+                <select value={regenStructureId} onChange={e => setRegenStructureId(e.target.value)}
+                  className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3 py-3 text-sm font-bold text-slate-900 outline-none focus:border-blue-500 mb-4">
+                  <option value="">— Pick a structure —</option>
+                  {feeStructures.map(s => (
+                    <option key={s.id} value={s.id}>
+                      {s.name} ({s.className}){s.className === selected.className ? ' ★ matches class' : ''}
+                    </option>
+                  ))}
+                </select>
+              )}
+
+              <p className="text-[10px] font-black uppercase tracking-widest text-slate-400 mb-2">Discount (optional)</p>
+              <div className="grid grid-cols-2 gap-2 mb-4">
+                <div className="bg-slate-50 border border-slate-200 rounded-xl p-3 flex items-center gap-2">
+                  <IndianRupee size={14} className="text-slate-400" />
+                  <input type="number" min="0" value={regenDiscountAmt} onChange={e => setRegenDiscountAmt(e.target.value)}
+                    placeholder="Flat ₹" className="flex-1 bg-transparent font-black text-slate-900 text-sm outline-none w-full" />
+                </div>
+                <div className="bg-slate-50 border border-slate-200 rounded-xl p-3 flex items-center gap-2">
+                  <span className="text-slate-400 text-sm font-black">%</span>
+                  <input type="number" min="0" max="100" value={regenDiscountPct} onChange={e => setRegenDiscountPct(e.target.value)}
+                    placeholder="Percent" className="flex-1 bg-transparent font-black text-slate-900 text-sm outline-none w-full" />
+                </div>
+              </div>
+              <p className="text-[9px] font-bold text-slate-400 mb-3 -mt-2">Larger of flat / percent wins per installment.</p>
+
+              <label className="flex items-center gap-2 mb-4 cursor-pointer">
+                <input type="checkbox" checked={regenIsRte} onChange={e => setRegenIsRte(e.target.checked)}
+                  className="accent-emerald-600" />
+                <ShieldCheck size={14} className="text-emerald-600" />
+                <span className="text-[11px] font-bold text-slate-700">Mark tuition as RTE (paid by Government)</span>
+              </label>
+
+              <button onClick={handleRegenerate} disabled={!regenStructureId || regenSubmitting}
+                className="w-full py-3.5 bg-amber-600 text-white font-black rounded-xl disabled:opacity-40 flex items-center justify-center gap-2">
+                <RefreshCw size={15} className={regenSubmitting ? 'animate-spin' : ''} />
+                {regenSubmitting ? 'Regenerating…' : 'Regenerate Schedule'}
+              </button>
             </div>
           </div>
         )}
