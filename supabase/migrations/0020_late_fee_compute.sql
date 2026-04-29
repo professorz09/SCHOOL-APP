@@ -101,8 +101,12 @@ BEGIN
       ELSE
         LEAST(
           COALESCE((cfg.late_fee->>'maxCap')::BIGINT, 9999999999::BIGINT),
-          CASE COALESCE(cfg.late_fee->>'type', 'flat')
-            WHEN 'percent' THEN
+          -- Accept both legacy lowercase ('percent'/'flat') and the canonical
+          -- uppercase values written by the principal Fee Structures editor
+          -- ('PERCENTAGE'/'FIXED'). Anything other than a percent variant
+          -- falls through to the fixed-amount branch.
+          CASE
+            WHEN UPPER(COALESCE(cfg.late_fee->>'type', 'FIXED')) IN ('PERCENTAGE', 'PERCENT') THEN
               FLOOR((o.amount - o.paid_amount - o.write_off_amount)
                     * COALESCE((cfg.late_fee->>'amount')::NUMERIC, 0) / 100.0)::BIGINT
             ELSE
@@ -110,7 +114,12 @@ BEGIN
           END
         )
     END AS late_fee,
-    COALESCE(cfg.late_fee->>'type', 'flat') AS source
+    -- Canonicalise to exactly 'PERCENTAGE' or 'FIXED' so callers don't have
+    -- to worry about legacy lowercase / 'PERCENT' variants when labelling.
+    CASE
+      WHEN UPPER(COALESCE(cfg.late_fee->>'type', 'FIXED')) IN ('PERCENTAGE', 'PERCENT') THEN 'PERCENTAGE'
+      ELSE 'FIXED'
+    END AS source
   FROM overdue o
   LEFT JOIN cfg ON TRUE;
 END $$;
