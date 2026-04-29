@@ -3,7 +3,8 @@ import { PaymentStatus } from '../config/constants';
 export type BloodGroup = 'A+' | 'A-' | 'B+' | 'B-' | 'O+' | 'O-' | 'AB+' | 'AB-';
 export type Gender = 'MALE' | 'FEMALE' | 'OTHER';
 export type StaffRole = 'TEACHER' | 'VICE_PRINCIPAL' | 'ACCOUNTANT' | 'LIBRARIAN' | 'LAB_INCHARGE' | 'DRIVER' | 'PEON' | 'SECURITY';
-export type StaffStatus = 'ACTIVE' | 'ON_LEAVE' | 'SUSPENDED';
+export type StaffStatus = 'ACTIVE' | 'ON_LEAVE' | 'SUSPENDED' | 'RELIEVED';
+export type SalaryPaymentMethod = 'CASH' | 'BANK_TRANSFER' | 'UPI' | 'CHEQUE' | 'OTHER';
 export type ComplaintStatus = 'OPEN' | 'IN_PROGRESS' | 'RESOLVED';
 export type ComplaintFrom = 'STUDENT' | 'TEACHER' | 'PARENT';
 export type ApprovalType = 'LEAVE' | 'FEE_PAYMENT' | 'ATTENDANCE_CORRECTION';
@@ -115,6 +116,41 @@ export interface SalaryPayment {
   paidAt: string;
   transactionId: string;
   note: string;
+  method?: SalaryPaymentMethod | null;
+}
+
+export interface StaffSalaryHistoryEntry {
+  id: string;
+  amount: number;
+  effectiveFrom: string;
+  reason: string | null;
+  createdAt: string;
+}
+
+export interface StaffStatusHistoryEntry {
+  id: string;
+  oldStatus: StaffStatus | null;
+  newStatus: StaffStatus;
+  reason: string | null;
+  changedAt: string;
+}
+
+export interface StaffDocument {
+  id: string;
+  staffId: string;
+  docType: string;
+  docName: string;
+  storagePath: string;
+  uploadedAt: string;
+}
+
+export interface SalaryReminderRow {
+  staffId: string;
+  name: string;
+  role: StaffRole;
+  salary: number;
+  paid: number;
+  pending: number;
 }
 
 export interface StaffMember {
@@ -132,6 +168,8 @@ export interface StaffMember {
   address: string;
   photo: string;
   salaryHistory?: SalaryPayment[];
+  relievingDate?: string | null;
+  relievingReason?: string | null;
 }
 
 export interface Complaint {
