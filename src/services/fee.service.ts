@@ -389,13 +389,31 @@ export const feeService = {
     if (error) throw new Error(error.message);
     const paymentId = data as string;
 
+    // Authoritative `applied` total: sum of payment_installment_links rows
+    // for the just-inserted payment. We previously derived this from
+    // (beforeDue - afterDue) on the cache, but when applyLateFee=true the
+    // RPC inserts a Late Fee row which inflates afterDue and can make the
+    // delta come out <= 0 even on a fully-applied payment, breaking the
+    // FeeLedger guard and causing a false "Nothing applied" error.
+    let applied = 0;
+    if (paymentId) {
+      const { data: linkRows } = await supabase
+        .from('payment_installment_links')
+        .select('amount_applied')
+        .eq('payment_id', paymentId);
+      applied = (linkRows ?? []).reduce(
+        (s, r: { amount_applied: number | string }) => s + Number(r.amount_applied ?? 0),
+        0,
+      );
+    }
+
     await this.refreshAll();
 
-    const afterDue = this.getStudentInstallments(studentId)
-      .filter(i => i.payerType === 'PARENT')
-      .reduce((s, i) => s + Math.max(0, i.amount - i.paidAmount - i.writeOffAmount), 0);
     const afterAdv = this.getAdvanceBalance(studentId);
-    const applied = Math.max(0, beforeDue - afterDue);
+    // beforeDue retained for diagnostics; advance is still derived from
+    // cache delta because the RPC writes the residual advance to the
+    // student record, not to the links table.
+    void beforeDue;
     const advance = Math.max(0, afterAdv - (useAdvance ? 0 : beforeAdv));
     return { applied, advance, paymentId };
   },
