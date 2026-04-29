@@ -3758,6 +3758,22 @@ CREATE UNIQUE INDEX IF NOT EXISTS sar_year_section_roll_uniq
 
 -- ─── 6. student_class_movements: richer history columns ─────────────────────
 
+-- Resilience: create the table if a partial schema is missing it. The
+-- baseline column set mirrors the prior migration that introduced this
+-- table; the ALTER below then adds any newly-required columns idempotently.
+CREATE TABLE IF NOT EXISTS public.student_class_movements (
+  id               UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  student_id       UUID NOT NULL REFERENCES public.students(id) ON DELETE CASCADE,
+  academic_year_id UUID NOT NULL REFERENCES public.academic_years(id) ON DELETE CASCADE,
+  from_class       TEXT,
+  from_section     TEXT,
+  to_class         TEXT,
+  to_section       TEXT,
+  effective_date   DATE NOT NULL DEFAULT CURRENT_DATE,
+  reason           TEXT,
+  created_at       TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
 ALTER TABLE public.student_class_movements
   ADD COLUMN IF NOT EXISTS old_section_id  UUID REFERENCES public.sections(id),
   ADD COLUMN IF NOT EXISTS new_section_id  UUID REFERENCES public.sections(id),
@@ -3930,7 +3946,8 @@ BEGIN
            v_amt, v_payer);
         v_count := v_count + 1;
       END LOOP;
-    ELSE  -- ANNUAL or ONE_TIME
+    ELSE  -- ANNUAL or ONE_TIME — payer also follows v_payer so RTE flips
+          -- annual / one-time charges to GOVERNMENT too.
       INSERT INTO public.fee_installments
         (student_id, academic_year_id, school_id, month, due_date, fee_type, amount, payer_type)
       VALUES
@@ -3938,7 +3955,7 @@ BEGIN
          CASE WHEN v_freq = 'ONE_TIME' THEN 'OneTime' ELSE 'Annual' END,
          (SELECT MIN((dd->>'date')::DATE) FROM jsonb_array_elements(p_due_dates) dd),
          'OTHER',
-         v_amt, 'PARENT');
+         v_amt, v_payer);
       v_count := v_count + 1;
     END IF;
   END LOOP;

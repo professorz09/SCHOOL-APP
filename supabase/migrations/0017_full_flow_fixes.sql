@@ -194,6 +194,22 @@ CREATE UNIQUE INDEX IF NOT EXISTS sar_year_section_roll_uniq
 
 -- ─── 6. student_class_movements: richer history columns ─────────────────────
 
+-- Resilience: create the table if a partial schema is missing it. The
+-- baseline column set mirrors the prior migration that introduced this
+-- table; the ALTER below then adds any newly-required columns idempotently.
+CREATE TABLE IF NOT EXISTS public.student_class_movements (
+  id               UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  student_id       UUID NOT NULL REFERENCES public.students(id) ON DELETE CASCADE,
+  academic_year_id UUID NOT NULL REFERENCES public.academic_years(id) ON DELETE CASCADE,
+  from_class       TEXT,
+  from_section     TEXT,
+  to_class         TEXT,
+  to_section       TEXT,
+  effective_date   DATE NOT NULL DEFAULT CURRENT_DATE,
+  reason           TEXT,
+  created_at       TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
 ALTER TABLE public.student_class_movements
   ADD COLUMN IF NOT EXISTS old_section_id  UUID REFERENCES public.sections(id),
   ADD COLUMN IF NOT EXISTS new_section_id  UUID REFERENCES public.sections(id),
