@@ -279,6 +279,19 @@ const SalaryTab: React.FC<SalaryTabProps> = ({
   );
 };
 
+// Typed field-map for the create / edit text inputs. Keys are restricted to
+// the string-typed fields on StaffMember so the form indexing is type-safe
+// (replaces the previous `as unknown as Record<string, string>` cast).
+type StaffTextKey = 'name' | 'subject' | 'phone' | 'email' | 'aadhaarNo' | 'address';
+const STAFF_TEXT_FIELDS: ReadonlyArray<{ label: string; key: StaffTextKey; placeholder: string }> = [
+  { label: 'Full Name *', key: 'name',      placeholder: 'Staff full name' },
+  { label: 'Subject',     key: 'subject',   placeholder: 'e.g. Mathematics' },
+  { label: 'Phone',       key: 'phone',     placeholder: '+91 XXXXX XXXXX' },
+  { label: 'Email',       key: 'email',     placeholder: 'staff@school.edu.in' },
+  { label: 'Aadhaar No.', key: 'aadhaarNo', placeholder: 'XXXX XXXX XXXX' },
+  { label: 'Address',     key: 'address',   placeholder: 'Residential address' },
+];
+
 const BLANK: Omit<StaffMember, 'id'> = {
   name: '', role: 'TEACHER', subject: '', phone: '', email: '', aadhaarNo: '',
   salary: 0, joiningDate: todayIso(), status: 'ACTIVE',
@@ -636,17 +649,10 @@ export const StaffManager: React.FC<Props> = ({ onBack }) => {
       {renderHeader('Add Staff', () => setView('LIST'))}
       <div className="flex-1 overflow-y-auto p-4  space-y-4">
         <div className="bg-white rounded-2xl border border-slate-100 shadow-sm p-4 space-y-4">
-          {[
-            { label: 'Full Name *', key: 'name', placeholder: 'Staff full name' },
-            { label: 'Subject', key: 'subject', placeholder: 'e.g. Mathematics' },
-            { label: 'Phone', key: 'phone', placeholder: '+91 XXXXX XXXXX' },
-            { label: 'Email', key: 'email', placeholder: 'staff@school.edu.in' },
-            { label: 'Aadhaar No.', key: 'aadhaarNo', placeholder: 'XXXX XXXX XXXX' },
-            { label: 'Address', key: 'address', placeholder: 'Residential address' },
-          ].map(({ label, key, placeholder }) => (
+          {STAFF_TEXT_FIELDS.map(({ label, key, placeholder }) => (
             <div key={key}>
               <label className="block text-[10px] font-black uppercase tracking-widest text-slate-500 mb-1.5">{label}</label>
-              <input value={(form as unknown as Record<string, string>)[key]} onChange={e => setForm(f => ({ ...f, [key]: e.target.value }))}
+              <input value={(form[key] ?? '') as string} onChange={e => setForm(f => ({ ...f, [key]: e.target.value }))}
                 placeholder={placeholder}
                 className="w-full border border-slate-200 bg-slate-50 rounded-xl px-4 py-3 font-bold text-sm outline-none focus:border-blue-500 focus:bg-white transition-colors" />
             </div>
@@ -688,17 +694,10 @@ export const StaffManager: React.FC<Props> = ({ onBack }) => {
       {renderHeader('Edit Staff', () => setView('PROFILE'))}
       <div className="flex-1 overflow-y-auto p-4  space-y-4">
         <div className="bg-white rounded-2xl border border-slate-100 shadow-sm p-4 space-y-4">
-          {[
-            { label: 'Full Name *', key: 'name', placeholder: 'Staff full name' },
-            { label: 'Subject', key: 'subject', placeholder: 'e.g. Mathematics' },
-            { label: 'Phone', key: 'phone', placeholder: '+91 XXXXX XXXXX' },
-            { label: 'Email', key: 'email', placeholder: 'staff@school.edu.in' },
-            { label: 'Aadhaar No.', key: 'aadhaarNo', placeholder: 'XXXX XXXX XXXX' },
-            { label: 'Address', key: 'address', placeholder: 'Residential address' },
-          ].map(({ label, key, placeholder }) => (
+          {STAFF_TEXT_FIELDS.map(({ label, key, placeholder }) => (
             <div key={key}>
               <label className="block text-[10px] font-black uppercase tracking-widest text-slate-500 mb-1.5">{label}</label>
-              <input value={(editForm as unknown as Record<string, string>)[key] ?? ''} onChange={e => setEditForm(f => ({ ...f, [key]: e.target.value }))}
+              <input value={(editForm[key] ?? '') as string} onChange={e => setEditForm(f => ({ ...f, [key]: e.target.value }))}
                 placeholder={placeholder}
                 className="w-full border border-slate-200 bg-slate-50 rounded-xl px-4 py-3 font-bold text-sm outline-none focus:border-blue-500 focus:bg-white transition-colors" />
             </div>
