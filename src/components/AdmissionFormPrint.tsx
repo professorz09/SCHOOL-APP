@@ -1,5 +1,5 @@
-import React, { useRef } from 'react';
-import { X, Printer } from 'lucide-react';
+import React, { useRef, useState } from 'react';
+import { X, Printer, Download } from 'lucide-react';
 import { Student, STREAM_CLASSES } from '../types/principal.types';
 import { SchoolInfo } from '../services/schoolInfo.service';
 
@@ -56,6 +56,52 @@ const PRINT_CSS = `
 
 export const AdmissionFormPrint: React.FC<Props> = ({ student, schoolInfo, onClose }) => {
   const printRef = useRef<HTMLDivElement>(null);
+  const [downloading, setDownloading] = useState(false);
+
+  // Lazy-load jspdf + html2canvas only when the user actually clicks
+  // download. Keeps the initial bundle ~600 KB lighter for everyone who
+  // is just printing.
+  const handleDownloadPdf = async () => {
+    if (!printRef.current) return;
+    setDownloading(true);
+    try {
+      const [{ default: html2canvas }, { jsPDF }] = await Promise.all([
+        import('html2canvas'),
+        import('jspdf'),
+      ]);
+      const canvas = await html2canvas(printRef.current, {
+        scale: 2,
+        backgroundColor: '#ffffff',
+        useCORS: true,
+        logging: false,
+      });
+      const imgData = canvas.toDataURL('image/jpeg', 0.95);
+      const pdf = new jsPDF({ unit: 'mm', format: 'a4', orientation: 'portrait' });
+      const pageWidth = pdf.internal.pageSize.getWidth();
+      const pageHeight = pdf.internal.pageSize.getHeight();
+      const imgRatio = canvas.height / canvas.width;
+      const imgWidth = pageWidth;
+      const imgHeight = imgWidth * imgRatio;
+      let heightLeft = imgHeight;
+      let position = 0;
+      pdf.addImage(imgData, 'JPEG', 0, position, imgWidth, imgHeight, undefined, 'FAST');
+      heightLeft -= pageHeight;
+      while (heightLeft > 0) {
+        position = heightLeft - imgHeight;
+        pdf.addPage();
+        pdf.addImage(imgData, 'JPEG', 0, position, imgWidth, imgHeight, undefined, 'FAST');
+        heightLeft -= pageHeight;
+      }
+      const safeName = student.name.replace(/[^a-zA-Z0-9]+/g, '_');
+      pdf.save(`Admission_${safeName}_${student.admissionNo}.pdf`);
+    } catch (e) {
+      // eslint-disable-next-line no-console
+      console.error('[AdmissionForm] PDF download failed', e);
+      alert('PDF generation failed — please try Print instead.');
+    } finally {
+      setDownloading(false);
+    }
+  };
 
   const handlePrint = () => {
     const printWindow = window.open('', '', 'height=900,width=1100');
@@ -99,10 +145,15 @@ export const AdmissionFormPrint: React.FC<Props> = ({ student, schoolInfo, onClo
             <p className="text-xs font-bold text-slate-400 mt-0.5">{student.name} · {student.admissionNo}</p>
           </div>
           <div className="flex gap-2">
+            <button onClick={handleDownloadPdf} disabled={downloading}
+              className="flex items-center gap-1.5 px-3 py-2 bg-emerald-600 text-white font-black text-xs rounded-xl active:scale-90 transition-transform disabled:opacity-60"
+              title="Download as PDF">
+              <Download size={14} /> {downloading ? 'Saving…' : 'Download PDF'}
+            </button>
             <button onClick={handlePrint}
               className="flex items-center gap-1.5 px-3 py-2 bg-blue-600 text-white font-black text-xs rounded-xl active:scale-90 transition-transform"
-              title="Print to PDF">
-              <Printer size={14} /> Print / PDF
+              title="Print">
+              <Printer size={14} /> Print
             </button>
             <button onClick={onClose}
               className="p-2 bg-slate-100 text-slate-600 rounded-xl active:scale-90 transition-transform">
