@@ -439,11 +439,28 @@ export const FeesView: React.FC<Props> = ({ onBack }) => {
                 </div>
               )}
               {feeSummary.transport > 0 && (
-                <div className="flex items-center justify-between p-4">
+                <div className="flex items-center justify-between p-4 border-b border-slate-100 last:border-b-0">
                   <div>
                     <div className="font-black text-slate-900 text-sm">TRANSPORT FEE</div>
                   </div>
                   <div className="font-black text-slate-900">₹{feeSummary.transport.toLocaleString('en-IN')}</div>
+                </div>
+              )}
+              {feeSummary.exam > 0 && (
+                <div className="flex items-center justify-between p-4 border-b border-slate-100 last:border-b-0">
+                  <div>
+                    <div className="font-black text-slate-900 text-sm">EXAM FEE</div>
+                  </div>
+                  <div className="font-black text-slate-900">₹{feeSummary.exam.toLocaleString('en-IN')}</div>
+                </div>
+              )}
+              {feeSummary.other > 0 && (
+                <div className="flex items-center justify-between p-4">
+                  <div>
+                    <div className="font-black text-slate-900 text-sm">OTHER CHARGES</div>
+                    <div className="text-[10px] font-bold text-slate-400 mt-0.5">Includes any late fees</div>
+                  </div>
+                  <div className="font-black text-slate-900">₹{feeSummary.other.toLocaleString('en-IN')}</div>
                 </div>
               )}
             </div>

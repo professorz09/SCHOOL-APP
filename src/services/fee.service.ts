@@ -311,11 +311,22 @@ export const feeService = {
     return { lastClearedMonth: last, allCleared: last === months[months.length - 1] && months.length > 0 };
   },
 
-  getParentDueSummary(studentId: string): { tuition: number; transport: number; total: number } {
+  // Aggregate parent-payable outstanding across ALL years and ALL fee types
+  // (TUITION, TRANSPORT, EXAM, OTHER — including any 'Late Fee' rows). The
+  // top "Total Outstanding" card in FeesView reads `total`; per-type lines
+  // render the individual fields. Government-payable (RTE) rows are excluded.
+  getParentDueSummary(studentId: string): {
+    tuition: number; transport: number; exam: number; other: number; total: number;
+  } {
     const insts = this.getStudentInstallments(studentId).filter(i => i.payerType === 'PARENT');
-    const tuition = insts.filter(i => i.feeType === 'TUITION').reduce((s, i) => s + Math.max(0, i.amount - i.paidAmount - i.writeOffAmount), 0);
-    const transport = insts.filter(i => i.feeType === 'TRANSPORT').reduce((s, i) => s + Math.max(0, i.amount - i.paidAmount - i.writeOffAmount), 0);
-    return { tuition, transport, total: tuition + transport };
+    const sumOf = (t: FeeType) => insts
+      .filter(i => i.feeType === t)
+      .reduce((s, i) => s + Math.max(0, i.amount - i.paidAmount - i.writeOffAmount), 0);
+    const tuition   = sumOf('TUITION');
+    const transport = sumOf('TRANSPORT');
+    const exam      = sumOf('EXAM');
+    const other     = sumOf('OTHER');
+    return { tuition, transport, exam, other, total: tuition + transport + exam + other };
   },
 
   getGovernmentDueSummary(studentId: string): { tuition: number; total: number } {

@@ -296,6 +296,10 @@ export const FeeLedger: React.FC<Props> = ({ onBack }) => {
       const canonical = feeService.getPaymentRecordById(result.paymentId);
       setPaymentTransactions(feeService.getPaymentHistory());
       if (canonical) setReceiptModal(canonical);
+      // Refresh per-year accordion totals so the schedule tab reflects the
+      // freshly-allocated payment without requiring the principal to reselect
+      // the student.
+      await reloadYearGroups(selected.studentId);
       setPayAmount('');
       setPaymentNote('');
       setPayModal(false);

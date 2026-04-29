@@ -40,9 +40,7 @@ RETURNS TABLE (
 LANGUAGE plpgsql SECURITY DEFINER SET search_path = public AS $$
 DECLARE
   v_school_id UUID;
-  v_year_id UUID;
-  v_class_name TEXT;
-  v_caller UUID := auth.uid();
+  v_caller    UUID := auth.uid();
 BEGIN
   IF v_caller IS NULL THEN RAISE EXCEPTION 'unauthenticated'; END IF;
 
@@ -57,71 +55,79 @@ BEGIN
     RAISE EXCEPTION 'forbidden';
   END IF;
 
-  -- Resolve the active year + the student's class within that year.
-  SELECT id INTO v_year_id FROM public.academic_years
-    WHERE school_id = v_school_id AND is_active = TRUE LIMIT 1;
-  IF v_year_id IS NULL THEN RETURN; END IF;
-
-  SELECT class_name INTO v_class_name FROM public.student_academic_records
-    WHERE student_id = p_student_id AND academic_year_id = v_year_id
-    LIMIT 1;
-  IF v_class_name IS NULL THEN RETURN; END IF;
-
+  -- Scan EVERY parent overdue installment across ALL years (not just the
+  -- active one). For each, look up the class the student was in for that
+  -- specific year and the late-fee policy of the matching fee_structure.
+  -- This way carry-forward dues from prior years still accrue late fees per
+  -- their own year's policy.
   RETURN QUERY
-  WITH cfg AS (
-    -- Pick the most recently-updated fee_structures row for the class.
-    -- Multiple structures per class are allowed (e.g. concession variants);
-    -- the late-fee policy is a school-level convention so we just pick one.
-    SELECT late_fee
-      FROM public.fee_structures
-     WHERE school_id = v_school_id
-       AND academic_year_id = v_year_id
-       AND class_name = v_class_name
-     ORDER BY updated_at DESC
-     LIMIT 1
-  ),
-  overdue AS (
-    SELECT i.id, i.due_date, i.amount, i.paid_amount, i.write_off_amount
+  WITH overdue AS (
+    SELECT i.id,
+           i.due_date,
+           i.amount,
+           i.paid_amount,
+           i.write_off_amount,
+           i.academic_year_id
       FROM public.fee_installments i
      WHERE i.student_id = p_student_id
-       AND i.academic_year_id = v_year_id
        AND i.payer_type = 'PARENT'
        AND (i.amount - i.paid_amount - i.write_off_amount) > 0
        -- Skip late-fee rows themselves (avoid recursive late fees).
        AND NOT (i.fee_type = 'OTHER' AND i.month = 'Late Fee')
+  ),
+  enriched AS (
+    -- Resolve the student's class in the installment's own year, then the
+    -- most-recently-updated fee_structures row for that (school, year,
+    -- class). LEFT JOINs so installments without a matching structure (e.g.
+    -- legacy years without a configured policy) just yield late_fee = 0.
+    SELECT o.*,
+           sar.class_name,
+           fs.late_fee
+      FROM overdue o
+      LEFT JOIN public.student_academic_records sar
+        ON sar.student_id = p_student_id
+       AND sar.academic_year_id = o.academic_year_id
+      LEFT JOIN LATERAL (
+        SELECT fs2.late_fee
+          FROM public.fee_structures fs2
+         WHERE fs2.school_id = v_school_id
+           AND fs2.academic_year_id = o.academic_year_id
+           AND fs2.class_name = sar.class_name
+         ORDER BY fs2.updated_at DESC
+         LIMIT 1
+      ) fs ON TRUE
   )
   SELECT
-    o.id AS installment_id,
-    o.due_date,
-    GREATEST(0, (CURRENT_DATE - o.due_date) - COALESCE((cfg.late_fee->>'gracePeriodDays')::INT, 0))::INT AS days_late,
+    e.id AS installment_id,
+    e.due_date,
+    GREATEST(0, (CURRENT_DATE - e.due_date) - COALESCE((e.late_fee->>'gracePeriodDays')::INT, 0))::INT AS days_late,
     CASE
-      WHEN cfg.late_fee IS NULL THEN 0::BIGINT
-      WHEN COALESCE((cfg.late_fee->>'enabled')::BOOLEAN, FALSE) = FALSE THEN 0::BIGINT
-      WHEN (CURRENT_DATE - o.due_date) <= COALESCE((cfg.late_fee->>'gracePeriodDays')::INT, 0) THEN 0::BIGINT
+      WHEN e.late_fee IS NULL THEN 0::BIGINT
+      WHEN COALESCE((e.late_fee->>'enabled')::BOOLEAN, FALSE) = FALSE THEN 0::BIGINT
+      WHEN (CURRENT_DATE - e.due_date) <= COALESCE((e.late_fee->>'gracePeriodDays')::INT, 0) THEN 0::BIGINT
       ELSE
         LEAST(
-          COALESCE((cfg.late_fee->>'maxCap')::BIGINT, 9999999999::BIGINT),
+          COALESCE((e.late_fee->>'maxCap')::BIGINT, 9999999999::BIGINT),
           -- Accept both legacy lowercase ('percent'/'flat') and the canonical
           -- uppercase values written by the principal Fee Structures editor
           -- ('PERCENTAGE'/'FIXED'). Anything other than a percent variant
           -- falls through to the fixed-amount branch.
           CASE
-            WHEN UPPER(COALESCE(cfg.late_fee->>'type', 'FIXED')) IN ('PERCENTAGE', 'PERCENT') THEN
-              FLOOR((o.amount - o.paid_amount - o.write_off_amount)
-                    * COALESCE((cfg.late_fee->>'amount')::NUMERIC, 0) / 100.0)::BIGINT
+            WHEN UPPER(COALESCE(e.late_fee->>'type', 'FIXED')) IN ('PERCENTAGE', 'PERCENT') THEN
+              FLOOR((e.amount - e.paid_amount - e.write_off_amount)
+                    * COALESCE((e.late_fee->>'amount')::NUMERIC, 0) / 100.0)::BIGINT
             ELSE
-              COALESCE((cfg.late_fee->>'amount')::BIGINT, 0)
+              COALESCE((e.late_fee->>'amount')::BIGINT, 0)
           END
         )
     END AS late_fee,
     -- Canonicalise to exactly 'PERCENTAGE' or 'FIXED' so callers don't have
     -- to worry about legacy lowercase / 'PERCENT' variants when labelling.
     CASE
-      WHEN UPPER(COALESCE(cfg.late_fee->>'type', 'FIXED')) IN ('PERCENTAGE', 'PERCENT') THEN 'PERCENTAGE'
+      WHEN UPPER(COALESCE(e.late_fee->>'type', 'FIXED')) IN ('PERCENTAGE', 'PERCENT') THEN 'PERCENTAGE'
       ELSE 'FIXED'
     END AS source
-  FROM overdue o
-  LEFT JOIN cfg ON TRUE;
+  FROM enriched e;
 END $$;
 
 GRANT EXECUTE ON FUNCTION public.preview_student_late_fees(UUID) TO authenticated;
