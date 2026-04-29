@@ -366,7 +366,8 @@ BEGIN
            v_amt, v_payer);
         v_count := v_count + 1;
       END LOOP;
-    ELSE  -- ANNUAL or ONE_TIME
+    ELSE  -- ANNUAL or ONE_TIME — payer also follows v_payer so RTE flips
+          -- annual / one-time charges to GOVERNMENT too.
       INSERT INTO public.fee_installments
         (student_id, academic_year_id, school_id, month, due_date, fee_type, amount, payer_type)
       VALUES
@@ -374,7 +375,7 @@ BEGIN
          CASE WHEN v_freq = 'ONE_TIME' THEN 'OneTime' ELSE 'Annual' END,
          (SELECT MIN((dd->>'date')::DATE) FROM jsonb_array_elements(p_due_dates) dd),
          'OTHER',
-         v_amt, 'PARENT');
+         v_amt, v_payer);
       v_count := v_count + 1;
     END IF;
   END LOOP;
