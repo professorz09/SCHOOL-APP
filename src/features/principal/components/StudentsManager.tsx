@@ -134,13 +134,17 @@ export const StudentsManager: React.FC<Props> = ({ onBack, initialView }) => {
   }, [mainView, refreshArchive]);
 
   const loadStudentData = async (student: Student) => {
-    const [fees, record] = await Promise.all([
+    // Fetch docs from `student_documents` directly — getAll/getById return
+    // an empty docs[] for performance, so the profile DOCS tab needs its
+    // own load to show real storage-backed rows after refresh/reopen.
+    const [fees, record, docs] = await Promise.all([
       studentService.getFeeRecords(student.id),
       studentService.getAcademicRecord(student.id, student.academicYearId),
+      studentService.listDocuments(student.id).catch(() => [] as StudentDoc[]),
     ]);
     setFeeRecords(fees);
     setAcademicRecord(record);
-    setProfileDocsLive(student.docs ?? []);
+    setProfileDocsLive(docs);
     try {
       const assignment = transportService.getAssignmentForStudent(student.id);
       if (assignment) {
@@ -154,7 +158,7 @@ export const StudentsManager: React.FC<Props> = ({ onBack, initialView }) => {
     // doc exists, so the principal can see at a glance what's missing.
     setProfileDocs(prev => prev.map(d => ({
       ...d,
-      uploaded: (student.docs ?? []).some(x => x.type === d.type),
+      uploaded: docs.some(x => x.type === d.type),
     })));
   };
 
@@ -243,13 +247,13 @@ export const StudentsManager: React.FC<Props> = ({ onBack, initialView }) => {
     try {
       const { path } = await storageService.uploadStudentDocument(selected.id, docType, file);
       const newDoc = await studentService.addDocumentRecord(selected.id, docType, path);
-      setProfileDocsLive(prev => [...prev.filter(d => d.id !== newDoc.id), newDoc]);
-      // Reflect in the in-memory selected.docs so the "Submitted" panel updates.
-      const refreshed = await studentService.getById(selected.id);
-      if (refreshed) {
-        setSelected(refreshed);
-        setStudents(prev => prev.map(s => s.id === refreshed.id ? refreshed : s));
-      }
+      // Add (or replace) the doc in the live list — profile DOCS tab reads
+      // exclusively from profileDocsLive, so this drives both the "Submitted
+      // Documents" rows and the checklist tick.
+      setProfileDocsLive(prev => [
+        newDoc,
+        ...prev.filter(d => d.id !== newDoc.id && !(d.type === docType && d.storagePath === newDoc.storagePath)),
+      ]);
       setProfileDocs(prev => prev.map(d => d.type === docType ? { ...d, uploaded: true } : d));
       showToast(`${file.name} uploaded`);
     } catch (err) {
@@ -276,12 +280,15 @@ export const StudentsManager: React.FC<Props> = ({ onBack, initialView }) => {
     if (!selected) return;
     if (!confirm('Remove this document?')) return;
     try {
+      const removed = profileDocsLive.find(d => d.id === docId);
       await studentService.removeDocument(docId);
-      setProfileDocsLive(prev => prev.filter(d => d.id !== docId));
-      const refreshed = await studentService.getById(selected.id);
-      if (refreshed) {
-        setSelected(refreshed);
-        setStudents(prev => prev.map(s => s.id === refreshed.id ? refreshed : s));
+      const next = profileDocsLive.filter(d => d.id !== docId);
+      setProfileDocsLive(next);
+      // If no other doc of the same type remains, untick the checklist row.
+      if (removed && !next.some(d => d.type === removed.type)) {
+        setProfileDocs(prev => prev.map(d =>
+          d.type === removed.type ? { ...d, uploaded: false } : d
+        ));
       }
       showToast('Document removed');
     } catch (err) {
@@ -415,7 +422,6 @@ export const StudentsManager: React.FC<Props> = ({ onBack, initialView }) => {
             {[
               { label: 'Full Name *', key: 'name', placeholder: 'Student full name' },
               { label: 'Admission No. *', key: 'admissionNo', placeholder: 'ADM-2024-XXX' },
-              { label: 'Roll No. *', key: 'rollNo', placeholder: '01' },
               { label: 'Aadhaar No.', key: 'aadhaarNo', placeholder: 'XXXX XXXX XXXX' },
               { label: 'Religion', key: 'religion', placeholder: 'e.g. Hindu, Muslim, Christian' },
               { label: 'Caste', key: 'caste', placeholder: 'e.g. General, OBC, SC, ST' },
