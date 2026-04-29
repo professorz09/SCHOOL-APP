@@ -405,6 +405,14 @@ export const StaffManager: React.FC<Props> = ({ onBack }) => {
   };
 
   const handleSuspend = async (member: StaffMember) => {
+    // Defensive guard — UI hides the action for RELIEVED staff, but a stale
+    // confirmSuspend reference (e.g. relieving completes while the modal is
+    // still open) shouldn't be allowed to re-open the lifecycle.
+    if (member.status === 'RELIEVED') {
+      showToast('Cannot change status of a relieved staff member', 'error');
+      setConfirmSuspend(null);
+      return;
+    }
     try {
       const updated = member.status === 'SUSPENDED'
         ? await staffService.reinstate(member.id)
@@ -829,15 +837,26 @@ export const StaffManager: React.FC<Props> = ({ onBack }) => {
 
               <div className="space-y-2">
                 {selected.status !== 'RELIEVED' && (
-                  <button onClick={() => { setRelieveDate(todayIso()); setRelieveReason(''); setRelieveOpen(true); }}
-                    className="w-full py-3 rounded-2xl font-black text-sm bg-amber-50 text-amber-700 border border-amber-200 active:scale-95 transition-transform">
-                    Set Relieving Date
-                  </button>
+                  <>
+                    <button onClick={() => { setRelieveDate(todayIso()); setRelieveReason(''); setRelieveOpen(true); }}
+                      className="w-full py-3 rounded-2xl font-black text-sm bg-amber-50 text-amber-700 border border-amber-200 active:scale-95 transition-transform">
+                      Set Relieving Date
+                    </button>
+                    {/* Suspend / Reinstate is only meaningful while staff is in
+                        the active lifecycle. Once RELIEVED the only valid
+                        forward state is staying RELIEVED, so the action is
+                        hidden to keep the lifecycle log truthful. */}
+                    <button onClick={() => setConfirmSuspend(selected)}
+                      className={`w-full py-3 rounded-2xl font-black text-sm active:scale-95 transition-transform ${selected.status === 'SUSPENDED' ? 'bg-emerald-50 text-emerald-700 border border-emerald-200' : 'bg-rose-50 text-rose-700 border border-rose-200'}`}>
+                      {selected.status === 'SUSPENDED' ? 'Reinstate Staff Member' : 'Suspend Staff Member'}
+                    </button>
+                  </>
                 )}
-                <button onClick={() => setConfirmSuspend(selected)}
-                  className={`w-full py-3 rounded-2xl font-black text-sm active:scale-95 transition-transform ${selected.status === 'SUSPENDED' ? 'bg-emerald-50 text-emerald-700 border border-emerald-200' : 'bg-rose-50 text-rose-700 border border-rose-200'}`}>
-                  {selected.status === 'SUSPENDED' ? 'Reinstate Staff Member' : 'Suspend Staff Member'}
-                </button>
+                {selected.status === 'RELIEVED' && (
+                  <p className="text-[10px] font-bold text-slate-400 text-center px-3">
+                    This staff member has been relieved. Lifecycle changes are locked.
+                  </p>
+                )}
               </div>
             </>
           )}
