@@ -71,6 +71,11 @@ export const AcademicYearWizard: React.FC<Props> = ({
   const step2Valid = enabledClasses.length > 0;
 
   // ─── Step 3 validation ─────────────────────────────────────────────────
+  // Note: we deliberately do NOT enforce "every selected stream must have at
+  // least one Class 11/12 section". A school may enable Arts as a future
+  // possibility but not actually staff it this year, and the wizard should
+  // not block that. The DB-side RPC mirrors this — it only checks each
+  // section's stream is a member of the year's selected streams.
   const step3Issues = useMemo(() => {
     const issues: string[] = [];
     enabledClasses.forEach(c => {
@@ -179,11 +184,11 @@ export const AcademicYearWizard: React.FC<Props> = ({
   // ─── Render ────────────────────────────────────────────────────────────
   return (
     <div
-      className="fixed inset-0 bg-black/50 z-50 flex items-end sm:items-center justify-center p-0 sm:p-4"
+      className="fixed inset-0 bg-black/50 z-50 flex items-end sm:items-center justify-center p-0 sm:p-4 animate-in fade-in duration-200"
       onClick={() => !saving && onClose()}
     >
       <div
-        className="bg-white rounded-t-3xl sm:rounded-3xl w-full max-w-lg max-h-[92vh] flex flex-col"
+        className="bg-white rounded-t-3xl sm:rounded-3xl w-full max-w-lg max-h-[92vh] flex flex-col animate-in slide-in-from-bottom-4 sm:zoom-in-95 duration-300"
         onClick={e => e.stopPropagation()}
       >
         {/* Header */}
