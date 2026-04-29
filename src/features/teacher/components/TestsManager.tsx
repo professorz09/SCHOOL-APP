@@ -7,6 +7,8 @@ import { teacherService } from '../../../services/teacher.service';
 import { TestSchedule, TestType, TeacherClass } from '../../../types/teacher.types';
 import { useUIStore } from '../../../store/uiStore';
 import { useAuthStore } from '../../../store/authStore';
+import { useAcademicYear } from '../../../context/AcademicYearContext';
+import { useEditGuard } from '../../../store/correctionStore';
 
 type View = 'LIST' | 'CREATE' | 'UPLOAD';
 
@@ -39,6 +41,9 @@ interface Props { onBack: () => void; }
 export const TestsManager: React.FC<Props> = ({ onBack }) => {
   const { showToast } = useUIStore();
   const teacherName = useAuthStore(s => s.session?.name ?? 'Teacher');
+  const { activeYear } = useAcademicYear();
+  const isYearClosed = !!activeYear && activeYear.status === 'LOCKED';
+  const editGuard = useEditGuard(activeYear?.id, isYearClosed);
   const [view, setView]      = useState<View>('LIST');
   const [exams, setExams]    = useState<TestSchedule[]>([]);
   const [classes, setClasses] = useState<TeacherClass[]>([]);
@@ -99,21 +104,29 @@ export const TestsManager: React.FC<Props> = ({ onBack }) => {
       showToast('Pick a subject for this exam', 'error');
       return;
     }
+    if (!editGuard.canEdit) {
+      showToast('Year closed — Principal se Correction Mode enable karne ko bolein', 'error');
+      return;
+    }
     setIsBusy(true);
     try {
       const totalMarks = cForm.hasSubjects ? subjects.reduce((a, s) => a + s.maxMarks, 0) : cForm.maxMarks;
-      const exam = await teacherService.createTest({
-        classId:      cForm.classId,
-        className:    cForm.className,
-        section:      cForm.section,
-        subject:      cForm.hasSubjects ? subjects.map(s => s.subject).join(', ') : cForm.primarySubject,
-        testType:     cForm.testType,
-        title:        cForm.title,
-        scheduledDate: cForm.scheduledDate,
-        duration:     cForm.duration,
-        maxMarks:     totalMarks,
-        syllabus:     cForm.description,
-      });
+      const exam = await editGuard.gate(
+        () => teacherService.createTest({
+          classId:      cForm.classId,
+          className:    cForm.className,
+          section:      cForm.section,
+          subject:      cForm.hasSubjects ? subjects.map(s => s.subject).join(', ') : cForm.primarySubject,
+          testType:     cForm.testType,
+          title:        cForm.title,
+          scheduledDate: cForm.scheduledDate,
+          duration:     cForm.duration,
+          maxMarks:     totalMarks,
+          syllabus:     cForm.description,
+        }),
+        { entityType: 'test_schedule', entityId: `${cForm.classId}/${cForm.title}` },
+      );
+      if (exam === undefined) return; // user cancelled correction prompt
       setExams(p => [exam, ...p]);
       showToast(`${typeLabel(cForm.testType)} scheduled`);
       resetForm();
@@ -162,25 +175,33 @@ export const TestsManager: React.FC<Props> = ({ onBack }) => {
         return;
       }
     }
+    if (!editGuard.canEdit) {
+      showToast('Year closed — Principal se Correction Mode enable karne ko bolein', 'error');
+      return;
+    }
     setIsBusy(true);
     try {
       const cls = classes.find(c => c.id === uploadExam.classId);
-      await teacherService.publishResults({
-        testId:       uploadExam.id,
-        examName:     uploadExam.title,
-        description:  uploadExam.syllabus,
-        testType:     uploadExam.testType,
-        subject:      uploadExam.subject,
-        teacherName:  teacherName,
-        date:         uploadExam.scheduledDate,
-        maxMarks:     uploadExam.maxMarks,
-        studentResults: stuRows.map(r => ({
-          studentId:    r.studentId,
-          obtainedMarks: hasSubjects ? Object.values(r.subjectMarks).reduce((a, v) => a + (+v || 0), 0) : +r.marks,
-          note:         r.note,
-        })),
-        allStudents: cls?.students.map(s => ({ id: s.id, name: s.name, rollNo: s.rollNo })) ?? [],
-      });
+      const result = await editGuard.gate(
+        () => teacherService.publishResults({
+          testId:       uploadExam.id,
+          examName:     uploadExam.title,
+          description:  uploadExam.syllabus,
+          testType:     uploadExam.testType,
+          subject:      uploadExam.subject,
+          teacherName:  teacherName,
+          date:         uploadExam.scheduledDate,
+          maxMarks:     uploadExam.maxMarks,
+          studentResults: stuRows.map(r => ({
+            studentId:    r.studentId,
+            obtainedMarks: hasSubjects ? Object.values(r.subjectMarks).reduce((a, v) => a + (+v || 0), 0) : +r.marks,
+            note:         r.note,
+          })),
+          allStudents: cls?.students.map(s => ({ id: s.id, name: s.name, rollNo: s.rollNo })) ?? [],
+        }),
+        { entityType: 'exam_result', entityId: uploadExam.id },
+      );
+      if (result === undefined) return; // user cancelled correction prompt
       setExams(p => p.map(e => e.id === uploadExam.id ? { ...e, resultsUploaded: true } : e));
       showToast('Results published!');
       setView('LIST');

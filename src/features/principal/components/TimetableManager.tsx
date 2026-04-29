@@ -4,6 +4,8 @@ import {
   timetableService, PERIOD_SLOTS, DAYS, TimetableEntry, TDay, TimetableTeacher,
 } from '../../../services/timetable.service';
 import { useUIStore } from '../../../store/uiStore';
+import { useAcademicYear } from '../../../context/AcademicYearContext';
+import { useEditGuard } from '../../../store/correctionStore';
 
 const CLASSES = ['8-A', '8-B', '9-A', '9-B', '10-A', '10-B'];
 
@@ -34,6 +36,9 @@ interface Props { onBack: () => void; }
 
 export const TimetableManager: React.FC<Props> = ({ onBack }) => {
   const { showToast } = useUIStore();
+  const { activeYear } = useAcademicYear();
+  const isYearClosed = !!activeYear && activeYear.status === 'LOCKED';
+  const editGuard = useEditGuard(activeYear?.id, isYearClosed);
   const [selectedClass, setSelectedClass] = useState('10-A');
   const [activeDay, setActiveDay] = useState<TDay>('Monday');
   const [entries, setEntries] = useState<TimetableEntry[]>([]);
@@ -92,6 +97,10 @@ export const TimetableManager: React.FC<Props> = ({ onBack }) => {
 
   const handleSave = async () => {
     if (!form.subject || !form.teacherId) return;
+    if (!editGuard.canEdit) {
+      showToast('Year closed — pehle Correction Mode enable karein', 'error');
+      return;
+    }
     const teacher = teachers.find(t => t.id === form.teacherId)!;
     const [className, section] = selectedClass.split('-');
 
@@ -101,24 +110,31 @@ export const TimetableManager: React.FC<Props> = ({ onBack }) => {
       timetableService.updateSlotTime(editModal!.slotId, form.startTime, form.endTime);
     }
 
-    const result = timetableService.saveEntry({
-      id: editModal?.existing?.id,
-      classId: selectedClass,
-      className,
-      section,
-      day: activeDay,
-      slotId: editModal!.slotId,
-      subject: form.subject,
-      teacherId: form.teacherId,
-      teacherName: teacher.name,
-      room: form.room,
-      // academicYearId is resolved server-side by timetable.service from the
-      // active academic_year — passing a placeholder here would be ignored and
-      // misleading. Service-side _activeYearId is the single source of truth.
-      academicYearId: '',
-    });
+    const r = await editGuard.gate(
+      () => timetableService.saveEntry({
+        id: editModal?.existing?.id,
+        classId: selectedClass,
+        className,
+        section,
+        day: activeDay,
+        slotId: editModal!.slotId,
+        subject: form.subject,
+        teacherId: form.teacherId,
+        teacherName: teacher.name,
+        room: form.room,
+        // academicYearId is resolved server-side by timetable.service from the
+        // active academic_year — passing a placeholder here would be ignored
+        // and misleading. Service-side _activeYearId is the single source of
+        // truth.
+        academicYearId: '',
+      }),
+      {
+        entityType: 'timetable_entry',
+        entityId: editModal?.existing?.id ?? `${selectedClass}/${activeDay}/${editModal!.slotId}`,
+      },
+    );
 
-    const r = await result;
+    if (r === undefined) return; // user cancelled correction prompt
     if (!r.ok) {
       setConflictMsg(`Conflict! ${r.conflict?.teacherName ?? r.reason ?? ''} is already assigned at this time.`);
       return;
@@ -131,8 +147,16 @@ export const TimetableManager: React.FC<Props> = ({ onBack }) => {
 
   const handleDelete = async () => {
     if (editModal?.existing) {
+      if (!editGuard.canEdit) {
+        showToast('Year closed — pehle Correction Mode enable karein', 'error');
+        return;
+      }
       try {
-        await timetableService.deleteEntry(editModal.existing.id);
+        const result = await editGuard.gate(
+          () => timetableService.deleteEntry(editModal.existing!.id),
+          { entityType: 'timetable_entry', entityId: editModal.existing.id },
+        );
+        if (result === undefined) return; // user cancelled
         reload(selectedClass);
       } catch (e) {
         showToast(e instanceof Error ? e.message : 'Delete failed', 'error');
@@ -142,12 +166,23 @@ export const TimetableManager: React.FC<Props> = ({ onBack }) => {
     setEditModal(null);
   };
 
-  const handleSlotTimeSave = () => {
+  const handleSlotTimeSave = async () => {
     if (!slotTimeModal) return;
     if (!slotTimeModal.startTime || !slotTimeModal.endTime) {
       showToast('Start and end time required', 'error'); return;
     }
-    timetableService.updateSlotTime(slotTimeModal.slotId, slotTimeModal.startTime, slotTimeModal.endTime);
+    if (!editGuard.canEdit) {
+      showToast('Year closed — pehle Correction Mode enable karein', 'error');
+      return;
+    }
+    const result = await editGuard.gate(
+      () => {
+        timetableService.updateSlotTime(slotTimeModal.slotId, slotTimeModal.startTime, slotTimeModal.endTime);
+        return true;
+      },
+      { entityType: 'period_slot', entityId: slotTimeModal.slotId },
+    );
+    if (result === undefined) return; // user cancelled
     setSlots([...PERIOD_SLOTS]);
     setSlotTimeModal(null);
     showToast(`${slotTimeModal.label} time updated`);

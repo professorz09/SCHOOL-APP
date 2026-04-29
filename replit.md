@@ -2,6 +2,79 @@
 
 A school management application with React frontend and Supabase (Postgres + Auth + RLS) backend. Supports Super Admin, Principal, Teacher, Student/Parent, and Driver roles.
 
+## Task #8 — Year closing without auto-promote + Correction Mode
+
+The "close academic year" flow no longer auto-promotes students,
+no longer creates the next year, and no longer treats unpaid salary
+as a hard blocker. Closing a year is now an explicit, surgical
+read-only switch — promotion is handled separately by the existing
+Student Archive flow (Failed / Unassigned / TC), and the next year
+is opened via the existing `AcademicYearWizard`.
+
+Service layer (`src/services/yearClosing.service.ts`):
+
+- **`closeAcademicYear(yearId)`** — calls the existing
+  `close_academic_year` RPC (sets `is_closed = TRUE`, `is_active = FALSE`)
+  and writes a `close_academic_year` audit-log row. **No student
+  promotion. No next-year creation. No fee carry-forward.** Outstanding
+  fees stay attached to the locked year as historical debt.
+- **`getPreClosingChecklist`** — salary pending and outstanding fees
+  both moved from `blockers[]` → `warnings[]`. The principal
+  acknowledges salary explicitly via a checkbox in the close modal;
+  there are no hard blockers any more.
+- **`getCorrectionCount(yearId)`** — counts `YEAR_CORRECTION` audit-log
+  rows for the year, used to hydrate the badge in the year-list card.
+- The legacy `commitYearClosing` (auto-promote + new-year + dues
+  policy) is kept in place for the wizard's billing-rollover path but
+  is no longer surfaced from `AcademicYearManager`.
+
+Correction Mode (`src/store/correctionStore.ts`):
+
+- New zustand store with **per-year** flags (`enabledByYear[yearId]`)
+  plus an in-memory corrections counter that hydrates from
+  `getCorrectionCount` on mount. Toggling Correction Mode is a
+  transient, session-scoped intent — closing the tab snaps the year
+  back to read-only, the safe default.
+- **`recordCorrection(ctx, reason)`** — writes a `YEAR_CORRECTION`
+  audit-log row tagged with `entity_type`, `entity_id`,
+  `academic_year_id`, optional `field` / `old_value` / `new_value`
+  and the operator's reason; bumps the in-memory counter so the
+  badge updates without a refetch.
+- **`useEditGuard(activeYearId, isYearClosed)`** — hook returned to
+  every editing surface. Exposes `{ canEdit, isCorrectionOn, gate }`
+  where `gate(action, ctx)` runs `action` directly when the year is
+  open, and when closed prompts for a reason and records a
+  correction (returns `undefined` if the operator cancels the prompt).
+
+UI (`src/features/principal/components/AcademicYearManager.tsx`):
+
+- The big "Naya Year + Promote Students" form (~200 lines) is gone.
+- Each year card now has its own action: open years get a compact
+  "Close Year" CTA; closed years get a Correction Mode toggle plus a
+  "N corrections logged" badge and a sticky amber banner whenever the
+  toggle is ON, warning that every edit will demand a reason.
+- The Close Year modal shows the live pre-close checklist
+  (attendance / results / salary / fees), an explicit "I acknowledge"
+  checkbox if salary is pending, and an info card reminding the
+  principal that promotion + new-year creation happen separately.
+
+Read-only enforcement on edit surfaces:
+
+- `StudentAttendanceManager`, `StaffAttendanceManager`,
+  `TimetableManager` (principal) and `TestsManager` (teacher) all use
+  `useEditGuard(activeYear?.id, activeYear.status === 'LOCKED')` and
+  wrap every save / approve / delete handler in `editGuard.gate(...)`.
+- When the active year is closed and Correction Mode is OFF the save
+  short-circuits with a Hindi-mix error toast directing the operator
+  to enable Correction Mode first; when ON, the operator is prompted
+  for a reason and a `YEAR_CORRECTION` audit-log row is written
+  alongside the actual mutation. Local in-memory edits remain
+  unblocked — only the persistence step is gated, which keeps the UX
+  click-light during normal in-year work.
+
+No new migrations were required — `audit_logs`, `close_academic_year`
+and `set_active_academic_year` already existed from earlier work.
+
 ## Task #7 — Super Admin per-year billing breakdown
 
 The Super Admin Billing module now shows **every** billing year for each
