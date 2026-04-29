@@ -559,12 +559,17 @@ export const staffService = {
     const end = ay ? new Date((ay as { end_date: string }).end_date)
                    : new Date(today.getFullYear() + 1, 2, 31); // Mar 31
 
-    // Build month list from max(joiningDate, AY-start) → min(today, AY-end).
+    // Build month list from max(joiningDate, AY-start) → min(today, AY-end,
+    // relievingDate). Clamping at relievingDate keeps ledger totals
+    // semantically clean for relieved staff (no phantom months after exit).
     const fmt = (d: Date) => d.toLocaleString('en-IN', { month: 'long', year: 'numeric' });
-    const buildMonths = (joinIso: string): string[] => {
+    const buildMonths = (joinIso: string, relieveIso: string | null): string[] => {
       const join = joinIso ? new Date(joinIso) : start;
       const from = join > start ? join : start;
-      const to = today < end ? today : end;
+      const ceiling = today < end ? today : end;
+      const relieve = relieveIso ? new Date(relieveIso) : null;
+      const to = relieve && relieve < ceiling ? relieve : ceiling;
+      if (from > to) return [];
       const months: string[] = [];
       const cur = new Date(from.getFullYear(), from.getMonth(), 1);
       const stop = new Date(to.getFullYear(), to.getMonth(), 1);
@@ -606,7 +611,7 @@ export const staffService = {
     };
 
     return staff.map(s => {
-      const months = buildMonths(s.joiningDate ?? '');
+      const months = buildMonths(s.joiningDate ?? '', s.relievingDate ?? null);
       const sHist = histByStaff.get(s.id) ?? [];
       return {
         staff: s,
