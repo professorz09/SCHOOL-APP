@@ -1,0 +1,1419 @@
+# Full School App Flow – Complete Detailed Implementation Plan
+
+## Context
+
+The EduGrow school management app has a solid foundation: Supabase backend with 66 DB tables, RLS, auth, and most role-based UI screens built. However, several critical features and edge cases need implementation.
+
+**Key Findings from Code Audit:**
+- Document uploads are **fake** (local state only, never saved to Supabase storage)
+- Staff salary has **no pro-rata logic** (full salary even for mid-month join/leave)
+- Attendance **doesn't feed into salary** (two separate systems)
+- Transport has **no date tracking** (no history of mid-year vehicle changes)
+- Fee schedule generation RPC exists **but is never called** from UI
+- Year closing has **auto-promotion logic** (which spec says "NO complex auto promotion")
+- Roll numbers have **no uniqueness constraint** in DB
+- 12th class **streams not persisted** (UI state only)
+- Late fees have **schema but no calculation logic**
+
+---
+
+## Gap Analysis Summary
+
+| Area | Status | Details |
+|------|--------|---------|
+| Super Admin School Creation | ✅ Works | All 6 fields; but billing needs oldest-due-first |
+| Academic Year toggle | ✅ UI exists | Missing "only 1 active" enforcement + class/section/stream selection |
+| Classes/Streams/Sections in AY | ❌ Missing | Currently in Settings, not linked to AY |
+| Stream persistence | ❌ Missing | 12th streams stored in UI state, not DB |
+| Student Master vs Class Assignment | ❌ Missing | Class assigned at admission only; no separate flow |
+| Admission Archive tabs | ❌ Missing | No Active/Inactive/TC/Alumni/Unassigned tabs |
+| Unassigned students | ❌ Missing | Students without current AY assignment not tracked |
+| Roll number uniqueness | ❌ Missing | No DB constraint; no auto-suggest |
+| Roll number history | ❌ Missing | No tracking when student moves classes |
+| Fee schedule auto-generation | ❌ Missing | RPC exists but never called on class assignment |
+| Transport date tracking | ❌ Missing | No start_date/end_date; no change history |
+| Transport fee as addon | ❌ Missing | Not integrated into class assignment flow |
+| Document real save | ❌ Missing | UI shows fake upload; never calls Supabase storage |
+| Admission form PDF | ⚠️ Partial | Print exists but not downloadable; no biodata history |
+| Staff salary pro-rata | ❌ Missing | Full salary for partial months (mid-join, mid-leave) |
+| Staff relieving_date | ❌ Missing | No way to record when staff leaves |
+| Attendance-salary link | ❌ Missing | Attendance marked but doesn't affect salary |
+| Late fee calculation | ❌ Missing | Schema exists; logic missing |
+| TC/Failed/Readmission | ❌ Missing | No UI workflow |
+| New AY unassigned flow | ❌ Missing | No bulk assignment tool |
+| Year close correction mode | ❌ Missing | No per-year edit toggle with audit |
+| Year close auto-promotion | ⚠️ Exists | Spec says "NO auto promotion" — needs removal |
+| School billing oldest-due-first | ❌ Missing | Simple recording only |
+| Per-year outstanding view | ❌ Missing | Student doesn't see 2026-27 vs 2027-28 dues separately |
+
+---
+
+---
+
+## Detailed Module Breakdown with All Edge Cases
+
+### 1. STAFF SALARY SYSTEM (Simple)
+
+**Approach: Simple fixed monthly salary, no complex calculations.**
+
+#### 1a. Staff Add karte time — Fixed Salary Set karo
+
+```
+Staff Create Form:
+  Name *
+  Role *
+  Mobile *
+  Joining Date *
+  Monthly Salary *: [₹_______]  ← yaha set hoti hai salary
+  Relieving Date: (optional — fill karo jab staff leave kare)
+  
+On Save:
+  - INSERT INTO staff(name, role, phone, joining_date, salary)
+  - Log salary change: INSERT INTO staff_salary_history(
+      staff_id, salary_amount, effective_from, changed_by, reason='Initial'
+    )
+```
+
+#### 1b. Salary Reminder
+
+```
+Staff profile me "Next Salary Due" reminder dikhe:
+  Last paid: March 2027
+  Next due: April 2027 (due on 1st of every month)
+
+Principal dashboard me:
+  🔔 Salary Reminder: 5 staff pending salary for April 2027
+  [Pay Now] button
+  
+Rule: Reminder shows on 1st of each month for unpaid staff.
+       Principal se dismiss/snooze nahi hogi — stays until paid.
+```
+
+#### 1c. Salary Amount Change (From Profile)
+
+```
+Principal → Staff Profile → [Edit Salary]
+
+Modal:
+  Current Salary: ₹15,000
+  New Salary *: [₹18,000]
+  Effective From *: [01-Sep-2027]  ← kis mahine se lagni hai
+  Reason: [Increment] / [Correction] / [Other]
+
+On Save:
+  - UPDATE staff SET salary = 18000
+  - INSERT INTO staff_salary_history(
+      staff_id,
+      salary_amount = 18000,
+      effective_from = '2027-09-01',
+      reason = 'Increment',
+      changed_by = principalUserId
+    )
+    
+Future payments will use new amount automatically from effective_from date.
+```
+
+#### 1d. Monthly Salary Payment (Flexible Amount)
+
+```
+Principal → Staff Profile → [Pay Salary]
+OR
+Principal → Salary Ledger → Select Month → Pay
+
+Pay Salary Modal:
+  Staff: Ramesh Kumar
+  Month: April 2027
+  Expected Amount: ₹15,000  (auto-filled from current salary)
+  Actual Amount: [₹15,000]  ← principal change kar sakta hai (partial/bonus)
+  Payment Mode: [Cash | UPI | Bank Transfer | Cheque]
+  Transaction ID: [optional]
+  Note: [optional, e.g., "₹2000 advance included"]
+
+On Save:
+  - INSERT INTO salary_payments(staff_id, month, amount, method, txn_id, note, paid_at)
+  - Log audit
+```
+
+#### 1e. Staff Profile — Full Details (All in One Page)
+
+```
+Staff Profile tabs:
+
+TAB 1: INFO
+  Name, Role, Mobile, Email, Aadhaar
+  Photo
+  Joining Date: 01-Apr-2024
+  Relieving Date: 31-Aug-2027 (if applicable)
+  Status: ACTIVE / INACTIVE (with active/inactive dates)
+  Address
+
+TAB 2: SALARY
+  Current Monthly Salary: ₹18,000 (from Sep 2027)
+  
+  Salary History (Salary amount changes):
+  ┌─────────────────────────────────────────────────────┐
+  │ From         │ Amount  │ Reason      │ Changed By    │
+  │ 01-Apr-2024  │ ₹12,000 │ Initial     │ Principal     │
+  │ 01-Sep-2025  │ ₹14,000 │ Increment   │ Principal     │
+  │ 01-Apr-2026  │ ₹15,000 │ Increment   │ Principal     │
+  │ 01-Sep-2027  │ ₹18,000 │ Increment   │ Principal     │
+  └─────────────────────────────────────────────────────┘
+  
+  Payment History (Month-wise received salary):
+  ┌─────────────────────────────────────────────────────┐
+  │ Month        │ Expected│ Paid    │ Mode │ Date Paid  │
+  │ April 2024   │ ₹12,000 │ ₹12,000 │ Cash │ 01-May-24  │
+  │ May 2024     │ ₹12,000 │ ₹10,000 │ UPI  │ 05-Jun-24  │
+  │ June 2024    │ ₹12,000 │ ₹12,000 │ Cash │ 01-Jul-24  │
+  │ ...          │         │         │      │            │
+  │ Sep 2027     │ ₹18,000 │ UNPAID  │ —    │ —          │  ← Pending
+  └─────────────────────────────────────────────────────┘
+  
+  Total Paid (this AY): ₹1,62,000
+  Total Due (this AY): ₹18,000 (Sep 2027 pending)
+  
+  [Pay This Month] button
+  
+  Previous Academic Year salary also visible
+  (Tab or dropdown: "2026-27 | 2027-28 | All Years")
+
+TAB 3: ATTENDANCE
+  Academic Year filter: [2027-28 ▼] [2026-27]
+  
+  Monthly Calendar View:
+  ┌────────────────────────────────────────┐
+  │ April 2027                             │
+  │ Mon Tue Wed Thu Fri Sat                │
+  │  P   P   P   A   P   H                │
+  │  P   L   P   P   P   H                │
+  │  ...                                  │
+  └────────────────────────────────────────┘
+  
+  Monthly Summary row:
+  April: P:22, A:1, L:1, H:2 (of 26 working days)
+  May:   P:25, A:0, L:0, H:1
+  
+  Legend: P=Present, A=Absent, H=Holiday, L=Leave, HD=Half Day, LT=Late
+
+TAB 4: CLASSES (for Teachers)
+  Academic Year: [2027-28 ▼]
+  Assigned Classes:
+    Class 5-A — Math
+    Class 6-B — Math
+  Class Teacher of: Class 5-A
+
+TAB 5: DOCUMENTS
+  Photo, Aadhaar, Qualification certificates
+  (Same real Supabase Storage upload as students)
+
+TAB 6: ACTIVITY LOG (Principal only)
+  Active Date: 01-Apr-2024
+  Inactive/Relieving Date: 31-Aug-2027 (if set)
+  Reason for leaving: [field]
+  
+  Status change history:
+  ACTIVE → ON_LEAVE (01-May-2025)
+  ON_LEAVE → ACTIVE (15-May-2025)
+  ACTIVE → RELIEVED (31-Aug-2027)
+```
+
+#### 1f. DB Changes (Simple)
+
+```sql
+-- Staff salary history table (new)
+CREATE TABLE staff_salary_history (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  staff_id UUID NOT NULL REFERENCES staff(id),
+  school_id UUID NOT NULL REFERENCES schools(id),
+  salary_amount BIGINT NOT NULL,
+  effective_from DATE NOT NULL,
+  reason TEXT,
+  changed_by UUID REFERENCES users(id),
+  created_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+-- Add relieving date to staff
+ALTER TABLE staff ADD COLUMN relieving_date DATE;
+ALTER TABLE staff ADD COLUMN relieving_reason TEXT;
+
+-- Staff status change log
+CREATE TABLE staff_status_history (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  staff_id UUID NOT NULL REFERENCES staff(id),
+  old_status TEXT,
+  new_status TEXT,
+  effective_date DATE,
+  reason TEXT,
+  changed_by UUID REFERENCES users(id),
+  created_at TIMESTAMPTZ DEFAULT NOW()
+);
+```
+
+---
+
+### 2. DOCUMENT UPLOAD & STORAGE
+
+**Current Problem:** Upload UI is fake (just toggles local state). Never calls Supabase storage.
+
+**Required Real Implementation:**
+
+#### 2a. Student Documents Real Upload
+```typescript
+// In StudentsManager.tsx handleDocumentUpload()
+
+const file = e.target.files?.[0];
+if (!file) return;
+
+// 1. Validate
+if (file.size > 5*1024*1024) { error('Max 5MB'); return; }
+if (!['image/jpeg', 'image/png', 'application/pdf'].includes(file.type)) {
+  error('Only JPG, PNG, PDF'); return;
+}
+
+// 2. Upload to Supabase Storage
+const filename = `${Date.now()}-${file.name}`;
+const { data, error: uploadError } = 
+  await supabase.storage
+    .from('student-documents')
+    .upload(`${schoolId}/${studentId}/${docType}/${filename}`, file);
+
+if (uploadError) { error(uploadError.message); return; }
+
+// 3. Get signed URL (valid 24 hours)
+const { data: { publicUrl } } = 
+  supabase.storage
+    .from('student-documents')
+    .getPublicUrl(`${schoolId}/${studentId}/${docType}/${filename}`);
+
+// 4. Save to student_documents table
+await supabase.from('student_documents').insert({
+  student_id: studentId,
+  doc_type: docType,
+  doc_url: publicUrl,
+  uploaded_by: userId,
+  uploaded_at: new Date()
+});
+
+// 5. UI update
+setDocuments(prev => prev.map(d => 
+  d.type === docType 
+    ? { ...d, uploaded: true, url: publicUrl } 
+    : d
+));
+```
+
+**Document Types (for students):**
+- PHOTO (profile picture)
+- AADHAAR
+- BIRTH_CERTIFICATE
+- TRANSFER_CERTIFICATE (for TC issued students)
+- MARKSHEET (for failed students)
+- ADMISSION_PROOF
+- OTHER
+
+#### 2b. Admission Form PDF Download
+
+```
+Current: window.print() only
+New: Add buttons
+  [Print] → window.print()
+  [Download PDF] → generatePDF() → download as admission_form_<studentId>.pdf
+  [Email] → send PDF via email
+
+PDF Generation using jsPDF library:
+```
+
+#### 2c. Document Cleanup
+```
+When student is deleted (soft-delete):
+- Student documents rows cascade deleted (RLS policy)
+- Supabase Storage files orphaned
+- Cleanup cron job monthly: delete files not referenced in student_documents table
+```
+
+---
+
+### 3. ACADEMIC YEAR – CLASS/SECTION/STREAM SETUP
+
+**Current Problem:** Classes configured in Settings separately from AY creation. Streams not persisted.
+
+**Required Implementation:**
+
+#### 3a. Class/Section/Stream Selection IN Academic Year Creation
+
+```
+Flow:
+1. Principal clicks "Create Academic Year"
+2. Form Step 1: Basic
+   - Label: "2027-28"
+   - Start Date: 01-Apr-2027
+   - End Date: 31-Mar-2028
+   - Board: CBSE / ICSE / State Board
+   
+3. Form Step 2: Classes & Sections
+   - Checkboxes for Classes 1-12
+   - User selects: [1] [2] [5] [10] [11] [12]
+   
+4. Form Step 3: Sections & Streams
+   For each selected class:
+     Class 1:
+       Sections: [A] [B] [C] checkbox
+       Capacity: ___ (e.g., 40)
+     Class 10:
+       Sections: [A] [B] checkbox
+       Capacity: ___ (e.g., 45)
+     Class 11:
+       Sections:
+         [A] Science (PCM/PCB/BIO) – Capacity: ___
+         [B] Commerce – Capacity: ___
+         [C] Arts – Capacity: ___
+     Class 12:
+       [A] Science – Capacity: ___
+       [B] Commerce – Capacity: ___
+       [C] Arts – Capacity: ___
+
+5. On Save:
+   - Create academic_years row
+   - For each (class, section, stream):
+     INSERT INTO sections(
+       academic_year_id, class_name, section, stream, capacity, class_teacher, student_count
+     ) VALUES(...)
+```
+
+**Database Changes:**
+```sql
+-- Add stream + capacity columns to sections
+ALTER TABLE sections ADD COLUMN stream TEXT; -- NULL for 1-10, 'Science'|'Commerce'|'Arts' for 11-12
+ALTER TABLE sections ADD COLUMN capacity INT DEFAULT 45;
+
+-- Add stream config to academic_years
+ALTER TABLE academic_years ADD COLUMN streams JSONB DEFAULT '["Science","Commerce","Arts"]'::jsonb;
+```
+
+#### 3b. Only ONE Active Year Enforcement
+
+```sql
+-- Trigger: When is_active = TRUE, set all others to FALSE
+CREATE OR REPLACE FUNCTION enforce_single_active_year()
+RETURNS TRIGGER AS $$
+BEGIN
+  IF NEW.is_active = TRUE THEN
+    UPDATE academic_years 
+    SET is_active = FALSE 
+    WHERE school_id = NEW.school_id 
+      AND id != NEW.id 
+      AND is_active = TRUE;
+  END IF;
+  RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+CREATE TRIGGER trigger_single_active_year
+AFTER UPDATE OF is_active ON academic_years
+FOR EACH ROW
+EXECUTE FUNCTION enforce_single_active_year();
+```
+
+#### 3c. Toggle Previous Year (with Confirmation Modal)
+
+```typescript
+// In AcademicYearManager.tsx
+
+const previousYears = academicYears.filter(ay => !ay.isActive);
+
+previousYears.map(py => (
+  <div key={py.id} className="card">
+    <h3>{py.label} (Closed)</h3>
+    <p>Students: {py.totalStudents}</p>
+    <button onClick={() => {
+      // Show modal: "Activating {py.label} will deactivate {current.label}. Continue?"
+      if (confirm(...)) {
+        updateAcademicYear(py.id, { is_active: true });
+      }
+    }}>Make Active</button>
+    <button onClick={() => {
+      // Correction mode toggle
+      setCorrectionMode(prev => !prev);
+      // Show banner: "Correction Mode ON — Edit attendance, results, marks with reason"
+    }}>Edit (Correction Mode)</button>
+    <button onClick={() => viewPreviousYearData(py.id)}>View Data</button>
+  </div>
+))
+```
+
+---
+
+### 4. STUDENT MASTER & ADMISSION ARCHIVE
+
+**Current Problem:** Classes assigned at admission; no separate assignment. No archive tabs.
+
+#### 4a. Separate Student Creation (No Class Assignment)
+
+```
+StudentsManager.tsx → CREATE TAB
+
+Form fields:
+  - Name *, DOB *, Gender *
+  - Aadhaar Number
+  - Photo (upload)
+  - Blood Group
+  - Father Name *, Father Phone *
+  - Mother Name
+  - Guardian Name (if minor)
+  - Address *
+  - Documents (Birth Cert, TC if switching school)
+
+On Save:
+  - Create students row (NO class assignment)
+  - Auto-create Parent user if parent mobile exists
+  - Show confirmation: "Student added. Now assign to academic year."
+  
+Student appears in "Unassigned" archive tab until class assigned.
+```
+
+#### 4b. Admission Archive with Status Tabs
+
+```
+Archive view has 5 tabs:
+
+1. ACTIVE
+   - Students assigned to current AY + active status
+   - Show: Name, Class, Section, Roll No, Status
+   - Actions: [View] [Edit] [Assign to Class] [Issue TC] [Mark Failed]
+
+2. INACTIVE  
+   - status = 'INACTIVE' (manually deactivated)
+   - Actions: [Reactivate] [View]
+
+3. TC ISSUED
+   - status = 'TC_ISSUED'
+   - Show: TC No, Issued Date
+   - Documents: [View TC] [View Marksheet]
+   - Actions: [View Profile] [Readmit (new AY)]
+
+4. ALUMNI
+   - Graduated from Class 12
+   - Show: Graduation Year
+   - Read-only archive
+
+5. UNASSIGNED
+   - status = 'ACTIVE' but NO student_academic_records for current AY
+   - Actions: [Assign to Class] [View] [Edit]
+   - Bulk action: [Select All] [Bulk Assign to Class]
+```
+
+**Database Changes:**
+```sql
+-- Add column to students (already exists, verify)
+ALTER TABLE students ADD CONSTRAINT check_status 
+  CHECK (status IN ('ACTIVE', 'INACTIVE', 'TC_ISSUED', 'ALUMNI'));
+```
+
+#### 4c. Mark Student as Failed
+
+```
+From student profile or archive:
+  [Mark as Failed] button
+  
+Modal form:
+  - Confirm student name & class
+  - Marksheet upload (required)
+  - Notes (optional)
+  
+On Save:
+  - UPDATE student_academic_records SET status='FAILED'
+  - Save marksheet to student_documents (doc_type='MARKSHEET')
+  - Log audit
+  
+Next year: Failed student appears in Unassigned students list
+           Can reassign to same or next class
+```
+
+#### 4d. Issue TC (Transfer Certificate)
+
+```
+From student profile:
+  [Issue TC] button → Modal form:
+  
+  - Confirm student name, class, section
+  - TC Number (auto-generated: TC-<School Code>-<YY>-<Serial>)
+  - Issue Date (default: today)
+  - Reason for leaving (Dropdown)
+  - TC Document upload (PDF)
+  - Remarks (optional)
+  
+On Save:
+  - UPDATE students SET status='TC_ISSUED', tc_number=..., tc_date=...
+  - Save TC document
+  - student_academic_records.status='TC'  [marks in academic record too]
+  - Log audit
+  
+TC students:
+  - Hidden from next AY assignment list (filter in assignment modal)
+  - Archive shows "TC ISSUED" tab
+  - Can be readmitted (see next section)
+```
+
+#### 4e. Readmission (From TC or Inactive)
+
+```
+From Archive:
+  TC ISSUED tab or INACTIVE tab
+  [Readmit] button
+  
+Modal form:
+  - Confirm student details
+  - New Academic Year (dropdown, default: current)
+  - New Class/Section/Stream (based on selected AY)
+  - Previous TC/Marksheet (if applicable)
+  - Fee Structure to apply
+  - New Roll Number (auto-suggest)
+  
+On Save:
+  - UPDATE students SET status='ACTIVE'
+  - INSERT INTO student_academic_records (new AY)
+  - Call generate_student_fee_schedule RPC
+  - Log audit as "READMISSION"
+  
+Note: Same student profile is reused (not duplicated)
+```
+
+---
+
+### 5. STUDENT CLASS ASSIGNMENT (Separate Flow)
+
+**Current Problem:** Class only assigned at admission. Not a separate step. Fee schedule never generated.
+
+#### 5a. Class Assignment Modal
+
+```
+Triggered from:
+  - Admission Archive → [Assign to Class]
+  - Student Profile → [Change Class] (mid-year move)
+  - Unassigned Tab → [Bulk Assign]
+
+Modal form:
+
+1. Academic Year *
+   Dropdown: [2027-28] [2026-27] (only active AY default)
+
+2. Class * 
+   Dropdown: populated from sections table where academic_year_id = selected AY
+   Options: [Class 1-A] [Class 1-B] [Class 11-Science-A] [Class 12-Commerce-B]
+
+3. Section (auto-filled based on class)
+   Display: Section = A
+
+4. Roll Number *
+   Auto-suggest: Query max(roll_number) for (AY, class, section) → suggest next
+   Field: [___4___] (editable, manual override)
+   Validation: On blur, check for duplicates → "Roll 4 already assigned. Swap roles?"
+
+5. Fee Structure *
+   Dropdown: All fee structures for selected AY
+   Filtered by class name
+   Example: [Class 1-8 Fee] [Class 9-10 Fee]
+
+6. Discount (optional)
+   [ ] Fixed (₹) or (%) 
+   Amount: [_________]
+
+7. Transport Required? *
+   [Yes] [No] toggle
+
+   IF YES:
+     - Vehicle *: Dropdown (list active vehicles)
+     - Route: Auto-filled from vehicle
+     - Boarding Stop *: Dropdown (stops for selected vehicle)
+     - Monthly Amount *: [_________]  (or auto-populated from transport_rates)
+     - Start Date *: Date picker (default: 01-Apr)
+
+On Save:
+  1. INSERT INTO student_academic_records(
+       student_id, academic_year_id, section_id, class_name, section,
+       stream (if 11/12), roll_number, fee_structure_id, discount_amount
+     )
+  
+  2. Call RPC: generate_student_fee_schedule(
+       student_id, academic_year_id, fee_structure_id, discount_amount
+     )
+     → Creates fee_installments rows with monthly dues
+  
+  3. IF transport = YES:
+     INSERT INTO student_transport_assignments(
+       student_id, academic_year_id, vehicle_id, stop_id, monthly_amount,
+       start_date, end_date (NULL)
+     )
+  
+  4. Log audit event
+  
+  5. Show success: "Student assigned to Class 1-A, Roll 4. Fee schedule generated."
+```
+
+#### 5b. Roll Number Auto-Suggest & Uniqueness
+
+```sql
+-- DB Constraint
+ALTER TABLE student_academic_records
+  ADD CONSTRAINT uq_roll_per_section_year
+  UNIQUE(academic_year_id, section_id, roll_number);
+
+-- UI Logic (TypeScript)
+const suggestRollNumber = async (academicYearId, sectionId) => {
+  const { data } = await supabase
+    .from('student_academic_records')
+    .select('roll_number')
+    .eq('academic_year_id', academicYearId)
+    .eq('section_id', sectionId)
+    .order('roll_number', { ascending: false })
+    .limit(1);
+  
+  return data?.[0]?.roll_number ? data[0].roll_number + 1 : 1;
+};
+
+// Manual override with conflict check
+const validateRollNumber = async (academicYearId, sectionId, rollNumber) => {
+  const { data } = await supabase
+    .from('student_academic_records')
+    .select('student_id')
+    .eq('academic_year_id', academicYearId)
+    .eq('section_id', sectionId)
+    .eq('roll_number', rollNumber);
+  
+  if (data?.length > 0) {
+    return { conflict: true, conflictStudent: data[0].student_id };
+  }
+  return { conflict: false };
+};
+```
+
+#### 5c. Mid-Year Class Change
+
+```
+Scenario: Student moved from Class 5-A to Class 5-B
+
+From student profile:
+  [Change Class] button
+  
+Modal: Same as class assignment, but:
+  - Current Class shown (read-only): "Class 5-A, Roll 3"
+  - New Class selection
+  - Effective Date (default: today)
+  
+On Save:
+  1. INSERT INTO student_class_movements(
+       student_id, academic_year_id, old_class, old_section, 
+       new_class, new_section, effective_date, reason
+     )
+  
+  2. Update student_academic_records:
+       section_id = new_section, roll_number = new_roll
+  
+  3. Fee recalculation: Does student get new fee installments?
+       Options: (a) Keep old, (b) Pro-rata new fee from effective_date
+       Decision: Keep old installments (simplicity)
+  
+  4. Log audit
+```
+
+---
+
+### 6. FEE SYSTEM – SCHEDULE GENERATION & PAYMENT
+
+**Current Problem:** Fee structure template never applied to students. No transport fee generation.
+
+#### 6a. Fee Structure (Template) Creation
+
+```
+Principal: Settings → Fee Structures → [Create]
+
+Form:
+  Academic Year *: [2027-28]
+  Class *: [Class 1-8] | [Class 9-10] | [Class 11-Science]
+  Fee Structure Name *: "Class 1-8 Monthly Fees"
+  
+  Fee Heads (add multiple):
+    [Fee Head Name]           [Monthly Amount]   [Due Months]
+    Tuition Fee               ₹5,000             Apr-Mar (all 12 months)
+    Activity Fee              ₹500               Apr-Mar
+    Library Fee               ₹200               Apr only
+    
+    [Add More]
+  
+  Monthly Due Dates:
+    April:     15
+    May:       15
+    June:      15
+    ... (rest auto-fill)
+  
+  Late Fee (optional):
+    Enabled: [✓]
+    Type: Fixed / Percentage
+    Amount: ₹500 / 5%
+    Grace Days: 7  (fee charged if paid after due_date + grace_days)
+    Max Cap: ₹5000 (fee won't exceed)
+
+On Save:
+  INSERT INTO fee_structures(
+    school_id, academic_year_id, class_name, name,
+    fee_heads: [{name, amount, frequency}, ...],
+    monthly_due_dates: [{month, due_date}, ...],
+    late_fee: {enabled, type, amount, grace_days, max_cap}
+  )
+```
+
+#### 6b. Fee Schedule Auto-Generation on Class Assignment
+
+```
+When student assigned to class (Section 5a, Step 2):
+
+Call RPC: generate_student_fee_schedule(
+  p_student_id,
+  p_academic_year_id,
+  p_fee_structure_id,
+  p_discount_amount,  -- Fixed amount (₹500) or percentage (10%)
+  p_is_rte            -- RTE student (govt pays, not parent)
+)
+
+RPC Logic:
+  1. Delete all UNPAID installments for (student, year)
+  2. For each fee head in fee_structure:
+       frequency = MONTHLY (default)
+       IF frequency == MONTHLY:
+         FOR month IN Apr-Mar:
+           amount = head.amount - (discount if monthly, else 0)
+           due_date = monthly_due_dates[month]
+           payer_type = GOVERNMENT if is_rte else PARENT
+           fee_type = detect from head.name (TUITION, TRANSPORT, etc)
+           
+           INSERT INTO fee_installments(
+             student_id, academic_year_id, month, due_date, 
+             fee_type, amount, payer_type, status='UNPAID'
+           )
+       
+       IF frequency == ANNUAL:
+         amount = head.amount - discount
+         due_date = first_month_date
+         INSERT INTO fee_installments(...)
+  
+  3. Return count of rows created (e.g., "12 monthly + 2 annual = 14 installments")
+
+Example Output:
+  Tuition: ₹5000/mo × 12 = ₹60,000
+  Activity: ₹500/mo × 12 = ₹6,000
+  Discount: -₹5,000
+  TOTAL: ₹61,000 in 12 monthly installments
+```
+
+#### 6c. Transport Fee as Separate Addon
+
+```
+When "Transport Required = Yes" in class assignment (Section 5a):
+
+Transport fee NOT in fee_structure template.
+Instead, create separate fee_installment row(s):
+
+INSERT INTO fee_installments(
+  student_id,
+  academic_year_id,
+  fee_type = 'TRANSPORT',
+  amount = monthly_transport_fee,  (e.g., ₹1000)
+  payer_type = 'PARENT',
+  frequency = 'MONTHLY',
+  start_month = start_date month,
+  end_month = end_date month (or March if ongoing)
+)
+
+Example:
+  Transport assignment: April to March, ₹1000/month
+  → Creates 12 installments of ₹1000 each
+
+Mid-year transport change:
+  If vehicle changed on July 15:
+    - Old assignment: end_date = July 15
+    - Old installments: June fully paid, July is partial (15 days paid = ₹500)
+    - New assignment: start_date = July 15, new_monthly_amount = ₹1200
+    - New installments: July partial (₹600 for 15 days), Aug-Mar ₹1200 each
+```
+
+#### 6d. Payment Allocation (Oldest Due First)
+
+```
+Student owes:
+  2026-27: ₹3,000 (previous year, overdue)
+  2027-28 April: ₹5,000 (current, due 15 Apr)
+  2027-28 May: ₹5,000 (current, due 15 May)
+  TOTAL DUE: ₹13,000
+
+Parent pays: ₹8,000
+
+Allocation (oldest first):
+  2026-27: ₹3,000 (PAID)
+  2027-28 April: ₹5,000 (PAID)
+  2027-28 May: ₹0 (not yet paid, but ₹0 allocation)
+  BALANCE OWED: ₹5,000
+
+RPC: record_fee_payment(
+  p_student_id, p_amount, p_method, p_transaction_id
+)
+
+Logic:
+  1. Get all UNPAID installments for student's ALL years, order by due_date ASC
+  2. Loop through, allocate amount:
+       remaining = 8000
+       FOR inst IN unpaid_installments (oldest first):
+         IF remaining >= inst.amount:
+           inst.paid_amount = inst.amount
+           remaining -= inst.amount
+           inst.status = 'PAID'
+         ELSE:
+           inst.paid_amount = remaining
+           remaining = 0
+           inst.status = 'PARTIAL'
+           BREAK
+  3. IF remaining > 0:
+       INSERT INTO advance_balances(
+         student_id, amount = remaining
+       )
+       [This credit used for future payments]
+  4. INSERT INTO payment_records(
+       student_id, academic_year_id, amount, method, date
+     )
+```
+
+#### 6e. Late Fee Calculation
+
+```
+Due date: April 15
+Grace period: 7 days (till April 22)
+Paid on: May 10 (28 days late, beyond grace)
+
+Late fee: 5% of amount = ₹250 (capped at ₹500 max)
+
+Payment screen shows:
+  Original due: ₹5,000
+  Late fee: ₹250
+  Total to pay: ₹5,250
+  
+If paid within grace (by Apr 22): ₹5,000
+If paid after grace: ₹5,000 + late_fee
+```
+
+#### 6f. Student Fee View (Per-Year Breakdown)
+
+```
+FeesView.tsx - Student sees:
+
+┌─────────────────────────────────────┐
+│ 2027-28 (Current Year) [ACTIVE]     │
+├─────────────────────────────────────┤
+│ Tuition Fees                        │
+│   April:  ₹5,000  [PAID]            │
+│   May:    ₹5,000  [PAID]            │
+│   June:   ₹5,000  [PARTIAL] ₹2,500  │
+│   July:   ₹5,000  [UNPAID]          │
+│ Current Due: ₹7,500                 │
+│                                     │
+│ Transport Fees                      │
+│   April:  ₹1,000  [PAID]            │
+│   May:    ₹1,000  [PAID]            │
+│   June:   ₹1,000  [PAID]            │
+│   Jul-Mar: ₹9,000 [UNPAID]          │
+│ Transport Due: ₹9,000               │
+│                                     │
+│ Current Year Total: ₹16,500         │
+├─────────────────────────────────────┤
+│ 2026-27 (Previous Year) [CLOSED]    │
+│ Outstanding: ₹3,500                 │
+├─────────────────────────────────────┤
+│ TOTAL DUE (All Years): ₹20,000      │
+│ Advance Balance: ₹500               │
+│ NET OUTSTANDING: ₹19,500            │
+├─────────────────────────────────────┤
+│ [Pay Online] [Download Receipt]     │
+└─────────────────────────────────────┘
+```
+
+---
+
+### 7. TRANSPORT SYSTEM – DATE TRACKING & HISTORY
+
+**Current Problem:** No start_date/end_date. No mid-year change history.
+
+#### 7a. Transport Assignment with Date Range
+
+```sql
+-- Modify student_transport_assignments table
+ALTER TABLE student_transport_assignments
+  ADD COLUMN start_date DATE NOT NULL DEFAULT CURRENT_DATE,
+  ADD COLUMN end_date DATE,  -- NULL if ongoing
+  ADD COLUMN reason TEXT,    -- Why assignment changed
+  ADD COLUMN changed_by UUID REFERENCES users(id);
+
+-- History view: all rows (ordered by start_date)
+```
+
+#### 7b. Mid-Year Vehicle Change
+
+```
+Scenario: Student in Vehicle A → needs Vehicle B
+
+From student profile:
+  [Edit Transport] button
+  
+Modal:
+  Current: Vehicle A, Route: North Route, Stop: Gate
+  Changed on: [Date picker] (e.g., July 15)
+  
+  New Vehicle *: [Dropdown] Vehicle B
+  New Route: [Auto-filled]
+  New Stop *: [Dropdown]
+  New Monthly Amount: [₹________]
+  
+  Reason: [Dropdown]  "Vehicle breakdown", "Student relocation", "Cancel service"
+
+On Save:
+  1. Set old assignment end_date = changed_on_date
+  2. INSERT new assignment with start_date = changed_on_date
+  3. Update fee schedule:
+       - Old transport installments (after change_date) → set status='CANCELLED'
+       - New transport installments (from change_date) → create with new amount
+  4. Log audit with "TRANSPORT_CHANGE" action
+  5. Parent sees both old and new in history
+```
+
+#### 7c. Transport History View
+
+```
+Student profile → Transport tab:
+
+┌─────────────────────────────────────────────────┐
+│ ACTIVE TRANSPORT (Current)                      │
+│ Vehicle: Bus-AB-01                              │
+│ Route: North Route                              │
+│ Stop: Gate No. 3                                │
+│ Fee: ₹1,000/month                               │
+│ Since: 01-Apr-2027                              │
+│ Status: Active                                  │
+└─────────────────────────────────────────────────┘
+
+HISTORY:
+│ 01-Jun-2027 to 15-Jul-2027                      │
+│ Vehicle: Bus-AB-01 → Bus-CD-02                  │
+│ Reason: Vehicle breakdown                       │
+│ Fee: ₹1,000 → ₹1,200                            │
+
+│ 01-Apr-2027 to 31-May-2027                      │
+│ Vehicle: Bus-AB-01                              │
+│ Route: North Route                              │
+│ Fee: ₹1,000/month                               │
+```
+
+---
+
+### 8. YEAR CLOSING – WITHOUT AUTO-PROMOTION
+
+**Current Problem:** yearClosing.service.ts auto-promotes students. Spec says "NO auto promotion".
+
+#### 8a. Simplified Year Closing (Manual Only)
+
+```
+Principal: Academic Year Manager → Previous Year Card → [Close Year]
+
+Modal:
+1. Confirm year: "2026-27 academic year"
+2. Pre-close checklist:
+   ✓ All salary paid
+   ✓ Attendance records complete
+   ✓ Exam results entered
+   [Close] button enabled if all ✓
+   
+3. On close:
+   - SET is_closed = TRUE
+   - Make read-only (attendance, results, timetable)
+   - Does NOT auto-promote students
+   
+   For failed students:
+   - Principal manually assigns to same class in new AY
+   
+   For TC students:
+   - Marked as TC_ISSUED, hidden from next year
+   
+   For others:
+   - Unassigned in new year; principal manually assigns
+
+4. Fee carry-forward:
+   Outstanding fees from 2026-27 → stay in old year
+   Show as "Previous Year Dues" in student fee view
+   Can be paid in new year (oldest-first allocation includes them)
+```
+
+#### 8b. Correction Mode (Locked Year Edits)
+
+```
+After year is closed (is_closed = TRUE):
+
+Previous year card shows [Enable Correction Mode] toggle
+
+When Correction Mode ON:
+  - Warning banner: "You're editing a closed year. All changes require reason."
+  - Attendance/Results/Timetable cells become editable
+  - On any edit:
+    - Input dialog: "Reason for correction? *"  (required)
+    - Options: "Data entry error", "Late submission", "Attendance omitted", "Other"
+  
+  - Log to audit_logs:
+    action = 'YEAR_CORRECTION'
+    entity_type = 'attendance' | 'result' | 'timetable'
+    entity_id = record_id
+    details: {
+      old_value, new_value, reason, corrected_by, corrected_at
+    }
+
+Principal can toggle off after edits.
+```
+
+---
+
+### 9. SCHOOL BILLING – OLDEST-DUE-FIRST
+
+**Current Problem:** BillingManager just records payments without allocation.
+
+#### 9a. Billing Years & Outstanding
+
+```
+School BASIC plan: ₹2,999/year
+Billing schedule: Jul-Jun (financial year)
+
+Billing years (per school):
+2026-27: ₹2,999 (Jul 2026 - Jun 2027)
+2027-28: ₹2,999 (Jul 2027 - Jun 2028)
+
+If unpaid:
+2026-27: Outstanding ₹2,999
+2027-28: Outstanding ₹2,999
+TOTAL: ₹5,998
+
+School pays: ₹4,000
+
+Allocation (oldest first):
+2026-27: ₹2,999 (PAID)
+2027-28: ₹1,001 (partial)
+REMAINING: ₹998
+
+OR: Advance credit (if overpaid)
+Paid: ₹6,000
+2026-27: ₹2,999 (PAID)
+2027-28: ₹2,999 (PAID)
+Advance: ₹1,002 (credit for future years)
+```
+
+#### 9b. RPC: record_school_payment (Oldest-Due-First)
+
+```sql
+CREATE OR REPLACE FUNCTION record_school_payment(
+  p_school_id UUID,
+  p_amount DECIMAL,
+  p_transaction_id TEXT,
+  p_method TEXT,  -- 'UPI', 'NEFT', 'CHEQUE', 'CASH'
+  p_notes TEXT
+)
+RETURNS TABLE (year_id UUID, allocated_amount DECIMAL) AS $$
+DECLARE
+  v_remaining DECIMAL := p_amount;
+  v_year RECORD;
+  v_allocated DECIMAL;
+  v_payment_id UUID;
+BEGIN
+  -- Record payment
+  INSERT INTO school_payments(school_id, amount, txn_id, method, notes, paid_at)
+  VALUES(p_school_id, p_amount, p_transaction_id, p_method, p_notes, NOW())
+  RETURNING id INTO v_payment_id;
+  
+  -- Allocate to oldest unpaid years
+  FOR v_year IN 
+    SELECT * FROM school_billing_years 
+    WHERE school_id = p_school_id 
+      AND total_paid < annual_amount
+    ORDER BY start_date ASC
+  LOOP
+    v_allocated := LEAST(v_remaining, v_year.annual_amount - v_year.total_paid);
+    
+    UPDATE school_billing_years 
+    SET total_paid = total_paid + v_allocated
+    WHERE id = v_year.id;
+    
+    INSERT INTO school_payment_allocations(payment_id, billing_year_id, allocated_amount)
+    VALUES(v_payment_id, v_year.id, v_allocated);
+    
+    v_remaining := v_remaining - v_allocated;
+    
+    RETURN QUERY SELECT v_year.id, v_allocated;
+  END LOOP;
+  
+  -- Advance balance if overpaid
+  IF v_remaining > 0 THEN
+    UPDATE school_billing_schedules
+    SET advance_balance = advance_balance + v_remaining
+    WHERE school_id = p_school_id;
+  END IF;
+END;
+$$ LANGUAGE plpgsql SECURITY DEFINER;
+```
+
+---
+
+---
+
+## Implementation Phases
+
+### Phase 1 – Database Migrations (new migration file `0017_full_flow_fixes.sql`)
+
+**All DB changes for sections 1-9 above (staff, documents, AY setup, roll numbers, streams, transport dates, billing):**
+
+```sql
+-- 1. Staff salary pro-rata
+ALTER TABLE staff ADD COLUMN relieving_date DATE;
+ALTER TABLE staff ADD COLUMN salary_type TEXT DEFAULT 'MONTHLY';
+ALTER TABLE staff_attendance ADD COLUMN working_days INT DEFAULT 30;
+
+-- 2. Stream column on sections
+ALTER TABLE sections ADD COLUMN stream TEXT;
+ALTER TABLE sections ADD COLUMN capacity INT DEFAULT 45;
+
+-- 3. Roll number unique constraint
+ALTER TABLE student_academic_records
+  ADD CONSTRAINT uq_roll_per_section_year
+  UNIQUE(academic_year_id, section_id, roll_number);
+
+-- 4. Only-one-active-year trigger
+CREATE OR REPLACE FUNCTION enforce_single_active_year()
+RETURNS TRIGGER AS $$
+BEGIN
+  IF NEW.is_active = TRUE THEN
+    UPDATE academic_years 
+    SET is_active = FALSE 
+    WHERE school_id = NEW.school_id AND id != NEW.id;
+  END IF;
+  RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+CREATE TRIGGER trigger_single_active_year
+BEFORE UPDATE OF is_active ON academic_years
+FOR EACH ROW
+EXECUTE FUNCTION enforce_single_active_year();
+
+-- 5. Transport assignment with dates
+ALTER TABLE student_transport_assignments 
+  ADD COLUMN start_date DATE DEFAULT CURRENT_DATE,
+  ADD COLUMN end_date DATE,
+  ADD COLUMN reason TEXT,
+  ADD COLUMN changed_by UUID REFERENCES users(id);
+
+-- 6. School billing allocations
+ALTER TABLE school_payment_allocations ADD COLUMN allocated_amount DECIMAL;
+
+-- 7. Late fee schema (already exists, just verify)
+-- fee_structures.late_fee JSONB with {enabled, type, amount, grace_days, max_cap}
+
+-- 8. Academic year streams config
+ALTER TABLE academic_years 
+  ADD COLUMN streams JSONB DEFAULT '["Science","Commerce","Arts"]'::jsonb;
+
+-- 9. Update generate_student_fee_schedule RPC (see Section 6b above)
+-- Update record_school_payment RPC for oldest-due-first (see Section 9b above)
+```
+
+**Files:** `supabase/migrations/0017_full_flow_fixes.sql`
+
+---
+
+### Phase 2 – Staff Salary System (Simple Implementation)
+
+**Files:**
+- `src/features/principal/components/SalaryLedger.tsx` — month-wise salary list + [Pay] button
+- `src/features/principal/components/StaffProfile.tsx` (new/refactor) — full profile with 6 tabs
+- `src/services/staff.service.ts` — add salary history, relieving_date, status log
+- `src/features/principal/components/StaffManager.tsx` — add salary field on create + salary change from profile
+
+**Key Functions:**
+- `getSalaryHistory(staffId)` → salary amount change log over time
+- `updateSalary(staffId, newAmount, effectiveFrom, reason)` → updates + logs to staff_salary_history
+- `getPaymentHistory(staffId, academicYearId)` → month-wise payments with expected vs actual
+- `recordSalaryPayment(staffId, month, amount, method, txnId, note)` → saves salary_payments row
+- `getSalaryReminders(schoolId)` → list of staff with unpaid salary for current month
+- `getAttendanceHistory(staffId, academicYearId)` → all attendance records formatted monthly
+
+---
+
+### Phase 3 – Document Upload & Storage (Real Supabase Integration)
+
+**Files:**
+- `src/features/principal/components/StudentsManager.tsx` → `handleDocumentUpload()` — real upload
+- `src/features/student/components/DocumentUpload.tsx` (new) — shared component
+- `src/services/storage.service.ts` (new) — Supabase storage wrapper
+- `src/components/AdmissionFormPrint.tsx` — add [Download PDF] button
+
+**Key Functions:**
+- `uploadToStorage(file, path)` → returns publicUrl
+- `generateAdmissionFormPDF(studentData)` → jsPDF with all fields
+- `listStudentDocuments(studentId)` → from student_documents table
+- `deleteOrphanedStorageFiles()` → cleanup cron job
+
+---
+
+### Phase 4 – Academic Year – Class/Section/Stream Selection
+
+**Files:**
+- `src/features/principal/components/AcademicYearManager.tsx` — refactor to 3-step form
+- `src/services/academicYear.service.ts` — add `createWithSections()` RPC call
+- `src/context/AcademicYearContext.tsx` — store selected sections, stream config
+
+**Key Functions:**
+- `createAcademicYearWithSections(label, dates, board, classConfig, streamConfig)` → RPC
+- `validateSingleActiveYear(schoolId)` → enforces only 1 active
+- `toggleActiveYear(yearId)` → shows confirmation modal, calls RPC
+
+---
+
+### Phase 5 – Student Master & Admission Archive
+
+**Files:**
+- `src/features/principal/components/StudentsManager.tsx` — refactor into tabs
+- `src/services/student.service.ts` — add archive query filters
+- `src/components/AdmissionArchiveTabs.tsx` (new) — tab bar component
+
+**Key Functions:**
+- `getStudentsInArchive(filter: 'ACTIVE'|'INACTIVE'|'TC'|'ALUMNI'|'UNASSIGNED')` → filtered query
+- `markStudentAsFailed(studentId, marksheetUrl)` → sets status + doc
+- `issueTCToStudent(studentId, tcNumber, tcDocUrl)` → sets TC_ISSUED status
+- `readmitStudent(studentId, newAYId)` → reactivates + calls class assignment modal
+
+---
+
+### Phase 6 – Student Class Assignment Modal (Separate Flow)
+
+**Files:**
+- `src/features/principal/components/StudentClassAssignmentModal.tsx` (new)
+- `src/services/student.service.ts` — add `assignToAcademicYear()` + fee schedule call
+- `src/features/principal/components/StudentsManager.tsx` — trigger modal on [Assign]
+
+**Key Functions:**
+- `suggestRollNumber(academicYearId, sectionId)` → next number
+- `validateRollNumberConflict(academicYearId, sectionId, rollNumber)` → duplicate check
+- `assignStudentToClass(studentId, classConfig, feeStructureId, discount, transport)` → atomic flow
+- `generateFeeInstallments(studentId, academicYearId, feeStructureId, discount)` → RPC call
+
+---
+
+### Phase 7 – Fee System – Template to Schedule Generation
+
+**Files:**
+- `src/features/principal/components/FeeLedger.tsx` — enhance with per-year breakdown
+- `src/services/fee.service.ts` — add `generateSchedule()` RPC wrapper
+- `supabase/migrations/0017_full_flow_fixes.sql` — verify/fix `generate_student_fee_schedule` RPC
+- `src/features/student/components/FeesView.tsx` — show per-year outstanding
+
+**Key Functions:**
+- `createFeeStructure(classConfig, feeHeads, dueDates)` → template
+- `generateStudentFeeSchedule(studentId, yearId, feeStructureId, discount)` → RPC
+- `calculateLateFee(installment, paidDate)` → late fee logic
+- `getPerYearOutstanding(studentId)` → {2026-27: ₹3000, 2027-28: ₹5000, ...}
+
+---
+
+### Phase 8 – Transport System – Date Tracking & History
+
+**Files:**
+- `src/features/principal/components/TransportManager.tsx` — enhance with edit/history
+- `src/services/transport.service.ts` — add mid-year change tracking
+- `supabase/migrations/0017_full_flow_fixes.sql` — already covered in Phase 1
+
+**Key Functions:**
+- `assignStudentToTransport(studentId, vehicleId, stopId, amount, startDate)` → creates row
+- `changeStudentTransport(studentId, newVehicleId, newStop, effectiveDate, reason)` → sets end_date + new row
+- `getTransportHistory(studentId, academicYearId)` → ordered by start_date
+- `generateTransportInstallments(transportAssignmentId)` → creates fee_installments with date logic
+
+---
+
+### Phase 9 – School Billing – Oldest-Due-First
+
+**Files:**
+- `src/features/super-admin/components/BillingManager.tsx` — show year-by-year breakdown
+- `src/services/billing.service.ts` — update to call fixed RPC
+- `supabase/migrations/0017_full_flow_fixes.sql` — replace `record_school_payment` RPC (see Section 9b)
+
+**Key Functions:**
+- `recordSchoolPayment(schoolId, amount, transactionId, method)` → calls fixed RPC
+- `getSchoolBillingWithBreakdown(schoolId)` → shows per-year outstanding + advance balance
+- `allocateOldestDue(schoolId, paymentAmount)` → billing year allocation logic
+
+---
+
+### Phase 10 – Year Closing – WITHOUT Auto-Promotion + Correction Mode
+
+**Files:**
+- `src/features/principal/components/AcademicYearManager.tsx` — add close button + correction mode toggle
+- `src/services/yearClosing.service.ts` — remove auto-promotion logic; simplify to close-only
+- `src/context/AcademicYearContext.tsx` — add `isCorrectionMode` flag
+- `src/features/principal/components/AttendanceHub.tsx`, `TestsManager.tsx`, etc. — check correction mode before allowing edits
+
+**Key Functions:**
+- `closeAcademicYear(yearId)` → simple: set is_closed=TRUE (no promotion)
+- `enableCorrectionMode(yearId)` → toggles flag
+- `saveWithCorrection(entityType, entityId, oldValue, newValue, reason)` → logs to audit_logs with reason
+
+---
+
+## File Dependency Order (Build in This Order)
+
+1. **Database migrations** (Phase 1) — all table changes first
+2. **Utility services** (Phase 2-3) — staff salary, document storage
+3. **Academic year** (Phase 4) — foundation for everything else
+4. **Student archive** (Phase 5) — list/filter students
+5. **Class assignment modal** (Phase 6) — new separate flow
+6. **Fee system** (Phase 7) — RPC call on assignment
+7. **Transport** (Phase 8) — date tracking in assignment
+8. **School billing** (Phase 9) — older RPC update
+9. **Year closing** (Phase 10) — final module
+
+---
+
+## Critical Business Rules Checklist
+
+- [ ] Roll number unique per (academic_year, section, number)
+- [ ] Only 1 active academic year per school
+- [ ] Student class assignment separate from student creation
+- [ ] Fee structure is template; generates installments on assignment
+- [ ] Transport fee separate addon (not in fee structure)
+- [ ] Payment allocation: oldest due first (both student and school)
+- [ ] Staff salary: pro-rata for partial months + attendance-based deductions
+- [ ] TC students hidden from next year assignment list
+- [ ] Failed students assigned to same class next year
+- [ ] Previous year data read-only without correction mode
+- [ ] Correction mode edits require reason + audit log
+- [ ] NO auto-promotion (manual only)
+- [ ] Document uploads real to Supabase Storage
+- [ ] Admission form downloadable as PDF
+- [ ] Transport history tracked (mid-year changes with dates)
+- [ ] Per-year outstanding shown in student fee view
+
+---
+
+## Final Verification / Testing Checklist
+
+1. **Super Admin creates school** → all 6 fields → principal login → forced pwd change
+2. **Principal creates AY** → select classes 1–5, 11-Science → sections auto-created → toggle confirms 1 active
+3. **Add student** → no class selection → appears in "Unassigned" tab
+4. **Documents** → student photo, aadhaar uploads → real Supabase storage → signed URLs work
+5. **Assign student to class** → roll auto-suggests → fee installments generated → transport addon works
+6. **Fee payment** → ₹2500 vs ₹3000 → oldest first allocation → April+May paid, June partial
+7. **Staff salary** → salary generation → pro-rata for join/relief dates → attendance impacts amount
+8. **Transport mid-year** → vehicle change on July 15 → old end_date set → new starts → history tracked
+9. **TC student** → issue TC → hidden from next AY assignment → readmission works
+10. **Year closing** → close without auto-promotion → correction mode toggles → edits logged with reason
+11. **School billing** → 2-year dues → payment allocated oldest first → advance balance shown
+12. **Admission form PDF** → download with full biodata, streams, roll numbers
+13. **12th class streams** → Science/Commerce/Arts persisted → different roll numbers per stream
