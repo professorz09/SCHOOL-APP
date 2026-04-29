@@ -952,11 +952,17 @@ export const FeeLedger: React.FC<Props> = ({ onBack }) => {
                 <select value={regenStructureId} onChange={e => setRegenStructureId(e.target.value)}
                   className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3 py-3 text-sm font-bold text-slate-900 outline-none focus:border-blue-500 mb-4">
                   <option value="">— Pick a structure —</option>
-                  {feeStructures.map(s => (
-                    <option key={s.id} value={s.id}>
-                      {s.name} ({s.className}){s.className === selected.className ? ' ★ matches class' : ''}
-                    </option>
-                  ))}
+                  {feeStructures.map(s => {
+                    // selected.className is `${class}-${section}`; structures
+                    // are keyed by class only — strip the section suffix so
+                    // the ★ indicator actually fires for the right structure.
+                    const baseClass = selected.className.split('-')[0]?.trim() ?? selected.className;
+                    return (
+                      <option key={s.id} value={s.id}>
+                        {s.name} ({s.className}){s.className === baseClass ? ' ★ matches class' : ''}
+                      </option>
+                    );
+                  })}
                 </select>
               )}
 

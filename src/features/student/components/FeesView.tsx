@@ -61,7 +61,9 @@ export const FeesView: React.FC<Props> = ({ onBack }) => {
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [previewUrl, setPreviewUrl] = useState<string | null>(null);
   const [previewLoading, setPreviewLoading] = useState(false);
-  const [feeSummary, setFeeSummary] = useState({ tuition: 0, transport: 0, total: 0 });
+  const [feeSummary, setFeeSummary] = useState<{
+    tuition: number; transport: number; exam: number; other: number; total: number;
+  }>({ tuition: 0, transport: 0, exam: 0, other: 0, total: 0 });
   const [isRte, setIsRte] = useState(false);
   const [installments, setInstallments] = useState<FeeInstallment[]>([]);
   const [yearGroups, setYearGroups] = useState<YearGroup[]>([]);
