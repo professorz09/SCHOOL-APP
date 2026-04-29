@@ -632,6 +632,15 @@ export const feeService = {
       cursor.setMonth(cursor.getMonth() + 1);
     }
     if (rows.length) {
+      // Idempotency guard — if a previous attempt already inserted some
+      // rows for this assignment, drop the un-touched ones and re-insert
+      // the full set so a retry cannot leave duplicates behind. Only
+      // unpaid rows are removed, paid receipts stay intact.
+      await supabase.from('fee_installments').delete()
+        .eq('related_id', assignmentId)
+        .eq('fee_type', 'TRANSPORT')
+        .eq('paid_amount', 0)
+        .eq('write_off_amount', 0);
       const { error } = await supabase.from('fee_installments').insert(rows);
       if (error) throw new Error(error.message);
       await this.refreshAll();
@@ -639,13 +648,103 @@ export const feeService = {
   },
 
   async removeTransportFeeSchedule(assignmentId: string): Promise<void> {
-    // Drop only future, unpaid rows tied to this assignment.
-    const { error } = await supabase.from('fee_installments').delete()
+    // Backwards-compat shim: cancel from today forward.
+    await this.cancelTransportInstallmentsAfter(
+      assignmentId, new Date().toISOString().slice(0, 10),
+    );
+  },
+
+  /**
+   * Cancel TRANSPORT installments tied to `assignmentId` whose `due_date >=
+   * fromDate`. UNPAID rows are deleted; PARTIAL rows have their `amount`
+   * frozen at `paid_amount + write_off_amount` and are flagged
+   * `status = 'CANCELLED'` so they no longer show as outstanding but the
+   * receipt history is preserved.
+   */
+  async cancelTransportInstallmentsAfter(
+    assignmentId: string, fromDate: string,
+  ): Promise<{ deleted: number; cancelled: number }> {
+    // Pull the affected rows first so we can split them.
+    const { data: rows, error: rErr } = await supabase
+      .from('fee_installments')
+      .select('id, paid_amount, write_off_amount')
       .eq('related_id', assignmentId)
-      .eq('paid_amount', 0)
-      .gte('due_date', new Date().toISOString().slice(0, 10));
-    if (error) throw new Error(error.message);
+      .eq('fee_type', 'TRANSPORT')
+      .gte('due_date', fromDate);
+    if (rErr) throw new Error(rErr.message);
+
+    const fresh = ((rows ?? []) as { id: string; paid_amount: number; write_off_amount: number }[])
+      .filter(r => Number(r.paid_amount) === 0 && Number(r.write_off_amount) === 0);
+    const partial = ((rows ?? []) as { id: string; paid_amount: number; write_off_amount: number }[])
+      .filter(r => Number(r.paid_amount) > 0 || Number(r.write_off_amount) > 0);
+
+    if (fresh.length) {
+      const { error } = await supabase.from('fee_installments').delete().in('id', fresh.map(r => r.id));
+      if (error) throw new Error(error.message);
+    }
+    for (const r of partial) {
+      const frozen = Number(r.paid_amount) + Number(r.write_off_amount);
+      const { error } = await supabase.from('fee_installments')
+        .update({ status: 'CANCELLED', amount: frozen, updated_at: new Date().toISOString() })
+        .eq('id', r.id);
+      if (error) throw new Error(error.message);
+    }
     await this.refreshAll();
+    return { deleted: fresh.length, cancelled: partial.length };
+  },
+
+  /**
+   * Preview the installment delta a transport change will produce — how
+   * many UNPAID rows (and total ₹) will be cancelled vs how many new rows
+   * (and total ₹) will be created. Read-only.
+   */
+  async previewTransportInstallmentDelta(input: {
+    studentId: string;
+    currentAssignmentId: string | null;
+    effectiveDate: string;
+    newMonthlyAmount: number;
+    newEndDate?: string | null;
+  }): Promise<{
+    cancelCount: number; cancelAmount: number;
+    newCount: number; newAmount: number;
+  }> {
+    // Cancellation side: existing future rows on the current assignment.
+    let cancelCount = 0, cancelAmount = 0;
+    if (input.currentAssignmentId) {
+      const { data: rows } = await supabase
+        .from('fee_installments')
+        .select('amount, paid_amount, write_off_amount')
+        .eq('related_id', input.currentAssignmentId)
+        .eq('fee_type', 'TRANSPORT')
+        .gte('due_date', input.effectiveDate);
+      const list = (rows ?? []) as { amount: number; paid_amount: number; write_off_amount: number }[];
+      cancelCount = list.length;
+      cancelAmount = list.reduce(
+        (s, r) => s + Math.max(0, Number(r.amount) - Number(r.paid_amount) - Number(r.write_off_amount)),
+        0,
+      );
+    }
+
+    // Creation side: count months in [effectiveDate, end-of-AY or newEndDate].
+    const schoolId = getSchoolId();
+    const { data: ay } = await supabase
+      .from('academic_years').select('id, end_date')
+      .eq('school_id', schoolId).eq('is_active', true).maybeSingle();
+    const ayRow = ay as { id: string; end_date: string } | null;
+    if (!ayRow) return { cancelCount, cancelAmount, newCount: 0, newAmount: 0 };
+
+    const start = new Date(input.effectiveDate);
+    const end = input.newEndDate ? new Date(input.newEndDate) : new Date(ayRow.end_date);
+    const yearEnd = new Date(ayRow.end_date);
+    const cap = end < yearEnd ? end : yearEnd;
+    const cursor = new Date(start);
+    cursor.setDate(10);
+    let newCount = 0;
+    while (cursor <= cap) {
+      newCount += 1;
+      cursor.setMonth(cursor.getMonth() + 1);
+    }
+    return { cancelCount, cancelAmount, newCount, newAmount: newCount * input.newMonthlyAmount };
   },
 
   // ── Backwards-compat helpers (no-op cache writes — RPCs do the work) ────

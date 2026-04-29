@@ -556,3 +556,92 @@ specific function / policies it owns):
    admins) to delete the underlying object — a teacher delete would orphan
    the private file. The DELETE policy is now principal-only, matching the
    bucket. INSERT and UPDATE remain principal+teacher.
+
+## Task #6 — Transport date tracking & assignment history
+
+Problem: `student_transport_assignments` already had `start_date` /
+`end_date` / `is_active` columns plus `reason` + `changed_by` from 0017,
+but the UI surfaced only the *active* row, mid-year vehicle/stop changes
+forgot to clean up future TRANSPORT installments, and there was no
+"vehicle out of service → bulk move every student" workflow at all.
+
+### Migration 0025 (additive)
+
+- `student_transport_assignments` gains `end_reason TEXT` (why a row was
+  closed — distinct from the existing `reason`, which is "why this row
+  was created") and `ended_by UUID REFERENCES users(id)`.
+- Indexes: `sta_student_start_idx (student_id, start_date DESC)` for the
+  per-student timeline view, and partial `sta_vehicle_active_idx
+  (vehicle_id) WHERE is_active` for the bulk-reassign hot path.
+- New SECURITY DEFINER RPC
+  `bulk_close_transport_assignments(p_from_vehicle, p_effective_date,
+  p_end_reason)`:
+    - Cancels future-dated TRANSPORT installments for the affected
+      assignments — UNPAID rows are DELETEd, partially-paid rows are
+      flipped to `status='CANCELLED'` with `amount` frozen at
+      `paid_amount + write_off_amount` so they no longer show as
+      outstanding but the receipt history stays intact.
+    - Updates every active row on the source vehicle to
+      `is_active=FALSE, end_date=p_effective_date - 1, end_reason=…,
+      ended_by=auth.uid()`.
+    - Returns `(assignment_id, student_id, stop_id, monthly_amount,
+      academic_year_id)` so the caller can rebuild new rows on the target
+      vehicle.
+    - Authz: super admin OR same-school staff.
+
+### Service layer
+
+- `transport.service.assignStudent(...)` — backwards-compatible
+  positional API, but two new optional trailing args (`endDate?`,
+  `reason?`) are now accepted, the close-the-old-row update writes
+  `end_reason`, and after insert the service auto-generates monthly
+  TRANSPORT installments via `feeService.addTransportFeeSchedule(...)`
+  (lazy import, non-fatal on failure).
+- `transport.service.removeStudentAssignment(studentId, reason?)` — now
+  takes a reason, writes `end_reason`, and cancels future installments
+  via the new `feeService.cancelTransportInstallmentsAfter(...)` shim.
+- `transport.service.changeStudentTransport({studentId, effectiveDate,
+  newVehicleId, newStopId, newMonthlyAmount, reason, endDate?})` — guards
+  reason / date / amount, then funnels into `assignStudent` (which
+  closes-old + inserts-new + regenerates installments in one path).
+- `transport.service.getTransportHistory(studentId, academicYearId?)` —
+  full assignment timeline (active + closed) ordered newest-first, with
+  vehicle_no + class label resolved.
+- `transport.service.bulkReassignVehicle({fromVehicleId, toVehicleId,
+  toStopId, effectiveDate, reason})` — calls the
+  `bulk_close_transport_assignments` RPC then re-creates each closed
+  student's assignment on the target vehicle (preserving their
+  `monthly_amount` and academic year), audit-logs the operation, and
+  returns `{ moved }`.
+- `TRANSPORT_CHANGE_REASONS` exported as a typed list (vehicle
+  breakdown / student relocation / stop change / fare revision / cancel
+  service / other) so principal/parent UIs share one vocabulary.
+- `fee.service.cancelTransportInstallmentsAfter(assignmentId, fromDate)`
+  — used by the principal flows above; `removeTransportFeeSchedule()`
+  is now a thin shim that delegates to it.
+- `fee.service.previewTransportInstallmentDelta(...)` — read-only helper
+  the UI can call before showing a confirmation modal (currently unused
+  but available for the next round of polish).
+
+### UI
+
+- **`TransportManager` (Vehicles tab)** — every vehicle row with > 0
+  active students now has a Shuffle (amber) icon next to Trash. Clicking
+  it opens the **Bulk Reassign** modal (target vehicle, target stop,
+  effective date, reason dropdown + optional note), which calls
+  `bulkReassignVehicle` and surfaces a "Moved N students" confirmation.
+- **`StudentsManager` profile DOCS tab** — the static "Transport
+  Assignment" panel was replaced with:
+    - Active card: vehicle / type / route / stop / driver / phone /
+      monthly fee / start date + a rose "Cancel transport service"
+      button that opens a Cancel modal (reason required).
+    - **Change / Assign** button (top-right) opens a Change Transport
+      modal (vehicle, stop, monthly fee, effective date, reason dropdown
+      + optional note) backed by `changeStudentTransport`.
+    - **Assignment History** timeline (only renders when > 1 row
+      exists): each row shows vehicle + stop, date range, amount,
+      ACTIVE / CLOSED pill, and the start/end reasons in italic.
+- The existing `TransportView` parent/student page already showed the
+  active assignment from the cached `getAssignmentForStudent` and
+  continues to work unchanged — the new history endpoint will be wired
+  into that view in a follow-up if requested.

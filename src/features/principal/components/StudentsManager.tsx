@@ -14,7 +14,10 @@ import { useUIStore } from '../../../store/uiStore';
 type ParentCredsView = { mobileNumber: string; password: string };
 import { schoolInfoService, SchoolInfo } from '../../../services/schoolInfo.service';
 import { AdmissionFormPrint } from '../../../components/AdmissionFormPrint';
-import { transportService, TransportVehicle, StudentTransportAssignment } from '../../../services/transport.service';
+import {
+  transportService, TransportVehicle, StudentTransportAssignment,
+  TRANSPORT_CHANGE_REASONS,
+} from '../../../services/transport.service';
 import { storageService } from '../../../services/storage.service';
 import { StudentClassAssignmentModal } from './StudentClassAssignmentModal';
 
@@ -85,6 +88,24 @@ export const StudentsManager: React.FC<Props> = ({ onBack, initialView }) => {
   const [academicRecord, setAcademicRecord] = useState<StudentAcademicRecord | null>(null);
   const [activeProfileTab, setActiveProfileTab] = useState<'INFO' | 'FAMILY' | 'RESULTS' | 'FEES' | 'DOCS'>('INFO');
   const [studentTransport, setStudentTransport] = useState<{ vehicle: TransportVehicle; assignment: StudentTransportAssignment } | null>(null);
+  const [studentTransportHistory, setStudentTransportHistory] = useState<StudentTransportAssignment[]>([]);
+  const [transportHistoryError, setTransportHistoryError] = useState<string | null>(null);
+
+  // Change-transport modal
+  const [changeModalOpen, setChangeModalOpen] = useState(false);
+  const [changeVehicleId, setChangeVehicleId] = useState('');
+  const [changeStopId, setChangeStopId] = useState('');
+  const [changeMonthly, setChangeMonthly] = useState('500');
+  const [changeEffectiveDate, setChangeEffectiveDate] = useState('');
+  const [changeReason, setChangeReason] = useState('STOP_CHANGE');
+  const [changeReasonNote, setChangeReasonNote] = useState('');
+  const [changeBusy, setChangeBusy] = useState(false);
+  const [changeError, setChangeError] = useState<string | null>(null);
+
+  // Cancel-transport modal
+  const [cancelTransportOpen, setCancelTransportOpen] = useState(false);
+  const [cancelTransportReason, setCancelTransportReason] = useState('');
+  const [cancelTransportBusy, setCancelTransportBusy] = useState(false);
   const [profileDocs, setProfileDocs] = useState<DocumentUpload[]>([
     { type: 'BIRTH_CERT',     name: 'Birth Certificate',   uploaded: false },
     { type: 'TRANSFER_CERT',  name: 'Transfer Certificate', uploaded: false },
@@ -180,6 +201,15 @@ export const StudentsManager: React.FC<Props> = ({ onBack, initialView }) => {
         setStudentTransport(null);
       }
     } catch { setStudentTransport(null); }
+    // Pull the full assignment timeline so the DOCS tab can render history.
+    setTransportHistoryError(null);
+    try {
+      const history = await transportService.getTransportHistory(student.id);
+      setStudentTransportHistory(history);
+    } catch (e) {
+      setStudentTransportHistory([]);
+      setTransportHistoryError(e instanceof Error ? e.message : 'Could not load transport history');
+    }
     // Mark each upload-checklist row as already done if a matching live
     // doc exists, so the principal can see at a glance what's missing.
     setProfileDocs(prev => prev.map(d => ({
@@ -320,6 +350,79 @@ export const StudentsManager: React.FC<Props> = ({ onBack, initialView }) => {
     } catch (err) {
       const msg = err instanceof Error ? err.message : 'Remove failed';
       showToast(msg, 'error');
+    }
+  };
+
+  // ── Transport change/cancel handlers ───────────────────────────────────
+  const openChangeTransportModal = () => {
+    if (!selected) return;
+    const todayIso = new Date().toISOString().slice(0, 10);
+    setChangeVehicleId(studentTransport?.vehicle.id ?? '');
+    setChangeStopId(studentTransport?.assignment.boardingStopId ?? '');
+    setChangeMonthly(String(studentTransport?.assignment.monthlyAmount ?? 500));
+    setChangeEffectiveDate(todayIso);
+    setChangeReason(studentTransport ? 'STOP_CHANGE' : 'OTHER');
+    setChangeReasonNote('');
+    setChangeError(null);
+    setChangeModalOpen(true);
+  };
+
+  const handleChangeTransport = async () => {
+    if (!selected) return;
+    if (!changeVehicleId || !changeStopId) {
+      setChangeError('Pick a vehicle and stop.'); return;
+    }
+    if (!changeEffectiveDate) {
+      setChangeError('Pick an effective date.'); return;
+    }
+    const monthly = Number(changeMonthly);
+    if (!Number.isFinite(monthly) || monthly < 0) {
+      setChangeError('Monthly amount must be a positive number.'); return;
+    }
+    const reasonLabel = TRANSPORT_CHANGE_REASONS.find(r => r.value === changeReason)?.label ?? changeReason;
+    const finalReason = changeReasonNote.trim()
+      ? `${reasonLabel}: ${changeReasonNote.trim()}`
+      : reasonLabel;
+
+    setChangeBusy(true); setChangeError(null);
+    try {
+      await transportService.changeStudentTransport({
+        studentId: selected.id,
+        effectiveDate: changeEffectiveDate,
+        newVehicleId: changeVehicleId,
+        newStopId: changeStopId,
+        newMonthlyAmount: monthly,
+        reason: finalReason,
+      });
+      await loadStudentData(selected);
+      setChangeModalOpen(false);
+      showToast('Transport updated');
+    } catch (e) {
+      setChangeError(e instanceof Error ? e.message : 'Could not update transport');
+    } finally {
+      setChangeBusy(false);
+    }
+  };
+
+  const openCancelTransportModal = () => {
+    setCancelTransportReason(''); setCancelTransportOpen(true);
+  };
+
+  const handleCancelTransport = async () => {
+    if (!selected) return;
+    if (!cancelTransportReason.trim()) {
+      showToast('Please enter a reason for cancelling', 'error'); return;
+    }
+    setCancelTransportBusy(true);
+    try {
+      await transportService.removeStudentAssignment(selected.id, cancelTransportReason.trim());
+      await loadStudentData(selected);
+      setCancelTransportOpen(false);
+      showToast('Transport cancelled');
+    } catch (e) {
+      showToast(e instanceof Error ? e.message : 'Could not cancel transport', 'error');
+    } finally {
+      setCancelTransportBusy(false);
     }
   };
 
@@ -1490,9 +1593,15 @@ export const StudentsManager: React.FC<Props> = ({ onBack, initialView }) => {
             {/* ── DOCS TAB ─────────────────────────────── */}
             {activeProfileTab === 'DOCS' && (
               <>
-                {/* Transport assignment */}
+                {/* Transport assignment + history */}
                 <div className="bg-white rounded-2xl border border-slate-100 shadow-sm p-4">
-                  <SectionTitle icon={Bus} title="Transport Assignment" />
+                  <div className="flex items-center justify-between mb-2">
+                    <SectionTitle icon={Bus} title="Transport Assignment" />
+                    <button onClick={openChangeTransportModal}
+                      className="text-[9px] font-black text-blue-700 bg-blue-50 hover:bg-blue-100 px-2 py-1 rounded-full">
+                      {studentTransport ? 'CHANGE' : 'ASSIGN'}
+                    </button>
+                  </div>
                   {studentTransport ? (
                     <div className="space-y-0">
                       <ProfileField label="Vehicle No." value={studentTransport.vehicle.vehicleNo} />
@@ -1503,12 +1612,82 @@ export const StudentsManager: React.FC<Props> = ({ onBack, initialView }) => {
                       <ProfileField label="Driver Phone" value={studentTransport.vehicle.driverPhone} />
                       <ProfileField label="Monthly Fee"
                         value={`₹${studentTransport.assignment.monthlyAmount.toLocaleString('en-IN')}/mo`} />
+                      <ProfileField label="Started"
+                        value={studentTransport.assignment.startDate
+                          ? new Date(studentTransport.assignment.startDate).toLocaleDateString()
+                          : '—'} />
+                      <div className="pt-3">
+                        <button onClick={openCancelTransportModal}
+                          className="w-full text-[10px] font-black text-rose-600 bg-rose-50 hover:bg-rose-100 rounded-xl py-2 uppercase tracking-widest">
+                          Cancel transport service
+                        </button>
+                      </div>
                     </div>
                   ) : (
                     <div className="flex flex-col items-center py-6 text-slate-400">
                       <Bus size={28} className="mb-2 opacity-40" />
-                      <p className="font-bold text-sm">No transport assigned</p>
-                      <p className="text-xs font-bold mt-1 opacity-60">Assign via Transport Management</p>
+                      <p className="font-bold text-sm">No active transport</p>
+                      <p className="text-xs font-bold mt-1 opacity-60">Tap ASSIGN above to add</p>
+                    </div>
+                  )}
+
+                  {/* History timeline ─ all past + current rows */}
+                  {transportHistoryError && (
+                    <div className="mt-3 bg-rose-50 border border-rose-200 rounded-xl px-3 py-2 text-[10px] font-bold text-rose-700">
+                      {transportHistoryError}
+                    </div>
+                  )}
+                  {studentTransportHistory.length > 1 && (
+                    <div className="mt-4 pt-3 border-t border-slate-100">
+                      <p className="text-[9px] font-black uppercase tracking-widest text-slate-400 mb-2">
+                        Assignment History
+                      </p>
+                      <div className="space-y-2">
+                        {studentTransportHistory.map(h => {
+                          const isActive = h.isActive;
+                          return (
+                            <div key={h.id}
+                              className={`rounded-xl p-2.5 border ${
+                                isActive
+                                  ? 'bg-emerald-50 border-emerald-200'
+                                  : 'bg-slate-50 border-slate-200'
+                              }`}>
+                              <div className="flex items-center justify-between gap-2">
+                                <div className="flex items-center gap-2 min-w-0">
+                                  <Bus size={12} className={isActive ? 'text-emerald-600' : 'text-slate-400'} />
+                                  <span className={`text-xs font-black truncate ${
+                                    isActive ? 'text-emerald-800' : 'text-slate-700'
+                                  }`}>
+                                    {h.vehicleNo ?? '—'} · {h.boardingStopName}
+                                  </span>
+                                </div>
+                                <span className={`text-[9px] font-black px-2 py-0.5 rounded-full shrink-0 ${
+                                  isActive
+                                    ? 'bg-emerald-600 text-white'
+                                    : 'bg-slate-200 text-slate-600'
+                                }`}>
+                                  {isActive ? 'ACTIVE' : 'CLOSED'}
+                                </span>
+                              </div>
+                              <div className="mt-1 flex items-center justify-between text-[10px] font-bold text-slate-500">
+                                <span>
+                                  {h.startDate ? new Date(h.startDate).toLocaleDateString() : '—'}
+                                  {' → '}
+                                  {h.endDate ? new Date(h.endDate).toLocaleDateString() : 'present'}
+                                </span>
+                                <span>₹{h.monthlyAmount.toLocaleString('en-IN')}/mo</span>
+                              </div>
+                              {(h.reason || h.endReason) && (
+                                <div className="mt-1 text-[9px] font-bold text-slate-500 italic">
+                                  {h.reason && <>Started: {h.reason}</>}
+                                  {h.reason && h.endReason && ' · '}
+                                  {h.endReason && <>Ended: {h.endReason}</>}
+                                </div>
+                              )}
+                            </div>
+                          );
+                        })}
+                      </div>
                     </div>
                   )}
                 </div>
@@ -1591,6 +1770,153 @@ export const StudentsManager: React.FC<Props> = ({ onBack, initialView }) => {
 
           </div>
         </div>
+
+        {/* ── Change Transport modal ─────────────────────────────────── */}
+        {changeModalOpen && (() => {
+          const allVehicles = transportService.getVehicles();
+          const pickedVehicle = allVehicles.find(v => v.id === changeVehicleId);
+          return (
+            <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-50 flex items-end sm:items-center justify-center p-4"
+                 onClick={() => !changeBusy && setChangeModalOpen(false)}>
+              <div className="bg-white rounded-2xl border border-slate-200 shadow-2xl w-full max-w-md max-h-[90vh] overflow-y-auto"
+                   onClick={e => e.stopPropagation()}>
+                <div className="px-4 py-3 border-b border-slate-100 flex items-center gap-2 sticky top-0 bg-white">
+                  <Bus size={18} className="text-blue-600" />
+                  <div className="flex-1">
+                    <h3 className="font-black text-slate-900 text-sm uppercase tracking-tight">
+                      {studentTransport ? 'Change Transport' : 'Assign Transport'}
+                    </h3>
+                    <p className="text-[10px] font-bold text-slate-400">{selected.name}</p>
+                  </div>
+                  <button onClick={() => setChangeModalOpen(false)} disabled={changeBusy}
+                    className="p-1 hover:bg-slate-100 rounded-lg disabled:opacity-50">✕</button>
+                </div>
+                <div className="p-4 space-y-3">
+                  <div>
+                    <label className="text-[9px] font-black uppercase tracking-widest text-slate-500">
+                      Vehicle
+                    </label>
+                    <select value={changeVehicleId}
+                      onChange={e => { setChangeVehicleId(e.target.value); setChangeStopId(''); }}
+                      className="w-full mt-1 bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 text-sm font-bold outline-none focus:border-blue-500">
+                      <option value="">— Select —</option>
+                      {allVehicles.map(v => (
+                        <option key={v.id} value={v.id}>{v.vehicleNo} ({v.type})</option>
+                      ))}
+                    </select>
+                  </div>
+                  <div>
+                    <label className="text-[9px] font-black uppercase tracking-widest text-slate-500">
+                      Boarding Stop
+                    </label>
+                    <select value={changeStopId} onChange={e => setChangeStopId(e.target.value)}
+                      disabled={!pickedVehicle}
+                      className="w-full mt-1 bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 text-sm font-bold outline-none focus:border-blue-500 disabled:opacity-50">
+                      <option value="">— Select —</option>
+                      {(pickedVehicle?.stops ?? []).map(s => (
+                        <option key={s.id} value={s.id}>{s.name}</option>
+                      ))}
+                    </select>
+                  </div>
+                  <div>
+                    <label className="text-[9px] font-black uppercase tracking-widest text-slate-500">
+                      Monthly Fee (₹)
+                    </label>
+                    <input type="number" min="0" value={changeMonthly}
+                      onChange={e => setChangeMonthly(e.target.value)}
+                      className="w-full mt-1 bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 text-sm font-bold outline-none focus:border-blue-500" />
+                  </div>
+                  <div>
+                    <label className="text-[9px] font-black uppercase tracking-widest text-slate-500">
+                      Effective From
+                    </label>
+                    <input type="date" value={changeEffectiveDate}
+                      onChange={e => setChangeEffectiveDate(e.target.value)}
+                      className="w-full mt-1 bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 text-sm font-bold outline-none focus:border-blue-500" />
+                  </div>
+                  <div>
+                    <label className="text-[9px] font-black uppercase tracking-widest text-slate-500">
+                      Reason *
+                    </label>
+                    <select value={changeReason} onChange={e => setChangeReason(e.target.value)}
+                      className="w-full mt-1 bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 text-sm font-bold outline-none focus:border-blue-500">
+                      {TRANSPORT_CHANGE_REASONS.filter(r => r.value !== 'CANCEL_SERVICE').map(r => (
+                        <option key={r.value} value={r.value}>{r.label}</option>
+                      ))}
+                    </select>
+                    <input type="text" value={changeReasonNote}
+                      onChange={e => setChangeReasonNote(e.target.value)}
+                      placeholder="Add a note (optional)"
+                      className="w-full mt-2 bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 text-xs font-bold outline-none focus:border-blue-500" />
+                  </div>
+                  {studentTransport && (
+                    <div className="bg-amber-50 border border-amber-200 rounded-xl p-3 text-[10px] font-bold text-amber-800">
+                      The current assignment will be closed on {changeEffectiveDate
+                        ? new Date(new Date(changeEffectiveDate).getTime() - 86400000).toLocaleDateString()
+                        : '—'}. Future-dated transport installments will be cancelled and a fresh schedule generated.
+                    </div>
+                  )}
+                  {changeError && (
+                    <div className="bg-rose-50 border border-rose-200 rounded-xl p-3 text-xs font-bold text-rose-700">
+                      {changeError}
+                    </div>
+                  )}
+                </div>
+                <div className="px-4 py-3 border-t border-slate-100 flex gap-2 sticky bottom-0 bg-white">
+                  <button onClick={() => setChangeModalOpen(false)} disabled={changeBusy}
+                    className="flex-1 bg-slate-100 text-slate-700 font-black text-xs uppercase tracking-widest rounded-xl py-2.5 disabled:opacity-50">
+                    Cancel
+                  </button>
+                  <button onClick={handleChangeTransport} disabled={changeBusy}
+                    className="flex-1 bg-blue-600 hover:bg-blue-700 text-white font-black text-xs uppercase tracking-widest rounded-xl py-2.5 disabled:opacity-50">
+                    {changeBusy ? 'Saving…' : 'Save'}
+                  </button>
+                </div>
+              </div>
+            </div>
+          );
+        })()}
+
+        {/* ── Cancel Transport modal ─────────────────────────────────── */}
+        {cancelTransportOpen && (
+          <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-50 flex items-end sm:items-center justify-center p-4"
+               onClick={() => !cancelTransportBusy && setCancelTransportOpen(false)}>
+            <div className="bg-white rounded-2xl border border-slate-200 shadow-2xl w-full max-w-sm"
+                 onClick={e => e.stopPropagation()}>
+              <div className="p-4 border-b border-slate-100">
+                <h3 className="font-black text-slate-900 text-sm uppercase tracking-tight">
+                  Cancel transport?
+                </h3>
+                <p className="text-[10px] font-bold text-slate-400 mt-1">
+                  {selected.name} · ends today
+                </p>
+              </div>
+              <div className="p-4 space-y-2">
+                <label className="text-[9px] font-black uppercase tracking-widest text-slate-500">
+                  Reason *
+                </label>
+                <textarea value={cancelTransportReason}
+                  onChange={e => setCancelTransportReason(e.target.value)}
+                  rows={3}
+                  placeholder="e.g. Family is moving out of city"
+                  className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 text-sm font-bold outline-none focus:border-rose-500 resize-none" />
+                <p className="text-[9px] font-bold text-slate-400">
+                  Future-dated transport installments will be cancelled. Paid receipts stay intact.
+                </p>
+              </div>
+              <div className="px-4 py-3 border-t border-slate-100 flex gap-2">
+                <button onClick={() => setCancelTransportOpen(false)} disabled={cancelTransportBusy}
+                  className="flex-1 bg-slate-100 text-slate-700 font-black text-xs uppercase tracking-widest rounded-xl py-2.5 disabled:opacity-50">
+                  Keep
+                </button>
+                <button onClick={handleCancelTransport} disabled={cancelTransportBusy}
+                  className="flex-1 bg-rose-600 hover:bg-rose-700 text-white font-black text-xs uppercase tracking-widest rounded-xl py-2.5 disabled:opacity-50">
+                  {cancelTransportBusy ? 'Cancelling…' : 'Cancel'}
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
       </div>
     );
   }
