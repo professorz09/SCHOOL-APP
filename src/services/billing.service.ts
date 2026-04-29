@@ -47,7 +47,11 @@ interface PaymentRow {
   txn_id: string | null;
   method: string | null;
   notes: string | null;
-  allocations?: { billing_year_id: string }[];
+  allocations?: {
+    billing_year_id: string;
+    amount_applied: number;
+    billing_year?: { year_label: string } | null;
+  }[];
 }
 
 function scheduleRowToBilling(r: ScheduleRow): SchoolBilling {
@@ -83,7 +87,14 @@ function paymentRowToPayment(r: PaymentRow, defaultYearId: string): Payment {
   // A payment can be allocated across years (oldest-first); for the UI we
   // surface the first allocation as the "primary" year. The sum/total is
   // unaffected — it just decides which year tab the payment appears under.
-  const yearId = r.allocations?.[0]?.billing_year_id ?? defaultYearId;
+  const allocations = (r.allocations ?? []).map((a) => ({
+    yearId: a.billing_year_id,
+    yearLabel: a.billing_year?.year_label ?? '',
+    amountApplied: Number(a.amount_applied),
+  }));
+  const allocatedTotal = allocations.reduce((s, a) => s + a.amountApplied, 0);
+  const parkedAdvance = Math.max(0, r.amount - allocatedTotal);
+  const yearId = allocations[0]?.yearId ?? defaultYearId;
   const method = (r.method ?? 'NEFT') as Payment['method'];
   return {
     id: r.id,
@@ -94,6 +105,8 @@ function paymentRowToPayment(r: PaymentRow, defaultYearId: string): Payment {
     txnId: r.txn_id ?? '',
     method,
     notes: r.notes ?? '',
+    allocations,
+    parkedAdvance,
   };
 }
 
@@ -193,7 +206,7 @@ export const billingService = {
   async getPaymentsForSchool(schoolId: string): Promise<Payment[]> {
     const { data, error } = await supabase
       .from('school_payments')
-      .select('id, school_id, amount, paid_at, txn_id, method, notes, allocations:school_payment_allocations(billing_year_id)')
+      .select('id, school_id, amount, paid_at, txn_id, method, notes, allocations:school_payment_allocations(billing_year_id, amount_applied, billing_year:school_billing_years(year_label))')
       .eq('school_id', schoolId)
       .order('paid_at', { ascending: false });
     if (error) throw new Error(error.message);
@@ -229,7 +242,7 @@ export const billingService = {
 
     const { data: payRow, error: pErr } = await supabase
       .from('school_payments')
-      .select('id, school_id, amount, paid_at, txn_id, method, notes, allocations:school_payment_allocations(billing_year_id)')
+      .select('id, school_id, amount, paid_at, txn_id, method, notes, allocations:school_payment_allocations(billing_year_id, amount_applied, billing_year:school_billing_years(year_label))')
       .eq('id', payId as string)
       .single();
     if (pErr) throw new Error(pErr.message);
