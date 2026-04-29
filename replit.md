@@ -2,6 +2,62 @@
 
 A school management application with React frontend and Supabase (Postgres + Auth + RLS) backend. Supports Super Admin, Principal, Teacher, Student/Parent, and Driver roles.
 
+## Task #7 — Super Admin per-year billing breakdown
+
+The Super Admin Billing module now shows **every** billing year for each
+school in a single sortable table, plus the schedule-level advance-credit
+balance — replacing the old "latest year only" view that masked
+carry-forward dues.
+
+Service additions in `src/services/billing.service.ts`:
+
+- **`SchoolBilling.advanceBalance`** — every `getSchoolBillings()` /
+  `setupSchoolBilling()` read now selects `school_billing_schedules.advance_balance`
+  (added in migration 0017) and surfaces it on the type. Rolls into the
+  list-view "+₹X credit" pill and the detail-view advance card.
+- **`getBillingBreakdown(schoolId) → SchoolBillingBreakdown | null`** —
+  one round-trip that returns the schedule's advance balance, every
+  `school_billing_years` row for the school (sorted oldest-first) and a
+  rolled-up `totalOutstanding`. Returns `null` for legacy schools with
+  no schedule so the UI can render a setup CTA.
+- **`previewAllocation(schoolId, amount) → PaymentAllocationPreview`** —
+  read-only mirror of the `record_school_payment` RPC's allocation walk:
+  distributes the amount oldest-first across outstanding years, exposing
+  per-year `amountApplied` / `outstandingAfter` / `willClose` and the
+  `advanceCredit` leftover that would be parked. Powers the live
+  "this ₹4,000 will pay 2026-27 in full and apply ₹1,001 to 2027-28"
+  hint in the Add Payment screen.
+- The store exposes both new methods (`useBillingStore.getBillingBreakdown`,
+  `useBillingStore.previewAllocation`) so other consumers can opt in
+  without touching the service.
+
+UI rebuild in `src/features/super-admin/components/BillingManager.tsx`:
+
+- **List view** rolls "Outstanding" up across **all** years per school
+  (was: latest year only) and nets out parked advance credit. Schools
+  with credit get a violet "+₹X credit" badge alongside the plan pill.
+- **School detail** drops the single "Year Summary" card in favour of a
+  Year / Annual / Paid / Outstanding / Status table that highlights the
+  latest year, shows carry-forward c/f notes inline, and surfaces the
+  schedule's advance balance as a dedicated violet row.
+- **"Create Next Billing Year"** card sits below the table. Disabled
+  until `totalOutstanding === 0`; copy explains why when blocked. The
+  empty-state branch (no years yet for an existing schedule) flips the
+  button label to "Create First Year".
+- **Add Payment** screen runs `previewAllocation` on every amount change
+  (debounced 200 ms) and renders the per-year line items above the
+  Transaction ID input, including a "parked as advance credit" footer
+  when applicable. Confirming reuses `record_school_payment` (oldest-first
+  + audit log + advance-balance bump are still RPC-side). The school
+  summary now shows the total cross-year outstanding instead of a
+  single year's.
+- Auditing is unchanged: both `record_school_payment` and
+  `create_next_billing_year` already write `log_audit` entries inside
+  the RPC, so the UI doesn't double-log.
+
+No migrations were added — every required column / RPC was already in
+place from migrations 0002 and 0017.
+
 ## Tech Stack
 
 ### Frontend

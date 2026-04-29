@@ -3,7 +3,14 @@
 
 import { supabase } from '../lib/supabase';
 import { logAudit } from '../lib/audit';
-import { SchoolBilling, BillingYear, Payment } from '../types/billing.types';
+import {
+  SchoolBilling,
+  BillingYear,
+  Payment,
+  SchoolBillingBreakdown,
+  PaymentAllocationPreview,
+  PaymentAllocationLine,
+} from '../types/billing.types';
 import { BillingPlan, PLAN_PRICES } from '../config/constants';
 
 // Back-compat re-export — older call sites import this name from the service.
@@ -14,6 +21,7 @@ interface ScheduleRow {
   plan: string;
   annual_amount: number;
   billing_start_date: string;
+  advance_balance: number | null;
   schools: { name: string } | null;
 }
 
@@ -49,8 +57,11 @@ function scheduleRowToBilling(r: ScheduleRow): SchoolBilling {
     plan: r.plan as BillingPlan,
     annualAmount: r.annual_amount,
     billingStartDate: r.billing_start_date,
+    advanceBalance: Number(r.advance_balance ?? 0),
   };
 }
+
+const SCHEDULE_COLS = 'school_id, plan, annual_amount, billing_start_date, advance_balance, schools!inner(name, is_deleted)';
 
 function yearRowToBillingYear(r: YearRow): BillingYear {
   return {
@@ -90,10 +101,83 @@ export const billingService = {
   async getSchoolBillings(): Promise<SchoolBilling[]> {
     const { data, error } = await supabase
       .from('school_billing_schedules')
-      .select('school_id, plan, annual_amount, billing_start_date, schools!inner(name, is_deleted)')
+      .select(SCHEDULE_COLS)
       .eq('schools.is_deleted', false);
     if (error) throw new Error(error.message);
     return (data ?? []).map((r) => scheduleRowToBilling(r as unknown as ScheduleRow));
+  },
+
+  /**
+   * Per-school breakdown for the SA billing UI: every billing year (oldest
+   * first), the schedule's parked advance balance, and the rolled-up
+   * outstanding total. Returns `null` when the school has no billing
+   * schedule yet (legacy onboarded) so the UI can show a setup CTA.
+   */
+  async getBillingBreakdown(schoolId: string): Promise<SchoolBillingBreakdown | null> {
+    const { data: scheduleRow, error: sErr } = await supabase
+      .from('school_billing_schedules')
+      .select(SCHEDULE_COLS)
+      .eq('school_id', schoolId)
+      .maybeSingle();
+    if (sErr) throw new Error(sErr.message);
+    if (!scheduleRow) return null;
+
+    const { data: yearRows, error: yErr } = await supabase
+      .from('school_billing_years')
+      .select('id, school_id, year_label, start_date, end_date, annual_amount, carried_forward, total_due, total_paid, outstanding, schools!inner(name, is_deleted)')
+      .eq('school_id', schoolId)
+      .eq('schools.is_deleted', false)
+      .order('start_date', { ascending: true });
+    if (yErr) throw new Error(yErr.message);
+
+    const years = (yearRows ?? []).map((r) => yearRowToBillingYear(r as unknown as YearRow));
+    const totalOutstanding = years.reduce(
+      (s, y) => s + Math.max(0, y.outstanding), 0,
+    );
+    const advanceBalance = Number(
+      (scheduleRow as unknown as ScheduleRow).advance_balance ?? 0,
+    );
+    return { schoolId, years, advanceBalance, totalOutstanding };
+  },
+
+  /**
+   * Read-only mirror of `record_school_payment`'s allocation walk: distributes
+   * `amount` across outstanding billing years oldest-first, with any leftover
+   * landing in the schedule's advance balance. Does NOT write — used to
+   * power the "this ₹X will pay 2025-26 in full and apply ₹Y to 2026-27"
+   * preview shown before confirming a payment. Throws if the school has no
+   * schedule.
+   */
+  async previewAllocation(schoolId: string, amount: number): Promise<PaymentAllocationPreview> {
+    if (!Number.isFinite(amount) || amount <= 0) {
+      return { totalAmount: amount, allocations: [], advanceCredit: 0 };
+    }
+    const breakdown = await this.getBillingBreakdown(schoolId);
+    if (!breakdown) throw new Error('no billing schedule for school');
+
+    let remaining = Math.floor(amount);
+    const allocations: PaymentAllocationLine[] = [];
+    // Oldest-first walk over outstanding years only (mirrors the RPC's
+    // `WHERE outstanding > 0 ORDER BY start_date ASC`).
+    for (const y of breakdown.years) {
+      if (remaining <= 0) break;
+      if (y.outstanding <= 0) continue;
+      const applied = Math.min(remaining, y.outstanding);
+      allocations.push({
+        yearId: y.id,
+        yearLabel: y.yearLabel,
+        outstandingBefore: y.outstanding,
+        amountApplied: applied,
+        outstandingAfter: y.outstanding - applied,
+        willClose: y.outstanding - applied === 0,
+      });
+      remaining -= applied;
+    }
+    return {
+      totalAmount: amount,
+      allocations,
+      advanceCredit: Math.max(0, remaining),
+    };
   },
 
   async getBillingYears(): Promise<BillingYear[]> {
@@ -218,7 +302,7 @@ export const billingService = {
     // call it back-to-back with create()), we just return the existing one.
     const { data: existing } = await supabase
       .from('school_billing_schedules')
-      .select('school_id, plan, annual_amount, billing_start_date, schools!inner(name, is_deleted)')
+      .select(SCHEDULE_COLS)
       .eq('school_id', schoolId)
       .maybeSingle();
     if (existing) {
@@ -235,7 +319,7 @@ export const billingService = {
         annual_amount: annualAmount,
         billing_start_date: billingStartDate,
       })
-      .select('school_id, plan, annual_amount, billing_start_date, schools!inner(name, is_deleted)')
+      .select(SCHEDULE_COLS)
       .single();
     if (sErr) throw new Error(sErr.message);
 
