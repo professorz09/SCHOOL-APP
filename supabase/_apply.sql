@@ -4448,9 +4448,17 @@ GRANT EXECUTE ON FUNCTION public.roll_available(UUID, UUID, TEXT, TEXT, TEXT, UU
 -- ============================================================================
 
 -- ─── 1. preview_student_late_fees ───────────────────────────────────────────
+-- Re-create with an optional `p_as_of` cutoff date so callers (notably
+-- record_fee_payment when collecting backdated cash) can compute lateness
+-- relative to the actual payment date rather than today. Defaults to
+-- CURRENT_DATE for read-only callers (parent FeesView, principal preview).
 DROP FUNCTION IF EXISTS public.preview_student_late_fees(UUID);
+DROP FUNCTION IF EXISTS public.preview_student_late_fees(UUID, DATE);
 
-CREATE OR REPLACE FUNCTION public.preview_student_late_fees(p_student_id UUID)
+CREATE OR REPLACE FUNCTION public.preview_student_late_fees(
+  p_student_id UUID,
+  p_as_of      DATE DEFAULT CURRENT_DATE
+)
 RETURNS TABLE (
   installment_id UUID,
   due_date DATE,
@@ -4521,11 +4529,11 @@ BEGIN
   SELECT
     e.id AS installment_id,
     e.due_date,
-    GREATEST(0, (CURRENT_DATE - e.due_date) - COALESCE((e.late_fee->>'gracePeriodDays')::INT, 0))::INT AS days_late,
+    GREATEST(0, (p_as_of - e.due_date) - COALESCE((e.late_fee->>'gracePeriodDays')::INT, 0))::INT AS days_late,
     CASE
       WHEN e.late_fee IS NULL THEN 0::BIGINT
       WHEN COALESCE((e.late_fee->>'enabled')::BOOLEAN, FALSE) = FALSE THEN 0::BIGINT
-      WHEN (CURRENT_DATE - e.due_date) <= COALESCE((e.late_fee->>'gracePeriodDays')::INT, 0) THEN 0::BIGINT
+      WHEN (p_as_of - e.due_date) <= COALESCE((e.late_fee->>'gracePeriodDays')::INT, 0) THEN 0::BIGINT
       ELSE
         LEAST(
           COALESCE((e.late_fee->>'maxCap')::BIGINT, 9999999999::BIGINT),
@@ -4551,7 +4559,7 @@ BEGIN
   FROM enriched e;
 END $$;
 
-GRANT EXECUTE ON FUNCTION public.preview_student_late_fees(UUID) TO authenticated;
+GRANT EXECUTE ON FUNCTION public.preview_student_late_fees(UUID, DATE) TO authenticated;
 
 
 -- ─── 2. record_fee_payment — apply computed late fee before allocation ─────
@@ -4599,17 +4607,25 @@ BEGIN
   IF v_year_id IS NULL THEN RAISE EXCEPTION 'no active academic year for school'; END IF;
 
   -- Apply late-fee policy idempotently. preview_student_late_fees() returns
-  -- the TOTAL liability the student should currently owe in late fees. We
-  -- compare against the SUM(amount) of every 'Late Fee' row already accrued
-  -- for this (student, year) — INCLUDING paid/written-off rows — and only
-  -- insert the positive DELTA. Using the full principal as the baseline
-  -- (rather than the unpaid remainder) is critical: otherwise a partial
-  -- payment or write-off of an existing late-fee row would shrink the
-  -- baseline and the very next call would re-insert the just-paid/waived
-  -- amount as fresh accrual, creating a never-ending top-up loop.
+  -- the TOTAL liability the student should currently owe in late fees,
+  -- computed as of p_date (so backdated cash collection charges lateness
+  -- relative to the actual payment day, not today). We compare against the
+  -- SUM(amount) of every 'Late Fee' row already accrued for this student
+  -- ACROSS ALL YEARS — INCLUDING paid/written-off rows — and only insert
+  -- the positive DELTA. Both sides of the delta MUST share the same
+  -- year-scope or the math is asymmetric: previously the baseline was
+  -- active-year-only while the liability was all-years, so after a year
+  -- rollover the prior-year accrued principal would be invisible to the
+  -- baseline and the new active year would re-insert it as a fresh charge.
   --
-  -- Allocation ordering note: the new row is dated CURRENT_DATE - 1 so it
-  -- sorts AHEAD of any installments due today/in the future, but any older
+  -- Using the full principal as the baseline (rather than the unpaid
+  -- remainder) is critical: otherwise a partial payment or write-off of an
+  -- existing late-fee row would shrink the baseline and the very next call
+  -- would re-insert the just-paid/waived amount as fresh accrual, creating
+  -- a never-ending top-up loop.
+  --
+  -- Allocation ordering note: the new row is dated p_date - 1 so it sorts
+  -- AHEAD of any installments due on/after the payment date, but any older
   -- still-overdue base installments (earlier due_date) will still allocate
   -- first under the oldest-due-first walk below. This is intentional —
   -- principals collect for the oldest dues first, then the late fee is
@@ -4617,13 +4633,12 @@ BEGIN
   -- the ORDER BY in the allocation loop to prioritise month='Late Fee'.
   IF p_apply_late_fee THEN
     SELECT COALESCE(SUM(late_fee), 0) INTO v_late_total
-      FROM public.preview_student_late_fees(p_student_id);
+      FROM public.preview_student_late_fees(p_student_id, p_date);
 
     SELECT COALESCE(SUM(amount), 0)
       INTO v_late_existing
       FROM public.fee_installments
      WHERE student_id = p_student_id
-       AND academic_year_id = v_year_id
        AND payer_type = 'PARENT'
        AND fee_type = 'OTHER'
        AND month = 'Late Fee';
@@ -4635,7 +4650,7 @@ BEGIN
          fee_type, amount, payer_type)
       VALUES
         (p_student_id, v_year_id, v_school_id, 'Late Fee',
-         CURRENT_DATE - INTERVAL '1 day',
+         p_date - INTERVAL '1 day',
          'OTHER', v_late_delta, 'PARENT');
     END IF;
   END IF;
