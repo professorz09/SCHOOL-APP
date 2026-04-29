@@ -19,6 +19,23 @@ function getSchoolId(): string {
   return id;
 }
 
+const todayIso = (): string => new Date().toISOString().split('T')[0];
+
+/** Resolve a staff salary effective on a given month (first-of-month date)
+ *  from a sorted history slice. Falls back to `currentSalary`. */
+function effectiveSalaryAt(
+  monthStart: Date,
+  history: { amount: number; effective_from: string }[],
+  currentSalary: number,
+): number {
+  let amount = 0;
+  for (const h of history) {
+    if (new Date(h.effective_from) <= monthStart) amount = Number(h.amount);
+    else break;
+  }
+  return amount || currentSalary;
+}
+
 interface StaffRow {
   id: string;
   user_id: string | null;
@@ -182,7 +199,24 @@ export const staffService = {
     if (error) throw new Error(error.message);
     const row = data as StaffRow;
 
-    // Step 3: insert class assignments (active year only).
+    // Step 3: seed the initial salary-history row so every staff record has
+    // at least one entry from day one. This is part of the create contract;
+    // if the seed fails we ROLL BACK the staff row so the caller doesn't
+    // end up with a salaried staff member that has no salary history.
+    if (input.salary > 0) {
+      const { error: seedErr } = await supabase.rpc('update_staff_salary', {
+        p_staff_id: row.id,
+        p_amount: input.salary,
+        p_effective_from: input.joiningDate || todayIso(),
+        p_reason: 'Initial',
+      });
+      if (seedErr) {
+        await supabase.from('staff').delete().eq('id', row.id);
+        throw new Error(`Failed to seed initial salary: ${seedErr.message}`);
+      }
+    }
+
+    // Step 4: insert class assignments (active year only).
     if (input.assignedClasses?.length) {
       const { data: ay } = await supabase
         .from('academic_years').select('id')
@@ -548,17 +582,42 @@ export const staffService = {
       .in('staff_id', ids);
     const payRows = ((pays ?? []) as Array<{ staff_id: string; month: string; amount: number; paid_at: string; note: string | null }>);
 
+    // Pull all salary-history rows in one shot so each month's `due` reflects
+    // the amount that was effective at that month, not the latest amount on
+    // staff.salary (which is incorrect once a future raise is recorded).
+    const { data: hist } = await supabase
+      .from('staff_salary_history')
+      .select('staff_id, salary_amount, effective_from')
+      .in('staff_id', ids)
+      .order('effective_from', { ascending: true });
+    const histByStaff = new Map<string, Array<{ amount: number; effective_from: string }>>();
+    for (const row of (hist ?? []) as Array<{ staff_id: string; salary_amount: number; effective_from: string }>) {
+      const arr = histByStaff.get(row.staff_id) ?? [];
+      arr.push({ amount: Number(row.salary_amount), effective_from: row.effective_from });
+      histByStaff.set(row.staff_id, arr);
+    }
+
+    // Map "October 2025" → first-of-month Date. We pre-compute a parser so
+    // each row doesn't pay the locale-parse cost.
+    const monthLabelToDate = (label: string): Date => {
+      const [m, y] = label.split(' ');
+      const idx = ['January','February','March','April','May','June','July','August','September','October','November','December'].indexOf(m);
+      return new Date(Number(y), idx >= 0 ? idx : 0, 1);
+    };
+
     return staff.map(s => {
       const months = buildMonths(s.joiningDate ?? '');
+      const sHist = histByStaff.get(s.id) ?? [];
       return {
         staff: s,
         months: months.map(m => {
           const matches = payRows.filter(r => r.staff_id === s.id && r.month === m);
           const paid = matches.reduce((a, r) => a + Number(r.amount), 0);
           const last = matches.sort((a, b) => b.paid_at.localeCompare(a.paid_at))[0];
+          const due = effectiveSalaryAt(monthLabelToDate(m), sHist, s.salary);
           return {
             month: m,
-            due: s.salary,
+            due,
             paid,
             lastPaidAt: last?.paid_at ?? null,
             note: last?.note ?? '',

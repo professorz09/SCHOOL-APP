@@ -376,26 +376,11 @@ export const StaffManager: React.FC<Props> = ({ onBack }) => {
     }
     setIsSubmitting(true);
     try {
+      // Atomic create: staffService.create inserts the staff row AND seeds
+      // the initial salary-history entry; if the seed fails it deletes the
+      // staff row and throws, so we never end up with a salaried staff
+      // member that has no salary history.
       const member = await staffService.create(form);
-      // Seed the initial salary-history row. This is part of the create
-      // contract — if it fails the user must know so they can retry from
-      // the Salary tab. Staff row already exists; surface the error and
-      // still navigate the principal into the profile so they can fix it.
-      try {
-        await staffService.updateSalary(
-          member.id, form.salary, form.joiningDate, 'Initial',
-        );
-      } catch (e) {
-        showToast(
-          'Staff added, but the initial salary history row failed to save. ' +
-          'Open the Salary tab and tap "Edit Salary" to record it.',
-          'error',
-        );
-        setStaff(prev => [...prev, member]);
-        setSelected(member); setTab('SALARY'); setView('PROFILE');
-        setForm(BLANK);
-        return;
-      }
       setStaff(prev => [...prev, member]);
       showToast(`${member.name} added to staff`);
       setForm(BLANK);
@@ -541,6 +526,30 @@ export const StaffManager: React.FC<Props> = ({ onBack }) => {
   );
 
   // ─── LIST view ─────────────────────────────────────────────────────────────
+  // Suspend / Reinstate confirmation must render BEFORE the view-specific
+  // early returns; otherwise the LIST/PROFILE/etc return-statement below
+  // wins and the modal never appears.
+  if (confirmSuspend) return (
+    <div className="absolute inset-0 z-60 bg-slate-900/60 flex items-end justify-center animate-in fade-in">
+      <div className="bg-white w-full rounded-t-3xl p-6 pb-10 animate-in slide-in-from-bottom-4">
+        <h3 className="font-black text-slate-900 text-lg mb-2">
+          {confirmSuspend.status === 'SUSPENDED' ? 'Reinstate' : 'Suspend'} {confirmSuspend.name}?
+        </h3>
+        <p className="text-sm text-slate-500 mb-6">
+          {confirmSuspend.status === 'SUSPENDED'
+            ? 'This will restore their access and active status.'
+            : 'This will revoke access. Salary payments will be put on hold.'}
+        </p>
+        <div className="flex gap-3">
+          <button onClick={() => setConfirmSuspend(null)} className="flex-1 py-3 rounded-2xl border border-slate-200 font-black text-slate-600">Cancel</button>
+          <button onClick={() => handleSuspend(confirmSuspend)} className={`flex-1 py-3 rounded-2xl text-white font-black ${confirmSuspend.status === 'SUSPENDED' ? 'bg-emerald-600' : 'bg-rose-600'}`}>
+            {confirmSuspend.status === 'SUSPENDED' ? 'Reinstate' : 'Suspend'}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+
   if (view === 'LIST') return (
     <div className="w-full bg-slate-50 flex flex-col animate-in slide-in-from-right-8 duration-300">
       {renderHeader('Staff', onBack,
@@ -1066,27 +1075,6 @@ export const StaffManager: React.FC<Props> = ({ onBack }) => {
       </div>
     );
   }
-
-  if (confirmSuspend) return (
-    <div className="absolute inset-0 z-60 bg-slate-900/60 flex items-end justify-center animate-in fade-in">
-      <div className="bg-white w-full rounded-t-3xl p-6 pb-10 animate-in slide-in-from-bottom-4">
-        <h3 className="font-black text-slate-900 text-lg mb-2">
-          {confirmSuspend.status === 'SUSPENDED' ? 'Reinstate' : 'Suspend'} {confirmSuspend.name}?
-        </h3>
-        <p className="text-sm text-slate-500 mb-6">
-          {confirmSuspend.status === 'SUSPENDED'
-            ? 'This will restore their access and active status.'
-            : 'This will revoke access. Salary payments will be put on hold.'}
-        </p>
-        <div className="flex gap-3">
-          <button onClick={() => setConfirmSuspend(null)} className="flex-1 py-3 rounded-2xl border border-slate-200 font-black text-slate-600">Cancel</button>
-          <button onClick={() => handleSuspend(confirmSuspend)} className={`flex-1 py-3 rounded-2xl text-white font-black ${confirmSuspend.status === 'SUSPENDED' ? 'bg-emerald-600' : 'bg-rose-600'}`}>
-            {confirmSuspend.status === 'SUSPENDED' ? 'Reinstate' : 'Suspend'}
-          </button>
-        </div>
-      </div>
-    </div>
-  );
 
   return null;
 };
