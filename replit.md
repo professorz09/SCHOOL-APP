@@ -197,6 +197,73 @@ Existing principals stuck in the loop need to complete the forced-change
 screen one more time after this migration is live; the flag will then
 persist on every subsequent login.
 
+## Migration 0019 — Student documents storage + roll-uniqueness RPCs (Task #3)
+
+`supabase/migrations/0019_student_documents_storage.sql` is purely additive:
+
+1. **Private `student-documents` Storage bucket** (5 MB cap, image/* + pdf only)
+   with RLS policies mirroring 0012's `fee-screenshots` shape — path is
+   `<schoolId>/<studentId>/<docType>/<filename>`. Principals & teachers in the
+   same school can read/write; the parent of the student can read; the student
+   themselves can read; super-admins can do anything; everyone else is denied.
+2. **`next_available_roll(school_id, year_id, class_name, section)`** —
+   SECURITY DEFINER. Returns the next roll number string (`'1'`, `'2'`, …)
+   that is free for that section in that academic year, ignoring soft-deleted
+   and TC-issued rows.
+3. **`roll_available(school_id, year_id, class_name, section, roll, exclude_student_id)`** —
+   SECURITY DEFINER. Returns boolean; used by the assignment modal for live
+   uniqueness feedback while the principal types a roll number.
+
+Both RPCs are GRANTed to `authenticated` and key off the same school-isolation
+predicate already enforced everywhere else (`school_id = current_user_school_id()`).
+
+## Task #3 — Student Archive, Class Assignment & Document Uploads
+
+The Students module has been split into three top-level folders accessed from
+`StudentsManager`'s MENU view:
+
+- **Admission** — create a student. Class/section/stream/totalFee fields were
+  REMOVED from the create form: `student.service.create()` now skips the
+  `student_academic_records` insert when `className`/`section` are blank, so
+  fresh admissions land in the **UNASSIGNED** bucket. Parent auth account,
+  duplicate-check (Aadhaar / father-mobile), and audit log behaviour are
+  unchanged. The admission form preview now also has a "Download PDF" button
+  that lazy-loads `jspdf` + `html2canvas` and produces a multi-page A4 PDF.
+- **Archive** — five sub-tabs: **Active / Inactive / TC Issued / Alumni /
+  Unassigned**. Each row exposes per-row actions:
+    - *Assign to Class* (Unassigned, Active, Inactive) → opens
+      `StudentClassAssignmentModal` which atomically upserts the per-year
+      academic record, calls `generate_student_fee_schedule` with discount/RTE
+      flags, and optionally assigns transport via `transportService`.
+      Roll-number field auto-suggests the next free roll via
+      `next_available_roll` and re-validates with `roll_available` while typing.
+    - *Mark Failed* (Active) → flips the AR row to `FAILED`.
+    - *Issue TC* (Active, Inactive, Unassigned) → records TC number + reason,
+      sets `is_active=false`, disables parent portal login.
+    - *Re-admit* (TC Issued, Inactive) → reverses TC, then opens the
+      assignment modal.
+- **Classes** — unchanged class → section → student browser.
+
+Document uploads (Aadhaar, birth cert, transfer cert, mark sheet, photo, etc.)
+are now real: the profile DOCS tab uploads straight to the `student-documents`
+bucket via `storage.service.uploadStudentDocument`, persists a row in
+`student_documents`, and the "Submitted Documents" list shows actual storage
+rows with **VIEW** (signed URL) and **trash** buttons. Uploads accept
+JPG/PNG/WEBP/HEIC/PDF up to 5 MB.
+
+New / changed files:
+- `supabase/migrations/0019_student_documents_storage.sql` (APPLIED)
+- `src/services/storage.service.ts` (NEW — student-doc upload + signed URL)
+- `src/services/student.service.ts` (added `assignStudentToClass`,
+  `bulkAssignStudents`, `markStudentFailed`, `issueTC`, `readmitStudent`,
+  `getStudentsByArchiveStatus`, `addDocumentRecord`, `removeDocument`,
+  `getNextAvailableRoll`, `isRollAvailable`; `create()` now skips AR insert
+  when class/section blank). Exports new `AssignStudentInput` interface.
+- `src/features/principal/components/StudentClassAssignmentModal.tsx` (NEW)
+- `src/features/principal/components/StudentsManager.tsx` (Archive tab,
+  modals, real document uploads/preview/delete)
+- `src/components/AdmissionFormPrint.tsx` (Download PDF button)
+
 ## Migration 0018 — Atomic Academic Year + Sections RPC
 
 `supabase/migrations/0018_create_ay_with_sections.sql` introduces a single

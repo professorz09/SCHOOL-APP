@@ -62,6 +62,9 @@ export interface Student {
 export interface StudentDoc {
   id: string;
   name: string;
+  /** Bucket-relative storage path (e.g. `<schoolId>/<studentId>/AADHAAR/foo.jpg`).
+   *  Used to mint a signed URL for preview and to delete the bytes. */
+  storagePath: string;
   type: 'BIRTH_CERT' | 'TRANSFER_CERT' | 'AADHAAR' | 'PHOTO' | 'OTHER';
   uploadedAt: string;
 }

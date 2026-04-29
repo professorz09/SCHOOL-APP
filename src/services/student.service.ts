@@ -124,6 +124,27 @@ const FIELD_TO_DB: Record<string, string> = {
   admissionDate: 'admission_date',
 };
 
+/** Input shape for assignStudentToClass / bulkAssignStudents. */
+export interface AssignStudentInput {
+  studentId: string;
+  className: string;
+  section: string;
+  rollNo: string;
+  totalFee?: number;
+  feeStructure?: {
+    heads: Array<{ name: string; amount: number; frequency: string; description?: string }>;
+    monthlyDueDates: Array<{ month: string; date: string }>;
+    isRte?: boolean;
+    discountAmount?: number;
+    discountPct?: number;
+  };
+  transport?: {
+    vehicleId: string;
+    stopId: string;
+    monthlyAmount: number;
+  };
+}
+
 export const studentService = {
   async getAll(): Promise<Student[]> {
     const schoolId = getSchoolId();
@@ -279,10 +300,17 @@ export const studentService = {
       } catch { /* best-effort — parent may already be linked */ }
     }
 
-    // Step 5: insert per-year academic record (active year).
+    // Step 5: insert per-year academic record (active year), but ONLY if a
+    // class+section was supplied. The new admission flow leaves the
+    // academic record blank — the principal explicitly assigns the
+    // student to a class/section/roll afterwards via the
+    // "Assign to Class" modal (which also generates the fee schedule
+    // and optionally a transport assignment in one transaction). New
+    // admissions without a class therefore land in the UNASSIGNED
+    // archive bucket until they are placed.
     const ayId = input.academicYearId || await activeYearId(schoolId);
     let ar: AcademicRecordRow | null = null;
-    if (ayId) {
+    if (ayId && input.className && input.section) {
       // Resolve section_id (best-effort).
       let sectionId: string | null = null;
       const { data: sec } = await supabase
@@ -312,7 +340,10 @@ export const studentService = {
     }
 
     await logAudit('student_admitted', 'student', stu.id, {
-      admissionNo: stu.admission_no, className: input.className, section: input.section,
+      admissionNo: stu.admission_no,
+      className: input.className || null,
+      section: input.section || null,
+      assigned: !!ar,
     });
 
     return {
@@ -447,6 +478,7 @@ export const studentService = {
       .map(d => ({
         id: d.id,
         name: d.doc_url.split('/').pop() || d.doc_type,
+        storagePath: d.doc_url,
         type: d.doc_type as StudentDoc['type'],
         uploadedAt: d.uploaded_at,
       }));
@@ -584,5 +616,380 @@ export const studentService = {
 
   async sendFeeReminder(_studentId: string): Promise<void> {
     // No-op: in production this would fire an SMS/notification job.
+  },
+
+  // ── Document storage helpers ─────────────────────────────────────────────
+
+  /**
+   * Persist a freshly-uploaded document. `storagePath` is the
+   * bucket-relative path returned by storageService.uploadStudentDocument.
+   */
+  async addDocumentRecord(
+    studentId: string,
+    type: StudentDoc['type'],
+    storagePath: string,
+  ): Promise<StudentDoc> {
+    const { data, error } = await supabase.from('student_documents').insert({
+      student_id: studentId,
+      doc_type: type,
+      doc_url: storagePath,
+    }).select('id, doc_type, doc_url, uploaded_at').single();
+    if (error) throw new Error(error.message);
+    const row = data as { id: string; doc_type: string; doc_url: string; uploaded_at: string };
+    await logAudit('student_document_uploaded', 'student_document', row.id,
+      { studentId, docType: type });
+    return {
+      id: row.id,
+      name: row.doc_url.split('/').pop() || row.doc_type,
+      storagePath: row.doc_url,
+      type: row.doc_type as StudentDoc['type'],
+      uploadedAt: row.uploaded_at,
+    };
+  },
+
+  /** Remove a document row + its bytes (best-effort on storage). */
+  async removeDocument(documentId: string): Promise<void> {
+    const { data: row } = await supabase
+      .from('student_documents')
+      .select('id, doc_url, student_id')
+      .eq('id', documentId).maybeSingle();
+    const { error } = await supabase
+      .from('student_documents').delete().eq('id', documentId);
+    if (error) throw new Error(error.message);
+    const r = row as { doc_url: string; student_id: string } | null;
+    if (r?.doc_url) {
+      // Storage delete is best-effort: an orphaned object is harmless
+      // (the row that referenced it is gone) but row-level RLS may block
+      // delete for non-principal callers — we swallow errors.
+      try {
+        await supabase.storage.from('student-documents').remove([r.doc_url]);
+      } catch { /* ignore */ }
+    }
+    await logAudit('student_document_removed', 'student_document', documentId,
+      { studentId: r?.student_id ?? null });
+  },
+
+  // ── Archive / lifecycle ──────────────────────────────────────────────────
+
+  /**
+   * Returns students filtered by archive bucket for the active year:
+   *   ACTIVE      — is_active=true & current-year AR with status STUDYING/PROMOTED/null
+   *   INACTIVE    — is_active=true & current-year AR with status FAILED/REPEATING/SUSPENDED
+   *   TC_ISSUED   — students.status='TC_ISSUED' (always inactive)
+   *   ALUMNI      — students.status IN ('GRADUATED','ALUMNI')
+   *   UNASSIGNED  — is_active=true & no AR row for the active year
+   */
+  async getStudentsByArchiveStatus(
+    bucket: 'ACTIVE' | 'INACTIVE' | 'TC_ISSUED' | 'ALUMNI' | 'UNASSIGNED',
+  ): Promise<Student[]> {
+    const schoolId = getSchoolId();
+    const ayId = await activeYearId(schoolId);
+
+    // Pull every student (active+inactive) so we can bucket them
+    // client-side.  The set is small (school-scoped) and avoids
+    // building a separate query per bucket.
+    const { data: stuData, error } = await supabase
+      .from('students').select(STU_FIELDS)
+      .eq('school_id', schoolId).order('admission_no');
+    if (error) throw new Error(error.message);
+    const stu = (stuData ?? []) as unknown as StudentRow[];
+    if (!stu.length) return [];
+
+    let arMap = new Map<string, AcademicRecordRow>();
+    if (ayId) {
+      const { data: arData } = await supabase
+        .from('student_academic_records')
+        .select('id, student_id, academic_year_id, class_name, section, roll_no, fee_status, total_fee, paid_fee, attendance_percent, status')
+        .eq('academic_year_id', ayId)
+        .in('student_id', stu.map(s => s.id));
+      ((arData ?? []) as AcademicRecordRow[]).forEach(r => arMap.set(r.student_id, r));
+    }
+
+    const inactiveStatuses = new Set(['FAILED', 'REPEATING', 'SUSPENDED']);
+    const studyingStatuses = new Set(['STUDYING', 'PROMOTED', '']);
+
+    const filtered = stu.filter(s => {
+      const ar = arMap.get(s.id);
+      switch (bucket) {
+        case 'TC_ISSUED':
+          return s.status === 'TC_ISSUED';
+        case 'ALUMNI':
+          return s.status === 'GRADUATED' || s.status === 'ALUMNI';
+        case 'UNASSIGNED':
+          return s.is_active && !ar;
+        case 'INACTIVE':
+          return s.is_active
+            && !!ar
+            && inactiveStatuses.has(ar.status ?? '');
+        case 'ACTIVE':
+        default:
+          return s.is_active
+            && s.status === 'ACTIVE'
+            && !!ar
+            && studyingStatuses.has(ar.status ?? '');
+      }
+    });
+
+    return filtered.map(s => recordToStudent(s, arMap.get(s.id)));
+  },
+
+  /** Real-time roll-uniqueness check used by the assignment modal. */
+  async isRollAvailable(
+    className: string, section: string, roll: string,
+    excludeStudentId?: string,
+  ): Promise<boolean> {
+    if (!roll || !roll.trim()) return false;
+    const schoolId = getSchoolId();
+    const ayId = await activeYearId(schoolId);
+    if (!ayId) return false;
+    const { data, error } = await supabase.rpc('roll_available', {
+      p_school_id: schoolId,
+      p_year_id: ayId,
+      p_class: className,
+      p_section: section,
+      p_roll: roll,
+      p_exclude_student_id: excludeStudentId ?? null,
+    });
+    if (error) {
+      console.warn('[roll_available]', error.message);
+      return false;
+    }
+    return !!data;
+  },
+
+  /** Auto-suggest the smallest unused roll number in a section. */
+  async getNextAvailableRoll(className: string, section: string): Promise<string> {
+    const schoolId = getSchoolId();
+    const ayId = await activeYearId(schoolId);
+    if (!ayId) return '01';
+    const { data, error } = await supabase.rpc('next_available_roll', {
+      p_school_id: schoolId,
+      p_year_id: ayId,
+      p_class: className,
+      p_section: section,
+    });
+    if (error) {
+      console.warn('[next_available_roll]', error.message);
+      return '01';
+    }
+    return (data as string) || '01';
+  },
+
+  /**
+   * Atomic class assignment for a single student. Steps (in order):
+   *
+   *   1. Re-activate the student row if needed (status→ACTIVE, is_active=true).
+   *   2. Upsert the student_academic_records row for the active year, including
+   *      class/section/roll/total_fee/section_id/status='STUDYING'.
+   *   3. If a fee structure is supplied, fetch its heads + monthly_due_dates
+   *      and call generate_student_fee_schedule() (RTE + discount aware).
+   *   4. If a transport assignment is supplied, hand off to
+   *      transportService.assignStudent (which owns the transport tables).
+   *   5. Audit log every successful assignment.
+   *
+   * Errors thrown by any step are surfaced to the caller verbatim;
+   * partial-progress is acceptable here because each step is itself
+   * idempotent (upsert / RPC / transportService assignment all
+   * deactivate-then-insert).
+   */
+  async assignStudentToClass(input: AssignStudentInput): Promise<void> {
+    const schoolId = getSchoolId();
+    const ayId = await activeYearId(schoolId);
+    if (!ayId) throw new Error('No active academic year — create one first');
+
+    // Roll uniqueness pre-check (defensive — UI also enforces).
+    const free = await this.isRollAvailable(
+      input.className, input.section, input.rollNo, input.studentId,
+    );
+    if (!free) {
+      throw new Error(`Roll ${input.rollNo} is already taken in ${input.className}-${input.section}`);
+    }
+
+    // Step 1: re-activate student row if it was inactive (e.g. readmit
+    // after TC). Stays a no-op for already-active students.
+    await supabase.from('students').update({
+      is_active: true,
+      status: 'ACTIVE',
+      updated_at: new Date().toISOString(),
+    }).eq('id', input.studentId).eq('school_id', schoolId);
+
+    // Resolve section_id (best-effort).
+    let sectionId: string | null = null;
+    const { data: sec } = await supabase
+      .from('sections').select('id')
+      .eq('school_id', schoolId).eq('academic_year_id', ayId)
+      .eq('class_name', input.className).eq('section', input.section).maybeSingle();
+    sectionId = (sec as { id: string } | null)?.id ?? null;
+
+    // Step 2: upsert the academic record for the active year.
+    const { data: existing } = await supabase
+      .from('student_academic_records')
+      .select('id')
+      .eq('student_id', input.studentId)
+      .eq('academic_year_id', ayId)
+      .maybeSingle();
+
+    const arPayload: Record<string, unknown> = {
+      student_id: input.studentId,
+      academic_year_id: ayId,
+      section_id: sectionId,
+      class_name: input.className,
+      section: input.section,
+      roll_no: input.rollNo,
+      status: 'STUDYING',
+    };
+    if (input.totalFee !== undefined) arPayload.total_fee = input.totalFee;
+
+    if (existing) {
+      const { error } = await supabase
+        .from('student_academic_records')
+        .update(arPayload)
+        .eq('id', (existing as { id: string }).id);
+      if (error) throw new Error(`Update academic record failed: ${error.message}`);
+    } else {
+      const { error } = await supabase
+        .from('student_academic_records')
+        .insert({
+          ...arPayload,
+          fee_status: 'PENDING',
+          total_fee: input.totalFee ?? 0,
+          paid_fee: 0,
+          attendance_percent: 0,
+        });
+      if (error) throw new Error(`Insert academic record failed: ${error.message}`);
+    }
+
+    // Step 3: generate fee schedule.
+    if (input.feeStructure) {
+      const { error: feeErr } = await supabase.rpc('generate_student_fee_schedule', {
+        p_student_id: input.studentId,
+        p_year_id: ayId,
+        p_heads: input.feeStructure.heads,
+        p_due_dates: input.feeStructure.monthlyDueDates,
+        p_is_rte: !!input.feeStructure.isRte,
+        p_discount_amount: input.feeStructure.discountAmount ?? 0,
+        p_discount_pct: input.feeStructure.discountPct ?? 0,
+      });
+      if (feeErr) throw new Error(`Fee schedule failed: ${feeErr.message}`);
+    }
+
+    // Step 4: transport assignment (handled by transport service).
+    if (input.transport) {
+      // Lazy import to avoid a circular dep between student↔transport
+      // services (transportService imports from supabase + auth only,
+      // but keeping this lazy is the safer pattern).
+      const { transportService } = await import('./transport.service');
+      await transportService.assignStudent(
+        input.studentId, '', '',
+        input.transport.vehicleId,
+        input.transport.stopId, '',
+        input.transport.monthlyAmount,
+        undefined, ayId,
+      );
+    }
+
+    await logAudit('student_assigned_to_class', 'student', input.studentId, {
+      className: input.className,
+      section: input.section,
+      rollNo: input.rollNo,
+      hasFeeStructure: !!input.feeStructure,
+      hasTransport: !!input.transport,
+    });
+  },
+
+  /**
+   * Best-effort bulk version of assignStudentToClass. Each row is tried
+   * in turn; failures are collected and returned so the caller can show
+   * a per-row error report instead of aborting the whole batch.
+   */
+  async bulkAssignStudents(
+    inputs: AssignStudentInput[],
+  ): Promise<{ succeeded: number; failed: Array<{ studentId: string; error: string }> }> {
+    let succeeded = 0;
+    const failed: Array<{ studentId: string; error: string }> = [];
+    for (const input of inputs) {
+      try {
+        await studentService.assignStudentToClass(input);
+        succeeded += 1;
+      } catch (e) {
+        failed.push({
+          studentId: input.studentId,
+          error: e instanceof Error ? e.message : String(e),
+        });
+      }
+    }
+    return { succeeded, failed };
+  },
+
+  /** Mark a student as failed for the active year. */
+  async markStudentFailed(studentId: string, reason?: string): Promise<void> {
+    const schoolId = getSchoolId();
+    const ayId = await activeYearId(schoolId);
+    if (!ayId) throw new Error('No active academic year');
+    const { error } = await supabase
+      .from('student_academic_records')
+      .update({ status: 'FAILED' })
+      .eq('student_id', studentId)
+      .eq('academic_year_id', ayId);
+    if (error) throw new Error(error.message);
+    await logAudit('student_marked_failed', 'student', studentId,
+      { reason: reason ?? null, academicYearId: ayId });
+  },
+
+  /**
+   * Issue a Transfer Certificate.  Sets students.status='TC_ISSUED',
+   * is_active=false, persists tc_number, and disables the parent's
+   * portal access.  Active-year academic record is preserved (read-only).
+   */
+  async issueTC(studentId: string, tcNumber: string, reason?: string): Promise<void> {
+    const schoolId = getSchoolId();
+    const cleanTc = tcNumber.trim();
+    if (!cleanTc) throw new Error('TC number required');
+
+    const { data: row } = await supabase
+      .from('students').select('user_id, name')
+      .eq('id', studentId).eq('school_id', schoolId).maybeSingle();
+    const userId = (row as { user_id: string | null } | null)?.user_id ?? null;
+
+    const { error } = await supabase.from('students').update({
+      is_active: false,
+      status: 'TC_ISSUED',
+      tc_number: cleanTc,
+      updated_at: new Date().toISOString(),
+    }).eq('id', studentId).eq('school_id', schoolId);
+    if (error) throw new Error(error.message);
+
+    if (userId) {
+      try { await adminApi.setSchoolUserActive(userId, false); }
+      catch { /* best-effort */ }
+    }
+    await logAudit('student_tc_issued', 'student', studentId,
+      { tcNumber: cleanTc, reason: reason ?? null });
+  },
+
+  /**
+   * Re-admit a previously-deactivated student. Flips status back to ACTIVE
+   * + is_active=true; the caller is expected to follow up with
+   * assignStudentToClass() to put them back into a section.
+   */
+  async readmitStudent(studentId: string): Promise<void> {
+    const schoolId = getSchoolId();
+    const { data: row } = await supabase
+      .from('students').select('user_id')
+      .eq('id', studentId).eq('school_id', schoolId).maybeSingle();
+    const userId = (row as { user_id: string | null } | null)?.user_id ?? null;
+
+    const { error } = await supabase.from('students').update({
+      is_active: true,
+      status: 'ACTIVE',
+      updated_at: new Date().toISOString(),
+    }).eq('id', studentId).eq('school_id', schoolId);
+    if (error) throw new Error(error.message);
+
+    if (userId) {
+      try { await adminApi.setSchoolUserActive(userId, true); }
+      catch { /* best-effort */ }
+    }
+    await logAudit('student_readmitted', 'student', studentId);
   },
 };

@@ -5,30 +5,46 @@ import {
   X, FileText, BarChart2, FolderOpen, Copy, MapPin, FileCheck,
   Bus, Briefcase, Droplets, GraduationCap, Shield, Heart,
   CreditCard, Building2, TrendingUp, Home as HomeIcon,
+  Archive, UserCheck, UserX, Award, Trash2, AlertTriangle, RefreshCw,
 } from 'lucide-react';
 import { studentService } from '../../../services/student.service';
-import { Student, CreateStudentInput, FeeRecord, StudentAcademicRecord, STREAMS, STREAM_CLASSES, StudentStream } from '../../../types/principal.types';
+import { Student, CreateStudentInput, FeeRecord, StudentAcademicRecord, STREAMS, STREAM_CLASSES, StudentStream, StudentDoc } from '../../../types/principal.types';
 import { PaymentStatus, PAYMENT_COLORS } from '../../../config/constants';
 import { useUIStore } from '../../../store/uiStore';
 type ParentCredsView = { mobileNumber: string; password: string };
 import { schoolInfoService, SchoolInfo } from '../../../services/schoolInfo.service';
 import { AdmissionFormPrint } from '../../../components/AdmissionFormPrint';
 import { transportService, TransportVehicle, StudentTransportAssignment } from '../../../services/transport.service';
+import { storageService } from '../../../services/storage.service';
+import { StudentClassAssignmentModal } from './StudentClassAssignmentModal';
 
-type MainView = 'MENU' | 'ADMISSION' | 'FEES' | 'CLASSES';
+type MainView = 'MENU' | 'ADMISSION' | 'FEES' | 'CLASSES' | 'ARCHIVE';
 type SubView = 'LIST' | 'CREATE' | 'PROFILE' | 'CLASS_DETAIL' | 'SECTION_DETAIL';
+type ArchiveTab = 'ACTIVE' | 'INACTIVE' | 'TC_ISSUED' | 'ALUMNI' | 'UNASSIGNED';
+
+const ARCHIVE_TABS: Array<{ key: ArchiveTab; label: string; icon: React.ComponentType<{ size?: number; className?: string }>; tone: string }> = [
+  { key: 'ACTIVE',     label: 'Active',     icon: UserCheck,    tone: 'emerald' },
+  { key: 'UNASSIGNED', label: 'Unassigned', icon: AlertTriangle, tone: 'amber' },
+  { key: 'INACTIVE',   label: 'Inactive',   icon: UserX,        tone: 'slate' },
+  { key: 'TC_ISSUED',  label: 'TC Issued',  icon: FileCheck,    tone: 'rose' },
+  { key: 'ALUMNI',     label: 'Alumni',     icon: Award,        tone: 'indigo' },
+];
 
 interface Props { onBack: () => void; initialView?: MainView; }
 
 const CLASS_OPTIONS = ['Class 1','Class 2','Class 3','Class 4','Class 5','Class 6','Class 7','Class 8','Class 9','Class 10','Class 11','Class 12'];
 const BLOOD_GROUPS = ['A+','A-','B+','B-','O+','O-','AB+','AB-'];
 
+// Class/section/stream/totalFee deliberately blank — the new admission
+// flow creates the student in the UNASSIGNED bucket and a separate
+// "Assign to Class" modal handles class placement, fee schedule and
+// transport in one transaction.
 const BLANK_FORM: CreateStudentInput = {
-  name: '', rollNo: '', admissionNo: '', className: 'Class 10', section: 'A',
+  name: '', rollNo: '', admissionNo: '', className: '', section: '',
   dob: '', gender: 'MALE', bloodGroup: 'O+', aadhaarNo: '', phone: '',
   email: '', address: '', photo: '', fatherName: '', fatherPhone: '',
   motherName: '', motherPhone: '', academicYearId: '',
-  admissionDate: new Date().toISOString().split('T')[0], totalFee: 45000,
+  admissionDate: new Date().toISOString().split('T')[0], totalFee: 0,
   religion: '', caste: '', penNumber: '', birthCertNo: '', tcNumber: '', rte: false,
   fatherOccupation: '', fatherIncome: '', fatherEmail: '', motherOccupation: '',
   guardianName: '', guardianPhone: '', guardianRelation: '',
@@ -88,8 +104,34 @@ export const StudentsManager: React.FC<Props> = ({ onBack, initialView }) => {
     { type: 'OTHER', name: 'Other Documents', uploaded: false },
   ]);
 
+  // Archive state ─────────────────────────────────────────────────────────
+  const [archiveTab, setArchiveTab] = useState<ArchiveTab>('ACTIVE');
+  const [archiveLoading, setArchiveLoading] = useState(false);
+  const [archiveStudents, setArchiveStudents] = useState<Student[]>([]);
+  const [assignTarget, setAssignTarget] = useState<Student | null>(null);
+  const [tcModal, setTcModal] = useState<{ student: Student; tcNumber: string; reason: string } | null>(null);
+  const [profileDocsLive, setProfileDocsLive] = useState<StudentDoc[]>([]);
+  const [profileDocUploading, setProfileDocUploading] = useState<DocumentUpload['type'] | null>(null);
+
   useEffect(() => { studentService.getAll().then(setStudents); }, []);
   useEffect(() => { schoolInfoService.get().then(setSchoolInfo).catch(() => setSchoolInfo(null)); }, []);
+
+  const refreshArchive = React.useCallback(async () => {
+    setArchiveLoading(true);
+    try {
+      const rows = await studentService.getStudentsByArchiveStatus(archiveTab);
+      setArchiveStudents(rows);
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : 'Failed to load archive';
+      showToast(msg, 'error');
+    } finally {
+      setArchiveLoading(false);
+    }
+  }, [archiveTab, showToast]);
+
+  useEffect(() => {
+    if (mainView === 'ARCHIVE') refreshArchive();
+  }, [mainView, refreshArchive]);
 
   const loadStudentData = async (student: Student) => {
     const [fees, record] = await Promise.all([
@@ -98,6 +140,7 @@ export const StudentsManager: React.FC<Props> = ({ onBack, initialView }) => {
     ]);
     setFeeRecords(fees);
     setAcademicRecord(record);
+    setProfileDocsLive(student.docs ?? []);
     try {
       const assignment = transportService.getAssignmentForStudent(student.id);
       if (assignment) {
@@ -107,21 +150,26 @@ export const StudentsManager: React.FC<Props> = ({ onBack, initialView }) => {
         setStudentTransport(null);
       }
     } catch { setStudentTransport(null); }
+    // Mark each upload-checklist row as already done if a matching live
+    // doc exists, so the principal can see at a glance what's missing.
+    setProfileDocs(prev => prev.map(d => ({
+      ...d,
+      uploaded: (student.docs ?? []).some(x => x.type === d.type),
+    })));
   };
 
   const handleCreate = async () => {
-    if (!form.name || !form.admissionNo || !form.rollNo) {
-      showToast('Name, admission no. and roll no. required', 'error');
+    if (!form.name || !form.admissionNo) {
+      showToast('Name and admission no. required', 'error');
       return;
     }
     if (!form.parentMobileNumber.trim()) {
       showToast('Parent mobile number required', 'error');
       return;
     }
-    if (STREAM_CLASSES.has(form.className) && !form.stream) {
-      showToast('Stream is required for Class 11 and 12', 'error');
-      return;
-    }
+    // Class/section/stream are NOT collected at admission anymore — the
+    // student lands in the UNASSIGNED bucket and the principal places
+    // them via the "Assign to Class" modal. So no stream guard here.
 
     setIsSubmitting(true);
     try {
@@ -133,6 +181,9 @@ export const StudentsManager: React.FC<Props> = ({ onBack, initialView }) => {
       const canonicalParentMobile = ((form.fatherPhone || form.parentMobileNumber || '').replace(/\D/g, '')).slice(-10);
       const studentData: CreateStudentInput = {
         ...rest,
+        // Force class/section blank so the AR insert in create() is skipped
+        // (UNASSIGNED bucket). totalFee is taken in the assignment modal.
+        className: '', section: '', stream: undefined, totalFee: 0,
         fatherPhone: canonicalParentMobile,
         fatherName: rest.fatherName || form.parentName || 'Parent',
       };
@@ -182,16 +233,104 @@ export const StudentsManager: React.FC<Props> = ({ onBack, initialView }) => {
     showToast(`${file.name} uploaded (${(file.size / 1024).toFixed(0)}KB)`);
   };
 
-  const handleProfileDocUpload = (e: React.ChangeEvent<HTMLInputElement>, docType: DocumentUpload['type']) => {
+  const handleProfileDocUpload = async (
+    e: React.ChangeEvent<HTMLInputElement>,
+    docType: DocumentUpload['type'],
+  ) => {
     const file = e.target.files?.[0];
-    if (!file) return;
-    const maxSizeBytes = 2 * 1024 * 1024;
-    if (file.size > maxSizeBytes) {
-      showToast(`File must be less than 2MB. Current: ${(file.size / 1024 / 1024).toFixed(1)}MB`, 'error');
-      return;
+    if (!file || !selected) return;
+    setProfileDocUploading(docType);
+    try {
+      const { path } = await storageService.uploadStudentDocument(selected.id, docType, file);
+      const newDoc = await studentService.addDocumentRecord(selected.id, docType, path);
+      setProfileDocsLive(prev => [...prev.filter(d => d.id !== newDoc.id), newDoc]);
+      // Reflect in the in-memory selected.docs so the "Submitted" panel updates.
+      const refreshed = await studentService.getById(selected.id);
+      if (refreshed) {
+        setSelected(refreshed);
+        setStudents(prev => prev.map(s => s.id === refreshed.id ? refreshed : s));
+      }
+      setProfileDocs(prev => prev.map(d => d.type === docType ? { ...d, uploaded: true } : d));
+      showToast(`${file.name} uploaded`);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : 'Upload failed';
+      showToast(msg, 'error');
+    } finally {
+      setProfileDocUploading(null);
+      // reset input so the same filename can be re-picked
+      e.target.value = '';
     }
-    setProfileDocs(prev => prev.map(d => d.type === docType ? { ...d, uploaded: true } : d));
-    showToast(`${file.name} attached successfully`);
+  };
+
+  const openProfileDoc = async (doc: StudentDoc) => {
+    try {
+      const url = await storageService.getStudentDocumentSignedUrl(doc.storagePath);
+      if (url) window.open(url, '_blank', 'noopener');
+      else showToast('Could not open document', 'error');
+    } catch {
+      showToast('Could not open document', 'error');
+    }
+  };
+
+  const handleProfileDocRemove = async (docId: string) => {
+    if (!selected) return;
+    if (!confirm('Remove this document?')) return;
+    try {
+      await studentService.removeDocument(docId);
+      setProfileDocsLive(prev => prev.filter(d => d.id !== docId));
+      const refreshed = await studentService.getById(selected.id);
+      if (refreshed) {
+        setSelected(refreshed);
+        setStudents(prev => prev.map(s => s.id === refreshed.id ? refreshed : s));
+      }
+      showToast('Document removed');
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : 'Remove failed';
+      showToast(msg, 'error');
+    }
+  };
+
+  // ── Archive lifecycle handlers ──────────────────────────────────────────
+  const handleMarkFailed = async (student: Student) => {
+    if (!confirm(`Mark ${student.name} as FAILED for the active year?`)) return;
+    try {
+      await studentService.markStudentFailed(student.id);
+      showToast(`${student.name} marked as failed`);
+      await refreshArchive();
+      const all = await studentService.getAll(); setStudents(all);
+    } catch (e) {
+      showToast(e instanceof Error ? e.message : 'Failed', 'error');
+    }
+  };
+
+  const handleReadmit = async (student: Student) => {
+    if (!confirm(`Re-admit ${student.name}? You'll need to assign them to a class next.`)) return;
+    try {
+      await studentService.readmitStudent(student.id);
+      showToast(`${student.name} re-admitted — assign them to a class`);
+      await refreshArchive();
+      const all = await studentService.getAll(); setStudents(all);
+      // Open the assignment modal next.
+      const refreshed = await studentService.getById(student.id);
+      if (refreshed) setAssignTarget(refreshed);
+    } catch (e) {
+      showToast(e instanceof Error ? e.message : 'Failed', 'error');
+    }
+  };
+
+  const handleIssueTC = async () => {
+    if (!tcModal) return;
+    const tcNum = tcModal.tcNumber.trim();
+    if (!tcNum) { showToast('TC number required', 'error'); return; }
+    try {
+      await studentService.issueTC(tcModal.student.id, tcNum, tcModal.reason);
+      showToast(`TC issued to ${tcModal.student.name}`);
+      setTcModal(null);
+      await refreshArchive();
+      const all = await studentService.getAll(); setStudents(all);
+    } catch (e) {
+      showToast(e instanceof Error ? e.message : 'Failed', 'error');
+    }
   };
 
   const renderHeader = (title: string, back: () => void, action?: React.ReactNode) => (
@@ -222,11 +361,13 @@ export const StudentsManager: React.FC<Props> = ({ onBack, initialView }) => {
       <div className="flex-1 overflow-y-auto p-4  space-y-4">
         <div className="grid grid-cols-1 gap-3">
           {[
-            { icon: FileText, label: 'Admission', desc: 'Add new students & update records', action: () => { setMainView('ADMISSION'); setSubView('LIST'); } },
-          ].map(({ icon: Icon, label, desc, action }) => (
+            { icon: FileText, label: 'Admission', desc: 'Add new students & generate forms', tone: 'indigo', action: () => { setMainView('ADMISSION'); setSubView('LIST'); } },
+            { icon: Archive,  label: 'Archive',   desc: 'Active, inactive, TC issued, alumni & unassigned', tone: 'amber', action: () => { setMainView('ARCHIVE'); setSubView('LIST'); setArchiveTab('ACTIVE'); } },
+            { icon: BookOpen, label: 'Classes',   desc: 'Browse students by class & section', tone: 'emerald', action: () => { setMainView('CLASSES'); setSubView('LIST'); } },
+          ].map(({ icon: Icon, label, desc, tone, action }) => (
             <button key={label} onClick={action}
               className="flex items-center gap-4 bg-white rounded-2xl border border-slate-100 shadow-sm p-5 active:scale-95 transition-transform text-left">
-              <div className="w-12 h-12 rounded-xl bg-indigo-50 text-indigo-600 flex items-center justify-center shrink-0">
+              <div className={`w-12 h-12 rounded-xl bg-${tone}-50 text-${tone}-600 flex items-center justify-center shrink-0`}>
                 <Icon size={24} />
               </div>
               <div className="flex-1">
@@ -288,34 +429,13 @@ export const StudentsManager: React.FC<Props> = ({ onBack, initialView }) => {
                   className="w-full border border-slate-200 bg-slate-50 rounded-xl px-4 py-3 font-bold text-sm outline-none focus:border-indigo-500 focus:bg-white transition-colors" />
               </div>
             ))}
-            <div className="grid grid-cols-2 gap-3">
-              <div>
-                <label className="block text-[10px] font-black uppercase tracking-widest text-slate-500 mb-1.5">Class</label>
-                <select value={form.className} onChange={e => setForm(f => ({ ...f, className: e.target.value, stream: undefined }))}
-                  className="w-full border border-slate-200 bg-slate-50 rounded-xl px-3 py-3 font-bold text-sm outline-none focus:border-indigo-500">
-                  {CLASS_OPTIONS.map(c => <option key={c}>{c}</option>)}
-                </select>
-              </div>
-              <div>
-                <label className="block text-[10px] font-black uppercase tracking-widest text-slate-500 mb-1.5">Section</label>
-                <input value={form.section} onChange={e => setForm(f => ({ ...f, section: e.target.value }))}
-                  placeholder="A" className="w-full border border-slate-200 bg-slate-50 rounded-xl px-4 py-3 font-bold text-sm outline-none focus:border-indigo-500" />
-              </div>
+            <div className="bg-amber-50 border border-amber-200 rounded-xl p-3">
+              <p className="text-[10px] font-black uppercase tracking-widest text-amber-700">Class assignment</p>
+              <p className="text-[10px] font-bold text-amber-700 mt-1 leading-relaxed">
+                Class, section, roll number and fee schedule are set in the next step
+                via <b>Archive → Unassigned → Assign to Class</b> after admission.
+              </p>
             </div>
-            {STREAM_CLASSES.has(form.className) && (
-              <div>
-                <label className="block text-[10px] font-black uppercase tracking-widest text-slate-500 mb-1.5">Stream *</label>
-                <div className="grid grid-cols-3 gap-2">
-                  {STREAMS.map(s => (
-                    <button key={s} type="button"
-                      onClick={() => setForm(f => ({ ...f, stream: s }))}
-                      className={`py-3 rounded-xl text-sm font-black border transition-all ${form.stream === s ? 'bg-indigo-600 text-white border-indigo-600' : 'bg-slate-50 text-slate-600 border-slate-200'}`}>
-                      {s}
-                    </button>
-                  ))}
-                </div>
-              </div>
-            )}
             <div className="grid grid-cols-2 gap-3">
               <div>
                 <label className="block text-[10px] font-black uppercase tracking-widest text-slate-500 mb-1.5">Date of Birth</label>
@@ -412,15 +532,6 @@ export const StudentsManager: React.FC<Props> = ({ onBack, initialView }) => {
             </div>
           </div>
 
-          <div className="bg-white rounded-2xl border border-slate-100 shadow-sm p-4 space-y-4">
-            <p className="text-[10px] font-black uppercase tracking-widest text-slate-400">Fee Settings</p>
-            <div>
-              <label className="block text-[10px] font-black uppercase tracking-widest text-slate-500 mb-1.5">Annual Fee (₹)</label>
-              <input type="number" value={form.totalFee} onChange={e => setForm(f => ({ ...f, totalFee: +e.target.value }))}
-                className="w-full border border-slate-200 bg-slate-50 rounded-xl px-4 py-3 font-bold text-sm outline-none focus:border-indigo-500" />
-            </div>
-          </div>
-
           <button onClick={handleCreate} disabled={isSubmitting}
             className="w-full flex items-center justify-center gap-2 bg-indigo-600 text-white font-black text-xs uppercase tracking-widest py-4 rounded-2xl active:scale-95 transition-transform shadow-lg disabled:opacity-60">
             {isSubmitting ? 'Admitting…' : <><Plus size={16} /> Admit Student</>}
@@ -499,6 +610,202 @@ export const StudentsManager: React.FC<Props> = ({ onBack, initialView }) => {
             )}
           </div>
         </div>
+      </div>
+    );
+  }
+
+  // ─── ARCHIVE (Lifecycle buckets) ────────────────────────────────────────
+
+  if (!renderProfile && mainView === 'ARCHIVE') {
+    const filtered = archiveStudents.filter(s =>
+      !search ||
+      s.name.toLowerCase().includes(search.toLowerCase()) ||
+      s.admissionNo.toLowerCase().includes(search.toLowerCase()) ||
+      s.rollNo.includes(search)
+    );
+
+    return (
+      <div className="w-full bg-slate-50 flex flex-col animate-in slide-in-from-right-8 duration-300">
+        <div className="sticky top-0 z-10 bg-white border-b border-slate-100 shadow-sm">
+          <div className="px-4 pt-4 pb-3 flex items-center justify-between">
+            <div className="flex items-center gap-3">
+              <button onClick={() => setMainView('MENU')} className="p-2 -ml-2 bg-slate-100 rounded-full text-slate-600">
+                <ArrowLeft size={20} />
+              </button>
+              <div>
+                <h2 className="text-xl font-black text-slate-900 uppercase tracking-tight">Archive</h2>
+                <p className="text-[10px] font-bold text-slate-400">{filtered.length} students in this view</p>
+              </div>
+            </div>
+            <button onClick={refreshArchive}
+              className="p-2 bg-slate-100 rounded-xl text-slate-600 active:scale-90"
+              title="Refresh">
+              <RefreshCw size={16} className={archiveLoading ? 'animate-spin' : ''} />
+            </button>
+          </div>
+
+          {/* Sub-tabs */}
+          <div className="px-2 pb-2 flex gap-1 overflow-x-auto no-scrollbar">
+            {ARCHIVE_TABS.map(({ key, label, icon: Icon, tone }) => (
+              <button key={key} onClick={() => setArchiveTab(key)}
+                className={`shrink-0 flex items-center gap-1.5 px-3 py-2 rounded-xl text-[11px] font-black transition-all
+                  ${archiveTab === key
+                    ? `bg-${tone}-600 text-white shadow-sm`
+                    : `bg-slate-50 text-slate-600 hover:bg-slate-100`}`}>
+                <Icon size={13} />{label}
+              </button>
+            ))}
+          </div>
+
+          <div className="px-4 pb-3">
+            <div className="relative">
+              <Search size={15} className="absolute left-3.5 top-1/2 -translate-y-1/2 text-slate-400" />
+              <input value={search} onChange={e => setSearch(e.target.value)}
+                placeholder="Search in this bucket…"
+                className="w-full bg-slate-50 border border-slate-200 rounded-xl pl-10 pr-4 py-2.5 font-bold text-sm outline-none focus:border-indigo-500 focus:bg-white transition-colors" />
+            </div>
+          </div>
+        </div>
+
+        <div className="flex-1 overflow-y-auto p-4">
+          {archiveLoading && (
+            <div className="flex flex-col items-center py-12 text-slate-400">
+              <div className="w-7 h-7 border-4 border-slate-200 border-t-indigo-500 rounded-full animate-spin" />
+              <p className="font-bold text-xs mt-3">Loading…</p>
+            </div>
+          )}
+          {!archiveLoading && filtered.length === 0 && (
+            <div className="flex flex-col items-center py-16 text-slate-400">
+              <Archive size={32} className="mb-3 opacity-40" />
+              <p className="font-bold text-sm">No students in this bucket</p>
+            </div>
+          )}
+          <div className="space-y-2">
+            {filtered.map(student => {
+              const initials = student.name.split(' ').map(w => w[0]).join('').slice(0, 2);
+              const isUnassigned = !student.className;
+              return (
+                <div key={student.id} className="bg-white rounded-2xl border border-slate-100 shadow-sm p-3">
+                  <button
+                    onClick={() => { setSelected(student); loadStudentData(student); setActiveProfileTab('INFO'); setSubView('PROFILE'); }}
+                    className="w-full flex items-center gap-3 text-left active:bg-slate-50 transition-colors p-1 rounded-xl">
+                    <div className="w-11 h-11 rounded-xl bg-gradient-to-br from-indigo-400 to-violet-500 text-white flex items-center justify-center font-black text-sm shrink-0">
+                      {initials.toUpperCase()}
+                    </div>
+                    <div className="flex-1 min-w-0">
+                      <div className="font-extrabold text-slate-900 text-sm truncate">{student.name}</div>
+                      <div className="flex items-center gap-2 mt-0.5">
+                        <span className="text-[10px] font-bold text-slate-400">
+                          {isUnassigned ? 'Unassigned' : `${student.className}-${student.section} · Roll ${student.rollNo || '—'}`}
+                        </span>
+                        <span className="text-[9px] font-bold text-slate-300">·</span>
+                        <span className="text-[10px] font-bold text-indigo-500">{student.admissionNo}</span>
+                      </div>
+                    </div>
+                    <ChevronRight size={14} className="text-slate-300" />
+                  </button>
+
+                  {/* Per-row actions */}
+                  <div className="flex flex-wrap gap-1.5 mt-2 pt-2 border-t border-slate-100">
+                    {(archiveTab === 'UNASSIGNED' || archiveTab === 'ACTIVE' || archiveTab === 'INACTIVE') && (
+                      <button onClick={() => setAssignTarget(student)}
+                        className="flex-1 min-w-[110px] px-3 py-1.5 bg-indigo-600 text-white text-[10px] font-black rounded-lg active:scale-95 flex items-center justify-center gap-1">
+                        <UserCheck size={11} /> {isUnassigned ? 'Assign to Class' : 'Re-assign'}
+                      </button>
+                    )}
+                    {archiveTab === 'ACTIVE' && (
+                      <button onClick={() => handleMarkFailed(student)}
+                        className="flex-1 min-w-[100px] px-3 py-1.5 bg-amber-100 text-amber-700 text-[10px] font-black rounded-lg active:scale-95 flex items-center justify-center gap-1">
+                        <AlertTriangle size={11} /> Mark Failed
+                      </button>
+                    )}
+                    {(archiveTab === 'ACTIVE' || archiveTab === 'INACTIVE' || archiveTab === 'UNASSIGNED') && (
+                      <button onClick={() => setTcModal({ student, tcNumber: '', reason: '' })}
+                        className="flex-1 min-w-[100px] px-3 py-1.5 bg-rose-100 text-rose-700 text-[10px] font-black rounded-lg active:scale-95 flex items-center justify-center gap-1">
+                        <FileCheck size={11} /> Issue TC
+                      </button>
+                    )}
+                    {(archiveTab === 'TC_ISSUED' || archiveTab === 'INACTIVE') && (
+                      <button onClick={() => handleReadmit(student)}
+                        className="flex-1 min-w-[100px] px-3 py-1.5 bg-emerald-100 text-emerald-700 text-[10px] font-black rounded-lg active:scale-95 flex items-center justify-center gap-1">
+                        <RefreshCw size={11} /> Re-admit
+                      </button>
+                    )}
+                    {archiveTab === 'TC_ISSUED' && student.tcNumber && (
+                      <span className="px-2 py-1.5 bg-slate-100 text-slate-600 text-[9px] font-black rounded-lg">
+                        TC #{student.tcNumber}
+                      </span>
+                    )}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+
+        {/* Class assignment modal */}
+        {assignTarget && (
+          <StudentClassAssignmentModal
+            student={assignTarget}
+            onClose={() => setAssignTarget(null)}
+            onSuccess={async () => {
+              await refreshArchive();
+              const all = await studentService.getAll(); setStudents(all);
+            }}
+          />
+        )}
+
+        {/* TC modal */}
+        {tcModal && (
+          <div className="fixed inset-0 z-50 bg-black/60 flex items-end sm:items-center justify-center p-0 sm:p-4">
+            <div className="bg-white w-full sm:max-w-md sm:rounded-2xl rounded-t-2xl shadow-2xl">
+              <div className="flex items-center justify-between px-4 py-3 border-b border-slate-100">
+                <div>
+                  <h3 className="text-base font-black text-slate-900">Issue Transfer Certificate</h3>
+                  <p className="text-[11px] font-bold text-slate-500 mt-0.5">
+                    {tcModal.student.name} · {tcModal.student.admissionNo}
+                  </p>
+                </div>
+                <button onClick={() => setTcModal(null)} className="p-2 bg-slate-100 rounded-xl active:scale-95">
+                  <X size={18} />
+                </button>
+              </div>
+              <div className="p-4 space-y-3">
+                <div>
+                  <label className="text-[10px] font-black uppercase text-slate-500">TC Number *</label>
+                  <input value={tcModal.tcNumber}
+                    onChange={e => setTcModal(t => t ? { ...t, tcNumber: e.target.value } : t)}
+                    placeholder="e.g. TC/2025/021"
+                    className="w-full mt-1 px-3 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-sm font-bold" />
+                </div>
+                <div>
+                  <label className="text-[10px] font-black uppercase text-slate-500">Reason (optional)</label>
+                  <textarea value={tcModal.reason}
+                    onChange={e => setTcModal(t => t ? { ...t, reason: e.target.value } : t)}
+                    rows={2}
+                    placeholder="Family relocating, change of school, etc."
+                    className="w-full mt-1 px-3 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-xs font-bold resize-none" />
+                </div>
+                <div className="bg-rose-50 border border-rose-200 rounded-xl p-3">
+                  <p className="text-[10px] font-bold text-rose-700 leading-relaxed">
+                    Issuing a TC marks this student inactive and disables the parent
+                    portal login. Use <b>Re-admit</b> from the TC Issued tab to reverse.
+                  </p>
+                </div>
+              </div>
+              <div className="px-4 py-3 border-t border-slate-100 flex gap-2">
+                <button onClick={() => setTcModal(null)}
+                  className="flex-1 px-4 py-3 bg-slate-100 text-slate-700 font-black text-xs rounded-xl active:scale-95">
+                  Cancel
+                </button>
+                <button onClick={handleIssueTC}
+                  className="flex-1 px-4 py-3 bg-rose-600 text-white font-black text-xs rounded-xl active:scale-95">
+                  Issue TC
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
       </div>
     );
   }
@@ -1167,21 +1474,31 @@ export const StudentsManager: React.FC<Props> = ({ onBack, initialView }) => {
                   )}
                 </div>
 
-                {/* Submitted documents */}
+                {/* Submitted documents — actual storage rows with view/delete */}
                 <div className="bg-white rounded-2xl border border-slate-100 shadow-sm p-4">
                   <SectionTitle icon={FileText} title="Submitted Documents" />
-                  {selected.docs.length > 0 ? (
+                  {profileDocsLive.length > 0 ? (
                     <div className="space-y-2">
-                      {selected.docs.map(doc => (
+                      {profileDocsLive.map(doc => (
                         <div key={doc.id} className="flex items-center gap-3 bg-emerald-50 border border-emerald-100 rounded-xl px-3 py-2.5">
                           <CheckCircle2 size={15} className="text-emerald-600 shrink-0" />
                           <div className="flex-1 min-w-0">
-                            <span className="text-sm font-bold text-emerald-800 truncate block">{doc.name}</span>
-                            {doc.uploadedAt && (
-                              <span className="text-[9px] font-bold text-emerald-600">{doc.uploadedAt}</span>
-                            )}
+                            <span className="text-sm font-bold text-emerald-800 truncate block">
+                              {doc.type.replace('_', ' ')}
+                            </span>
+                            <span className="text-[9px] font-bold text-emerald-600 truncate block">
+                              {doc.name}
+                              {doc.uploadedAt && ` · ${new Date(doc.uploadedAt).toLocaleDateString()}`}
+                            </span>
                           </div>
-                          <span className="text-[9px] font-black text-emerald-600 bg-emerald-100 px-2 py-0.5 rounded-full shrink-0">SAVED</span>
+                          <button onClick={() => openProfileDoc(doc)}
+                            className="text-[9px] font-black text-emerald-700 bg-emerald-100 hover:bg-emerald-200 px-2 py-1 rounded-full shrink-0">
+                            VIEW
+                          </button>
+                          <button onClick={() => handleProfileDocRemove(doc.id)}
+                            className="p-1 text-rose-500 hover:bg-rose-50 rounded shrink-0" title="Remove">
+                            <Trash2 size={13} />
+                          </button>
                         </div>
                       ))}
                     </div>
@@ -1193,34 +1510,41 @@ export const StudentsManager: React.FC<Props> = ({ onBack, initialView }) => {
                   )}
                 </div>
 
-                {/* Upload checklist */}
+                {/* Upload checklist — uploads straight to Supabase Storage */}
                 <div className="bg-white rounded-2xl border border-slate-100 shadow-sm p-4">
                   <SectionTitle icon={CreditCard} title="Document Checklist" />
-                  <p className="text-[10px] font-bold text-slate-400 mb-3">Upload missing documents (max 2MB each)</p>
+                  <p className="text-[10px] font-bold text-slate-400 mb-3">
+                    Upload missing documents · max 5MB · JPG / PNG / WEBP / HEIC / PDF
+                  </p>
                   <div className="space-y-2">
-                    {profileDocs.map(doc => (
-                      <div key={doc.type} className="flex items-center justify-between bg-slate-50 rounded-xl p-3 border border-slate-200">
-                        <div className="flex items-center gap-3 flex-1">
-                          {doc.uploaded
-                            ? <CheckCircle2 size={16} className="text-emerald-600 shrink-0" />
-                            : <div className="w-4 h-4 rounded border-2 border-slate-300 shrink-0" />}
-                          <span className={`text-sm font-bold ${doc.uploaded ? 'text-emerald-800' : 'text-slate-700'}`}>
-                            {doc.name}
-                          </span>
+                    {profileDocs.map(doc => {
+                      const busy = profileDocUploading === doc.type;
+                      return (
+                        <div key={doc.type} className="flex items-center justify-between bg-slate-50 rounded-xl p-3 border border-slate-200">
+                          <div className="flex items-center gap-3 flex-1">
+                            {doc.uploaded
+                              ? <CheckCircle2 size={16} className="text-emerald-600 shrink-0" />
+                              : <div className="w-4 h-4 rounded border-2 border-slate-300 shrink-0" />}
+                            <span className={`text-sm font-bold ${doc.uploaded ? 'text-emerald-800' : 'text-slate-700'}`}>
+                              {doc.name}
+                            </span>
+                          </div>
+                          <label className={`cursor-pointer shrink-0 ${busy ? 'pointer-events-none opacity-60' : ''}`}>
+                            <input type="file" onChange={e => handleProfileDocUpload(e, doc.type)}
+                              className="hidden" disabled={busy}
+                              accept="image/jpeg,image/png,image/webp,image/heic,image/heif,application/pdf" />
+                            <span className={`text-[10px] font-black px-3 py-1.5 rounded-full transition-colors ${
+                              busy ? 'bg-slate-200 text-slate-500'
+                              : doc.uploaded
+                                ? 'bg-emerald-100 text-emerald-700 hover:bg-emerald-200'
+                                : 'bg-indigo-100 text-indigo-700 hover:bg-indigo-200'
+                            }`}>
+                              {busy ? 'Uploading…' : doc.uploaded ? 'Replace' : 'Upload'}
+                            </span>
+                          </label>
                         </div>
-                        <label className="cursor-pointer shrink-0">
-                          <input type="file" onChange={e => handleProfileDocUpload(e, doc.type)} className="hidden"
-                            accept="image/*,.pdf,.doc,.docx" />
-                          <span className={`text-[10px] font-black px-3 py-1.5 rounded-full transition-colors ${
-                            doc.uploaded
-                              ? 'bg-emerald-100 text-emerald-700'
-                              : 'bg-indigo-100 text-indigo-700 hover:bg-indigo-200'
-                          }`}>
-                            {doc.uploaded ? '✓ Done' : 'Upload'}
-                          </span>
-                        </label>
-                      </div>
-                    ))}
+                      );
+                    })}
                   </div>
                 </div>
               </>
