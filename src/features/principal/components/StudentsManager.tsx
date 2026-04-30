@@ -6,6 +6,7 @@ import {
   Bus, Briefcase, Droplets, GraduationCap, Shield, Heart,
   CreditCard, Building2, TrendingUp, Home as HomeIcon,
   Archive, UserCheck, UserX, Award, Trash2, AlertTriangle, RefreshCw,
+  Lock, Edit2,
 } from 'lucide-react';
 import { studentService } from '../../../services/student.service';
 import { Student, CreateStudentInput, FeeRecord, StudentAcademicRecord, STREAMS, STREAM_CLASSES, StudentStream, StudentDoc } from '../../../types/principal.types';
@@ -22,6 +23,7 @@ import { storageService } from '../../../services/storage.service';
 import { StudentClassAssignmentModal } from './StudentClassAssignmentModal';
 import { useAcademicYear } from '../../../context/AcademicYearContext';
 import { principalService } from '../../../services/principal.service';
+import { useEditorModeStore } from '../../../store/editorModeStore';
 
 type MainView = 'MENU' | 'ADMISSION' | 'FEES' | 'CLASSES' | 'ARCHIVE';
 type SubView = 'LIST' | 'CREATE' | 'PROFILE' | 'CLASS_DETAIL' | 'SECTION_DETAIL';
@@ -77,6 +79,7 @@ const BLANK_FORM_WITH_PARENT: FormWithParent = {
 export const StudentsManager: React.FC<Props> = ({ onBack, initialView }) => {
   const { showToast } = useUIStore();
   const { activeYear, academicYears } = useAcademicYear();
+  const editorModeActive = useEditorModeStore(s => s.isActive());
   const [mainView, setMainView] = useState<MainView>(initialView ?? 'CLASSES');
   const [subView, setSubView] = useState<SubView>('LIST');
   const [students, setStudents] = useState<Student[]>([]);
@@ -89,7 +92,7 @@ export const StudentsManager: React.FC<Props> = ({ onBack, initialView }) => {
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [feeRecords, setFeeRecords] = useState<FeeRecord[]>([]);
   const [academicRecord, setAcademicRecord] = useState<StudentAcademicRecord | null>(null);
-  const [activeProfileTab, setActiveProfileTab] = useState<'INFO' | 'FAMILY' | 'RESULTS' | 'FEES' | 'DOCS'>('INFO');
+  const [activeProfileTab, setActiveProfileTab] = useState<'INFO' | 'ALLOTMENT' | 'FAMILY' | 'RESULTS' | 'FEES' | 'DOCS'>('INFO');
   const [studentTransport, setStudentTransport] = useState<{ vehicle: TransportVehicle; assignment: StudentTransportAssignment } | null>(null);
   const [studentTransportHistory, setStudentTransportHistory] = useState<StudentTransportAssignment[]>([]);
   const [transportHistoryError, setTransportHistoryError] = useState<string | null>(null);
@@ -1039,9 +1042,9 @@ export const StudentsManager: React.FC<Props> = ({ onBack, initialView }) => {
 
     // Class list: use DB sections (shows classes even if no students assigned yet)
     // Falls back to student-derived list when DB sections haven't loaded.
-    const classNames = dbSections.length
-      ? [...new Set(dbSections.map(s => s.className))].sort(sortClassNames)
-      : [...new Set(students.map(s => s.className).filter(Boolean))].sort(sortClassNames);
+    const classNames: string[] = dbSections.length
+      ? [...new Set<string>(dbSections.map(s => s.className))].sort(sortClassNames)
+      : [...new Set<string>(students.map(s => s.className).filter(Boolean) as string[])].sort(sortClassNames);
 
     // Sections for selected class: from DB (includes empty/unfilled sections)
     const classSections: DbSection[] = selectedClass
@@ -1268,11 +1271,12 @@ export const StudentsManager: React.FC<Props> = ({ onBack, initialView }) => {
     );
 
     const tabList = [
-      { key: 'INFO' as const,    label: 'Info' },
-      { key: 'FAMILY' as const,  label: 'Family' },
-      { key: 'RESULTS' as const, label: 'Results' },
-      { key: 'FEES' as const,    label: 'Fees' },
-      { key: 'DOCS' as const,    label: 'Docs' },
+      { key: 'INFO' as const,       label: 'Info' },
+      { key: 'ALLOTMENT' as const,  label: 'Allotment' },
+      { key: 'FAMILY' as const,     label: 'Family' },
+      { key: 'RESULTS' as const,    label: 'Results' },
+      { key: 'FEES' as const,       label: 'Fees' },
+      { key: 'DOCS' as const,       label: 'Docs' },
     ];
 
     return (
@@ -1356,16 +1360,21 @@ export const StudentsManager: React.FC<Props> = ({ onBack, initialView }) => {
 
           {/* Tabs */}
           <div className="flex gap-1 overflow-x-auto hide-scrollbar px-4 pb-3">
-            {tabList.map(({ key, label }) => (
-              <button key={key} onClick={() => setActiveProfileTab(key)}
-                className={`flex-shrink-0 px-4 py-1.5 rounded-full text-[11px] font-black uppercase tracking-widest transition-all ${
-                  activeProfileTab === key
-                    ? 'bg-indigo-600 text-white shadow-md'
-                    : 'bg-slate-100 text-slate-500 border border-slate-200'
-                }`}>
-                {label}
-              </button>
-            ))}
+            {tabList.map(({ key, label }) => {
+              const isAllotment = key === 'ALLOTMENT';
+              const locked = isAllotment && !!selected.className && !editorModeActive;
+              return (
+                <button key={key} onClick={() => setActiveProfileTab(key)}
+                  className={`flex-shrink-0 flex items-center gap-1 px-4 py-1.5 rounded-full text-[11px] font-black uppercase tracking-widest transition-all ${
+                    activeProfileTab === key
+                      ? 'bg-indigo-600 text-white shadow-md'
+                      : 'bg-slate-100 text-slate-500 border border-slate-200'
+                  }`}>
+                  {locked && <Lock size={8} className={activeProfileTab === key ? 'text-white/70' : 'text-slate-400'} />}
+                  {label}
+                </button>
+              );
+            })}
           </div>
         </div>
 
@@ -1406,14 +1415,6 @@ export const StudentsManager: React.FC<Props> = ({ onBack, initialView }) => {
                     <ProfileField label="Academic Year" value={academicYears.find(y => y.id === selected.academicYearId)?.name ?? (selected.academicYearId ? 'Unknown Year' : 'Not assigned')} />
                     <ProfileField label="Admission Date" value={fmtAdm} />
                   </div>
-                  <div className="mt-3 pt-3 border-t border-slate-100">
-                    <button
-                      onClick={() => setAssignTarget(selected)}
-                      className="w-full flex items-center justify-center gap-2 px-4 py-2.5 bg-indigo-600 text-white text-[11px] font-black rounded-xl active:scale-95 transition-transform">
-                      <UserCheck size={13} />
-                      {selected.className ? 'Re-assign / Change Class' : 'Assign to Class'}
-                    </button>
-                  </div>
                 </div>
 
                 {/* Identity documents */}
@@ -1449,6 +1450,123 @@ export const StudentsManager: React.FC<Props> = ({ onBack, initialView }) => {
             )}
 
             {/* ── FAMILY TAB ───────────────────────────── */}
+            {/* ── ALLOTMENT TAB ─────────────────────────────── */}
+            {activeProfileTab === 'ALLOTMENT' && (
+              <>
+                {/* ── Class / Section / Roll ── */}
+                <div className="bg-white rounded-2xl border border-slate-100 shadow-sm p-4">
+                  <SectionTitle icon={GraduationCap} title="Class Allotment" />
+
+                  {selected.className ? (
+                    <>
+                      <div className="grid grid-cols-3 gap-2 mb-4">
+                        <div className="bg-indigo-50 rounded-xl p-3 text-center">
+                          <div className="text-base font-black text-indigo-700">{selected.className.replace('Class ', '')}</div>
+                          <div className="text-[9px] font-bold text-indigo-400 mt-0.5">Class</div>
+                        </div>
+                        <div className="bg-violet-50 rounded-xl p-3 text-center">
+                          <div className="text-base font-black text-violet-700">{selected.section || '—'}</div>
+                          <div className="text-[9px] font-bold text-violet-400 mt-0.5">Section</div>
+                        </div>
+                        <div className="bg-emerald-50 rounded-xl p-3 text-center">
+                          <div className="text-base font-black text-emerald-700">{selected.rollNo || '—'}</div>
+                          <div className="text-[9px] font-bold text-emerald-400 mt-0.5">Roll No</div>
+                        </div>
+                      </div>
+
+                      {/* Lock / Edit based on editor mode */}
+                      {editorModeActive ? (
+                        <button
+                          onClick={() => setAssignTarget(selected)}
+                          className="w-full flex items-center justify-center gap-2 px-4 py-2.5 bg-amber-500 text-white text-[11px] font-black rounded-xl active:scale-95 transition-transform">
+                          <Edit2 size={13} /> Re-assign Class (Editor Mode)
+                        </button>
+                      ) : (
+                        <div className="flex items-center gap-3 px-3 py-3 bg-slate-50 border border-slate-200 rounded-xl">
+                          <Lock size={14} className="text-slate-400 shrink-0" />
+                          <p className="text-[10px] font-bold text-slate-500 leading-snug">
+                            Assignment locked. Go to <span className="text-indigo-600">Settings → Editor Mode</span> to re-assign.
+                          </p>
+                        </div>
+                      )}
+                    </>
+                  ) : (
+                    <>
+                      <div className="flex items-center gap-2 px-3 py-3 bg-amber-50 border border-amber-200 rounded-xl mb-3">
+                        <AlertTriangle size={14} className="text-amber-500 shrink-0" />
+                        <p className="text-[10px] font-bold text-amber-700">Student not assigned to any class yet.</p>
+                      </div>
+                      <button
+                        onClick={() => setAssignTarget(selected)}
+                        className="w-full flex items-center justify-center gap-2 px-4 py-2.5 bg-indigo-600 text-white text-[11px] font-black rounded-xl active:scale-95 transition-transform">
+                        <UserCheck size={13} /> Assign to Class
+                      </button>
+                    </>
+                  )}
+                </div>
+
+                {/* ── Fee Summary ── */}
+                <div className="bg-white rounded-2xl border border-slate-100 shadow-sm p-4">
+                  <SectionTitle icon={IndianRupee} title="Fee Allotment" />
+                  <div className="grid grid-cols-3 gap-2">
+                    <div className="bg-slate-50 rounded-xl p-3 text-center">
+                      <div className="text-sm font-black text-slate-700">₹{(selected.totalFee / 1000).toFixed(0)}K</div>
+                      <div className="text-[9px] font-bold text-slate-400 mt-0.5">Total</div>
+                    </div>
+                    <div className="bg-emerald-50 rounded-xl p-3 text-center">
+                      <div className="text-sm font-black text-emerald-700">₹{(selected.paidFee / 1000).toFixed(0)}K</div>
+                      <div className="text-[9px] font-bold text-emerald-400 mt-0.5">Paid</div>
+                    </div>
+                    <div className="bg-rose-50 rounded-xl p-3 text-center">
+                      <div className="text-sm font-black text-rose-600">₹{((selected.totalFee - selected.paidFee) / 1000).toFixed(0)}K</div>
+                      <div className="text-[9px] font-bold text-rose-400 mt-0.5">Due</div>
+                    </div>
+                  </div>
+                  {selected.totalFee === 0 && (
+                    <p className="text-[10px] font-bold text-slate-400 mt-3 text-center">
+                      Fee schedule is generated when class is assigned.
+                    </p>
+                  )}
+                </div>
+
+                {/* ── Transport Allotment ── */}
+                <div className="bg-white rounded-2xl border border-slate-100 shadow-sm p-4">
+                  <SectionTitle icon={Bus} title="Vehicle Allotment" />
+                  {studentTransport ? (
+                    <>
+                      <div className="space-y-0 mb-3">
+                        <ProfileField label="Vehicle No." value={studentTransport.vehicle.vehicleNo} />
+                        <ProfileField label="Route" value={studentTransport.vehicle.routeName || '—'} />
+                        {studentTransport.assignment.boardingStopName && (
+                          <ProfileField label="Stop" value={studentTransport.assignment.boardingStopName} />
+                        )}
+                        <ProfileField label="Monthly" value={`₹${studentTransport.assignment.monthlyAmount}`} />
+                      </div>
+                      {editorModeActive ? (
+                        <button onClick={openChangeTransportModal}
+                          className="w-full flex items-center justify-center gap-2 px-4 py-2 bg-amber-500 text-white text-[11px] font-black rounded-xl active:scale-95">
+                          <Edit2 size={13} /> Change Transport (Editor Mode)
+                        </button>
+                      ) : (
+                        <div className="flex items-center gap-3 px-3 py-3 bg-slate-50 border border-slate-200 rounded-xl">
+                          <Lock size={14} className="text-slate-400 shrink-0" />
+                          <p className="text-[10px] font-bold text-slate-500">Enable Editor Mode to change transport.</p>
+                        </div>
+                      )}
+                    </>
+                  ) : (
+                    <>
+                      <p className="text-[10px] font-bold text-slate-400 mb-3">No transport assigned.</p>
+                      <button onClick={openChangeTransportModal}
+                        className="w-full flex items-center justify-center gap-2 px-4 py-2.5 bg-indigo-600 text-white text-[11px] font-black rounded-xl active:scale-95">
+                        <Bus size={13} /> Assign Transport
+                      </button>
+                    </>
+                  )}
+                </div>
+              </>
+            )}
+
             {activeProfileTab === 'FAMILY' && (
               <>
                 {/* Father */}
