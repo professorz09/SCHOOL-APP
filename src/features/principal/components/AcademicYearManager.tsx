@@ -22,6 +22,7 @@ export const AcademicYearManager: React.FC<Props> = ({ onBack }) => {
 
   // ─── Wizard state ───────────────────────────────────────────────────────
   const [showWizard, setShowWizard] = useState(false);
+  const [wizardKey, setWizardKey] = useState(0);
   const wizardDefaults = useMemo(() => {
     // Default to the year AFTER the latest existing year so the auto-filled
     // label cannot collide with the UNIQUE(school_id, label) constraint on
@@ -139,6 +140,10 @@ export const AcademicYearManager: React.FC<Props> = ({ onBack }) => {
     return () => { cancelled = true; };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [closedYearKey]);
+
+  // Increment wizardKey on every open so the wizard fully remounts (fresh
+  // state) instead of reusing a stale component instance.
+  const openWizard = () => { setWizardKey((k: number) => k + 1); setShowWizard(true); };
 
   // ─── Wizard finished → refresh + close ──────────────────────────────────
   const handleWizardCreated = async () => {
@@ -309,7 +314,7 @@ export const AcademicYearManager: React.FC<Props> = ({ onBack }) => {
               </p>
             </div>
             <button
-              onClick={() => setShowWizard(true)}
+              onClick={() => openWizard()}
               className="w-full text-white font-black text-sm rounded-xl py-3 bg-rose-600 hover:bg-rose-700 flex items-center justify-center gap-2"
             >
               <Sparkles size={16} /> Start Setup Wizard
@@ -338,7 +343,7 @@ export const AcademicYearManager: React.FC<Props> = ({ onBack }) => {
                   </div>
                 </div>
                 <button
-                  onClick={() => setShowWizard(true)}
+                  onClick={() => openWizard()}
                   className="w-full text-white font-black text-sm rounded-xl py-3 bg-rose-600 hover:bg-rose-700 flex items-center justify-center gap-2"
                 >
                   <Sparkles size={16} /> Naya Academic Year Start Karein
@@ -348,7 +353,7 @@ export const AcademicYearManager: React.FC<Props> = ({ onBack }) => {
 
             {/* ─── Add new year button ──────────────────────────────────── */}
             <button
-              onClick={() => setShowWizard(true)}
+              onClick={() => openWizard()}
               className="w-full bg-white border-2 border-dashed border-indigo-300 hover:border-indigo-500 text-indigo-600 font-black text-sm rounded-2xl py-3 flex items-center justify-center gap-2"
             >
               <Plus size={16} /> Add Academic Year
@@ -497,6 +502,7 @@ export const AcademicYearManager: React.FC<Props> = ({ onBack }) => {
       {/* ─── New Academic Year Wizard ─────────────────────────────────────── */}
       {showWizard && (
         <AcademicYearWizard
+          key={wizardKey}
           onClose={() => setShowWizard(false)}
           onCreated={() => { void handleWizardCreated(); }}
           defaultLabel={wizardDefaults.label}
