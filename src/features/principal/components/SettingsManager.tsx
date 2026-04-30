@@ -28,6 +28,7 @@ export const SettingsManager: React.FC<Props> = ({ onBack, initialView }) => {
   const [upiId, setUpiId] = useState('school@upi');
   const [upiSaved, setUpiSaved] = useState(false);
   const [qrFileName, setQrFileName] = useState('');
+  const [qrPreviewUrl, setQrPreviewUrl] = useState('');
   const [feeStructures, setFeeStructures] = useState<FeeStructureItem[]>([]);
   const [editingFs, setEditingFs] = useState<FeeStructureItem | null>(null);
   const [feeStructuresLoading, setFeeStructuresLoading] = useState(false);
@@ -38,7 +39,15 @@ export const SettingsManager: React.FC<Props> = ({ onBack, initialView }) => {
   const [schoolInfoSaving, setSchoolInfoSaving] = useState(false);
 
   useEffect(() => {
-    schoolInfoService.get().then(setSchoolInfo).catch(e => showToast(e instanceof Error ? e.message : 'Failed to load school info', 'error'));
+    schoolInfoService.get().then(async (info) => {
+      setSchoolInfo(info);
+      setUpiId(info.upiId || '');
+      if (info.paymentQrPath) {
+        setQrFileName(info.paymentQrPath.split('/').pop() || 'payment-qr');
+        const url = await schoolInfoService.getPaymentQrUrl(info.paymentQrPath);
+        setQrPreviewUrl(url ?? '');
+      }
+    }).catch(e => showToast(e instanceof Error ? e.message : 'Failed to load school info', 'error'));
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
   const session = useAuthStore(s => s.session);
@@ -528,7 +537,7 @@ export const SettingsManager: React.FC<Props> = ({ onBack, initialView }) => {
           <p className="text-xs font-bold text-slate-500">This UPI ID will be shown to parents in the fee payment screen.</p>
           <div className="flex gap-2">
             <input value={upiId} onChange={e => { setUpiId(e.target.value); setUpiSaved(false); }} placeholder="e.g. school@okaxis" className="flex-1 border border-slate-200 bg-slate-50 rounded-xl px-4 py-3 font-bold text-sm outline-none focus:border-blue-500" />
-            <button onClick={() => { setUpiSaved(true); showToast('UPI ID saved'); }} className={`px-4 py-3 rounded-xl font-black text-sm transition-colors ${upiSaved ? 'bg-emerald-500 text-white' : 'bg-slate-900 text-white'}`}>
+            <button onClick={async () => { await schoolInfoService.save({ upiId }); setUpiSaved(true); showToast('UPI ID saved'); }} className={`px-4 py-3 rounded-xl font-black text-sm transition-colors ${upiSaved ? 'bg-emerald-500 text-white' : 'bg-slate-900 text-white'}`}>
               {upiSaved ? <CheckCircle2 size={16} /> : <Save size={16} />}
             </button>
           </div>
@@ -543,12 +552,8 @@ export const SettingsManager: React.FC<Props> = ({ onBack, initialView }) => {
           <p className="text-xs font-bold text-slate-500">Upload a QR code image. Parents can scan this to pay fees directly.</p>
 
           <div className="w-36 h-36 mx-auto bg-slate-100 rounded-2xl border-2 border-dashed border-slate-300 flex flex-col items-center justify-center gap-2">
-            {qrFileName ? (
-              <div className="w-full h-full grid grid-cols-6 gap-px p-3 rounded-2xl">
-                {Array.from({ length: 36 }, (_, i) => (
-                  <div key={i} className={`rounded-sm ${(i * 7 + i * 3) % 3 === 0 ? 'bg-slate-800' : 'bg-white'}`} />
-                ))}
-              </div>
+            {qrPreviewUrl ? (
+              <img src={qrPreviewUrl} className="w-full h-full object-contain rounded-2xl" />
             ) : (
               <>
                 <QrCode size={28} className="text-slate-300" />
@@ -561,14 +566,23 @@ export const SettingsManager: React.FC<Props> = ({ onBack, initialView }) => {
             <Plus size={14} /> {qrFileName ? 'Replace QR Image' : 'Upload QR Image'}
             <input type="file" accept="image/*" className="hidden" onChange={e => {
               const file = e.target.files?.[0];
-              if (file) { setQrFileName(file.name); showToast(`QR image "${file.name}" uploaded`); }
+              if (file) {
+                (async () => {
+                  const path = await schoolInfoService.uploadPaymentQr(file);
+                  await schoolInfoService.save({ paymentQrPath: path });
+                  const url = await schoolInfoService.getPaymentQrUrl(path);
+                  setQrFileName(file.name);
+                  setQrPreviewUrl(url ?? '');
+                  showToast(`QR image "${file.name}" uploaded`);
+                })().catch(err => showToast(err instanceof Error ? err.message : 'QR upload failed', 'error'));
+              }
             }} />
           </label>
 
           {qrFileName && (
             <div className="flex items-center justify-between bg-slate-50 rounded-xl px-3 py-2.5">
               <span className="text-xs font-bold text-slate-600 truncate">{qrFileName}</span>
-              <button onClick={() => setQrFileName('')} className="text-slate-400 hover:text-rose-500 transition-colors ml-2 shrink-0"><Trash2 size={13} /></button>
+              <button onClick={async () => { await schoolInfoService.save({ paymentQrPath: '' }); setQrFileName(''); setQrPreviewUrl(''); }} className="text-slate-400 hover:text-rose-500 transition-colors ml-2 shrink-0"><Trash2 size={13} /></button>
             </div>
           )}
         </div>
