@@ -147,8 +147,15 @@ export const AcademicYearManager: React.FC<Props> = ({ onBack }) => {
 
   // ─── Wizard finished → refresh + close ──────────────────────────────────
   // Use try/finally so the wizard ALWAYS closes even if refreshAY() fails.
-  const handleWizardCreated = async () => {
+  // If no year is currently active (first-time setup or all previous years
+  // were closed), auto-activate the just-created year so the setup checklist
+  // step 1 marks as done immediately — without this the principal would have
+  // to manually hit "Make Active" before the checklist advances.
+  const handleWizardCreated = async (yearId: string) => {
     try {
+      if (!activeYear && yearId) {
+        try { await setActiveYear(yearId); } catch { /* non-fatal — year still created */ }
+      }
       await refreshAY();
     } finally {
       setShowWizard(false);
@@ -516,7 +523,7 @@ export const AcademicYearManager: React.FC<Props> = ({ onBack }) => {
         <AcademicYearWizard
           key={wizardKey}
           onClose={closeWizard}
-          onCreated={() => { void handleWizardCreated(); }}
+          onCreated={(yearId) => { void handleWizardCreated(yearId); }}
           defaultLabel={wizardDefaults.label}
           defaultStart={wizardDefaults.start}
           defaultEnd={wizardDefaults.end}
