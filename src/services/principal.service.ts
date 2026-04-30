@@ -1068,6 +1068,29 @@ export const principalService = {
     return { ...input, id };
   },
 
+  async saveFeeStructureForYear(
+    yearId: string,
+    input: Omit<FeeStructureRecord, 'id'>,
+  ): Promise<FeeStructureRecord> {
+    const schoolId = getSchoolId();
+    const payload = {
+      school_id: schoolId,
+      academic_year_id: yearId,
+      name: input.name,
+      class_name: input.className,
+      fee_heads: input.feeHeads,
+      monthly_due_dates: input.monthlyDueDates,
+      late_fee: input.lateFee,
+      updated_at: new Date().toISOString(),
+    };
+    const { data, error } = await supabase
+      .from('fee_structures').insert(payload).select('id').single();
+    if (error) throw new Error(error.message);
+    const id = (data as { id: string }).id;
+    await logAudit('fee_structure_saved', 'fee_structures', id, { name: input.name, mode: 'create' });
+    return { ...input, id };
+  },
+
   async deleteFeeStructure(id: string): Promise<void> {
     const schoolId = getSchoolId();
     const { error } = await supabase
