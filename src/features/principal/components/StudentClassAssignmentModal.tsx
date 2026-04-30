@@ -140,9 +140,8 @@ export const StudentClassAssignmentModal: React.FC<Props> = ({ student, onClose,
   // to "any" when none match.
   const matchingStructures = useMemo(() => {
     const classStructures = structures.filter(s => (s as any).structureType !== 'VEHICLE');
-    const exact = classStructures.filter(s => s.className === className);
-    return exact.length ? exact : classStructures;
-  }, [structures, className]);
+    return classStructures;
+  }, [structures]);
 
   const selectedVehicle = useMemo(
     () => vehicles.find(v => v.id === vehicleId) || null,

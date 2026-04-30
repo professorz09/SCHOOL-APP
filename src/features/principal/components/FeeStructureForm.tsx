@@ -128,6 +128,7 @@ export const FeeStructureForm: React.FC<Props> = ({
   const [name, setName] = useState(initialData?.name ?? '');
   const [structureType, setStructureType] = useState<'CLASS'|'VEHICLE'>(initialData?.structureType ?? 'CLASS');
   const [className, setClassName] = useState(initialData?.className.split(' - ')[0] ?? 'Class 1');
+  const [allClasses, setAllClasses] = useState((initialData?.className ?? '') === 'ALL_CLASSES');
   const [stream, setStream] = useState(
     initialData?.className.includes(' - ') ? initialData.className.split(' - ')[1] : ''
   );
@@ -225,7 +226,7 @@ export const FeeStructureForm: React.FC<Props> = ({
 
   const handleSave = () => {
     if (!name.trim()) { alert('Fee structure name is required'); return; }
-    if (structureType === 'CLASS' && !fullClassName) { alert('Class is required'); return; }
+    if (structureType === 'CLASS' && !allClasses && !fullClassName) { alert('Class is required'); return; }
     if (STREAM_CLASSES.has(className) && !stream) { alert('Stream is required for Class 11 and 12'); return; }
     if (hasMonthly && dueDates.length === 0) {
       alert('Select at least one billing month for monthly fee heads');
@@ -234,7 +235,7 @@ export const FeeStructureForm: React.FC<Props> = ({
     onSave({
       id: initialData?.id ?? `fs${Date.now()}`,
       name: name.trim(),
-      className: structureType === 'VEHICLE' ? 'TRANSPORT' : fullClassName,
+      className: structureType === 'VEHICLE' ? 'TRANSPORT' : (allClasses ? 'ALL_CLASSES' : fullClassName),
       structureType,
       billingCycle,
       feeHeads,
@@ -283,17 +284,21 @@ export const FeeStructureForm: React.FC<Props> = ({
               <option value="CLASS">Class Fee Structure</option>
               <option value="VEHICLE">Vehicle/Transport Fee Structure</option>
             </select>
-            <label className="block text-[10px] font-black uppercase tracking-widest text-slate-500 mb-1.5">Class *</label>
-            <select
+            <label className="block text-[10px] font-black uppercase tracking-widest text-slate-500 mb-1.5">Class (Optional)</label>
+            <label className="flex items-center gap-2 text-[11px] font-bold text-slate-600 mb-2">
+              <input type="checkbox" checked={allClasses} onChange={e => setAllClasses(e.target.checked)} />
+              Apply this structure to all classes
+            </label>
+            {!allClasses && (<select
               value={className}
               onChange={e => { setClassName(e.target.value); setStream(''); }}
               className="w-full border border-slate-200 bg-slate-50 rounded-xl px-3 py-3 font-bold text-sm outline-none focus:border-indigo-500"
             >
               {CLASS_OPTIONS.map(c => <option key={c}>{c}</option>)}
-            </select>
+            </select>)}
           </div>
 
-          {STREAM_CLASSES.has(className) && (
+          {!allClasses && STREAM_CLASSES.has(className) && (
             <div>
               <label className="block text-[10px] font-black uppercase tracking-widest text-slate-500 mb-1.5">Stream *</label>
               <div className="grid grid-cols-3 gap-2">
