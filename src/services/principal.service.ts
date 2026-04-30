@@ -762,6 +762,47 @@ export const principalService = {
     return (ts as { created_at: string } | null)?.created_at ?? nowIso;
   },
 
+  // Returns per-staff attendance summary for a given month (YYYY-MM).
+  async getStaffAttendanceMonth(yearMonth: string): Promise<Array<{
+    staffId: string; name: string; role: string;
+    days: Array<{ date: string; status: StaffAttendanceStatus }>;
+    counts: Record<StaffAttendanceStatus, number>;
+  }>> {
+    const schoolId = getSchoolId();
+    const [year, month] = yearMonth.split('-').map(Number);
+    const firstDay = `${yearMonth}-01`;
+    const lastDay  = new Date(year, month, 0).toISOString().split('T')[0]; // last day of month
+
+    const { data: staff, error: sErr } = await supabase
+      .from('staff').select('id, name, role')
+      .eq('school_id', schoolId).eq('is_active', true);
+    if (sErr) throw new Error(sErr.message);
+    const activeStaff = ((staff ?? []) as Array<{ id: string; name: string; role: string }>)
+      .sort((a, b) => a.name.localeCompare(b.name));
+
+    const { data: rows, error: aErr } = await supabase
+      .from('staff_attendance').select('staff_id, date, status')
+      .eq('school_id', schoolId).gte('date', firstDay).lte('date', lastDay);
+    if (aErr) throw new Error(aErr.message);
+
+    const byStaff = new Map<string, Array<{ date: string; status: StaffAttendanceStatus }>>();
+    for (const r of ((rows ?? []) as Array<{ staff_id: string; date: string; status: StaffAttendanceStatus }>)) {
+      const arr = byStaff.get(r.staff_id) ?? [];
+      arr.push({ date: r.date, status: r.status });
+      byStaff.set(r.staff_id, arr);
+    }
+
+    const ZERO: Record<StaffAttendanceStatus, number> = {
+      PRESENT: 0, ABSENT: 0, HALF_DAY: 0, LEAVE: 0, LATE: 0, HOLIDAY: 0,
+    };
+    return activeStaff.map(s => {
+      const days = (byStaff.get(s.id) ?? []).sort((a, b) => a.date.localeCompare(b.date));
+      const counts = { ...ZERO };
+      for (const d of days) counts[d.status]++;
+      return { staffId: s.id, name: s.name, role: s.role, days, counts };
+    });
+  },
+
   // ─── Asset issue history (BOOK / LAB_EQUIPMENT) ──────────────────────────
   // Returns every loan ever recorded for the given category, including
   // returns. Each row is one issue → optional return event.
