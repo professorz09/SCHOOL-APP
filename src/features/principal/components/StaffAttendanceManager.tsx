@@ -152,12 +152,9 @@ export const StaffAttendanceManager: React.FC<Props> = ({ onBack }) => {
     setSaved(false);
   };
 
-  // Bulk set everyone to ABSENT — used by the "All Absent" quick action.
-  const bulkAbsent = () => bulkSet('ABSENT');
-
   // "Clear" reverts every row back to the default PRESENT state. The principal
-  // must still tap Save to persist the change. This pairs with All Present /
-  // All Absent so it is easy to wipe accidental marks before saving.
+  // must still tap Save to persist the change. This pairs with All Present and
+  // Holiday so it is easy to wipe accidental marks before saving.
   const clearAll = () => {
     if (isLocked) return;
     setRecord(r => r ? ({ ...r, rows: r.rows.map(row => ({ ...row, status: 'PRESENT' as AttendanceStatus })) }) : r);
@@ -307,19 +304,15 @@ export const StaffAttendanceManager: React.FC<Props> = ({ onBack }) => {
                 className="flex-1 py-2 bg-emerald-500 text-white text-[11px] font-black rounded-xl active:scale-95 transition-transform">
                 All Present
               </button>
-              <button onClick={bulkAbsent}
-                className="flex-1 py-2 bg-rose-500 text-white text-[11px] font-black rounded-xl active:scale-95 transition-transform">
-                All Absent
+              <button onClick={() => bulkSet('HOLIDAY')}
+                className="flex-1 py-2 bg-sky-500 text-white text-[11px] font-black rounded-xl active:scale-95 transition-transform">
+                Holiday
               </button>
               <button onClick={clearAll}
                 className="flex-1 py-2 bg-slate-100 text-slate-700 border border-slate-200 text-[11px] font-black rounded-xl active:scale-95 transition-transform">
                 Clear
               </button>
             </div>
-            <button onClick={() => bulkSet('HOLIDAY')}
-              className="w-full py-2 bg-sky-500 text-white text-[11px] font-black rounded-xl active:scale-95 transition-transform">
-              Mark Day as Holiday
-            </button>
             <div className="relative">
               <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400"/>
               <input value={search} onChange={e => setSearch(e.target.value)}
