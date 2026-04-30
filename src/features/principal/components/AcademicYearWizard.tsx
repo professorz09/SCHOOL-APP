@@ -1,4 +1,4 @@
-import React, { useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import { X, ChevronRight, ChevronLeft, Plus, Trash2, CheckCircle2, AlertTriangle, Sparkles, IndianRupee } from 'lucide-react';
 import { useUIStore } from '../../../store/uiStore';
 import { academicYearService, type WizardSection } from '../../../services/academicYear.service';
@@ -61,6 +61,17 @@ export const AcademicYearWizard: React.FC<Props> = ({
   const [createdYearId, setCreatedYearId] = useState<string | null>(null);
   const [tuitionFee, setTuitionFee] = useState('');
   const [feesSaving, setFeesSaving] = useState(false);
+
+  // Prevents touch-through: when the wizard transitions from step 3 → 4,
+  // the "Create Year" button tap can register on the "Skip" button that
+  // appears at the same position after re-render. Wait 450ms before
+  // enabling step 4 buttons so the original touch event drains away.
+  const [step4Ready, setStep4Ready] = useState(false);
+  useEffect(() => {
+    if (step !== 4) { setStep4Ready(false); return; }
+    const t = setTimeout(() => setStep4Ready(true), 450);
+    return () => clearTimeout(t);
+  }, [step]);
 
   const enabledClasses = useMemo(() => plan.filter(c => c.enabled), [plan]);
 
@@ -224,7 +235,7 @@ export const AcademicYearWizard: React.FC<Props> = ({
   return (
     <div
       className="fixed inset-0 bg-black/50 z-50 flex items-end sm:items-center justify-center p-0 sm:p-4 animate-in fade-in duration-200"
-      onClick={() => !saving && onClose()}
+      onClick={() => !saving && !feesSaving && step < 4 && onClose()}
     >
       <div
         className="bg-white rounded-t-3xl sm:rounded-3xl w-full max-w-lg max-h-[92vh] flex flex-col animate-in slide-in-from-bottom-4 sm:zoom-in-95 duration-300"
@@ -553,14 +564,14 @@ export const AcademicYearWizard: React.FC<Props> = ({
             <>
               <button
                 onClick={() => { void handleFinishWizard(false); }}
-                disabled={feesSaving}
+                disabled={!step4Ready || feesSaving}
                 className="px-4 py-2.5 border border-slate-200 text-slate-600 font-black rounded-xl text-sm disabled:opacity-50"
               >
                 Skip
               </button>
               <button
                 onClick={() => { void handleFinishWizard(true); }}
-                disabled={feesSaving}
+                disabled={!step4Ready || feesSaving}
                 className="px-4 py-2.5 bg-emerald-600 text-white font-black rounded-xl text-sm flex items-center gap-2 disabled:opacity-50"
               >
                 {feesSaving && <div className="w-3.5 h-3.5 border-2 border-white/30 border-t-white rounded-full animate-spin" />}
