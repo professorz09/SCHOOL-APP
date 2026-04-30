@@ -81,6 +81,19 @@ interface ComplaintRow {
 const COMPLAINT_FIELDS = 'id, from_role, from_name, from_class, subject, description, status, response, created_at, resolved_at';
 
 function rowToComplaint(r: ComplaintRow): Complaint {
+  // Map legacy DB values onto the canonical status set used by the UI.
+  // Migration 0033 backfills existing rows, but we keep this defensive
+  // mapping so that any stragglers (or rows inserted by older clients)
+  // still render correctly.
+  const rawStatus = (r.status ?? '').toUpperCase();
+  let status: Complaint['status'];
+  if (rawStatus === 'OPEN') status = 'PENDING';
+  else if (rawStatus === 'IN_PROGRESS') status = 'IN_REVIEW';
+  else if (rawStatus === 'PENDING' || rawStatus === 'IN_REVIEW' ||
+           rawStatus === 'RESOLVED' || rawStatus === 'REJECTED') {
+    status = rawStatus as Complaint['status'];
+  } else status = 'PENDING';
+
   return {
     id: r.id,
     from: (r.from_role as Complaint['from']) ?? 'STUDENT',
@@ -88,7 +101,7 @@ function rowToComplaint(r: ComplaintRow): Complaint {
     fromClass: r.from_class ?? undefined,
     subject: r.subject,
     description: r.description ?? '',
-    status: (r.status as Complaint['status']) ?? 'OPEN',
+    status,
     createdAt: r.created_at.slice(0, 10),
     resolvedAt: r.resolved_at ? r.resolved_at.slice(0, 10) : null,
     response: r.response,
@@ -238,6 +251,22 @@ export const principalService = {
       .select(COMPLAINT_FIELDS).single();
     if (error) throw new Error(error.message);
     await logAudit('complaint_resolved', 'complaint', id, { response_length: response.length });
+    return rowToComplaint(data as ComplaintRow);
+  },
+
+  async rejectComplaint(id: string, reason: string): Promise<Complaint> {
+    const schoolId = getSchoolId();
+    const { data, error } = await supabase
+      .from('complaints')
+      .update({
+        status: 'REJECTED',
+        response: reason,
+        resolved_at: new Date().toISOString(),
+      })
+      .eq('id', id).eq('school_id', schoolId)
+      .select(COMPLAINT_FIELDS).single();
+    if (error) throw new Error(error.message);
+    await logAudit('complaint_rejected', 'complaint', id, { reason_length: reason.length });
     return rowToComplaint(data as ComplaintRow);
   },
 

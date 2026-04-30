@@ -586,11 +586,23 @@ export const StudentsManager: React.FC<Props> = ({ onBack, initialView }) => {
   // ─── ADMISSION (Add/Search) ────────────────────────────────────────────
 
   if (!renderProfile && mainView === 'ADMISSION') {
+    const q = search.trim().toLowerCase();
+    const digits = q.replace(/\D/g, '');
     const filteredStudents = students
-      .filter(s =>
-        s.name.toLowerCase().includes(search.toLowerCase()) ||
-        s.rollNo.includes(search) || s.admissionNo.toLowerCase().includes(search.toLowerCase())
-      )
+      .filter(s => {
+        if (!q) return true;
+        if (s.name.toLowerCase().includes(q)) return true;
+        if (s.rollNo.includes(search)) return true;
+        if (s.admissionNo.toLowerCase().includes(q)) return true;
+        // Mobile-number search (item 5.3): match digit-only prefix
+        // against either parent's phone, ignoring formatting.
+        if (digits && digits.length >= 3) {
+          const fp = (s.fatherPhone || '').replace(/\D/g, '');
+          const mp = (s.motherPhone || '').replace(/\D/g, '');
+          if (fp.includes(digits) || mp.includes(digits)) return true;
+        }
+        return false;
+      })
       .sort((a, b) => new Date(b.admissionDate ?? 0).getTime() - new Date(a.admissionDate ?? 0).getTime());
 
     if (subView === 'CREATE') return (
@@ -747,7 +759,7 @@ export const StudentsManager: React.FC<Props> = ({ onBack, initialView }) => {
           <div className="px-4 pb-3">
             <div className="relative">
               <Search size={15} className="absolute left-3.5 top-1/2 -translate-y-1/2 text-slate-400" />
-              <input value={search} onChange={e => setSearch(e.target.value)} placeholder="Search by name, roll no or admission no…"
+              <input value={search} onChange={e => setSearch(e.target.value)} placeholder="Search by name, roll, admission or mobile…"
                 className="w-full bg-slate-50 border border-slate-200 rounded-xl pl-10 pr-4 py-2.5 font-bold text-sm outline-none focus:border-indigo-500 focus:bg-white transition-colors" />
             </div>
           </div>

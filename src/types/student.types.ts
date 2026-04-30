@@ -76,7 +76,7 @@ export interface StudentComplaint {
   id: string;
   subject: string;
   description: string;
-  status: 'OPEN' | 'IN_PROGRESS' | 'RESOLVED';
+  status: 'PENDING' | 'IN_REVIEW' | 'RESOLVED' | 'REJECTED';
   createdAt: string;
   response: string | null;
 }
