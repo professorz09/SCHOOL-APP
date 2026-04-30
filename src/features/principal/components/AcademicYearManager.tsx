@@ -146,9 +146,21 @@ export const AcademicYearManager: React.FC<Props> = ({ onBack }) => {
   const openWizard = () => { setWizardKey((k: number) => k + 1); setShowWizard(true); };
 
   // ─── Wizard finished → refresh + close ──────────────────────────────────
+  // Use try/finally so the wizard ALWAYS closes even if refreshAY() fails.
   const handleWizardCreated = async () => {
-    await refreshAY();
+    try {
+      await refreshAY();
+    } finally {
+      setShowWizard(false);
+    }
+  };
+
+  // Close wizard and refresh in background (used by the X button so that
+  // academicYears is up-to-date next time the wizard opens, regardless of
+  // whether the user completed creation or closed mid-flow).
+  const closeWizard = () => {
     setShowWizard(false);
+    void refreshAY();
   };
 
   // ─── Make-active confirmation ───────────────────────────────────────────
@@ -503,7 +515,7 @@ export const AcademicYearManager: React.FC<Props> = ({ onBack }) => {
       {showWizard && (
         <AcademicYearWizard
           key={wizardKey}
-          onClose={() => setShowWizard(false)}
+          onClose={closeWizard}
           onCreated={() => { void handleWizardCreated(); }}
           defaultLabel={wizardDefaults.label}
           defaultStart={wizardDefaults.start}
