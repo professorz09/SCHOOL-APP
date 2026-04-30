@@ -215,7 +215,8 @@ export const StaffAttendanceManager: React.FC<Props> = ({ onBack }) => {
       <div className="w-full bg-slate-50 flex flex-col animate-in slide-in-from-right-8 duration-300">
         {/* Header */}
         <div className="bg-white border-b border-slate-100 px-4 pt-4 pb-0 sticky top-0 z-10 shadow-sm">
-          <div className="flex items-center gap-3 pb-3">
+          <div className="flex items-center justify-between gap-3 pb-3">
+            <div className="flex items-center gap-3">
             <button onClick={onBack} className="p-2 -ml-2 bg-slate-100 rounded-full text-slate-600">
               <ArrowLeft size={20} />
             </button>
@@ -223,6 +224,13 @@ export const StaffAttendanceManager: React.FC<Props> = ({ onBack }) => {
               <h2 className="text-xl font-black text-slate-900 uppercase tracking-tight">Staff Attendance</h2>
               <p className="text-[10px] font-bold text-slate-400">Mark & Save attendance</p>
             </div>
+            </div>
+            <button
+              onClick={() => { setTab('HISTORY'); loadHistory(getCurrentMonthYM()); }}
+              className="text-[10px] font-black uppercase tracking-widest bg-slate-100 text-slate-700 px-3 py-2 rounded-lg shrink-0"
+            >
+              History
+            </button>
           </div>
 
           {/* Date strip */}
@@ -247,16 +255,6 @@ export const StaffAttendanceManager: React.FC<Props> = ({ onBack }) => {
             })}
           </div>
 
-        </div>
-
-        {/* Keep history access minimal so marking UI stays clean */}
-        <div className="bg-white border-b border-slate-100 px-4 py-2">
-          <button
-            onClick={() => { setTab('HISTORY'); loadHistory(getCurrentMonthYM()); }}
-            className="text-xs font-black uppercase tracking-widest bg-slate-100 text-slate-700 px-3 py-2 rounded-lg"
-          >
-            Attendance History
-          </button>
         </div>
 
         {/* Status bar */}
@@ -317,7 +315,7 @@ export const StaffAttendanceManager: React.FC<Props> = ({ onBack }) => {
         )}
 
         {/* Staff list */}
-        <div className="flex-1 overflow-y-auto pb-32">
+        <div className="flex-1 overflow-y-auto pb-44">
           {record.rows.length > 0 && (
             <div className="p-4">
               <div className="bg-white rounded-2xl border border-slate-100 shadow-sm overflow-hidden">
@@ -376,7 +374,7 @@ export const StaffAttendanceManager: React.FC<Props> = ({ onBack }) => {
 
         {/* Floating Save button */}
         {!isLocked && (
-          <div className="fixed bottom-16 left-0 right-0 p-4 bg-white border-t border-slate-100 z-30">
+          <div className="fixed bottom-0 left-0 right-0 p-4 bg-white border-t border-slate-100 z-30">
             <button onClick={handleSave} disabled={isSaving}
               className={`w-full py-4 font-black text-base rounded-2xl flex items-center justify-center gap-2 transition-all disabled:opacity-60 ${
                 saved
@@ -395,7 +393,7 @@ export const StaffAttendanceManager: React.FC<Props> = ({ onBack }) => {
         )}
 
         {isLocked && (
-          <div className="fixed bottom-16 left-0 right-0 p-4 bg-white border-t border-slate-100 z-30">
+          <div className="fixed bottom-0 left-0 right-0 p-4 bg-white border-t border-slate-100 z-30">
             <div className="w-full py-3 bg-amber-50 border border-amber-200 rounded-2xl flex items-center justify-center gap-2">
               <Lock size={16} className="text-amber-500" />
               <span className="font-black text-amber-700 text-sm">Salary generated — record locked</span>
