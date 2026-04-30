@@ -293,6 +293,26 @@ export const feeService = {
     return [..._govtPaymentsCache];
   },
 
+  /** Direct DB query for a single student's installments, bypassing cache.
+   *  Use in contexts where a full refreshAll() would be too heavy (e.g.,
+   *  opening a student profile in the principal's Students view). */
+  async getStudentInstallmentsDirect(
+    studentId: string,
+    academicYearId?: string,
+  ): Promise<FeeInstallment[]> {
+    let query = supabase
+      .from('fee_installments')
+      .select(INST_FIELDS)
+      .eq('student_id', studentId)
+      .order('due_date', { ascending: true });
+    if (academicYearId) {
+      query = query.eq('academic_year_id', academicYearId) as typeof query;
+    }
+    const { data, error } = await query;
+    if (error) throw new Error(error.message);
+    return ((data ?? []) as InstallmentRow[]).map(rowToInstallment);
+  },
+
   getPaidTillMonth(studentId: string): { lastClearedMonth: string | null; allCleared: boolean } {
     const insts = this.getStudentInstallments(studentId).filter(i => i.payerType === 'PARENT');
     if (!insts.length) return { lastClearedMonth: null, allCleared: false };

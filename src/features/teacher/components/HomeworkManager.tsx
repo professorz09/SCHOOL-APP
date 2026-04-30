@@ -1,8 +1,9 @@
-import React, { useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useState } from 'react';
 import { ArrowLeft, Plus, BookOpen, CheckCircle2 } from 'lucide-react';
 import { teacherService } from '../../../services/teacher.service';
 import { HomeworkItem, TeacherClass } from '../../../types/teacher.types';
 import { useUIStore } from '../../../store/uiStore';
+import { useRealtimeTable } from '../../../hooks/useRealtimeTable';
 
 type View = 'LIST' | 'CREATE';
 
@@ -21,8 +22,14 @@ export const HomeworkManager: React.FC<Props> = ({ onBack }) => {
     dueDate: '', totalStudents: 0,
   });
 
-  useEffect(() => {
+  const loadHomework = useCallback(() => {
     teacherService.getHomework().then(setHomework);
+  }, []);
+
+  useRealtimeTable('homework_assignments', loadHomework);
+
+  useEffect(() => {
+    loadHomework();
     teacherService.getClasses().then(loaded => {
       setClasses(loaded);
       if (loaded.length > 0) {
@@ -30,6 +37,7 @@ export const HomeworkManager: React.FC<Props> = ({ onBack }) => {
         setForm(f => ({ ...f, classId: c.id, className: c.className, section: c.section, subject: c.subject, totalStudents: c.studentCount }));
       }
     });
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   // Refresh subject list whenever the chosen class changes

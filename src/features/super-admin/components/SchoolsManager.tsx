@@ -47,12 +47,8 @@ const Field: React.FC<FieldProps> = ({ label, k, placeholder, type, locked, form
   </div>
 );
 
-const STAFF_MOCK = [
-  { id: 'st1', name: 'Aarti Desai',  role: 'Teacher',    subject: 'Mathematics', phone: '+91 98001 11111', status: 'ACTIVE' as const },
-  { id: 'st2', name: 'Sanjay Mehta', role: 'Teacher',    subject: 'Science',     phone: '+91 98001 22222', status: 'ACTIVE' as const },
-  { id: 'st3', name: 'Priya Singh',  role: 'Teacher',    subject: 'English',     phone: '+91 98001 33333', status: 'ON_LEAVE' as const },
-  { id: 'st4', name: 'Rahul Verma',  role: 'Accountant', subject: '—',           phone: '+91 98001 44444', status: 'ACTIVE' as const },
-];
+type RealStaff = Awaited<ReturnType<typeof schoolService.getSchoolStaff>>[number];
+type RealStudent = Awaited<ReturnType<typeof schoolService.getSchoolStudents>>[number];
 
 export const SchoolsManager: React.FC<Props> = ({ onBack }) => {
   const { schools, fetchSchools, addSchool, updateSchool, deleteSchool } = useSchoolStore();
@@ -68,6 +64,12 @@ export const SchoolsManager: React.FC<Props> = ({ onBack }) => {
   const [confirmDelete, setConfirmDelete]     = useState<School | null>(null);
   const [confirmDeactivate, setConfirmDeactivate] = useState<School | null>(null);
   const [createdCredentials, setCreatedCredentials] = useState<{ schoolName: string; mobile: string; password: string } | null>(null);
+  const [schoolStaff, setSchoolStaff]       = useState<RealStaff[]>([]);
+  const [schoolStudents, setSchoolStudents] = useState<RealStudent[]>([]);
+  const [staffLoading, setStaffLoading]     = useState(false);
+  const [studentsLoading, setStudentsLoading] = useState(false);
+  const [staffSearch, setStaffSearch]       = useState('');
+  const [studentsSearch, setStudentsSearch] = useState('');
 
   const blankForm: Partial<CreateSchoolInput> = {
     name: '', code: '', location: '', address: '', phone: '',
@@ -164,6 +166,30 @@ export const SchoolsManager: React.FC<Props> = ({ onBack }) => {
   const handleStatusToggle = (school: School) => {
     if (school.status === SchoolStatus.ACTIVE) setConfirmDeactivate(school);
     else doStatusChange(school, SchoolStatus.ACTIVE);
+  };
+
+  const loadStaff = async (schoolId: string) => {
+    setStaffLoading(true);
+    try {
+      const data = await schoolService.getSchoolStaff(schoolId);
+      setSchoolStaff(data);
+    } catch (e) {
+      showToast(e instanceof Error ? e.message : 'Failed to load staff', 'error');
+    } finally {
+      setStaffLoading(false);
+    }
+  };
+
+  const loadStudents = async (schoolId: string) => {
+    setStudentsLoading(true);
+    try {
+      const data = await schoolService.getSchoolStudents(schoolId);
+      setSchoolStudents(data);
+    } catch (e) {
+      showToast(e instanceof Error ? e.message : 'Failed to load students', 'error');
+    } finally {
+      setStudentsLoading(false);
+    }
   };
 
   const doStatusChange = async (school: School, status: SchoolStatus) => {
@@ -532,7 +558,11 @@ export const SchoolsManager: React.FC<Props> = ({ onBack }) => {
               { icon: TrendingUp, label: 'Performance', view: 'DETAIL' as View,   color: 'text-amber-600 bg-amber-50',  count: 0 },
             ].map(({ icon: Icon, label, view: v, color, count }) => (
               <button key={label}
-                onClick={() => v !== 'DETAIL' && setView(v)}
+                onClick={() => {
+                  if (v === 'STAFF') { setStaffSearch(''); loadStaff(selected.id); setView(v); }
+                  else if (v === 'STUDENTS') { setStudentsSearch(''); setSelectedSection(null); loadStudents(selected.id); setView(v); }
+                  else if (v !== 'DETAIL') setView(v);
+                }}
                 className="flex items-center gap-3 bg-white rounded-2xl border border-slate-100 shadow-sm p-4 text-left active:scale-95 transition-transform">
                 <div className={`w-9 h-9 rounded-xl flex items-center justify-center ${color}`}><Icon size={18} /></div>
                 <div>
@@ -561,7 +591,7 @@ export const SchoolsManager: React.FC<Props> = ({ onBack }) => {
             </div>
           )}
           {ay?.sections.map(sec => (
-            <button key={sec.id} onClick={() => { setSelectedSection(sec); setView('STUDENTS'); }}
+            <button key={sec.id} onClick={() => { setSelectedSection(sec); setStudentsSearch(''); loadStudents(selected.id); setView('STUDENTS'); }}
               className="w-full flex items-center justify-between bg-white rounded-2xl border border-slate-100 shadow-sm p-4 active:scale-95 transition-transform text-left">
               <div className="flex items-center gap-3">
                 <div className="w-10 h-10 rounded-xl bg-indigo-50 text-indigo-700 flex items-center justify-center font-black text-xs">
@@ -584,13 +614,63 @@ export const SchoolsManager: React.FC<Props> = ({ onBack }) => {
 
   // ── STUDENTS ──────────────────────────────────────────────────────────────────
   if (view === 'STUDENTS' && selected) {
-    const sec = selectedSection;
+    const filtered_stu = schoolStudents.filter(s =>
+      s.name.toLowerCase().includes(studentsSearch.toLowerCase()) ||
+      s.admission_no.toLowerCase().includes(studentsSearch.toLowerCase()) ||
+      (s.class_name ?? '').toLowerCase().includes(studentsSearch.toLowerCase()),
+    );
     return (
       <div className="w-full bg-slate-50 flex flex-col animate-in slide-in-from-right-8 duration-300">
-        {renderHeader(sec ? `${sec.className}-${sec.section}` : 'Students', () => setView(sec ? 'SECTIONS' : 'DETAIL'))}
-        <div className="flex-1 overflow-y-auto p-4  flex flex-col items-center justify-center text-slate-400">
-          <Users size={32} className="mb-3 opacity-40" />
-          <p className="font-bold text-sm">Student list coming soon</p>
+        {renderHeader(`Students · ${selected.name}`, () => setView('DETAIL'))}
+
+        <div className="bg-white border-b border-slate-100 px-4 py-3">
+          <div className="relative">
+            <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400"/>
+            <input value={studentsSearch} onChange={e => setStudentsSearch(e.target.value)}
+              placeholder="Search by name, admission no, class…"
+              className="w-full bg-slate-50 border border-slate-200 rounded-xl pl-9 pr-4 py-2.5 font-bold text-sm outline-none focus:border-indigo-500"/>
+          </div>
+          <p className="text-[10px] font-bold text-slate-400 mt-2">
+            {schoolStudents.length} students enrolled
+          </p>
+        </div>
+
+        <div className="flex-1 overflow-y-auto p-4">
+          {studentsLoading ? (
+            <div className="flex items-center justify-center py-16">
+              <div className="w-8 h-8 border-2 border-slate-200 border-t-slate-600 rounded-full animate-spin" />
+            </div>
+          ) : filtered_stu.length === 0 ? (
+            <div className="flex flex-col items-center justify-center py-16 text-slate-400">
+              <Users size={32} className="mb-3 opacity-40" />
+              <p className="font-bold text-sm">{schoolStudents.length === 0 ? 'No students enrolled' : 'No results'}</p>
+            </div>
+          ) : (
+            <div className="bg-white rounded-2xl border border-slate-100 shadow-sm overflow-hidden">
+              {filtered_stu.map((s, idx) => (
+                <div key={s.id}
+                  className={`flex items-center gap-3 px-4 py-3 ${idx < filtered_stu.length - 1 ? 'border-b border-slate-50' : ''}`}>
+                  <div className="w-9 h-9 rounded-xl bg-indigo-50 text-indigo-700 flex items-center justify-center font-black text-xs shrink-0">
+                    {s.name.split(' ').map(w => w[0]).join('').slice(0, 2).toUpperCase()}
+                  </div>
+                  <div className="flex-1 min-w-0">
+                    <div className="font-bold text-slate-900 text-sm truncate">{s.name}</div>
+                    <div className="text-[10px] font-bold text-slate-400 mt-0.5">
+                      {s.admission_no}
+                      {s.class_name && ` · ${s.class_name}${s.section ? `-${s.section}` : ''}`}
+                      {s.roll_no != null && ` · Roll ${s.roll_no}`}
+                    </div>
+                    {s.father_name && (
+                      <div className="text-[9px] font-bold text-slate-300">{s.father_name}</div>
+                    )}
+                  </div>
+                  {s.is_rte && (
+                    <span className="text-[9px] font-black px-2 py-0.5 rounded-full bg-violet-50 text-violet-700 shrink-0">RTE</span>
+                  )}
+                </div>
+              ))}
+            </div>
+          )}
         </div>
       </div>
     );
@@ -598,25 +678,70 @@ export const SchoolsManager: React.FC<Props> = ({ onBack }) => {
 
   // ── STAFF ─────────────────────────────────────────────────────────────────────
   if (view === 'STAFF' && selected) {
+    const filtered_staff = schoolStaff.filter(s =>
+      s.name.toLowerCase().includes(staffSearch.toLowerCase()) ||
+      s.role.toLowerCase().includes(staffSearch.toLowerCase()) ||
+      (s.subject ?? '').toLowerCase().includes(staffSearch.toLowerCase()),
+    );
     return (
       <div className="w-full bg-slate-50 flex flex-col animate-in slide-in-from-right-8 duration-300">
-        {renderHeader('Staff & Teachers', () => setView('DETAIL'))}
-        <div className="flex-1 overflow-y-auto p-4  space-y-3">
-          {STAFF_MOCK.map(s => (
-            <div key={s.id} className="bg-white rounded-2xl border border-slate-100 shadow-sm p-4 flex items-center gap-3">
-              <div className={`w-10 h-10 rounded-xl flex items-center justify-center font-bold text-sm ${s.role === 'Teacher' ? 'bg-emerald-50 text-emerald-700' : 'bg-blue-50 text-blue-700'}`}>
-                {s.name.split(' ').map(w => w[0]).join('').slice(0, 2)}
-              </div>
-              <div className="flex-1">
-                <div className="font-extrabold text-slate-900 text-sm">{s.name}</div>
-                <div className="text-[10px] font-bold text-slate-400 mt-0.5">{s.role} · {s.subject}</div>
-                <div className="text-[10px] font-bold text-slate-400">{s.phone}</div>
-              </div>
-              <span className={`text-[9px] font-black px-2 py-0.5 rounded-full uppercase tracking-widest ${s.status === 'ACTIVE' ? 'text-emerald-700 bg-emerald-50' : 'text-amber-700 bg-amber-50'}`}>
-                {s.status === 'ON_LEAVE' ? 'On Leave' : s.status}
-              </span>
+        {renderHeader(`Staff · ${selected.name}`, () => setView('DETAIL'))}
+
+        <div className="bg-white border-b border-slate-100 px-4 py-3">
+          <div className="relative">
+            <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400"/>
+            <input value={staffSearch} onChange={e => setStaffSearch(e.target.value)}
+              placeholder="Search by name, role, subject…"
+              className="w-full bg-slate-50 border border-slate-200 rounded-xl pl-9 pr-4 py-2.5 font-bold text-sm outline-none focus:border-indigo-500"/>
+          </div>
+          <p className="text-[10px] font-bold text-slate-400 mt-2">
+            {schoolStaff.length} active staff members
+          </p>
+        </div>
+
+        <div className="flex-1 overflow-y-auto p-4">
+          {staffLoading ? (
+            <div className="flex items-center justify-center py-16">
+              <div className="w-8 h-8 border-2 border-slate-200 border-t-slate-600 rounded-full animate-spin" />
             </div>
-          ))}
+          ) : filtered_staff.length === 0 ? (
+            <div className="flex flex-col items-center justify-center py-16 text-slate-400">
+              <Users size={32} className="mb-3 opacity-40" />
+              <p className="font-bold text-sm">{schoolStaff.length === 0 ? 'No staff found' : 'No results'}</p>
+            </div>
+          ) : (
+            <div className="bg-white rounded-2xl border border-slate-100 shadow-sm overflow-hidden">
+              {filtered_staff.map((s, idx) => (
+                <div key={s.id}
+                  className={`flex items-center gap-3 px-4 py-3 ${idx < filtered_staff.length - 1 ? 'border-b border-slate-50' : ''}`}>
+                  <div className={`w-10 h-10 rounded-xl flex items-center justify-center font-bold text-sm shrink-0 ${s.role === 'TEACHER' ? 'bg-emerald-50 text-emerald-700' : 'bg-blue-50 text-blue-700'}`}>
+                    {s.name.split(' ').map(w => w[0]).join('').slice(0, 2).toUpperCase()}
+                  </div>
+                  <div className="flex-1 min-w-0">
+                    <div className="font-extrabold text-slate-900 text-sm truncate">{s.name}</div>
+                    <div className="text-[10px] font-bold text-slate-400 mt-0.5">
+                      {s.role}{s.subject ? ` · ${s.subject}` : ''}
+                    </div>
+                    {s.phone && <div className="text-[10px] font-bold text-slate-300">{s.phone}</div>}
+                  </div>
+                  <div className="text-right shrink-0">
+                    <span className={`text-[9px] font-black px-2 py-0.5 rounded-full uppercase tracking-widest ${
+                      s.status === 'ACTIVE' ? 'text-emerald-700 bg-emerald-50' :
+                      s.status === 'ON_LEAVE' ? 'text-amber-700 bg-amber-50' :
+                      'text-slate-500 bg-slate-100'
+                    }`}>
+                      {s.status === 'ON_LEAVE' ? 'On Leave' : s.status}
+                    </span>
+                    {s.salary > 0 && (
+                      <div className="text-[9px] font-bold text-slate-400 mt-1">
+                        ₹{s.salary.toLocaleString('en-IN')}/mo
+                      </div>
+                    )}
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
         </div>
       </div>
     );

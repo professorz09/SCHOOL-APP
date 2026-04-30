@@ -602,6 +602,43 @@ export const principalService = {
     });
   },
 
+  async getSectionsForYear(yearId: string): Promise<Array<{
+    id: string;
+    className: string;
+    section: string;
+    studentCount: number;
+    capacity: number;
+    classTeacher: string | null;
+    stream: string | null;
+  }>> {
+    const schoolId = getSchoolId();
+    const { data, error } = await supabase
+      .from('sections')
+      .select('id, class_name, section, student_count, capacity, class_teacher, stream')
+      .eq('school_id', schoolId)
+      .eq('academic_year_id', yearId)
+      .order('class_name')
+      .order('section');
+    if (error) throw new Error(error.message);
+    return ((data ?? []) as Array<{
+      id: string;
+      class_name: string;
+      section: string;
+      student_count: number;
+      capacity: number;
+      class_teacher: string | null;
+      stream: string | null;
+    }>).map(r => ({
+      id: r.id,
+      className: r.class_name,
+      section: r.section,
+      studentCount: r.student_count,
+      capacity: r.capacity,
+      classTeacher: r.class_teacher,
+      stream: r.stream,
+    }));
+  },
+
   async updateAYConfig(id: string, input: Partial<AcademicYearConfig>): Promise<AcademicYearConfig> {
     const schoolId = getSchoolId();
     if (input.classes) {
@@ -723,6 +760,47 @@ export const principalService = {
       .eq('school_id', schoolId).eq('date', date)
       .order('created_at', { ascending: false }).limit(1).maybeSingle();
     return (ts as { created_at: string } | null)?.created_at ?? nowIso;
+  },
+
+  // Returns per-staff attendance summary for a given month (YYYY-MM).
+  async getStaffAttendanceMonth(yearMonth: string): Promise<Array<{
+    staffId: string; name: string; role: string;
+    days: Array<{ date: string; status: StaffAttendanceStatus }>;
+    counts: Record<StaffAttendanceStatus, number>;
+  }>> {
+    const schoolId = getSchoolId();
+    const [year, month] = yearMonth.split('-').map(Number);
+    const firstDay = `${yearMonth}-01`;
+    const lastDay  = new Date(year, month, 0).toISOString().split('T')[0]; // last day of month
+
+    const { data: staff, error: sErr } = await supabase
+      .from('staff').select('id, name, role')
+      .eq('school_id', schoolId).eq('is_active', true);
+    if (sErr) throw new Error(sErr.message);
+    const activeStaff = ((staff ?? []) as Array<{ id: string; name: string; role: string }>)
+      .sort((a, b) => a.name.localeCompare(b.name));
+
+    const { data: rows, error: aErr } = await supabase
+      .from('staff_attendance').select('staff_id, date, status')
+      .eq('school_id', schoolId).gte('date', firstDay).lte('date', lastDay);
+    if (aErr) throw new Error(aErr.message);
+
+    const byStaff = new Map<string, Array<{ date: string; status: StaffAttendanceStatus }>>();
+    for (const r of ((rows ?? []) as Array<{ staff_id: string; date: string; status: StaffAttendanceStatus }>)) {
+      const arr = byStaff.get(r.staff_id) ?? [];
+      arr.push({ date: r.date, status: r.status });
+      byStaff.set(r.staff_id, arr);
+    }
+
+    const ZERO: Record<StaffAttendanceStatus, number> = {
+      PRESENT: 0, ABSENT: 0, HALF_DAY: 0, LEAVE: 0, LATE: 0, HOLIDAY: 0,
+    };
+    return activeStaff.map(s => {
+      const days = (byStaff.get(s.id) ?? []).sort((a, b) => a.date.localeCompare(b.date));
+      const counts = { ...ZERO };
+      for (const d of days) counts[d.status]++;
+      return { staffId: s.id, name: s.name, role: s.role, days, counts };
+    });
   },
 
   // ─── Asset issue history (BOOK / LAB_EQUIPMENT) ──────────────────────────
@@ -921,12 +999,13 @@ export const principalService = {
     const read = async () => {
       const { data, error } = await supabase
         .from('fee_structures')
-        .select('id, name, class_name, fee_heads, monthly_due_dates, late_fee')
+        .select('id, name, class_name, billing_cycle, fee_heads, monthly_due_dates, late_fee')
         .eq('school_id', schoolId).eq('academic_year_id', ayId)
         .order('class_name');
       if (error) throw new Error(error.message);
       return ((data ?? []) as Array<{
         id: string; name: string; class_name: string;
+        billing_cycle: BillingCycle | null;
         fee_heads: FeeStructureRecord['feeHeads'];
         monthly_due_dates: FeeStructureRecord['monthlyDueDates'];
         late_fee: FeeStructureRecord['lateFee'];
@@ -934,6 +1013,7 @@ export const principalService = {
         id: r.id,
         name: r.name,
         className: r.class_name,
+        billingCycle: (r.billing_cycle ?? 'MONTHLY') as BillingCycle,
         feeHeads: r.fee_heads ?? [],
         monthlyDueDates: r.monthly_due_dates ?? [],
         lateFee: r.late_fee ?? { enabled: false, gracePeriodDays: 0, type: 'FIXED', amount: 0, maxCap: 0 },
@@ -1019,6 +1099,7 @@ export const principalService = {
       academic_year_id: ayId,
       name: input.name,
       class_name: input.className,
+      billing_cycle: input.billingCycle,
       fee_heads: input.feeHeads,
       monthly_due_dates: input.monthlyDueDates,
       late_fee: input.lateFee,
@@ -1034,7 +1115,7 @@ export const principalService = {
       // Capture the previous structure so the audit log can show a real diff.
       const { data: prev } = await supabase
         .from('fee_structures')
-        .select('name, class_name, fee_heads, monthly_due_dates, late_fee')
+        .select('name, class_name, billing_cycle, fee_heads, monthly_due_dates, late_fee')
         .eq('id', input.id).eq('school_id', schoolId).maybeSingle();
       prevSnap = (prev ?? null) as Record<string, unknown> | null;
       const { error } = await supabase
@@ -1051,6 +1132,7 @@ export const principalService = {
     const newSnap: Record<string, unknown> = {
       name: input.name,
       class_name: input.className,
+      billing_cycle: input.billingCycle,
       fee_heads: input.feeHeads,
       monthly_due_dates: input.monthlyDueDates,
       late_fee: input.lateFee,
@@ -1078,6 +1160,7 @@ export const principalService = {
       academic_year_id: yearId,
       name: input.name,
       class_name: input.className,
+      billing_cycle: input.billingCycle,
       fee_heads: input.feeHeads,
       monthly_due_dates: input.monthlyDueDates,
       late_fee: input.lateFee,
@@ -1218,10 +1301,13 @@ export interface FeePaymentUploadRecord {
   recordedPaymentId: string | null;
 }
 
+export type BillingCycle = 'MONTHLY' | 'QUARTERLY' | 'HALF_YEARLY' | 'ANNUALLY' | 'CUSTOM';
+
 export interface FeeStructureRecord {
   id: string;
   name: string;
   className: string;
+  billingCycle: BillingCycle;
   feeHeads: Array<{ id: string; name: string; amount: number; frequency: 'MONTHLY' | 'ANNUAL' | 'ONE_TIME'; description: string }>;
   monthlyDueDates: Array<{ month: string; date: string }>;
   lateFee: { enabled: boolean; gracePeriodDays: number; type: 'FIXED' | 'PERCENTAGE'; amount: number; maxCap: number };

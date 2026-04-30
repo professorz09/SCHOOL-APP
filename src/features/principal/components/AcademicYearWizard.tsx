@@ -209,6 +209,7 @@ export const AcademicYearWizard: React.FC<Props> = ({
             principalService.saveFeeStructureForYear(createdYearId, {
               name: `Tuition - ${c.className}`,
               className: c.className,
+              billingCycle: 'MONTHLY',
               feeHeads: [{
                 id: `h${Date.now()}-${i}`,
                 name: 'Tuition Fee',
