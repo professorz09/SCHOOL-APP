@@ -12,6 +12,7 @@ import { transportService } from '../../../services/transport.service';
 import { supabase } from '../../../lib/supabase';
 import { PrincipalView } from '../pages/PrincipalLayout';
 import { useAuthStore } from '../../../store/authStore';
+import { useAcademicYear } from '../../../context/AcademicYearContext';
 import { SchoolSetupChecklist } from './SchoolSetupChecklist';
 import { SalaryReminderCard } from './SalaryReminderCard';
 
@@ -38,6 +39,13 @@ const LIVE_COLORS = [
 
 export const PrincipalDashboard: React.FC<Props> = ({ onNavigate }) => {
   const session = useAuthStore(s => s.session);
+  // Subscribe to the academic-year context so the dashboard re-fetches
+  // its stats whenever the active year changes (e.g. after the principal
+  // closes the current year or finishes the new-year wizard). Without
+  // this, the setup checklist and section/fee counts stay frozen at
+  // their first-mount values and the just-created year never registers.
+  const { activeYear, academicYears } = useAcademicYear();
+  const ayKey = `${activeYear?.id ?? 'none'}|${academicYears.length}`;
   const [showMore, setShowMore] = useState(false);
   const [stats, setStats] = useState({
     totalStudents: 0, avgAttendance: 0, paidFees: 0, totalFees: 0,
@@ -121,7 +129,11 @@ export const PrincipalDashboard: React.FC<Props> = ({ onNavigate }) => {
       })));
     };
     load();
-  }, []);
+    // Re-run whenever the active academic year (or the year list) changes,
+    // so the checklist's `hasActiveYear` and the section/fee/student counts
+    // stay in sync with the AY context immediately after a year-close or
+    // a successful "create new academic year" wizard run.
+  }, [ayKey, session?.schoolId]);
 
   const feePercent = stats.totalFees > 0 ? Math.round((stats.paidFees / stats.totalFees) * 100) : 0;
 
