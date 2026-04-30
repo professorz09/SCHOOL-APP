@@ -20,6 +20,7 @@ import {
 } from '../../../services/transport.service';
 import { storageService } from '../../../services/storage.service';
 import { StudentClassAssignmentModal } from './StudentClassAssignmentModal';
+import { useAcademicYear } from '../../../context/AcademicYearContext';
 
 type MainView = 'MENU' | 'ADMISSION' | 'FEES' | 'CLASSES' | 'ARCHIVE';
 type SubView = 'LIST' | 'CREATE' | 'PROFILE' | 'CLASS_DETAIL' | 'SECTION_DETAIL';
@@ -74,6 +75,7 @@ const BLANK_FORM_WITH_PARENT: FormWithParent = {
 
 export const StudentsManager: React.FC<Props> = ({ onBack, initialView }) => {
   const { showToast } = useUIStore();
+  const { activeYear } = useAcademicYear();
   const [mainView, setMainView] = useState<MainView>(initialView ?? 'CLASSES');
   const [subView, setSubView] = useState<SubView>('LIST');
   const [students, setStudents] = useState<Student[]>([]);
@@ -137,7 +139,7 @@ export const StudentsManager: React.FC<Props> = ({ onBack, initialView }) => {
   const [profileDocsLive, setProfileDocsLive] = useState<StudentDoc[]>([]);
   const [profileDocUploading, setProfileDocUploading] = useState<DocumentUpload['type'] | null>(null);
 
-  useEffect(() => { studentService.getAll().then(setStudents); }, []);
+  useEffect(() => { void studentService.getAll().then(setStudents); }, [activeYear?.id]);
   useEffect(() => { schoolInfoService.get().then(setSchoolInfo).catch(() => setSchoolInfo(null)); }, []);
 
   const refreshArchive = React.useCallback(async () => {
@@ -166,8 +168,8 @@ export const StudentsManager: React.FC<Props> = ({ onBack, initialView }) => {
   }, [archiveTab, showToast]);
 
   useEffect(() => {
-    if (mainView === 'ARCHIVE') refreshArchive();
-  }, [mainView, refreshArchive]);
+    if (mainView === 'ARCHIVE') void refreshArchive();
+  }, [mainView, refreshArchive, activeYear?.id]);
 
   const loadStudentData = async (student: Student) => {
     // Fetch docs from `student_documents` directly — getAll/getById return
@@ -1330,11 +1332,18 @@ export const StudentsManager: React.FC<Props> = ({ onBack, initialView }) => {
                   <SectionTitle icon={GraduationCap} title="Academic Details" />
                   <div className="space-y-0">
                     <ProfileField label="Admission No." value={selected.admissionNo} />
-                    <ProfileField label="Roll Number" value={selected.rollNo} />
-                    <ProfileField label="Class & Section" value={`${selected.className} – ${selected.section}`} />
+                    <ProfileField label="Roll Number" value={selected.rollNo || '—'} />
+                    <ProfileField label="Class & Section" value={selected.className ? `${selected.className} – ${selected.section}` : 'Unassigned'} />
                     {selected.stream && <ProfileField label="Stream" value={selected.stream} />}
                     <ProfileField label="Admission Date" value={fmtAdm} />
-                    <ProfileField label="Academic Year" value={selected.academicYearId} />
+                  </div>
+                  <div className="mt-3 pt-3 border-t border-slate-100">
+                    <button
+                      onClick={() => setAssignTarget(selected)}
+                      className="w-full flex items-center justify-center gap-2 px-4 py-2.5 bg-indigo-600 text-white text-[11px] font-black rounded-xl active:scale-95 transition-transform">
+                      <UserCheck size={13} />
+                      {selected.className ? 'Re-assign / Change Class' : 'Assign to Class'}
+                    </button>
                   </div>
                 </div>
 
@@ -1876,6 +1885,24 @@ export const StudentsManager: React.FC<Props> = ({ onBack, initialView }) => {
             </div>
           );
         })()}
+
+        {/* ── Class Assignment Modal (accessible from profile) ────────── */}
+        {assignTarget && (
+          <StudentClassAssignmentModal
+            student={assignTarget}
+            onClose={() => setAssignTarget(null)}
+            onSuccess={async () => {
+              await refreshArchive();
+              const all = await studentService.getAll();
+              setStudents(all);
+              const refreshed = await studentService.getById(selected.id);
+              if (refreshed) {
+                setSelected(refreshed);
+                void loadStudentData(refreshed);
+              }
+            }}
+          />
+        )}
 
         {/* ── Cancel Transport modal ─────────────────────────────────── */}
         {cancelTransportOpen && (
