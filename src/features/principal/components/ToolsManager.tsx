@@ -709,7 +709,7 @@ export const ToolsManager: React.FC<Props> = ({ onBack }) => {
         </div>
 
         {/* School info banner */}
-        {schoolInfo.name ? (
+        {schoolInfo?.name ? (
           <div className="mx-4 mb-4 bg-gradient-to-r from-slate-800 to-slate-900 rounded-2xl p-4 text-white">
             <div className="flex items-start gap-3">
               <div className="w-10 h-10 rounded-xl bg-white/10 flex items-center justify-center shrink-0">

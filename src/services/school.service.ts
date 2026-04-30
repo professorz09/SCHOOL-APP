@@ -139,4 +139,83 @@ export const schoolService = {
     // schools deactivates dependent users / students / staff rows.
     await adminApi.deleteSchool(id);
   },
+
+  // Super-admin views — query any school directly, bypassing the per-session
+  // school_id restriction used by principal-facing services.
+  async getSchoolStaff(schoolId: string): Promise<Array<{
+    id: string; name: string; role: string; subject: string | null;
+    phone: string; email: string | null; status: string; salary: number;
+  }>> {
+    const { data, error } = await supabase
+      .from('staff')
+      .select('id, name, role, subject, phone, email, status, salary')
+      .eq('school_id', schoolId)
+      .eq('is_active', true)
+      .order('name');
+    if (error) throw new Error(error.message);
+    return (data ?? []) as Array<{
+      id: string; name: string; role: string; subject: string | null;
+      phone: string; email: string | null; status: string; salary: number;
+    }>;
+  },
+
+  async getSchoolStudents(schoolId: string): Promise<Array<{
+    id: string; name: string; admission_no: string;
+    father_name: string | null; mother_name: string | null;
+    phone: string | null; class_name: string | null; section: string | null;
+    roll_no: number | null; is_rte: boolean;
+  }>> {
+    // Join students with their latest academic record to show class/section.
+    const { data: stuData, error: stuErr } = await supabase
+      .from('students')
+      .select('id, name, admission_no, father_name, mother_name, father_phone')
+      .eq('school_id', schoolId)
+      .eq('is_active', true)
+      .order('name');
+    if (stuErr) throw new Error(stuErr.message);
+    const stu = (stuData ?? []) as Array<{
+      id: string; name: string; admission_no: string;
+      father_name: string | null; mother_name: string | null; father_phone: string | null;
+    }>;
+    if (!stu.length) return [];
+
+    // Get active academic year for this school.
+    const { data: ay } = await supabase
+      .from('academic_years')
+      .select('id')
+      .eq('school_id', schoolId)
+      .eq('is_active', true)
+      .maybeSingle();
+    const ayId = (ay as { id: string } | null)?.id ?? null;
+
+    const arMap = new Map<string, { class_name: string; section: string; roll_no: number; is_rte: boolean }>();
+    if (ayId && stu.length) {
+      const { data: arData } = await supabase
+        .from('student_academic_records')
+        .select('student_id, class_name, section, roll_no, is_rte')
+        .eq('academic_year_id', ayId)
+        .in('student_id', stu.map(s => s.id));
+      for (const r of ((arData ?? []) as Array<{
+        student_id: string; class_name: string; section: string; roll_no: number; is_rte: boolean;
+      }>)) {
+        arMap.set(r.student_id, r);
+      }
+    }
+
+    return stu.map(s => {
+      const ar = arMap.get(s.id);
+      return {
+        id: s.id,
+        name: s.name,
+        admission_no: s.admission_no,
+        father_name: s.father_name,
+        mother_name: s.mother_name,
+        phone: s.father_phone,
+        class_name: ar?.class_name ?? null,
+        section: ar?.section ?? null,
+        roll_no: ar?.roll_no ?? null,
+        is_rte: ar?.is_rte ?? false,
+      };
+    });
+  },
 };

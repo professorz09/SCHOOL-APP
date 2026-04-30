@@ -139,9 +139,9 @@ export const StudentClassAssignmentModal: React.FC<Props> = ({ student, onClose,
   // (clerks usually want a class-specific structure), with a fallback
   // to "any" when none match.
   const matchingStructures = useMemo(() => {
-    const exact = structures.filter(s => s.className === className);
-    return exact.length ? exact : structures;
-  }, [structures, className]);
+    const classStructures = structures.filter(s => (s as any).structureType !== 'VEHICLE');
+    return classStructures;
+  }, [structures]);
 
   const selectedVehicle = useMemo(
     () => vehicles.find(v => v.id === vehicleId) || null,

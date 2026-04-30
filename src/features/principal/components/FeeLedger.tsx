@@ -68,6 +68,8 @@ const FEE_TYPE_LABEL: Record<FeeType, string> = {
 
 interface Props { onBack: () => void; }
 
+const PAGE_SIZE = 50;
+
 export const FeeLedger: React.FC<Props> = ({ onBack }) => {
   const { showToast } = useUIStore();
   const [students, setStudents]       = useState<StudentFeeProfile[]>([]);
@@ -76,6 +78,7 @@ export const FeeLedger: React.FC<Props> = ({ onBack }) => {
   const [listTab, setListTab]         = useState<ListTab>('ALL');
   const [search, setSearch]           = useState('');
   const [detailTab, setDetailTab]     = useState<'SCHEDULE' | 'HISTORY'>('SCHEDULE');
+  const [showCount, setShowCount]     = useState(PAGE_SIZE);
 
   // Modal states
   const [payModal, setPayModal]             = useState(false);
@@ -439,6 +442,11 @@ export const FeeLedger: React.FC<Props> = ({ onBack }) => {
     if (listTab === 'CLEARED') return !hasDue(s);
     return true;
   });
+
+  // Reset page when filter/search changes
+  useEffect(() => { setShowCount(PAGE_SIZE); }, [search, listTab]);
+  const pagedStudents = visibleStudents.slice(0, showCount);
+  const hasMore = showCount < visibleStudents.length;
 
   // ─── DETAIL VIEW ─────────────────────────────────────────────────────────────
   if (selected) {
@@ -1071,7 +1079,7 @@ export const FeeLedger: React.FC<Props> = ({ onBack }) => {
           </div>
         )}
 
-        {visibleStudents.map(student => {
+        {pagedStudents.map(student => {
           const pd = getParentDue(student.studentId);
           const gd = student.isRte ? getGovtDue(student.studentId) : { tuition: 0, total: 0 };
           const isDue = pd.total > 0 || gd.total > 0;
@@ -1125,6 +1133,20 @@ export const FeeLedger: React.FC<Props> = ({ onBack }) => {
             </button>
           );
         })}
+
+        {hasMore && (
+          <button
+            onClick={() => setShowCount(c => c + PAGE_SIZE)}
+            className="w-full py-3 mt-2 bg-white border border-slate-200 rounded-2xl text-xs font-black text-slate-500 uppercase tracking-widest active:scale-95 transition-transform">
+            Load More ({visibleStudents.length - showCount} remaining)
+          </button>
+        )}
+
+        {!hasMore && visibleStudents.length > PAGE_SIZE && (
+          <p className="text-center text-[9px] font-bold text-slate-300 py-3">
+            All {visibleStudents.length} students shown
+          </p>
+        )}
       </div>
     </div>
   );

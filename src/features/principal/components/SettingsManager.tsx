@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { ArrowLeft, Plus, Trash2, ChevronDown, ChevronUp, Save, QrCode, CreditCard, CheckCircle2, Lock, Eye, EyeOff, ShieldCheck, IndianRupee, Edit2, Building2, BookOpen, ChevronRight, X, Download, Database, History } from 'lucide-react';
+import { ArrowLeft, Plus, Trash2, ChevronDown, ChevronUp, Save, QrCode, CreditCard, CheckCircle2, Lock, Eye, EyeOff, ShieldCheck, IndianRupee, Edit2, Building2, BookOpen, ChevronRight, X, Download, Database, History, ShieldOff, Unlock } from 'lucide-react';
 import { supabase } from '../../../lib/supabase';
 import { principalService } from '../../../services/principal.service';
 import { AcademicYearConfig, ClassConfig } from '../../../types/principal.types';
@@ -9,6 +9,7 @@ import { useAuthStore } from '../../../store/authStore';
 import { schoolInfoService, SchoolInfo } from '../../../services/schoolInfo.service';
 import { FeeStructureForm, FeeStructureItem } from './FeeStructureForm';
 import { AuditLogsViewer } from './AuditLogsViewer';
+import { useEditorModeStore } from '../../../store/editorModeStore';
 
 type View = 'MENU' | 'SCHOOL_INFO' | 'CLASSES' | 'FEE_STRUCT' | 'FEE_STRUCT_EDIT' | 'PAYMENTS' | 'SECURITY' | 'DATA_EXPORT' | 'ACTIVITY_LOG';
 
@@ -27,6 +28,7 @@ export const SettingsManager: React.FC<Props> = ({ onBack, initialView }) => {
   const [upiId, setUpiId] = useState('school@upi');
   const [upiSaved, setUpiSaved] = useState(false);
   const [qrFileName, setQrFileName] = useState('');
+  const [qrPreviewUrl, setQrPreviewUrl] = useState('');
   const [feeStructures, setFeeStructures] = useState<FeeStructureItem[]>([]);
   const [editingFs, setEditingFs] = useState<FeeStructureItem | null>(null);
   const [feeStructuresLoading, setFeeStructuresLoading] = useState(false);
@@ -37,7 +39,15 @@ export const SettingsManager: React.FC<Props> = ({ onBack, initialView }) => {
   const [schoolInfoSaving, setSchoolInfoSaving] = useState(false);
 
   useEffect(() => {
-    schoolInfoService.get().then(setSchoolInfo).catch(e => showToast(e instanceof Error ? e.message : 'Failed to load school info', 'error'));
+    schoolInfoService.get().then(async (info) => {
+      setSchoolInfo(info);
+      setUpiId(info.upiId || '');
+      if (info.paymentQrPath) {
+        setQrFileName(info.paymentQrPath.split('/').pop() || 'payment-qr');
+        const url = await schoolInfoService.getPaymentQrUrl(info.paymentQrPath);
+        setQrPreviewUrl(url ?? '');
+      }
+    }).catch(e => showToast(e instanceof Error ? e.message : 'Failed to load school info', 'error'));
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
   const session = useAuthStore(s => s.session);
@@ -48,6 +58,26 @@ export const SettingsManager: React.FC<Props> = ({ onBack, initialView }) => {
   const [pwShow, setPwShow] = useState(false);
   const [pwError, setPwError] = useState('');
   const [pwSaving, setPwSaving] = useState(false);
+
+  // Editor Mode
+  const editorEnabled = useEditorModeStore(s => s.enabled);
+  const editorEnable  = useEditorModeStore(s => s.enable);
+  const editorDisable = useEditorModeStore(s => s.disable);
+  const editorRemMs   = useEditorModeStore(s => s.remainingMs);
+  const [editorConfirm, setEditorConfirm] = useState(false);
+  // tick refreshes every second so the countdown display updates
+  const [, setTick] = useState(0);
+  useEffect(() => {
+    if (!editorEnabled) return;
+    const id = setInterval(() => setTick(t => t + 1), 1000);
+    return () => clearInterval(id);
+  }, [editorEnabled]);
+  const fmtRemaining = () => {
+    const ms = editorRemMs();
+    const m = Math.floor(ms / 60000);
+    const s = Math.floor((ms % 60000) / 1000);
+    return `${m}:${String(s).padStart(2, '0')}`;
+  };
 
   useEffect(() => {
     principalService.getAYConfig().then(data => {
@@ -180,7 +210,86 @@ export const SettingsManager: React.FC<Props> = ({ onBack, initialView }) => {
         </button>
         <h2 className="text-xl font-black text-slate-900 uppercase tracking-tight">Settings</h2>
       </div>
-      <div className="flex-1 overflow-y-auto p-4  space-y-2">
+      <div className="flex-1 overflow-y-auto p-4 space-y-3">
+
+        {/* ── Editor Mode card ────────────────────────────────────────────── */}
+        <div className={`rounded-2xl border p-4 shadow-sm ${
+          editorEnabled
+            ? 'bg-amber-50 border-amber-200'
+            : 'bg-white border-slate-100'
+        }`}>
+          <div className="flex items-center gap-3">
+            <div className={`w-11 h-11 rounded-xl flex items-center justify-center shrink-0 ${
+              editorEnabled ? 'bg-amber-200' : 'bg-slate-100'
+            }`}>
+              {editorEnabled
+                ? <Unlock size={20} className="text-amber-700" />
+                : <Lock size={20} className="text-slate-500" />}
+            </div>
+            <div className="flex-1 min-w-0">
+              <div className="font-extrabold text-slate-900 text-sm">Editor Mode</div>
+              <div className={`text-[10px] font-bold mt-0.5 ${
+                editorEnabled ? 'text-amber-700' : 'text-slate-400'
+              }`}>
+                {editorEnabled
+                  ? `ON · auto-disables in ${fmtRemaining()}`
+                  : 'OFF · enable to edit student assignments'}
+              </div>
+            </div>
+            <button
+              onClick={() => editorEnabled ? editorDisable() : setEditorConfirm(true)}
+              className={`px-4 py-2 rounded-xl text-[11px] font-black transition-colors ${
+                editorEnabled
+                  ? 'bg-amber-500 text-white active:bg-amber-600'
+                  : 'bg-slate-900 text-white active:bg-slate-700'
+              }`}>
+              {editorEnabled ? 'Disable' : 'Enable'}
+            </button>
+          </div>
+          {editorEnabled && (
+            <div className="mt-3 flex items-start gap-2 bg-amber-100/70 rounded-xl p-2.5">
+              <ShieldOff size={13} className="text-amber-700 shrink-0 mt-0.5" />
+              <p className="text-[10px] font-bold text-amber-800">
+                Class assignments, roll numbers and sensitive student details can now be changed.
+                Disable when done.
+              </p>
+            </div>
+          )}
+        </div>
+
+        {/* Confirm enable dialog */}
+        {editorConfirm && (
+          <div className="fixed inset-0 z-50 bg-black/50 flex items-end sm:items-center justify-center p-4"
+               onClick={() => setEditorConfirm(false)}>
+            <div className="bg-white rounded-2xl shadow-2xl w-full max-w-sm p-5"
+                 onClick={e => e.stopPropagation()}>
+              <div className="flex items-center gap-3 mb-4">
+                <div className="w-10 h-10 rounded-xl bg-amber-100 flex items-center justify-center">
+                  <Unlock size={20} className="text-amber-600" />
+                </div>
+                <div>
+                  <h3 className="font-black text-slate-900 text-sm">Enable Editor Mode?</h3>
+                  <p className="text-[10px] font-bold text-slate-400 mt-0.5">Auto-disables after 30 minutes</p>
+                </div>
+              </div>
+              <p className="text-xs font-bold text-slate-600 mb-4 leading-relaxed">
+                Editor Mode allows changing student class assignments, roll numbers, and other
+                locked fields. Only enable when you need to make corrections.
+              </p>
+              <div className="flex gap-2">
+                <button onClick={() => setEditorConfirm(false)}
+                  className="flex-1 py-3 bg-slate-100 text-slate-700 font-black text-xs rounded-xl">
+                  Cancel
+                </button>
+                <button onClick={() => { editorEnable(); setEditorConfirm(false); }}
+                  className="flex-1 py-3 bg-amber-500 text-white font-black text-xs rounded-xl">
+                  Enable
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+
         {[
           { icon: Building2, title: 'School Info',    desc: 'School details & contact info',    iconBg: 'bg-blue-100',    iconColor: 'text-blue-600',    action: () => setView('SCHOOL_INFO') },
           // Classes/sections are now set in the Academic Year wizard. The legacy
@@ -428,7 +537,7 @@ export const SettingsManager: React.FC<Props> = ({ onBack, initialView }) => {
           <p className="text-xs font-bold text-slate-500">This UPI ID will be shown to parents in the fee payment screen.</p>
           <div className="flex gap-2">
             <input value={upiId} onChange={e => { setUpiId(e.target.value); setUpiSaved(false); }} placeholder="e.g. school@okaxis" className="flex-1 border border-slate-200 bg-slate-50 rounded-xl px-4 py-3 font-bold text-sm outline-none focus:border-blue-500" />
-            <button onClick={() => { setUpiSaved(true); showToast('UPI ID saved'); }} className={`px-4 py-3 rounded-xl font-black text-sm transition-colors ${upiSaved ? 'bg-emerald-500 text-white' : 'bg-slate-900 text-white'}`}>
+            <button onClick={async () => { await schoolInfoService.save({ upiId }); setUpiSaved(true); showToast('UPI ID saved'); }} className={`px-4 py-3 rounded-xl font-black text-sm transition-colors ${upiSaved ? 'bg-emerald-500 text-white' : 'bg-slate-900 text-white'}`}>
               {upiSaved ? <CheckCircle2 size={16} /> : <Save size={16} />}
             </button>
           </div>
@@ -443,12 +552,8 @@ export const SettingsManager: React.FC<Props> = ({ onBack, initialView }) => {
           <p className="text-xs font-bold text-slate-500">Upload a QR code image. Parents can scan this to pay fees directly.</p>
 
           <div className="w-36 h-36 mx-auto bg-slate-100 rounded-2xl border-2 border-dashed border-slate-300 flex flex-col items-center justify-center gap-2">
-            {qrFileName ? (
-              <div className="w-full h-full grid grid-cols-6 gap-px p-3 rounded-2xl">
-                {Array.from({ length: 36 }, (_, i) => (
-                  <div key={i} className={`rounded-sm ${(i * 7 + i * 3) % 3 === 0 ? 'bg-slate-800' : 'bg-white'}`} />
-                ))}
-              </div>
+            {qrPreviewUrl ? (
+              <img src={qrPreviewUrl} className="w-full h-full object-contain rounded-2xl" />
             ) : (
               <>
                 <QrCode size={28} className="text-slate-300" />
@@ -461,14 +566,23 @@ export const SettingsManager: React.FC<Props> = ({ onBack, initialView }) => {
             <Plus size={14} /> {qrFileName ? 'Replace QR Image' : 'Upload QR Image'}
             <input type="file" accept="image/*" className="hidden" onChange={e => {
               const file = e.target.files?.[0];
-              if (file) { setQrFileName(file.name); showToast(`QR image "${file.name}" uploaded`); }
+              if (file) {
+                (async () => {
+                  const path = await schoolInfoService.uploadPaymentQr(file);
+                  await schoolInfoService.save({ paymentQrPath: path });
+                  const url = await schoolInfoService.getPaymentQrUrl(path);
+                  setQrFileName(file.name);
+                  setQrPreviewUrl(url ?? '');
+                  showToast(`QR image "${file.name}" uploaded`);
+                })().catch(err => showToast(err instanceof Error ? err.message : 'QR upload failed', 'error'));
+              }
             }} />
           </label>
 
           {qrFileName && (
             <div className="flex items-center justify-between bg-slate-50 rounded-xl px-3 py-2.5">
               <span className="text-xs font-bold text-slate-600 truncate">{qrFileName}</span>
-              <button onClick={() => setQrFileName('')} className="text-slate-400 hover:text-rose-500 transition-colors ml-2 shrink-0"><Trash2 size={13} /></button>
+              <button onClick={async () => { await schoolInfoService.save({ paymentQrPath: '' }); setQrFileName(''); setQrPreviewUrl(''); }} className="text-slate-400 hover:text-rose-500 transition-colors ml-2 shrink-0"><Trash2 size={13} /></button>
             </div>
           )}
         </div>
@@ -484,7 +598,39 @@ export const SettingsManager: React.FC<Props> = ({ onBack, initialView }) => {
   if (view === 'SECURITY') return (
     <div className="w-full bg-slate-50 flex flex-col animate-in slide-in-from-right-8 duration-300">
       {renderHeader('Security')}
-      <div className="flex-1 overflow-y-auto p-4  space-y-4">
+      <div className="flex-1 overflow-y-auto p-4 space-y-4">
+
+        {/* ── Editor Mode ─────────────────────────────────────────────────── */}
+        <div className={`rounded-2xl border p-4 shadow-sm ${
+          editorEnabled ? 'bg-amber-50 border-amber-200' : 'bg-white border-slate-100'
+        }`}>
+          <div className="flex items-center gap-2 mb-3">
+            {editorEnabled
+              ? <Unlock size={16} className="text-amber-600" />
+              : <Lock size={16} className="text-slate-500" />}
+            <p className="text-[10px] font-black uppercase tracking-widest text-slate-400">Editor Mode</p>
+            <span className={`ml-auto text-[10px] font-black px-2 py-0.5 rounded-full ${
+              editorEnabled ? 'bg-amber-200 text-amber-800' : 'bg-slate-100 text-slate-500'
+            }`}>
+              {editorEnabled ? `ON · ${fmtRemaining()}` : 'OFF'}
+            </span>
+          </div>
+          <p className="text-xs font-bold text-slate-600 mb-3 leading-relaxed">
+            {editorEnabled
+              ? 'Editor Mode is active. Class assignments and locked student fields can be changed. Disable when done.'
+              : 'Enable to allow changes to class assignments, roll numbers, and other locked student fields.'}
+          </p>
+          <button
+            onClick={() => editorEnabled ? editorDisable() : setEditorConfirm(true)}
+            className={`w-full flex items-center justify-center gap-2 py-3 rounded-xl font-black text-xs transition-colors ${
+              editorEnabled
+                ? 'bg-rose-100 text-rose-700 active:bg-rose-200'
+                : 'bg-amber-500 text-white active:bg-amber-600'
+            }`}>
+            {editorEnabled ? <><ShieldOff size={14} /> Disable Editor Mode</> : <><Unlock size={14} /> Enable Editor Mode</>}
+          </button>
+        </div>
+
         {session?.mustChangePassword && (
           <div className="bg-amber-50 border border-amber-200 rounded-2xl p-4 flex items-start gap-2">
             <ShieldCheck size={18} className="text-amber-700 shrink-0 mt-0.5" />

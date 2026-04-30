@@ -13,7 +13,6 @@ import { supabase } from '../../../lib/supabase';
 import { PrincipalView } from '../pages/PrincipalLayout';
 import { useAuthStore } from '../../../store/authStore';
 import { useAcademicYear } from '../../../context/AcademicYearContext';
-import { SchoolSetupChecklist } from './SchoolSetupChecklist';
 import { SalaryReminderCard } from './SalaryReminderCard';
 
 interface Props {
@@ -50,7 +49,6 @@ export const PrincipalDashboard: React.FC<Props> = ({ onNavigate }) => {
   const [stats, setStats] = useState({
     totalStudents: 0, avgAttendance: 0, paidFees: 0, totalFees: 0,
     totalStaff: 0, openComplaints: 0, pendingApprovals: 0,
-    feeStructuresCount: 0, hasActiveYear: false, sectionsCount: 0,
   });
   const [vehicles, setVehicles] = useState<{ id: string; vehicleNo: string; routeName: string; driverName: string; isActive: boolean; currentStop: string }[]>([]);
   const [liveClasses, setLiveClasses] = useState<LiveClassRow[]>([]);
@@ -62,7 +60,7 @@ export const PrincipalDashboard: React.FC<Props> = ({ onNavigate }) => {
       // mount that cache may be empty, so prime it before reading. All other
       // services here fetch fresh per call.
       await transportService.refreshAll();
-      const [students, staff, complaints, approvals, allVehicles, attRes, feeStructures, ayConfigs] = await Promise.all([
+      const [students, staff, complaints, approvals, allVehicles, attRes] = await Promise.all([
         studentService.getAll(),
         staffService.getAll(),
         principalService.getComplaints(),
@@ -75,20 +73,7 @@ export const PrincipalDashboard: React.FC<Props> = ({ onNavigate }) => {
           .eq('date', today)
           .order('created_at', { ascending: false })
           .limit(5),
-        principalService.getFeeStructures().catch(() => []),
-        principalService.getAYConfig().catch(() => []),
       ]);
-      // Sections count is scoped to the *active* year only. We deliberately
-      // do NOT fall back to the first (closed) year — Step 2 of the setup
-      // checklist measures whether the principal has classes set up for the
-      // current operating year, and a closed year's sections cannot host
-      // new students/fees. Without this scoping, closing a year would leave
-      // Step 2 falsely "done" and let the principal advance to fees/staff
-      // before opening a fresh academic year.
-      const activeAY = ayConfigs.find(c => c.isActive) ?? null;
-      const sectionsCount = activeAY
-        ? activeAY.classes.reduce((s, cl) => s + cl.sections.length, 0)
-        : 0;
       const liveRows = ((attRes.data ?? []) as Array<{
         id: string; class_name: string | null; section: string | null;
         total_present: number; total_students: number;
@@ -115,9 +100,6 @@ export const PrincipalDashboard: React.FC<Props> = ({ onNavigate }) => {
         totalStaff: staff.length,
         openComplaints: complaints.filter(c => c.status !== 'RESOLVED').length,
         pendingApprovals: approvals.filter(a => a.status === 'PENDING').length,
-        feeStructuresCount: feeStructures.length,
-        hasActiveYear: !!activeAY,
-        sectionsCount,
       });
       setVehicles(allVehicles.filter(v => v.isActive).map(v => ({
         id: v.id,
@@ -161,19 +143,6 @@ export const PrincipalDashboard: React.FC<Props> = ({ onNavigate }) => {
 
   return (
     <div className="flex flex-col gap-5 pb-4 px-5">
-
-      {/* ── First-time School Setup Checklist (auto-hides when complete) ─ */}
-      <div className="pt-1">
-        <SchoolSetupChecklist
-          schoolId={session?.schoolId ?? null}
-          hasActiveYear={stats.hasActiveYear}
-          sectionsCount={stats.sectionsCount}
-          feeStructuresCount={stats.feeStructuresCount}
-          staffCount={stats.totalStaff}
-          studentsCount={stats.totalStudents}
-          onNavigate={onNavigate}
-        />
-      </div>
 
       {/* ── Header: Attendance ──────────────────────────────────────────── */}
       <div>

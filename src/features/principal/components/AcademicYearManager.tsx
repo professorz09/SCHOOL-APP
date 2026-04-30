@@ -22,6 +22,7 @@ export const AcademicYearManager: React.FC<Props> = ({ onBack }) => {
 
   // ─── Wizard state ───────────────────────────────────────────────────────
   const [showWizard, setShowWizard] = useState(false);
+  const [wizardKey, setWizardKey] = useState(0);
   const wizardDefaults = useMemo(() => {
     // Default to the year AFTER the latest existing year so the auto-filled
     // label cannot collide with the UNIQUE(school_id, label) constraint on
@@ -140,10 +141,33 @@ export const AcademicYearManager: React.FC<Props> = ({ onBack }) => {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [closedYearKey]);
 
+  // Increment wizardKey on every open so the wizard fully remounts (fresh
+  // state) instead of reusing a stale component instance.
+  const openWizard = () => { setWizardKey((k: number) => k + 1); setShowWizard(true); };
+
   // ─── Wizard finished → refresh + close ──────────────────────────────────
-  const handleWizardCreated = async () => {
-    await refreshAY();
+  // Use try/finally so the wizard ALWAYS closes even if refreshAY() fails.
+  // If no year is currently active (first-time setup or all previous years
+  // were closed), auto-activate the just-created year so the setup checklist
+  // step 1 marks as done immediately — without this the principal would have
+  // to manually hit "Make Active" before the checklist advances.
+  const handleWizardCreated = async (yearId: string) => {
+    try {
+      if (!activeYear && yearId) {
+        try { await setActiveYear(yearId); } catch { /* non-fatal — year still created */ }
+      }
+      await refreshAY();
+    } finally {
+      setShowWizard(false);
+    }
+  };
+
+  // Close wizard and refresh in background (used by the X button so that
+  // academicYears is up-to-date next time the wizard opens, regardless of
+  // whether the user completed creation or closed mid-flow).
+  const closeWizard = () => {
     setShowWizard(false);
+    void refreshAY();
   };
 
   // ─── Make-active confirmation ───────────────────────────────────────────
@@ -309,7 +333,7 @@ export const AcademicYearManager: React.FC<Props> = ({ onBack }) => {
               </p>
             </div>
             <button
-              onClick={() => setShowWizard(true)}
+              onClick={() => openWizard()}
               className="w-full text-white font-black text-sm rounded-xl py-3 bg-rose-600 hover:bg-rose-700 flex items-center justify-center gap-2"
             >
               <Sparkles size={16} /> Start Setup Wizard
@@ -338,7 +362,7 @@ export const AcademicYearManager: React.FC<Props> = ({ onBack }) => {
                   </div>
                 </div>
                 <button
-                  onClick={() => setShowWizard(true)}
+                  onClick={() => openWizard()}
                   className="w-full text-white font-black text-sm rounded-xl py-3 bg-rose-600 hover:bg-rose-700 flex items-center justify-center gap-2"
                 >
                   <Sparkles size={16} /> Naya Academic Year Start Karein
@@ -348,7 +372,7 @@ export const AcademicYearManager: React.FC<Props> = ({ onBack }) => {
 
             {/* ─── Add new year button ──────────────────────────────────── */}
             <button
-              onClick={() => setShowWizard(true)}
+              onClick={() => openWizard()}
               className="w-full bg-white border-2 border-dashed border-indigo-300 hover:border-indigo-500 text-indigo-600 font-black text-sm rounded-2xl py-3 flex items-center justify-center gap-2"
             >
               <Plus size={16} /> Add Academic Year
@@ -497,8 +521,9 @@ export const AcademicYearManager: React.FC<Props> = ({ onBack }) => {
       {/* ─── New Academic Year Wizard ─────────────────────────────────────── */}
       {showWizard && (
         <AcademicYearWizard
-          onClose={() => setShowWizard(false)}
-          onCreated={() => { void handleWizardCreated(); }}
+          key={wizardKey}
+          onClose={closeWizard}
+          onCreated={(yearId) => { void handleWizardCreated(yearId); }}
           defaultLabel={wizardDefaults.label}
           defaultStart={wizardDefaults.start}
           defaultEnd={wizardDefaults.end}

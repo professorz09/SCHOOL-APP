@@ -1,7 +1,8 @@
-import React, { useMemo, useState } from 'react';
-import { X, ChevronRight, ChevronLeft, Plus, Trash2, CheckCircle2, AlertTriangle, Sparkles } from 'lucide-react';
+import React, { useEffect, useMemo, useState } from 'react';
+import { X, ChevronRight, ChevronLeft, Plus, Trash2, CheckCircle2, AlertTriangle, Sparkles, IndianRupee } from 'lucide-react';
 import { useUIStore } from '../../../store/uiStore';
 import { academicYearService, type WizardSection } from '../../../services/academicYear.service';
+import { principalService } from '../../../services/principal.service';
 
 interface Props {
   onClose: () => void;
@@ -41,7 +42,7 @@ export const AcademicYearWizard: React.FC<Props> = ({
   onClose, onCreated, defaultLabel = '', defaultStart = '', defaultEnd = '', defaultBoard = 'CBSE',
 }) => {
   const { showToast } = useUIStore();
-  const [step, setStep] = useState<1 | 2 | 3>(1);
+  const [step, setStep] = useState<1 | 2 | 3 | 4>(1);
 
   // Step 1
   const [label, setLabel] = useState(defaultLabel);
@@ -55,6 +56,22 @@ export const AcademicYearWizard: React.FC<Props> = ({
   const [plan, setPlan] = useState<ClassPlan[]>(defaultPlan);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
+
+  // Step 4 — fee quick-setup (after year is created)
+  const [createdYearId, setCreatedYearId] = useState<string | null>(null);
+  const [tuitionFee, setTuitionFee] = useState('');
+  const [feesSaving, setFeesSaving] = useState(false);
+
+  // Prevents touch-through: when the wizard transitions from step 3 → 4,
+  // the "Create Year" button tap can register on the "Skip" button that
+  // appears at the same position after re-render. Wait 450ms before
+  // enabling step 4 buttons so the original touch event drains away.
+  const [step4Ready, setStep4Ready] = useState(false);
+  useEffect(() => {
+    if (step !== 4) { setStep4Ready(false); return; }
+    const t = setTimeout(() => setStep4Ready(true), 450);
+    return () => clearTimeout(t);
+  }, [step]);
 
   const enabledClasses = useMemo(() => plan.filter(c => c.enabled), [plan]);
 
@@ -171,7 +188,8 @@ export const AcademicYearWizard: React.FC<Props> = ({
         sections: sectionsPayload,
       });
       showToast(`${label.trim()} created with ${sectionsPayload.length} sections`);
-      onCreated(id);
+      setCreatedYearId(id);
+      setStep(4);
     } catch (e) {
       const msg = e instanceof Error ? e.message : 'Failed to create academic year';
       setError(msg);
@@ -181,11 +199,44 @@ export const AcademicYearWizard: React.FC<Props> = ({
     }
   };
 
+  // ─── Step 4: finish wizard (save optional fees then call onCreated) ──────
+  const handleFinishWizard = async (saveFees: boolean) => {
+    if (saveFees && createdYearId && Number(tuitionFee) > 0) {
+      setFeesSaving(true);
+      try {
+        await Promise.all(
+          enabledClasses.map((c, i) =>
+            principalService.saveFeeStructureForYear(createdYearId, {
+              name: `Tuition - ${c.className}`,
+              className: c.className,
+              billingCycle: 'MONTHLY',
+              feeHeads: [{
+                id: `h${Date.now()}-${i}`,
+                name: 'Tuition Fee',
+                amount: Number(tuitionFee),
+                frequency: 'MONTHLY',
+                description: 'Monthly tuition charges',
+              }],
+              monthlyDueDates: [],
+              lateFee: { enabled: false, gracePeriodDays: 5, type: 'FIXED', amount: 100, maxCap: 1000 },
+            }),
+          ),
+        );
+        showToast(`${enabledClasses.length} fee structures saved`);
+      } catch (e) {
+        showToast(e instanceof Error ? e.message : 'Fee save failed', 'error');
+      } finally {
+        setFeesSaving(false);
+      }
+    }
+    onCreated(createdYearId ?? '');
+  };
+
   // ─── Render ────────────────────────────────────────────────────────────
   return (
     <div
       className="fixed inset-0 bg-black/50 z-50 flex items-end sm:items-center justify-center p-0 sm:p-4 animate-in fade-in duration-200"
-      onClick={() => !saving && onClose()}
+      onClick={() => !saving && !feesSaving && step < 4 && onClose()}
     >
       <div
         className="bg-white rounded-t-3xl sm:rounded-3xl w-full max-w-lg max-h-[92vh] flex flex-col animate-in slide-in-from-bottom-4 sm:zoom-in-95 duration-300"
@@ -209,7 +260,7 @@ export const AcademicYearWizard: React.FC<Props> = ({
           </div>
           {/* Step pills */}
           <div className="flex items-center gap-1.5">
-            {[1, 2, 3].map(s => (
+            {[1, 2, 3, 4].map(s => (
               <div
                 key={s}
                 className={`flex-1 h-1.5 rounded-full transition-colors ${
@@ -221,8 +272,8 @@ export const AcademicYearWizard: React.FC<Props> = ({
             ))}
           </div>
           <p className="text-[10px] font-black uppercase tracking-widest text-slate-400 mt-2">
-            Step {step} of 3 ·{' '}
-            {step === 1 ? 'Year basics' : step === 2 ? 'Pick classes' : 'Sections & capacity'}
+            Step {step} of 4 ·{' '}
+            {step === 1 ? 'Year basics' : step === 2 ? 'Pick classes' : step === 3 ? 'Sections & capacity' : 'Fee setup'}
           </p>
         </div>
 
@@ -428,11 +479,52 @@ export const AcademicYearWizard: React.FC<Props> = ({
               )}
             </div>
           )}
+
+          {/* ─── STEP 4: OPTIONAL FEE SETUP ─────────────────────────── */}
+          {step === 4 && (
+            <div key="step-4" className="space-y-3 animate-in fade-in slide-in-from-right-4 duration-200">
+              <div className="p-3 bg-emerald-50 border border-emerald-200 rounded-xl flex items-start gap-2">
+                <CheckCircle2 size={14} className="text-emerald-600 mt-0.5 shrink-0" />
+                <p className="text-[11px] font-bold text-emerald-800 leading-relaxed">
+                  {label.trim()} ban gaya — {enabledClasses.length} classes ke saath!
+                </p>
+              </div>
+              <p className="text-[11px] font-bold text-slate-500 leading-relaxed">
+                Optional: Abhi sabhi {enabledClasses.length} classes ke liye ek common monthly tuition fee set kar sakte hain. Detailed configuration baad mein Settings → Fee Structure mein ho sakti hai.
+              </p>
+              <div>
+                <label className="text-[10px] font-black uppercase tracking-widest text-slate-400 flex items-center gap-1">
+                  Monthly Tuition Fee — sabhi classes (₹)
+                </label>
+                <input
+                  type="number"
+                  min={0}
+                  value={tuitionFee}
+                  onChange={e => setTuitionFee(e.target.value)}
+                  placeholder="e.g. 1500 — khali chhod sakte hain"
+                  className="w-full mt-1 border border-slate-200 bg-slate-50 rounded-xl px-3 py-2.5 font-bold text-sm outline-none focus:border-slate-900"
+                />
+                {Number(tuitionFee) > 0 && (
+                  <p className="text-[10px] font-bold text-indigo-600 mt-1">
+                    {enabledClasses.length} fee structures create hongi — ek har class ke liye
+                  </p>
+                )}
+              </div>
+              <div className="bg-blue-50 border border-blue-100 rounded-xl p-3 space-y-1">
+                <p className="text-[10px] font-bold text-blue-700">
+                  Classes: {enabledClasses.map(c => c.className).join(', ')}
+                </p>
+                <p className="text-[10px] font-bold text-blue-500">
+                  Alag-alag amounts ya exam/lab fees ke liye Settings → Fee Structure use karein.
+                </p>
+              </div>
+            </div>
+          )}
         </div>
 
         {/* Footer */}
         <div className="px-5 py-3 border-t border-slate-100 flex items-center gap-2">
-          {step > 1 && (
+          {step > 1 && step < 4 && (
             <button
               onClick={() => { setError(''); setStep(prev => (prev - 1) as 1 | 2 | 3); }}
               disabled={saving}
@@ -454,13 +546,13 @@ export const AcademicYearWizard: React.FC<Props> = ({
                   setError('Kam se kam 1 class enable karein');
                   return;
                 }
-                setStep(prev => (prev + 1) as 1 | 2 | 3);
+                setStep(prev => (prev + 1) as 1 | 2 | 3 | 4);
               }}
               className="px-4 py-2.5 bg-indigo-600 text-white font-black rounded-xl text-sm flex items-center gap-1"
             >
               Next <ChevronRight size={14} />
             </button>
-          ) : (
+          ) : step === 3 ? (
             <button
               onClick={() => { void handleSubmit(); }}
               disabled={saving || step3Issues.length > 0}
@@ -469,6 +561,24 @@ export const AcademicYearWizard: React.FC<Props> = ({
               {saving && <div className="w-3.5 h-3.5 border-2 border-white/30 border-t-white rounded-full animate-spin" />}
               {saving ? 'Creating…' : 'Create Year'}
             </button>
+          ) : (
+            <>
+              <button
+                onClick={() => { void handleFinishWizard(false); }}
+                disabled={!step4Ready || feesSaving}
+                className="px-4 py-2.5 border border-slate-200 text-slate-600 font-black rounded-xl text-sm disabled:opacity-50"
+              >
+                Skip
+              </button>
+              <button
+                onClick={() => { void handleFinishWizard(true); }}
+                disabled={!step4Ready || feesSaving}
+                className="px-4 py-2.5 bg-emerald-600 text-white font-black rounded-xl text-sm flex items-center gap-2 disabled:opacity-50"
+              >
+                {feesSaving && <div className="w-3.5 h-3.5 border-2 border-white/30 border-t-white rounded-full animate-spin" />}
+                {feesSaving ? 'Saving…' : Number(tuitionFee) > 0 ? 'Save & Done' : 'Done'}
+              </button>
+            </>
           )}
         </div>
       </div>

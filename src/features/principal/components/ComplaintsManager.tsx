@@ -1,8 +1,9 @@
-import React, { useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useState } from 'react';
 import { ArrowLeft, CircleAlert, CheckCircle2, Clock, MessageSquare } from 'lucide-react';
 import { principalService } from '../../../services/principal.service';
 import { Complaint, ComplaintStatus } from '../../../types/principal.types';
 import { useUIStore } from '../../../store/uiStore';
+import { useRealtimeTable } from '../../../hooks/useRealtimeTable';
 
 type Filter = 'ALL' | ComplaintStatus;
 
@@ -24,7 +25,12 @@ export const ComplaintsManager: React.FC<Props> = ({ onBack }) => {
   const [response, setResponse] = useState('');
   const [isSubmitting, setIsSubmitting] = useState(false);
 
-  useEffect(() => { principalService.getComplaints().then(setComplaints); }, []);
+  const loadComplaints = useCallback(() => {
+    principalService.getComplaints().then(setComplaints);
+  }, []);
+
+  useEffect(() => { loadComplaints(); }, [loadComplaints]);
+  useRealtimeTable('complaints', loadComplaints);
 
   const filtered = filter === 'ALL' ? complaints : complaints.filter(c => c.status === filter);
 

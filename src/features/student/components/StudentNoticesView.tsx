@@ -1,10 +1,11 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useState, useCallback } from 'react';
 import {
   ArrowLeft, Bell, Pin, ChevronDown, ChevronUp,
   Clock, CheckCircle2, AlertCircle, Calendar, User, BookOpen,
 } from 'lucide-react';
 import { studentDashboardService, HomeworkItem } from '../../../services/studentDashboard.service';
 import { StudentNotice } from '../../../types/student.types';
+import { useRealtimeTable } from '../../../hooks/useRealtimeTable';
 
 interface Props { onBack: () => void; }
 
@@ -133,10 +134,15 @@ export const StudentNoticesView: React.FC<Props> = ({ onBack }) => {
   const [homework, setHomework] = useState<HomeworkItem[]>([]);
   const [filter, setFilter]     = useState<FilterKey>('ALL');
 
-  useEffect(() => {
+  const loadAll = useCallback(() => {
     studentDashboardService.getNotices().then(setNotices);
     studentDashboardService.getHomework().then(setHomework);
   }, []);
+
+  useEffect(() => { loadAll(); }, [loadAll]);
+
+  useRealtimeTable('notices', loadAll);
+  useRealtimeTable('homework_assignments', loadAll);
 
   const feed: FeedItem[] = [
     ...notices.map(n => ({ kind: 'notice' as const, data: n })),

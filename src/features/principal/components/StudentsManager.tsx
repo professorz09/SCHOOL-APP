@@ -6,9 +6,10 @@ import {
   Bus, Briefcase, Droplets, GraduationCap, Shield, Heart,
   CreditCard, Building2, TrendingUp, Home as HomeIcon,
   Archive, UserCheck, UserX, Award, Trash2, AlertTriangle, RefreshCw,
+  Lock, Edit2, History,
 } from 'lucide-react';
 import { studentService } from '../../../services/student.service';
-import { Student, CreateStudentInput, FeeRecord, StudentAcademicRecord, STREAMS, STREAM_CLASSES, StudentStream, StudentDoc } from '../../../types/principal.types';
+import { Student, CreateStudentInput, StudentAcademicRecord, STREAMS, STREAM_CLASSES, StudentStream, StudentDoc } from '../../../types/principal.types';
 import { PaymentStatus, PAYMENT_COLORS } from '../../../config/constants';
 import { useUIStore } from '../../../store/uiStore';
 type ParentCredsView = { mobileNumber: string; password: string };
@@ -20,6 +21,12 @@ import {
 } from '../../../services/transport.service';
 import { storageService } from '../../../services/storage.service';
 import { StudentClassAssignmentModal } from './StudentClassAssignmentModal';
+import { useAcademicYear } from '../../../context/AcademicYearContext';
+import { principalService, FeeStructureRecord } from '../../../services/principal.service';
+import { useEditorModeStore } from '../../../store/editorModeStore';
+import { feeService, FeeInstallment } from '../../../services/fee.service';
+
+const PAGE_SIZE = 50;
 
 type MainView = 'MENU' | 'ADMISSION' | 'FEES' | 'CLASSES' | 'ARCHIVE';
 type SubView = 'LIST' | 'CREATE' | 'PROFILE' | 'CLASS_DETAIL' | 'SECTION_DETAIL';
@@ -74,6 +81,8 @@ const BLANK_FORM_WITH_PARENT: FormWithParent = {
 
 export const StudentsManager: React.FC<Props> = ({ onBack, initialView }) => {
   const { showToast } = useUIStore();
+  const { activeYear, academicYears } = useAcademicYear();
+  const editorModeActive = useEditorModeStore(s => s.isActive());
   const [mainView, setMainView] = useState<MainView>(initialView ?? 'CLASSES');
   const [subView, setSubView] = useState<SubView>('LIST');
   const [students, setStudents] = useState<Student[]>([]);
@@ -84,9 +93,11 @@ export const StudentsManager: React.FC<Props> = ({ onBack, initialView }) => {
   const [classFilter, setClassFilter] = useState<string>('ALL');
   const [form, setForm] = useState<FormWithParent>(BLANK_FORM_WITH_PARENT);
   const [isSubmitting, setIsSubmitting] = useState(false);
-  const [feeRecords, setFeeRecords] = useState<FeeRecord[]>([]);
+  const [feeInstallments, setFeeInstallments] = useState<FeeInstallment[]>([]);
+  const [studentFeeStructure, setStudentFeeStructure] = useState<FeeStructureRecord | null>(null);
+  const [feePaymentHistory, setFeePaymentHistory] = useState<import('../../../services/fee.service').PaymentRecord[]>([]);
   const [academicRecord, setAcademicRecord] = useState<StudentAcademicRecord | null>(null);
-  const [activeProfileTab, setActiveProfileTab] = useState<'INFO' | 'FAMILY' | 'RESULTS' | 'FEES' | 'DOCS'>('INFO');
+  const [activeProfileTab, setActiveProfileTab] = useState<'INFO' | 'ALLOTMENT' | 'FAMILY' | 'RESULTS' | 'FEES' | 'DOCS'>('INFO');
   const [studentTransport, setStudentTransport] = useState<{ vehicle: TransportVehicle; assignment: StudentTransportAssignment } | null>(null);
   const [studentTransportHistory, setStudentTransportHistory] = useState<StudentTransportAssignment[]>([]);
   const [transportHistoryError, setTransportHistoryError] = useState<string | null>(null);
@@ -101,6 +112,10 @@ export const StudentsManager: React.FC<Props> = ({ onBack, initialView }) => {
   const [changeReasonNote, setChangeReasonNote] = useState('');
   const [changeBusy, setChangeBusy] = useState(false);
   const [changeError, setChangeError] = useState<string | null>(null);
+
+  const [showCountAdmission, setShowCountAdmission] = useState(PAGE_SIZE);
+  const [showCountArchive, setShowCountArchive] = useState(PAGE_SIZE);
+  const [showCountFees, setShowCountFees] = useState(PAGE_SIZE);
 
   // Cancel-transport modal
   const [cancelTransportOpen, setCancelTransportOpen] = useState(false);
@@ -132,12 +147,25 @@ export const StudentsManager: React.FC<Props> = ({ onBack, initialView }) => {
   const [archiveCounts, setArchiveCounts] = useState<Record<ArchiveTab, number>>({
     ACTIVE: 0, INACTIVE: 0, TC_ISSUED: 0, ALUMNI: 0, UNASSIGNED: 0,
   });
+
+  // DB-backed sections for the active academic year (includes empty sections)
+  type DbSection = {
+    id: string; className: string; section: string;
+    studentCount: number; capacity: number;
+    classTeacher: string | null; stream: string | null;
+  };
+  const [dbSections, setDbSections] = useState<DbSection[]>([]);
   const [assignTarget, setAssignTarget] = useState<Student | null>(null);
   const [tcModal, setTcModal] = useState<{ student: Student; tcNumber: string; reason: string } | null>(null);
   const [profileDocsLive, setProfileDocsLive] = useState<StudentDoc[]>([]);
   const [profileDocUploading, setProfileDocUploading] = useState<DocumentUpload['type'] | null>(null);
 
-  useEffect(() => { studentService.getAll().then(setStudents); }, []);
+  useEffect(() => { void studentService.getAll().then(setStudents); }, [activeYear?.id]);
+  useEffect(() => {
+    if (!activeYear?.id) { setDbSections([]); return; }
+    void principalService.getSectionsForYear(activeYear.id)
+      .then(setDbSections).catch(() => setDbSections([]));
+  }, [activeYear?.id]);
   useEffect(() => { schoolInfoService.get().then(setSchoolInfo).catch(() => setSchoolInfo(null)); }, []);
 
   const refreshArchive = React.useCallback(async () => {
@@ -166,8 +194,12 @@ export const StudentsManager: React.FC<Props> = ({ onBack, initialView }) => {
   }, [archiveTab, showToast]);
 
   useEffect(() => {
-    if (mainView === 'ARCHIVE') refreshArchive();
-  }, [mainView, refreshArchive]);
+    if (mainView === 'ARCHIVE') void refreshArchive();
+  }, [mainView, refreshArchive, activeYear?.id]);
+
+  useEffect(() => { setShowCountAdmission(PAGE_SIZE); }, [search]);
+  useEffect(() => { setShowCountArchive(PAGE_SIZE); }, [search, archiveTab]);
+  useEffect(() => { setShowCountFees(PAGE_SIZE); }, [search, classFilter]);
 
   const loadStudentData = async (student: Student) => {
     // Fetch docs from `student_documents` directly — getAll/getById return
@@ -179,18 +211,27 @@ export const StudentsManager: React.FC<Props> = ({ onBack, initialView }) => {
     // which would otherwise reject on the UUID cast) cannot blank the
     // whole profile.
     const hasYear = !!student.academicYearId;
-    const [feesRes, recordRes, docsRes] = await Promise.allSettled([
-      studentService.getFeeRecords(student.id),
+    const [feesRes, recordRes, docsRes, structuresRes, payRes] = await Promise.allSettled([
+      feeService.getStudentInstallmentsDirect(student.id, hasYear ? student.academicYearId : undefined),
       hasYear
         ? studentService.getAcademicRecord(student.id, student.academicYearId)
         : Promise.resolve(null),
       studentService.listDocuments(student.id),
+      principalService.getFeeStructures(),
+      (async () => {
+        await feeService.refreshAll();
+        return feeService.getPaymentHistory().filter(p => p.studentId === student.id);
+      })(),
     ]);
-    const fees = feesRes.status === 'fulfilled' ? feesRes.value : [];
+    const insts = feesRes.status === 'fulfilled' ? feesRes.value : [];
     const record = recordRes.status === 'fulfilled' ? recordRes.value : null;
     const docs = docsRes.status === 'fulfilled' ? docsRes.value : [];
-    setFeeRecords(fees);
+    const structures = structuresRes.status === 'fulfilled' ? structuresRes.value : [];
+    const payments = payRes.status === 'fulfilled' ? payRes.value : [];
+    setFeeInstallments(insts);
+    setStudentFeeStructure(structures.find(s => s.className === student.className) ?? null);
     setAcademicRecord(record);
+    setFeePaymentHistory(payments);
     setProfileDocsLive(docs);
     try {
       const assignment = transportService.getAssignmentForStudent(student.id);
@@ -274,11 +315,21 @@ export const StudentsManager: React.FC<Props> = ({ onBack, initialView }) => {
     }
   };
 
-  const handleMarkFeePaid = async (feeId: string) => {
-    await studentService.markFeePaid(feeId, `TXN-${Date.now()}`);
-    const updated = await studentService.getFeeRecords(selected!.id);
-    setFeeRecords(updated);
-    showToast('Payment marked as paid');
+  const handleMarkFeePaid = async (installment: FeeInstallment) => {
+    const due = installment.amount - installment.paidAmount - installment.writeOffAmount;
+    if (due <= 0) return;
+    try {
+      await feeService.refreshAll();
+      await feeService.recordPayment(installment.studentId, due, 'CASH');
+      const updated = await feeService.getStudentInstallmentsDirect(
+        installment.studentId,
+        selected?.academicYearId || undefined,
+      );
+      setFeeInstallments(updated);
+      showToast('Payment recorded');
+    } catch (e) {
+      showToast(e instanceof Error ? e.message : 'Payment failed', 'error');
+    }
   };
 
   const handleDocumentUpload = (e: React.ChangeEvent<HTMLInputElement>, docType: DocumentUpload['type']) => {
@@ -704,7 +755,7 @@ export const StudentsManager: React.FC<Props> = ({ onBack, initialView }) => {
 
         <div className="flex-1 overflow-y-auto p-4">
           <div className="space-y-2">
-            {filteredStudents.map(student => {
+            {filteredStudents.slice(0, showCountAdmission).map(student => {
               const initials = student.name.split(' ').map(w => w[0]).join('').slice(0, 2);
               return (
                 <button key={student.id}
@@ -717,14 +768,16 @@ export const StudentsManager: React.FC<Props> = ({ onBack, initialView }) => {
                     <div className="flex-1 min-w-0">
                       <div className="font-extrabold text-slate-900 text-sm truncate">{student.name}</div>
                       <div className="flex items-center gap-2 mt-0.5">
-                        <span className="text-[10px] font-bold text-slate-400">{student.className}-{student.section}</span>
+                        <span className="text-[10px] font-bold text-slate-400">
+                          {student.className ? `${student.className}·${student.section}` : 'Unassigned'}
+                        </span>
                         <span className="text-[9px] font-bold text-slate-300">·</span>
                         <span className="text-[10px] font-bold text-indigo-500">{student.admissionNo}</span>
                       </div>
                     </div>
                     <div className="flex flex-col items-end gap-1">
                       <span className={`text-[9px] font-black px-2 py-0.5 rounded-full uppercase ${
-                        student.feeStatus === 'PAID' ? 'bg-emerald-100 text-emerald-700' :
+                        student.feeStatus === PaymentStatus.PAID ? 'bg-emerald-100 text-emerald-700' :
                         student.feeStatus === 'PARTIAL' ? 'bg-amber-100 text-amber-700' :
                         'bg-rose-100 text-rose-600'
                       }`}>
@@ -742,6 +795,17 @@ export const StudentsManager: React.FC<Props> = ({ onBack, initialView }) => {
                 <p className="font-bold text-sm">{search ? 'No students found' : 'No students admitted yet'}</p>
                 {!search && <p className="text-xs font-bold mt-1 opacity-60">Tap New to admit the first student</p>}
               </div>
+            )}
+            {showCountAdmission < filteredStudents.length && (
+              <button onClick={() => setShowCountAdmission(c => c + PAGE_SIZE)}
+                className="w-full py-3 mt-2 bg-white border border-slate-200 rounded-2xl text-xs font-black text-slate-500 uppercase tracking-widest active:scale-95 transition-transform">
+                Load More ({filteredStudents.length - showCountAdmission} remaining)
+              </button>
+            )}
+            {showCountAdmission >= filteredStudents.length && filteredStudents.length > PAGE_SIZE && (
+              <p className="text-center text-[9px] font-bold text-slate-300 py-3">
+                All {filteredStudents.length} students shown
+              </p>
             )}
           </div>
         </div>
@@ -823,7 +887,7 @@ export const StudentsManager: React.FC<Props> = ({ onBack, initialView }) => {
             </div>
           )}
           <div className="space-y-2">
-            {filtered.map(student => {
+            {filtered.slice(0, showCountArchive).map(student => {
               const initials = student.name.split(' ').map(w => w[0]).join('').slice(0, 2);
               const isUnassigned = !student.className;
               return (
@@ -882,6 +946,17 @@ export const StudentsManager: React.FC<Props> = ({ onBack, initialView }) => {
                 </div>
               );
             })}
+            {showCountArchive < filtered.length && (
+              <button onClick={() => setShowCountArchive(c => c + PAGE_SIZE)}
+                className="w-full py-3 mt-2 bg-white border border-slate-200 rounded-2xl text-xs font-black text-slate-500 uppercase tracking-widest active:scale-95 transition-transform">
+                Load More ({filtered.length - showCountArchive} remaining)
+              </button>
+            )}
+            {showCountArchive >= filtered.length && filtered.length > PAGE_SIZE && (
+              <p className="text-center text-[9px] font-bold text-slate-300 py-3">
+                All {filtered.length} students shown
+              </p>
+            )}
           </div>
         </div>
 
@@ -980,7 +1055,7 @@ export const StudentsManager: React.FC<Props> = ({ onBack, initialView }) => {
           </div>
 
           <div className="space-y-2">
-            {filteredFees.map(student => (
+            {filteredFees.slice(0, showCountFees).map(student => (
               <button key={student.id}
                 onClick={() => { setSelected(student); loadStudentData(student); setActiveProfileTab('FEES'); setSubView('PROFILE'); }}
                 className="w-full bg-white rounded-2xl border border-slate-100 shadow-sm p-4 text-left active:bg-slate-50 transition-colors">
@@ -990,7 +1065,9 @@ export const StudentsManager: React.FC<Props> = ({ onBack, initialView }) => {
                   </div>
                   <div className="flex-1">
                     <div className="font-extrabold text-slate-900 text-sm">{student.name}</div>
-                    <div className="text-[10px] font-bold text-slate-400 mt-0.5">{student.className}-{student.section} · ₹{((student.totalFee - student.paidFee) / 1000).toFixed(0)}K due</div>
+                    <div className="text-[10px] font-bold text-slate-400 mt-0.5">
+                      {student.className ? `${student.className}-${student.section}` : 'Unassigned'} · ₹{((student.totalFee - student.paidFee) / 1000).toFixed(0)}K due
+                    </div>
                   </div>
                   <span className={`text-[9px] font-black px-2 py-0.5 rounded-full uppercase ${PAYMENT_COLORS[student.feeStatus]}`}>
                     {student.feeStatus}
@@ -998,6 +1075,17 @@ export const StudentsManager: React.FC<Props> = ({ onBack, initialView }) => {
                 </div>
               </button>
             ))}
+            {showCountFees < filteredFees.length && (
+              <button onClick={() => setShowCountFees(c => c + PAGE_SIZE)}
+                className="w-full py-3 mt-2 bg-white border border-slate-200 rounded-2xl text-xs font-black text-slate-500 uppercase tracking-widest active:scale-95 transition-transform">
+                Load More ({filteredFees.length - showCountFees} remaining)
+              </button>
+            )}
+            {showCountFees >= filteredFees.length && filteredFees.length > PAGE_SIZE && (
+              <p className="text-center text-[9px] font-bold text-slate-300 py-3">
+                All {filteredFees.length} students shown
+              </p>
+            )}
           </div>
         </div>
       </div>
@@ -1007,10 +1095,30 @@ export const StudentsManager: React.FC<Props> = ({ onBack, initialView }) => {
   // ─── CLASSES (Class → Section → Students) ────────────────────────────────
 
   if (!renderProfile && mainView === 'CLASSES') {
-    const classes = [...new Set(students.map(s => s.className))].sort();
-    const sections = selectedClass
-      ? [...new Set(students.filter(s => s.className === selectedClass).map(s => s.section))].sort()
+    // Sort helper: Pre-KG → LKG → UKG → Class 1 … Class 12
+    const sortClassNames = (a: string, b: string) => {
+      const order = ['Pre-KG', 'LKG', 'UKG'];
+      const ia = order.indexOf(a), ib = order.indexOf(b);
+      if (ia !== -1 && ib !== -1) return ia - ib;
+      if (ia !== -1) return -1;
+      if (ib !== -1) return 1;
+      return (parseInt(a.replace('Class ', ''), 10) || 0) - (parseInt(b.replace('Class ', ''), 10) || 0);
+    };
+
+    // Class list: use DB sections (shows classes even if no students assigned yet)
+    // Falls back to student-derived list when DB sections haven't loaded.
+    const classNames: string[] = dbSections.length
+      ? [...new Set<string>(dbSections.map(s => s.className))].sort(sortClassNames)
+      : [...new Set<string>(students.map(s => s.className).filter(Boolean) as string[])].sort(sortClassNames);
+
+    // Sections for selected class: from DB (includes empty/unfilled sections)
+    const classSections: DbSection[] = selectedClass
+      ? dbSections.length
+        ? dbSections.filter(s => s.className === selectedClass).sort((a, b) => a.section.localeCompare(b.section))
+        : [...new Set(students.filter(s => s.className === selectedClass).map(s => s.section))].sort()
+            .map(sec => ({ id: sec, className: selectedClass, section: sec, studentCount: 0, capacity: 45, classTeacher: null, stream: null }))
       : [];
+
     const classStudents = selectedClass && selectedSection
       ? students.filter(s => s.className === selectedClass && s.section === selectedSection)
       : [];
@@ -1021,6 +1129,7 @@ export const StudentsManager: React.FC<Props> = ({ onBack, initialView }) => {
         s.name.toLowerCase().includes(search.toLowerCase()) ||
         s.rollNo.includes(search)
       );
+      const secMeta = classSections.find(s => s.section === selectedSection);
 
       return (
         <div className="w-full bg-slate-50 flex flex-col animate-in slide-in-from-right-8 duration-300">
@@ -1033,7 +1142,10 @@ export const StudentsManager: React.FC<Props> = ({ onBack, initialView }) => {
                 <h2 className="text-xl font-black text-slate-900 uppercase tracking-tight">
                   {selectedClass.replace('Class ', '')}-{selectedSection}
                 </h2>
-                <p className="text-[10px] font-bold text-slate-400">{classStudents.length} students</p>
+                <p className="text-[10px] font-bold text-slate-400">
+                  {classStudents.length}{secMeta?.capacity ? `/${secMeta.capacity}` : ''} students
+                  {secMeta?.classTeacher ? ` · ${secMeta.classTeacher}` : ''}
+                </p>
               </div>
             </div>
             <div className="relative">
@@ -1046,12 +1158,14 @@ export const StudentsManager: React.FC<Props> = ({ onBack, initialView }) => {
 
           <div className="flex-1 overflow-y-auto p-4">
             <div className="bg-white rounded-2xl border border-slate-100 shadow-sm overflow-hidden">
-              {filteredClassStudents.map((s, idx) => (
+              {filteredClassStudents
+                .sort((a, b) => (parseInt(a.rollNo, 10) || 0) - (parseInt(b.rollNo, 10) || 0))
+                .map((s, idx) => (
                 <button key={s.id}
-                  onClick={() => { setSelected(s); loadStudentData(s); setActiveProfileTab('INFO'); setSubView('PROFILE'); }}
+                  onClick={() => { setSelected(s); void loadStudentData(s); setActiveProfileTab('INFO'); setSubView('PROFILE'); }}
                   className={`w-full flex items-center gap-4 px-4 py-3.5 text-left active:bg-slate-50 transition-colors ${idx < filteredClassStudents.length - 1 ? 'border-b border-slate-100' : ''}`}>
                   <div className="w-10 h-10 rounded-full bg-indigo-100 text-indigo-700 flex items-center justify-center font-black text-sm shrink-0">
-                    {s.name.split(' ').map(w => w[0]).join('').slice(0, 2)}
+                    {s.name.split(' ').map((w: string) => w[0]).join('').slice(0, 2)}
                   </div>
                   <div className="flex-1">
                     <div className="font-extrabold text-slate-900 text-sm">{s.name}</div>
@@ -1068,7 +1182,7 @@ export const StudentsManager: React.FC<Props> = ({ onBack, initialView }) => {
               {filteredClassStudents.length === 0 && (
                 <div className="flex flex-col items-center py-10 text-slate-400">
                   <Users size={28} className="mb-2 opacity-40" />
-                  <p className="font-bold text-sm">No students found</p>
+                  <p className="font-bold text-sm">{search ? 'No students found' : 'No students assigned to this section'}</p>
                 </div>
               )}
             </div>
@@ -1088,41 +1202,56 @@ export const StudentsManager: React.FC<Props> = ({ onBack, initialView }) => {
             </button>
             <div>
               <h2 className="text-xl font-black text-slate-900 uppercase tracking-tight">Class {clsNum}</h2>
-              <p className="text-[10px] font-bold text-slate-400">{sections.length} section{sections.length !== 1 ? 's' : ''}</p>
+              <p className="text-[10px] font-bold text-slate-400">{classSections.length} section{classSections.length !== 1 ? 's' : ''}</p>
             </div>
           </div>
 
           <div className="flex-1 overflow-y-auto p-4">
             <div className="bg-white rounded-2xl border border-slate-100 shadow-sm overflow-hidden">
-              {sections.map((section, idx) => {
-                const count = students.filter(s => s.className === selectedClass && s.section === section).length;
-                const sectionStudents = students.filter(s => s.className === selectedClass && s.section === section);
-                const highAtt = sectionStudents.filter(s => s.attendancePercent >= 75).length;
+              {classSections.map((sec, idx) => {
+                const liveCount = students.filter(s => s.className === selectedClass && s.section === sec.section).length;
+                const highAtt = students.filter(s => s.className === selectedClass && s.section === sec.section && s.attendancePercent >= 75).length;
+                const isFull = sec.capacity > 0 && liveCount >= sec.capacity;
                 return (
-                  <button key={section}
-                    onClick={() => { setSelectedSection(section); setSearch(''); }}
-                    className={`w-full flex items-center gap-4 px-4 py-4 text-left active:bg-slate-50 transition-colors ${idx < sections.length - 1 ? 'border-b border-slate-100' : ''}`}>
+                  <button key={sec.id}
+                    onClick={() => { setSelectedSection(sec.section); setSearch(''); }}
+                    className={`w-full flex items-center gap-4 px-4 py-4 text-left active:bg-slate-50 transition-colors ${idx < classSections.length - 1 ? 'border-b border-slate-100' : ''}`}>
                     <div className="w-11 h-11 rounded-xl bg-indigo-100 text-indigo-700 flex items-center justify-center font-black text-lg shrink-0">
-                      {section}
+                      {sec.section}
                     </div>
-                    <div className="flex-1">
-                      <div className="font-extrabold text-slate-900 text-sm">{clsNum}-{section}</div>
-                      <div className="text-[10px] font-bold text-slate-400 mt-0.5">{count} students · {highAtt} good attendance</div>
+                    <div className="flex-1 min-w-0">
+                      <div className="font-extrabold text-slate-900 text-sm">{clsNum}-{sec.section}</div>
+                      <div className="flex flex-wrap items-center gap-x-1.5 mt-0.5">
+                        <span className="text-[10px] font-bold text-slate-400">
+                          {liveCount}{sec.capacity > 0 ? `/${sec.capacity}` : ''} enrolled
+                        </span>
+                        {highAtt > 0 && <span className="text-[9px] font-black text-emerald-600">· {highAtt} ≥75% att</span>}
+                        {sec.classTeacher && <span className="text-[9px] font-bold text-slate-400 truncate">· {sec.classTeacher}</span>}
+                      </div>
                     </div>
-                    <div className="bg-indigo-50 text-indigo-700 text-[10px] font-black px-2.5 py-1 rounded-lg">
-                      {count}
+                    <div className={`text-[10px] font-black px-2.5 py-1 rounded-lg shrink-0 ${
+                      isFull ? 'bg-rose-50 text-rose-600' : 'bg-indigo-50 text-indigo-700'
+                    }`}>
+                      {liveCount}
                     </div>
                     <ChevronRight size={16} className="text-slate-300" />
                   </button>
                 );
               })}
+              {classSections.length === 0 && (
+                <div className="flex flex-col items-center py-10 text-slate-400">
+                  <BookOpen size={28} className="mb-2 opacity-40" />
+                  <p className="font-bold text-sm">No sections configured</p>
+                  <p className="text-xs font-bold mt-1 opacity-60">Add sections in Academic Year setup</p>
+                </div>
+              )}
             </div>
           </div>
         </div>
       );
     }
 
-    // ── Class Directory (2×2 Grid) ─────────────────────────────────────────
+    // ── Class Directory ────────────────────────────────────────────────────
     return (
       <div className="w-full bg-slate-50 flex flex-col animate-in slide-in-from-right-8 duration-300">
         <div className="sticky top-0 z-10 bg-white border-b border-slate-100 shadow-sm">
@@ -1132,17 +1261,20 @@ export const StudentsManager: React.FC<Props> = ({ onBack, initialView }) => {
             </button>
             <div>
               <h2 className="text-xl font-black text-slate-900 uppercase tracking-tight">Students Directory</h2>
-              <p className="text-[10px] font-bold text-slate-400">{students.length} total students · {classes.length} classes</p>
+              <p className="text-[10px] font-bold text-slate-400">
+                {students.length} enrolled · {classNames.length} class{classNames.length !== 1 ? 'es' : ''}
+              </p>
             </div>
           </div>
         </div>
 
         <div className="flex-1 overflow-y-auto p-4">
           <div className="grid grid-cols-2 gap-3">
-            {classes.map(cls => {
+            {classNames.map(cls => {
               const count = students.filter(s => s.className === cls).length;
               const clsNum = cls.replace('Class ', '');
-              const paid = students.filter(s => s.className === cls && s.feeStatus === 'PAID').length;
+              const paid = students.filter(s => s.className === cls && s.feeStatus === PaymentStatus.PAID).length;
+              const numSections = dbSections.filter(s => s.className === cls).length;
               return (
                 <button key={cls}
                   onClick={() => { setSelectedClass(cls); setSearch(''); }}
@@ -1151,20 +1283,24 @@ export const StudentsManager: React.FC<Props> = ({ onBack, initialView }) => {
                     {clsNum}
                   </div>
                   <div className="font-black text-slate-900 text-sm">{cls}</div>
-                  <div className="flex items-center gap-2 mt-1">
-                    <span className="text-[10px] font-black text-slate-400">{count} students</span>
-                    {paid > 0 && <span className="text-[9px] font-black text-emerald-600 bg-emerald-50 px-1.5 py-0.5 rounded-full">{paid} paid</span>}
+                  <div className="text-[10px] font-bold text-slate-400 mt-0.5">
+                    {numSections > 0 ? `${numSections} sec · ` : ''}{count} students
                   </div>
+                  {paid > 0 && (
+                    <span className="inline-block mt-1 text-[9px] font-black text-emerald-600 bg-emerald-50 px-1.5 py-0.5 rounded-full">
+                      {paid} paid
+                    </span>
+                  )}
                 </button>
               );
             })}
           </div>
 
-          {classes.length === 0 && (
+          {classNames.length === 0 && (
             <div className="flex flex-col items-center py-16 text-slate-400">
               <Users size={32} className="mb-3 opacity-40" />
-              <p className="font-bold text-sm">No students yet</p>
-              <p className="text-xs font-bold mt-1 opacity-60">Add students via Admission section</p>
+              <p className="font-bold text-sm">No classes yet</p>
+              <p className="text-xs font-bold mt-1 opacity-60">Create classes in the Academic Year setup</p>
             </div>
           )}
         </div>
@@ -1200,11 +1336,12 @@ export const StudentsManager: React.FC<Props> = ({ onBack, initialView }) => {
     );
 
     const tabList = [
-      { key: 'INFO' as const,    label: 'Info' },
-      { key: 'FAMILY' as const,  label: 'Family' },
-      { key: 'RESULTS' as const, label: 'Results' },
-      { key: 'FEES' as const,    label: 'Fees' },
-      { key: 'DOCS' as const,    label: 'Docs' },
+      { key: 'INFO' as const,       label: 'Info' },
+      { key: 'ALLOTMENT' as const,  label: 'Allotment' },
+      { key: 'FAMILY' as const,     label: 'Family' },
+      { key: 'RESULTS' as const,    label: 'Results' },
+      { key: 'FEES' as const,       label: 'Fees' },
+      { key: 'DOCS' as const,       label: 'Docs' },
     ];
 
     return (
@@ -1243,11 +1380,13 @@ export const StudentsManager: React.FC<Props> = ({ onBack, initialView }) => {
                   <p className="text-[10px] font-bold text-white/60 mt-0.5">{selected.admissionNo}</p>
                   <div className="flex flex-wrap gap-1.5 mt-2">
                     <span className="text-[9px] font-black bg-white/20 text-white px-2 py-0.5 rounded-full">
-                      {selected.className}-{selected.section}
+                      {selected.className ? `${selected.className}-${selected.section}` : 'Unassigned'}
                     </span>
-                    <span className="text-[9px] font-black bg-white/20 text-white px-2 py-0.5 rounded-full">
-                      Roll #{selected.rollNo}
-                    </span>
+                    {selected.rollNo && (
+                      <span className="text-[9px] font-black bg-white/20 text-white px-2 py-0.5 rounded-full">
+                        Roll #{selected.rollNo}
+                      </span>
+                    )}
                     {selected.stream && (
                       <span className="text-[9px] font-black bg-white/20 text-white px-2 py-0.5 rounded-full">
                         {selected.stream}
@@ -1286,16 +1425,21 @@ export const StudentsManager: React.FC<Props> = ({ onBack, initialView }) => {
 
           {/* Tabs */}
           <div className="flex gap-1 overflow-x-auto hide-scrollbar px-4 pb-3">
-            {tabList.map(({ key, label }) => (
-              <button key={key} onClick={() => setActiveProfileTab(key)}
-                className={`flex-shrink-0 px-4 py-1.5 rounded-full text-[11px] font-black uppercase tracking-widest transition-all ${
-                  activeProfileTab === key
-                    ? 'bg-indigo-600 text-white shadow-md'
-                    : 'bg-slate-100 text-slate-500 border border-slate-200'
-                }`}>
-                {label}
-              </button>
-            ))}
+            {tabList.map(({ key, label }) => {
+              const isAllotment = key === 'ALLOTMENT';
+              const locked = isAllotment && !!selected.className && !editorModeActive;
+              return (
+                <button key={key} onClick={() => setActiveProfileTab(key)}
+                  className={`flex-shrink-0 flex items-center gap-1 px-4 py-1.5 rounded-full text-[11px] font-black uppercase tracking-widest transition-all ${
+                    activeProfileTab === key
+                      ? 'bg-indigo-600 text-white shadow-md'
+                      : 'bg-slate-100 text-slate-500 border border-slate-200'
+                  }`}>
+                  {locked && <Lock size={8} className={activeProfileTab === key ? 'text-white/70' : 'text-slate-400'} />}
+                  {label}
+                </button>
+              );
+            })}
           </div>
         </div>
 
@@ -1330,11 +1474,11 @@ export const StudentsManager: React.FC<Props> = ({ onBack, initialView }) => {
                   <SectionTitle icon={GraduationCap} title="Academic Details" />
                   <div className="space-y-0">
                     <ProfileField label="Admission No." value={selected.admissionNo} />
-                    <ProfileField label="Roll Number" value={selected.rollNo} />
-                    <ProfileField label="Class & Section" value={`${selected.className} – ${selected.section}`} />
+                    <ProfileField label="Roll Number" value={selected.rollNo || '—'} />
+                    <ProfileField label="Class & Section" value={selected.className ? `${selected.className} – ${selected.section}` : 'Unassigned'} />
                     {selected.stream && <ProfileField label="Stream" value={selected.stream} />}
+                    <ProfileField label="Academic Year" value={academicYears.find(y => y.id === selected.academicYearId)?.name ?? (selected.academicYearId ? 'Unknown Year' : 'Not assigned')} />
                     <ProfileField label="Admission Date" value={fmtAdm} />
-                    <ProfileField label="Academic Year" value={selected.academicYearId} />
                   </div>
                 </div>
 
@@ -1371,6 +1515,123 @@ export const StudentsManager: React.FC<Props> = ({ onBack, initialView }) => {
             )}
 
             {/* ── FAMILY TAB ───────────────────────────── */}
+            {/* ── ALLOTMENT TAB ─────────────────────────────── */}
+            {activeProfileTab === 'ALLOTMENT' && (
+              <>
+                {/* ── Class / Section / Roll ── */}
+                <div className="bg-white rounded-2xl border border-slate-100 shadow-sm p-4">
+                  <SectionTitle icon={GraduationCap} title="Class Allotment" />
+
+                  {selected.className ? (
+                    <>
+                      <div className="grid grid-cols-3 gap-2 mb-4">
+                        <div className="bg-indigo-50 rounded-xl p-3 text-center">
+                          <div className="text-base font-black text-indigo-700">{selected.className.replace('Class ', '')}</div>
+                          <div className="text-[9px] font-bold text-indigo-400 mt-0.5">Class</div>
+                        </div>
+                        <div className="bg-violet-50 rounded-xl p-3 text-center">
+                          <div className="text-base font-black text-violet-700">{selected.section || '—'}</div>
+                          <div className="text-[9px] font-bold text-violet-400 mt-0.5">Section</div>
+                        </div>
+                        <div className="bg-emerald-50 rounded-xl p-3 text-center">
+                          <div className="text-base font-black text-emerald-700">{selected.rollNo || '—'}</div>
+                          <div className="text-[9px] font-bold text-emerald-400 mt-0.5">Roll No</div>
+                        </div>
+                      </div>
+
+                      {/* Lock / Edit based on editor mode */}
+                      {editorModeActive ? (
+                        <button
+                          onClick={() => setAssignTarget(selected)}
+                          className="w-full flex items-center justify-center gap-2 px-4 py-2.5 bg-amber-500 text-white text-[11px] font-black rounded-xl active:scale-95 transition-transform">
+                          <Edit2 size={13} /> Re-assign Class (Editor Mode)
+                        </button>
+                      ) : (
+                        <div className="flex items-center gap-3 px-3 py-3 bg-slate-50 border border-slate-200 rounded-xl">
+                          <Lock size={14} className="text-slate-400 shrink-0" />
+                          <p className="text-[10px] font-bold text-slate-500 leading-snug">
+                            Assignment locked. Go to <span className="text-indigo-600">Settings → Editor Mode</span> to re-assign.
+                          </p>
+                        </div>
+                      )}
+                    </>
+                  ) : (
+                    <>
+                      <div className="flex items-center gap-2 px-3 py-3 bg-amber-50 border border-amber-200 rounded-xl mb-3">
+                        <AlertTriangle size={14} className="text-amber-500 shrink-0" />
+                        <p className="text-[10px] font-bold text-amber-700">Student not assigned to any class yet.</p>
+                      </div>
+                      <button
+                        onClick={() => setAssignTarget(selected)}
+                        className="w-full flex items-center justify-center gap-2 px-4 py-2.5 bg-indigo-600 text-white text-[11px] font-black rounded-xl active:scale-95 transition-transform">
+                        <UserCheck size={13} /> Assign to Class
+                      </button>
+                    </>
+                  )}
+                </div>
+
+                {/* ── Fee Summary ── */}
+                <div className="bg-white rounded-2xl border border-slate-100 shadow-sm p-4">
+                  <SectionTitle icon={IndianRupee} title="Fee Allotment" />
+                  <div className="grid grid-cols-3 gap-2">
+                    <div className="bg-slate-50 rounded-xl p-3 text-center">
+                      <div className="text-sm font-black text-slate-700">₹{(selected.totalFee / 1000).toFixed(0)}K</div>
+                      <div className="text-[9px] font-bold text-slate-400 mt-0.5">Total</div>
+                    </div>
+                    <div className="bg-emerald-50 rounded-xl p-3 text-center">
+                      <div className="text-sm font-black text-emerald-700">₹{(selected.paidFee / 1000).toFixed(0)}K</div>
+                      <div className="text-[9px] font-bold text-emerald-400 mt-0.5">Paid</div>
+                    </div>
+                    <div className="bg-rose-50 rounded-xl p-3 text-center">
+                      <div className="text-sm font-black text-rose-600">₹{((selected.totalFee - selected.paidFee) / 1000).toFixed(0)}K</div>
+                      <div className="text-[9px] font-bold text-rose-400 mt-0.5">Due</div>
+                    </div>
+                  </div>
+                  {selected.totalFee === 0 && (
+                    <p className="text-[10px] font-bold text-slate-400 mt-3 text-center">
+                      Fee schedule is generated when class is assigned.
+                    </p>
+                  )}
+                </div>
+
+                {/* ── Transport Allotment ── */}
+                <div className="bg-white rounded-2xl border border-slate-100 shadow-sm p-4">
+                  <SectionTitle icon={Bus} title="Vehicle Allotment" />
+                  {studentTransport ? (
+                    <>
+                      <div className="space-y-0 mb-3">
+                        <ProfileField label="Vehicle No." value={studentTransport.vehicle.vehicleNo} />
+                        <ProfileField label="Route" value={studentTransport.vehicle.routeName || '—'} />
+                        {studentTransport.assignment.boardingStopName && (
+                          <ProfileField label="Stop" value={studentTransport.assignment.boardingStopName} />
+                        )}
+                        <ProfileField label="Monthly" value={`₹${studentTransport.assignment.monthlyAmount}`} />
+                      </div>
+                      {editorModeActive ? (
+                        <button onClick={openChangeTransportModal}
+                          className="w-full flex items-center justify-center gap-2 px-4 py-2 bg-amber-500 text-white text-[11px] font-black rounded-xl active:scale-95">
+                          <Edit2 size={13} /> Change Transport (Editor Mode)
+                        </button>
+                      ) : (
+                        <div className="flex items-center gap-3 px-3 py-3 bg-slate-50 border border-slate-200 rounded-xl">
+                          <Lock size={14} className="text-slate-400 shrink-0" />
+                          <p className="text-[10px] font-bold text-slate-500">Enable Editor Mode to change transport.</p>
+                        </div>
+                      )}
+                    </>
+                  ) : (
+                    <>
+                      <p className="text-[10px] font-bold text-slate-400 mb-3">No transport assigned.</p>
+                      <button onClick={openChangeTransportModal}
+                        className="w-full flex items-center justify-center gap-2 px-4 py-2.5 bg-indigo-600 text-white text-[11px] font-black rounded-xl active:scale-95">
+                        <Bus size={13} /> Assign Transport
+                      </button>
+                    </>
+                  )}
+                </div>
+              </>
+            )}
+
             {activeProfileTab === 'FAMILY' && (
               <>
                 {/* Father */}
@@ -1517,78 +1778,183 @@ export const StudentsManager: React.FC<Props> = ({ onBack, initialView }) => {
             )}
 
             {/* ── FEES TAB ─────────────────────────────── */}
-            {activeProfileTab === 'FEES' && (
-              <>
-                {/* Summary */}
-                <div className="bg-gradient-to-br from-slate-800 to-slate-900 rounded-2xl p-5 text-white">
-                  <p className="text-[9px] font-black uppercase tracking-widest text-white/50 mb-3">Fee Overview</p>
-                  <div className="grid grid-cols-3 gap-3 text-center">
-                    <div>
-                      <div className="text-xl font-black text-white">₹{(selected.totalFee / 1000).toFixed(0)}K</div>
-                      <div className="text-[8px] font-bold text-white/40 uppercase mt-0.5">Total</div>
-                    </div>
-                    <div>
-                      <div className="text-xl font-black text-emerald-400">₹{(selected.paidFee / 1000).toFixed(0)}K</div>
-                      <div className="text-[8px] font-bold text-white/40 uppercase mt-0.5">Paid</div>
-                    </div>
-                    <div>
-                      <div className="text-xl font-black text-rose-400">₹{((selected.totalFee - selected.paidFee) / 1000).toFixed(0)}K</div>
-                      <div className="text-[8px] font-bold text-white/40 uppercase mt-0.5">Due</div>
-                    </div>
-                  </div>
-                  {/* Progress bar */}
-                  <div className="mt-4 bg-white/10 rounded-full h-2">
-                    <div className="h-2 rounded-full bg-emerald-400 transition-all"
-                      style={{ width: `${selected.totalFee > 0 ? Math.round((selected.paidFee / selected.totalFee) * 100) : 0}%` }} />
-                  </div>
-                  <div className="flex justify-between mt-1">
-                    <span className="text-[9px] font-bold text-white/40">0%</span>
-                    <span className="text-[9px] font-black text-emerald-400">
-                      {selected.totalFee > 0 ? Math.round((selected.paidFee / selected.totalFee) * 100) : 0}% paid
-                    </span>
-                    <span className="text-[9px] font-bold text-white/40">100%</span>
-                  </div>
-                </div>
+            {activeProfileTab === 'FEES' && (() => {
+              // Group installments by month (ordered by due_date via DB)
+              const instByMonth = feeInstallments.reduce<Record<string, FeeInstallment[]>>(
+                (acc, inst) => {
+                  const key = inst.month;
+                  if (!acc[key]) acc[key] = [];
+                  acc[key].push(inst);
+                  return acc;
+                }, {},
+              );
+              // Preserve due_date order: use the first installment's dueDate for sorting
+              const monthEntries = (Object.entries(instByMonth) as [string, FeeInstallment[]][]).sort(
+                ([, a], [, b]) => new Date(a[0].dueDate).getTime() - new Date(b[0].dueDate).getTime(),
+              );
 
-                {/* Records */}
-                {feeRecords.length === 0 ? (
-                  <div className="bg-white rounded-2xl border border-slate-100 shadow-sm flex flex-col items-center py-10 text-slate-400">
-                    <IndianRupee size={28} className="mb-2 opacity-40" />
-                    <p className="font-bold text-sm">No fee records</p>
-                  </div>
-                ) : (
-                  <div className="space-y-2">
-                    {feeRecords.map(fee => (
-                      <div key={fee.id} className="bg-white rounded-2xl border border-slate-100 shadow-sm p-4">
-                        <div className="flex items-start justify-between gap-3">
-                          <div className="flex-1">
-                            <div className="font-bold text-slate-800 text-sm">{fee.description}</div>
-                            <div className="text-[10px] font-bold text-slate-400 mt-0.5">Due: {fee.dueDate}</div>
-                            {fee.paidAt && (
-                              <div className="text-[10px] font-bold text-emerald-600 mt-0.5">Paid: {fee.paidAt}</div>
-                            )}
-                          </div>
-                          <div className="flex flex-col items-end gap-2 shrink-0">
-                            <span className="font-black text-slate-900 text-sm">₹{fee.amount.toLocaleString('en-IN')}</span>
-                            <span className={`text-[9px] font-black px-2 py-0.5 rounded-full uppercase ${
-                              fee.status === PaymentStatus.PAID ? 'bg-emerald-100 text-emerald-700' :
-                              fee.status === 'PARTIAL' ? 'bg-amber-100 text-amber-700' :
-                              'bg-rose-100 text-rose-600'
-                            }`}>{fee.status}</span>
-                            {fee.status !== PaymentStatus.PAID && (
-                              <button onClick={() => handleMarkFeePaid(fee.id)}
-                                className="text-[10px] font-black text-emerald-700 bg-emerald-50 border border-emerald-200 px-3 py-1 rounded-xl active:scale-95 transition-transform">
-                                Mark Paid
-                              </button>
-                            )}
-                          </div>
-                        </div>
+              const totalFee = feeInstallments.reduce((s, i) => s + i.amount, 0);
+              const totalPaid = feeInstallments.reduce((s, i) => s + i.paidAmount + i.writeOffAmount, 0);
+              const totalDue = Math.max(0, totalFee - totalPaid);
+              const pct = totalFee > 0 ? Math.round((totalPaid / totalFee) * 100) : 0;
+
+              const statusBadge = (status: string) => {
+                if (status === 'PAID') return 'bg-emerald-100 text-emerald-700';
+                if (status === 'PARTIAL') return 'bg-amber-100 text-amber-700';
+                if (status === 'WAIVED' || status === 'WRITTEN_OFF') return 'bg-slate-100 text-slate-500';
+                if (status === 'OVERDUE') return 'bg-rose-200 text-rose-700';
+                return 'bg-rose-100 text-rose-600';
+              };
+
+              return (
+                <>
+                  {/* Fee structure banner */}
+                  {studentFeeStructure && (
+                    <div className="bg-indigo-50 border border-indigo-100 rounded-2xl px-4 py-3 flex items-center gap-3">
+                      <IndianRupee size={16} className="text-indigo-500 shrink-0" />
+                      <div className="min-w-0">
+                        <div className="text-[10px] font-black uppercase tracking-widest text-indigo-500">Fee Structure</div>
+                        <div className="font-extrabold text-slate-800 text-sm truncate">{studentFeeStructure.name}</div>
+                        <div className="text-[10px] font-bold text-slate-400">{studentFeeStructure.className} · {studentFeeStructure.billingCycle}</div>
                       </div>
-                    ))}
+                    </div>
+                  )}
+
+                  {/* Summary card */}
+                  <div className="bg-gradient-to-br from-slate-800 to-slate-900 rounded-2xl p-5 text-white">
+                    <p className="text-[9px] font-black uppercase tracking-widest text-white/50 mb-3">Fee Overview · {selected.className || 'Unassigned'}</p>
+                    <div className="grid grid-cols-3 gap-3 text-center">
+                      <div>
+                        <div className="text-xl font-black text-white">₹{(totalFee / 1000).toFixed(1)}K</div>
+                        <div className="text-[8px] font-bold text-white/40 uppercase mt-0.5">Total</div>
+                      </div>
+                      <div>
+                        <div className="text-xl font-black text-emerald-400">₹{(totalPaid / 1000).toFixed(1)}K</div>
+                        <div className="text-[8px] font-bold text-white/40 uppercase mt-0.5">Paid</div>
+                      </div>
+                      <div>
+                        <div className="text-xl font-black text-rose-400">₹{(totalDue / 1000).toFixed(1)}K</div>
+                        <div className="text-[8px] font-bold text-white/40 uppercase mt-0.5">Due</div>
+                      </div>
+                    </div>
+                    <div className="mt-4 bg-white/10 rounded-full h-2">
+                      <div className="h-2 rounded-full bg-emerald-400 transition-all" style={{ width: `${pct}%` }} />
+                    </div>
+                    <div className="flex justify-between mt-1">
+                      <span className="text-[9px] font-bold text-white/40">0%</span>
+                      <span className="text-[9px] font-black text-emerald-400">{pct}% paid</span>
+                      <span className="text-[9px] font-bold text-white/40">100%</span>
+                    </div>
                   </div>
-                )}
-              </>
-            )}
+
+
+
+                  {/* Fee payment history timeline */}
+                  <div className="bg-white rounded-2xl border border-slate-100 shadow-sm p-4">
+                    <SectionTitle icon={History} title="Fee Payment History" />
+                    {feePaymentHistory.length === 0 ? (
+                      <p className="text-xs font-bold text-slate-400">No payment entries yet</p>
+                    ) : (
+                      <div className="space-y-2">
+                        {feePaymentHistory.slice(0, 20).map(p => (
+                          <div key={p.id} className="rounded-xl border border-slate-100 bg-slate-50 px-3 py-2">
+                            <div className="flex items-center justify-between gap-2">
+                              <div>
+                                <p className="text-xs font-black text-slate-800">₹{p.amount.toLocaleString('en-IN')} · {p.method}</p>
+                                <p className="text-[10px] font-bold text-slate-500">{p.date} · Receipt {p.receiptNo}</p>
+                              </div>
+                              {p.advanceAmount > 0 && (
+                                <span className="text-[9px] font-black bg-indigo-100 text-indigo-700 px-2 py-0.5 rounded-full">Advance ₹{p.advanceAmount.toLocaleString('en-IN')}</span>
+                              )}
+                            </div>
+                            {p.installmentDetails.length > 0 && (
+                              <p className="text-[10px] font-bold text-slate-500 mt-1">
+                                {p.installmentDetails.map(d => `${d.month} ${d.feeType}`).join(' · ')}
+                              </p>
+                            )}
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+
+                  {/* Installments grouped by month */}
+                  {feeInstallments.length === 0 ? (
+                    <div className="bg-white rounded-2xl border border-slate-100 shadow-sm flex flex-col items-center py-10 text-slate-400">
+                      <IndianRupee size={28} className="mb-2 opacity-40" />
+                      <p className="font-bold text-sm">No fee schedule for this year</p>
+                      {!selected.className && (
+                        <p className="text-xs font-bold mt-1 text-slate-400 opacity-60">Assign student to a class first</p>
+                      )}
+                      {selected.className && !studentFeeStructure && (
+                        <p className="text-xs font-bold mt-1 text-slate-400 opacity-60">No fee structure configured for {selected.className}</p>
+                      )}
+                    </div>
+                  ) : (
+                    <div className="space-y-3">
+                      {monthEntries.map(([month, insts]) => {
+                        const monthTotal = insts.reduce((s, i) => s + i.amount, 0);
+                        const monthPaid = insts.reduce((s, i) => s + i.paidAmount + i.writeOffAmount, 0);
+                        const monthDue = Math.max(0, monthTotal - monthPaid);
+                        const allPaid = insts.every(i => i.status === 'PAID' || i.status === 'WAIVED' || i.status === 'WRITTEN_OFF');
+                        return (
+                          <div key={month} className={`bg-white rounded-2xl border shadow-sm overflow-hidden ${allPaid ? 'border-emerald-100' : 'border-slate-100'}`}>
+                            {/* Month header */}
+                            <div className={`flex items-center justify-between px-4 py-2.5 ${allPaid ? 'bg-emerald-50' : 'bg-slate-50'}`}>
+                              <div className="flex items-center gap-2">
+                                <Calendar size={13} className={allPaid ? 'text-emerald-600' : 'text-slate-500'} />
+                                <span className="font-black text-slate-800 text-sm">{month}</span>
+                              </div>
+                              <div className="flex items-center gap-2">
+                                {allPaid
+                                  ? <span className="text-[9px] font-black text-emerald-700 bg-emerald-100 px-2 py-0.5 rounded-full">PAID</span>
+                                  : monthDue > 0 && (
+                                    <span className="text-[10px] font-black text-rose-600">₹{monthDue.toLocaleString('en-IN')} due</span>
+                                  )
+                                }
+                              </div>
+                            </div>
+                            {/* Fee heads */}
+                            <div className="divide-y divide-slate-50 px-4">
+                              {insts.map(inst => {
+                                const instDue = Math.max(0, inst.amount - inst.paidAmount - inst.writeOffAmount);
+                                return (
+                                  <div key={inst.id} className="flex items-center justify-between py-2.5 gap-3">
+                                    <div className="flex-1 min-w-0">
+                                      <div className="font-bold text-slate-700 text-sm capitalize">
+                                        {inst.feeType.replace('_', ' ').toLowerCase().replace(/\b\w/g, c => c.toUpperCase())}
+                                      </div>
+                                      <div className="text-[10px] font-bold text-slate-400">Due: {inst.dueDate}</div>
+                                    </div>
+                                    <div className="flex flex-col items-end gap-1 shrink-0">
+                                      <span className="font-black text-slate-900 text-sm">₹{inst.amount.toLocaleString('en-IN')}</span>
+                                      <span className={`text-[9px] font-black px-2 py-0.5 rounded-full uppercase ${statusBadge(inst.status)}`}>
+                                        {inst.status}
+                                      </span>
+                                      {instDue > 0 && (
+                                        <button onClick={() => handleMarkFeePaid(inst)}
+                                          className="text-[9px] font-black text-emerald-700 bg-emerald-50 border border-emerald-200 px-2.5 py-1 rounded-xl active:scale-95 transition-transform">
+                                          Collect ₹{instDue.toLocaleString('en-IN')}
+                                        </button>
+                                      )}
+                                    </div>
+                                  </div>
+                                );
+                              })}
+                            </div>
+                            {/* Month total */}
+                            <div className="flex items-center justify-between px-4 py-2 border-t border-slate-100 bg-slate-50/60">
+                              <span className="text-[10px] font-black uppercase tracking-wide text-slate-400">Month Total</span>
+                              <span className="font-black text-slate-700 text-sm">₹{monthTotal.toLocaleString('en-IN')}</span>
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  )}
+                </>
+              );
+            })()}
 
             {/* ── DOCS TAB ─────────────────────────────── */}
             {activeProfileTab === 'DOCS' && (
@@ -1876,6 +2242,24 @@ export const StudentsManager: React.FC<Props> = ({ onBack, initialView }) => {
             </div>
           );
         })()}
+
+        {/* ── Class Assignment Modal (accessible from profile) ────────── */}
+        {assignTarget && (
+          <StudentClassAssignmentModal
+            student={assignTarget}
+            onClose={() => setAssignTarget(null)}
+            onSuccess={async () => {
+              await refreshArchive();
+              const all = await studentService.getAll();
+              setStudents(all);
+              const refreshed = await studentService.getById(selected.id);
+              if (refreshed) {
+                setSelected(refreshed);
+                void loadStudentData(refreshed);
+              }
+            }}
+          />
+        )}
 
         {/* ── Cancel Transport modal ─────────────────────────────────── */}
         {cancelTransportOpen && (

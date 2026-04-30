@@ -1,8 +1,10 @@
 import React, { useState, useMemo } from 'react';
-import { ArrowLeft, Plus, Trash2, Save, ChevronDown, AlertCircle, RotateCcw, Zap } from 'lucide-react';
+import { ArrowLeft, Plus, Trash2, Save, ChevronDown, AlertCircle, RotateCcw, Zap, Calendar } from 'lucide-react';
 import { STREAMS, STREAM_CLASSES } from '../../../types/principal.types';
 
 // ─── Data Types ────────────────────────────────────────────────────────────────
+
+export type BillingCycle = 'MONTHLY' | 'QUARTERLY' | 'HALF_YEARLY' | 'ANNUALLY' | 'CUSTOM';
 
 export interface FeeHead {
   id: string;
@@ -29,6 +31,8 @@ export interface FeeStructureItem {
   id: string;
   name: string;
   className: string;
+  structureType: 'CLASS' | 'VEHICLE';
+  billingCycle: BillingCycle;
   feeHeads: FeeHead[];
   monthlyDueDates: MonthlyDueDate[];
   lateFee: LateFeeConfig;
@@ -41,6 +45,20 @@ const MONTH_INDEX: Record<string, number> = {
   Apr:4,May:5,Jun:6,Jul:7,Aug:8,Sep:9,Oct:10,Nov:11,Dec:12,Jan:1,Feb:2,Mar:3,
 };
 const CLASS_OPTIONS = ['Class 1','Class 2','Class 3','Class 4','Class 5','Class 6','Class 7','Class 8','Class 9','Class 10','Class 11','Class 12'];
+
+// Preset months per billing cycle. The first month of each "period" within the
+// academic year (Apr-start) is selected so installments are evenly spaced.
+const CYCLE_MONTHS: Record<Exclude<BillingCycle, 'CUSTOM'>, string[]> = {
+  MONTHLY:     ['Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec','Jan','Feb','Mar'],
+  QUARTERLY:   ['Apr','Jul','Oct','Jan'],
+  HALF_YEARLY: ['Apr','Oct'],
+  ANNUALLY:    ['Apr'],
+};
+
+const CYCLE_LABEL: Record<BillingCycle, string> = {
+  MONTHLY: 'Monthly', QUARTERLY: 'Quarterly', HALF_YEARLY: 'Half-Yearly',
+  ANNUALLY: 'Annually', CUSTOM: 'Custom',
+};
 
 const COMMON_FEE_HEADS = [
   { name: 'Tuition Fee', frequency: 'MONTHLY' as const },
@@ -61,20 +79,28 @@ const FREQ_LABEL: Record<string, string> = {
 
 function pad(n: number) { return n < 10 ? `0${n}` : `${n}`; }
 
-function buildDefaultDueDates(startDate: string): MonthlyDueDate[] {
+function buildDueDatesForMonths(startDate: string, months: string[]): MonthlyDueDate[] {
   const startYear = startDate ? parseInt(startDate.slice(0, 4)) : new Date().getFullYear();
-  return ACADEMIC_MONTHS.map(month => {
+  return months.map(month => {
     const mIdx = MONTH_INDEX[month];
     const year = mIdx >= 4 ? startYear : startYear + 1;
     return { month, date: `${year}-${pad(mIdx)}-10` };
   });
 }
 
-function calcAnnual(heads: FeeHead[]): number {
+// Given a billing cycle, return the months it covers. CUSTOM falls back to
+// any months caller already selected (so we don't wipe their picks).
+function monthsForCycle(cycle: BillingCycle, currentMonths: string[]): string[] {
+  if (cycle === 'CUSTOM') return currentMonths.length ? currentMonths : ['Apr'];
+  return CYCLE_MONTHS[cycle];
+}
+
+// Annual total: monthly heads bill once per selected month; annual / one-time
+// heads bill exactly once regardless of cycle.
+function calcAnnual(heads: FeeHead[], installmentCount: number): number {
   return heads.reduce((sum, h) => {
-    if (h.frequency === 'MONTHLY') return sum + h.amount * 12;
-    if (h.frequency === 'ANNUAL') return sum + h.amount;
-    return sum + h.amount; // ONE_TIME counted once
+    if (h.frequency === 'MONTHLY') return sum + h.amount * installmentCount;
+    return sum + h.amount;
   }, 0);
 }
 
@@ -100,7 +126,9 @@ export const FeeStructureForm: React.FC<Props> = ({
   const isEditing = !!initialData;
 
   const [name, setName] = useState(initialData?.name ?? '');
+  const [structureType, setStructureType] = useState<'CLASS'|'VEHICLE'>(initialData?.structureType ?? 'CLASS');
   const [className, setClassName] = useState(initialData?.className.split(' - ')[0] ?? 'Class 1');
+  const [allClasses, setAllClasses] = useState((initialData?.className ?? '') === 'ALL_CLASSES');
   const [stream, setStream] = useState(
     initialData?.className.includes(' - ') ? initialData.className.split(' - ')[1] : ''
   );
@@ -109,12 +137,45 @@ export const FeeStructureForm: React.FC<Props> = ({
     initialData?.feeHeads ?? [{ id: 'h1', name: 'Tuition Fee', amount: 0, frequency: 'MONTHLY', description: 'Monthly tuition charges' }]
   );
 
-  const defaultDates = useMemo(() => buildDefaultDueDates(activeYearStartDate), [activeYearStartDate]);
-  const [dueDates, setDueDates] = useState<MonthlyDueDate[]>(
-    initialData?.monthlyDueDates ?? defaultDates
+  const [billingCycle, setBillingCycleState] = useState<BillingCycle>(
+    initialData?.billingCycle ?? 'MONTHLY'
   );
 
+  const initialDueDates: MonthlyDueDate[] = useMemo(() => {
+    if (initialData?.monthlyDueDates?.length) return initialData.monthlyDueDates;
+    const months = monthsForCycle(initialData?.billingCycle ?? 'MONTHLY', []);
+    return buildDueDatesForMonths(activeYearStartDate, months);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+  const [dueDates, setDueDates] = useState<MonthlyDueDate[]>(initialDueDates);
+
   const [lateFee, setLateFee] = useState<LateFeeConfig>(initialData?.lateFee ?? BLANK_LATE_FEE);
+
+  // Switching cycle rebuilds the due-dates list. We preserve user-edited dates
+  // for any month that survives the switch so a custom date isn't lost on
+  // toggle (Apr → Apr stays put).
+  const setBillingCycle = (cycle: BillingCycle) => {
+    setBillingCycleState(cycle);
+    const months = monthsForCycle(cycle, dueDates.map(d => d.month));
+    const fresh = buildDueDatesForMonths(activeYearStartDate, months);
+    setDueDates(fresh.map(f => {
+      const prior = dueDates.find(d => d.month === f.month);
+      return prior ? prior : f;
+    }));
+  };
+
+  // For CUSTOM cycle: toggle a month on/off in the schedule.
+  const toggleCustomMonth = (month: string) => {
+    setDueDates(prev => {
+      const exists = prev.some(d => d.month === month);
+      if (exists) return prev.filter(d => d.month !== month);
+      const fresh = buildDueDatesForMonths(activeYearStartDate, [month])[0];
+      const next = [...prev, fresh];
+      // Keep academic order Apr → Mar
+      next.sort((a, b) => ACADEMIC_MONTHS.indexOf(a.month) - ACADEMIC_MONTHS.indexOf(b.month));
+      return next;
+    });
+  };
 
   // New fee head form
   const [newHeadName, setNewHeadName] = useState('');
@@ -129,8 +190,9 @@ export const FeeStructureForm: React.FC<Props> = ({
     ? `${className} - ${stream}`
     : className;
 
-  const annualTotal = calcAnnual(feeHeads);
+  const annualTotal = calcAnnual(feeHeads, dueDates.length);
   const hasMonthly = feeHeads.some(h => h.frequency === 'MONTHLY');
+  const installmentCount = dueDates.length;
 
   const handleAddHead = () => {
     if (!newHeadName.trim()) return;
@@ -157,16 +219,25 @@ export const FeeStructureForm: React.FC<Props> = ({
     setSelectedCommon('');
   };
 
-  const handleResetDates = () => setDueDates(defaultDates);
+  const handleResetDates = () => {
+    const months = monthsForCycle(billingCycle, dueDates.map(d => d.month));
+    setDueDates(buildDueDatesForMonths(activeYearStartDate, months));
+  };
 
   const handleSave = () => {
     if (!name.trim()) { alert('Fee structure name is required'); return; }
-    if (!fullClassName) { alert('Class is required'); return; }
+    if (structureType === 'CLASS' && !allClasses && !fullClassName) { alert('Class is required'); return; }
     if (STREAM_CLASSES.has(className) && !stream) { alert('Stream is required for Class 11 and 12'); return; }
+    if (hasMonthly && dueDates.length === 0) {
+      alert('Select at least one billing month for monthly fee heads');
+      return;
+    }
     onSave({
       id: initialData?.id ?? `fs${Date.now()}`,
       name: name.trim(),
-      className: fullClassName,
+      className: structureType === 'VEHICLE' ? 'TRANSPORT' : (allClasses ? 'ALL_CLASSES' : fullClassName),
+      structureType,
+      billingCycle,
       feeHeads,
       monthlyDueDates: dueDates,
       lateFee,
@@ -208,17 +279,26 @@ export const FeeStructureForm: React.FC<Props> = ({
           </div>
 
           <div>
-            <label className="block text-[10px] font-black uppercase tracking-widest text-slate-500 mb-1.5">Class *</label>
-            <select
+            <label className="block text-[10px] font-black uppercase tracking-widest text-slate-500 mb-1.5">Type *</label>
+            <select value={structureType} onChange={e => setStructureType(e.target.value as 'CLASS'|'VEHICLE')} className="w-full border border-slate-200 bg-slate-50 rounded-xl px-4 py-3 font-bold text-sm mb-2">
+              <option value="CLASS">Class Fee Structure</option>
+              <option value="VEHICLE">Vehicle/Transport Fee Structure</option>
+            </select>
+            <label className="block text-[10px] font-black uppercase tracking-widest text-slate-500 mb-1.5">Class (Optional)</label>
+            <label className="flex items-center gap-2 text-[11px] font-bold text-slate-600 mb-2">
+              <input type="checkbox" checked={allClasses} onChange={e => setAllClasses(e.target.checked)} />
+              Apply this structure to all classes
+            </label>
+            {!allClasses && (<select
               value={className}
               onChange={e => { setClassName(e.target.value); setStream(''); }}
               className="w-full border border-slate-200 bg-slate-50 rounded-xl px-3 py-3 font-bold text-sm outline-none focus:border-indigo-500"
             >
               {CLASS_OPTIONS.map(c => <option key={c}>{c}</option>)}
-            </select>
+            </select>)}
           </div>
 
-          {STREAM_CLASSES.has(className) && (
+          {!allClasses && STREAM_CLASSES.has(className) && (
             <div>
               <label className="block text-[10px] font-black uppercase tracking-widest text-slate-500 mb-1.5">Stream *</label>
               <div className="grid grid-cols-3 gap-2">
@@ -238,6 +318,55 @@ export const FeeStructureForm: React.FC<Props> = ({
               <span className="text-[10px] font-black text-blue-700">📅 Showing classes for academic year: {activeYearLabel}</span>
             </div>
           )}
+        </div>
+
+        {/* ── Billing Cycle ── */}
+        <div className="bg-white rounded-2xl border border-slate-100 shadow-sm p-4 space-y-3">
+          <div className="flex items-center gap-2">
+            <Calendar size={14} className="text-indigo-600" />
+            <span className="text-[10px] font-black uppercase tracking-widest text-slate-500">Billing Cycle *</span>
+          </div>
+          <p className="text-[10px] font-bold text-slate-400 -mt-1">
+            How often monthly fee heads are billed during the academic year.
+          </p>
+
+          <div className="grid grid-cols-5 gap-1.5">
+            {(['MONTHLY','QUARTERLY','HALF_YEARLY','ANNUALLY','CUSTOM'] as BillingCycle[]).map(c => (
+              <button key={c} type="button"
+                onClick={() => setBillingCycle(c)}
+                className={`py-2 rounded-xl text-[10px] font-black border transition-all leading-tight ${billingCycle === c ? 'bg-indigo-600 text-white border-indigo-600' : 'bg-slate-50 text-slate-600 border-slate-200'}`}>
+                {CYCLE_LABEL[c]}
+              </button>
+            ))}
+          </div>
+
+          {billingCycle === 'CUSTOM' && (
+            <div className="bg-slate-50 rounded-xl p-3 space-y-2">
+              <p className="text-[10px] font-black uppercase tracking-widest text-slate-500">
+                Pick billing months ({dueDates.length} selected)
+              </p>
+              <div className="grid grid-cols-6 gap-1.5">
+                {ACADEMIC_MONTHS.map(m => {
+                  const active = dueDates.some(d => d.month === m);
+                  return (
+                    <button key={m} type="button"
+                      onClick={() => toggleCustomMonth(m)}
+                      className={`py-2 rounded-lg text-[10px] font-black border transition-all ${active ? 'bg-emerald-600 text-white border-emerald-600' : 'bg-white text-slate-500 border-slate-200'}`}>
+                      {m}
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+          )}
+
+          <div className="bg-indigo-50 rounded-xl px-3 py-2">
+            <p className="text-[10px] font-bold text-indigo-700">
+              {hasMonthly
+                ? `Monthly heads will bill ${installmentCount}× per year (${dueDates.map(d => d.month).join(', ') || 'no months selected'}).`
+                : 'No monthly heads — billing cycle does not affect annual / one-time heads.'}
+            </p>
+          </div>
         </div>
 
         {/* ── Common Fee Heads Quick-add ── */}
@@ -380,7 +509,7 @@ export const FeeStructureForm: React.FC<Props> = ({
         {hasMonthly && (
           <div className="bg-white rounded-2xl border border-slate-100 shadow-sm overflow-hidden">
             <div className="flex items-center justify-between px-4 py-3 border-b border-slate-100">
-              <span className="text-[10px] font-black uppercase tracking-widest text-slate-400">Monthly Due Dates</span>
+              <span className="text-[10px] font-black uppercase tracking-widest text-slate-400">Due Dates · {CYCLE_LABEL[billingCycle]}</span>
               <button onClick={handleResetDates} className="flex items-center gap-1 text-[10px] font-black text-indigo-600">
                 <RotateCcw size={11} /> Reset All
               </button>
@@ -499,6 +628,11 @@ export const FeeStructureForm: React.FC<Props> = ({
             <span className="font-black text-white text-sm">Total Annual Fee:</span>
             <span className="font-black text-white text-xl">₹{annualTotal.toLocaleString('en-IN')}</span>
           </div>
+          {hasMonthly && (
+            <p className="text-[10px] font-bold text-indigo-200 mt-1">
+              Across {installmentCount} {CYCLE_LABEL[billingCycle].toLowerCase()} installment{installmentCount === 1 ? '' : 's'}
+            </p>
+          )}
           {lateFee.enabled && (
             <div className="flex items-center gap-1.5 mt-2">
               <Zap size={12} className="text-yellow-300" />

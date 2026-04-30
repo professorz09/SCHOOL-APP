@@ -1,8 +1,9 @@
-import React, { useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useState } from 'react';
 import { ArrowLeft, Plus, Bell, Trash2, Pin } from 'lucide-react';
 import { principalService } from '../../../services/principal.service';
 import { Notice, NoticeAudience } from '../../../types/principal.types';
 import { useUIStore } from '../../../store/uiStore';
+import { useRealtimeTable } from '../../../hooks/useRealtimeTable';
 
 type View = 'LIST' | 'COMPOSE';
 
@@ -30,7 +31,12 @@ export const NoticesManager: React.FC<Props> = ({ onBack }) => {
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState<Notice | null>(null);
 
-  useEffect(() => { principalService.getNotices().then(setNotices); }, []);
+  const loadNotices = useCallback(() => {
+    principalService.getNotices().then(setNotices);
+  }, []);
+
+  useEffect(() => { loadNotices(); }, [loadNotices]);
+  useRealtimeTable('notices', loadNotices);
 
   const handleSend = async () => {
     if (!form.title || !form.body) { showToast('Title and body required', 'error'); return; }
