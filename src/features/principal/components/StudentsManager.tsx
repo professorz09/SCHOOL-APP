@@ -9,7 +9,7 @@ import {
   Lock, Edit2,
 } from 'lucide-react';
 import { studentService } from '../../../services/student.service';
-import { Student, CreateStudentInput, FeeRecord, StudentAcademicRecord, STREAMS, STREAM_CLASSES, StudentStream, StudentDoc } from '../../../types/principal.types';
+import { Student, CreateStudentInput, StudentAcademicRecord, STREAMS, STREAM_CLASSES, StudentStream, StudentDoc } from '../../../types/principal.types';
 import { PaymentStatus, PAYMENT_COLORS } from '../../../config/constants';
 import { useUIStore } from '../../../store/uiStore';
 type ParentCredsView = { mobileNumber: string; password: string };
@@ -22,8 +22,9 @@ import {
 import { storageService } from '../../../services/storage.service';
 import { StudentClassAssignmentModal } from './StudentClassAssignmentModal';
 import { useAcademicYear } from '../../../context/AcademicYearContext';
-import { principalService } from '../../../services/principal.service';
+import { principalService, FeeStructureRecord } from '../../../services/principal.service';
 import { useEditorModeStore } from '../../../store/editorModeStore';
+import { feeService, FeeInstallment } from '../../../services/fee.service';
 
 const PAGE_SIZE = 50;
 
@@ -92,7 +93,8 @@ export const StudentsManager: React.FC<Props> = ({ onBack, initialView }) => {
   const [classFilter, setClassFilter] = useState<string>('ALL');
   const [form, setForm] = useState<FormWithParent>(BLANK_FORM_WITH_PARENT);
   const [isSubmitting, setIsSubmitting] = useState(false);
-  const [feeRecords, setFeeRecords] = useState<FeeRecord[]>([]);
+  const [feeInstallments, setFeeInstallments] = useState<FeeInstallment[]>([]);
+  const [studentFeeStructure, setStudentFeeStructure] = useState<FeeStructureRecord | null>(null);
   const [academicRecord, setAcademicRecord] = useState<StudentAcademicRecord | null>(null);
   const [activeProfileTab, setActiveProfileTab] = useState<'INFO' | 'ALLOTMENT' | 'FAMILY' | 'RESULTS' | 'FEES' | 'DOCS'>('INFO');
   const [studentTransport, setStudentTransport] = useState<{ vehicle: TransportVehicle; assignment: StudentTransportAssignment } | null>(null);
@@ -208,17 +210,20 @@ export const StudentsManager: React.FC<Props> = ({ onBack, initialView }) => {
     // which would otherwise reject on the UUID cast) cannot blank the
     // whole profile.
     const hasYear = !!student.academicYearId;
-    const [feesRes, recordRes, docsRes] = await Promise.allSettled([
-      studentService.getFeeRecords(student.id),
+    const [feesRes, recordRes, docsRes, structuresRes] = await Promise.allSettled([
+      feeService.getStudentInstallmentsDirect(student.id, hasYear ? student.academicYearId : undefined),
       hasYear
         ? studentService.getAcademicRecord(student.id, student.academicYearId)
         : Promise.resolve(null),
       studentService.listDocuments(student.id),
+      principalService.getFeeStructures(),
     ]);
-    const fees = feesRes.status === 'fulfilled' ? feesRes.value : [];
+    const insts = feesRes.status === 'fulfilled' ? feesRes.value : [];
     const record = recordRes.status === 'fulfilled' ? recordRes.value : null;
     const docs = docsRes.status === 'fulfilled' ? docsRes.value : [];
-    setFeeRecords(fees);
+    const structures = structuresRes.status === 'fulfilled' ? structuresRes.value : [];
+    setFeeInstallments(insts);
+    setStudentFeeStructure(structures.find(s => s.className === student.className) ?? null);
     setAcademicRecord(record);
     setProfileDocsLive(docs);
     try {
@@ -303,11 +308,21 @@ export const StudentsManager: React.FC<Props> = ({ onBack, initialView }) => {
     }
   };
 
-  const handleMarkFeePaid = async (feeId: string) => {
-    await studentService.markFeePaid(feeId, `TXN-${Date.now()}`);
-    const updated = await studentService.getFeeRecords(selected!.id);
-    setFeeRecords(updated);
-    showToast('Payment marked as paid');
+  const handleMarkFeePaid = async (installment: FeeInstallment) => {
+    const due = installment.amount - installment.paidAmount - installment.writeOffAmount;
+    if (due <= 0) return;
+    try {
+      await feeService.refreshAll();
+      await feeService.recordPayment(installment.studentId, due, 'CASH');
+      const updated = await feeService.getStudentInstallmentsDirect(
+        installment.studentId,
+        selected?.academicYearId || undefined,
+      );
+      setFeeInstallments(updated);
+      showToast('Payment recorded');
+    } catch (e) {
+      showToast(e instanceof Error ? e.message : 'Payment failed', 'error');
+    }
   };
 
   const handleDocumentUpload = (e: React.ChangeEvent<HTMLInputElement>, docType: DocumentUpload['type']) => {
@@ -1756,78 +1771,152 @@ export const StudentsManager: React.FC<Props> = ({ onBack, initialView }) => {
             )}
 
             {/* ── FEES TAB ─────────────────────────────── */}
-            {activeProfileTab === 'FEES' && (
-              <>
-                {/* Summary */}
-                <div className="bg-gradient-to-br from-slate-800 to-slate-900 rounded-2xl p-5 text-white">
-                  <p className="text-[9px] font-black uppercase tracking-widest text-white/50 mb-3">Fee Overview</p>
-                  <div className="grid grid-cols-3 gap-3 text-center">
-                    <div>
-                      <div className="text-xl font-black text-white">₹{(selected.totalFee / 1000).toFixed(0)}K</div>
-                      <div className="text-[8px] font-bold text-white/40 uppercase mt-0.5">Total</div>
-                    </div>
-                    <div>
-                      <div className="text-xl font-black text-emerald-400">₹{(selected.paidFee / 1000).toFixed(0)}K</div>
-                      <div className="text-[8px] font-bold text-white/40 uppercase mt-0.5">Paid</div>
-                    </div>
-                    <div>
-                      <div className="text-xl font-black text-rose-400">₹{((selected.totalFee - selected.paidFee) / 1000).toFixed(0)}K</div>
-                      <div className="text-[8px] font-bold text-white/40 uppercase mt-0.5">Due</div>
-                    </div>
-                  </div>
-                  {/* Progress bar */}
-                  <div className="mt-4 bg-white/10 rounded-full h-2">
-                    <div className="h-2 rounded-full bg-emerald-400 transition-all"
-                      style={{ width: `${selected.totalFee > 0 ? Math.round((selected.paidFee / selected.totalFee) * 100) : 0}%` }} />
-                  </div>
-                  <div className="flex justify-between mt-1">
-                    <span className="text-[9px] font-bold text-white/40">0%</span>
-                    <span className="text-[9px] font-black text-emerald-400">
-                      {selected.totalFee > 0 ? Math.round((selected.paidFee / selected.totalFee) * 100) : 0}% paid
-                    </span>
-                    <span className="text-[9px] font-bold text-white/40">100%</span>
-                  </div>
-                </div>
+            {activeProfileTab === 'FEES' && (() => {
+              // Group installments by month (ordered by due_date via DB)
+              const instByMonth = feeInstallments.reduce<Record<string, FeeInstallment[]>>(
+                (acc, inst) => {
+                  const key = inst.month;
+                  if (!acc[key]) acc[key] = [];
+                  acc[key].push(inst);
+                  return acc;
+                }, {},
+              );
+              // Preserve due_date order: use the first installment's dueDate for sorting
+              const monthEntries = (Object.entries(instByMonth) as [string, FeeInstallment[]][]).sort(
+                ([, a], [, b]) => new Date(a[0].dueDate).getTime() - new Date(b[0].dueDate).getTime(),
+              );
 
-                {/* Records */}
-                {feeRecords.length === 0 ? (
-                  <div className="bg-white rounded-2xl border border-slate-100 shadow-sm flex flex-col items-center py-10 text-slate-400">
-                    <IndianRupee size={28} className="mb-2 opacity-40" />
-                    <p className="font-bold text-sm">No fee records</p>
-                  </div>
-                ) : (
-                  <div className="space-y-2">
-                    {feeRecords.map(fee => (
-                      <div key={fee.id} className="bg-white rounded-2xl border border-slate-100 shadow-sm p-4">
-                        <div className="flex items-start justify-between gap-3">
-                          <div className="flex-1">
-                            <div className="font-bold text-slate-800 text-sm">{fee.description}</div>
-                            <div className="text-[10px] font-bold text-slate-400 mt-0.5">Due: {fee.dueDate}</div>
-                            {fee.paidAt && (
-                              <div className="text-[10px] font-bold text-emerald-600 mt-0.5">Paid: {fee.paidAt}</div>
-                            )}
-                          </div>
-                          <div className="flex flex-col items-end gap-2 shrink-0">
-                            <span className="font-black text-slate-900 text-sm">₹{fee.amount.toLocaleString('en-IN')}</span>
-                            <span className={`text-[9px] font-black px-2 py-0.5 rounded-full uppercase ${
-                              fee.status === PaymentStatus.PAID ? 'bg-emerald-100 text-emerald-700' :
-                              fee.status === 'PARTIAL' ? 'bg-amber-100 text-amber-700' :
-                              'bg-rose-100 text-rose-600'
-                            }`}>{fee.status}</span>
-                            {fee.status !== PaymentStatus.PAID && (
-                              <button onClick={() => handleMarkFeePaid(fee.id)}
-                                className="text-[10px] font-black text-emerald-700 bg-emerald-50 border border-emerald-200 px-3 py-1 rounded-xl active:scale-95 transition-transform">
-                                Mark Paid
-                              </button>
-                            )}
-                          </div>
-                        </div>
+              const totalFee = feeInstallments.reduce((s, i) => s + i.amount, 0);
+              const totalPaid = feeInstallments.reduce((s, i) => s + i.paidAmount + i.writeOffAmount, 0);
+              const totalDue = Math.max(0, totalFee - totalPaid);
+              const pct = totalFee > 0 ? Math.round((totalPaid / totalFee) * 100) : 0;
+
+              const statusBadge = (status: string) => {
+                if (status === 'PAID') return 'bg-emerald-100 text-emerald-700';
+                if (status === 'PARTIAL') return 'bg-amber-100 text-amber-700';
+                if (status === 'WAIVED' || status === 'WRITTEN_OFF') return 'bg-slate-100 text-slate-500';
+                if (status === 'OVERDUE') return 'bg-rose-200 text-rose-700';
+                return 'bg-rose-100 text-rose-600';
+              };
+
+              return (
+                <>
+                  {/* Fee structure banner */}
+                  {studentFeeStructure && (
+                    <div className="bg-indigo-50 border border-indigo-100 rounded-2xl px-4 py-3 flex items-center gap-3">
+                      <IndianRupee size={16} className="text-indigo-500 shrink-0" />
+                      <div className="min-w-0">
+                        <div className="text-[10px] font-black uppercase tracking-widest text-indigo-500">Fee Structure</div>
+                        <div className="font-extrabold text-slate-800 text-sm truncate">{studentFeeStructure.name}</div>
+                        <div className="text-[10px] font-bold text-slate-400">{studentFeeStructure.className} · {studentFeeStructure.billingCycle}</div>
                       </div>
-                    ))}
+                    </div>
+                  )}
+
+                  {/* Summary card */}
+                  <div className="bg-gradient-to-br from-slate-800 to-slate-900 rounded-2xl p-5 text-white">
+                    <p className="text-[9px] font-black uppercase tracking-widest text-white/50 mb-3">Fee Overview · {selected.className || 'Unassigned'}</p>
+                    <div className="grid grid-cols-3 gap-3 text-center">
+                      <div>
+                        <div className="text-xl font-black text-white">₹{(totalFee / 1000).toFixed(1)}K</div>
+                        <div className="text-[8px] font-bold text-white/40 uppercase mt-0.5">Total</div>
+                      </div>
+                      <div>
+                        <div className="text-xl font-black text-emerald-400">₹{(totalPaid / 1000).toFixed(1)}K</div>
+                        <div className="text-[8px] font-bold text-white/40 uppercase mt-0.5">Paid</div>
+                      </div>
+                      <div>
+                        <div className="text-xl font-black text-rose-400">₹{(totalDue / 1000).toFixed(1)}K</div>
+                        <div className="text-[8px] font-bold text-white/40 uppercase mt-0.5">Due</div>
+                      </div>
+                    </div>
+                    <div className="mt-4 bg-white/10 rounded-full h-2">
+                      <div className="h-2 rounded-full bg-emerald-400 transition-all" style={{ width: `${pct}%` }} />
+                    </div>
+                    <div className="flex justify-between mt-1">
+                      <span className="text-[9px] font-bold text-white/40">0%</span>
+                      <span className="text-[9px] font-black text-emerald-400">{pct}% paid</span>
+                      <span className="text-[9px] font-bold text-white/40">100%</span>
+                    </div>
                   </div>
-                )}
-              </>
-            )}
+
+                  {/* Installments grouped by month */}
+                  {feeInstallments.length === 0 ? (
+                    <div className="bg-white rounded-2xl border border-slate-100 shadow-sm flex flex-col items-center py-10 text-slate-400">
+                      <IndianRupee size={28} className="mb-2 opacity-40" />
+                      <p className="font-bold text-sm">No fee schedule for this year</p>
+                      {!selected.className && (
+                        <p className="text-xs font-bold mt-1 text-slate-400 opacity-60">Assign student to a class first</p>
+                      )}
+                      {selected.className && !studentFeeStructure && (
+                        <p className="text-xs font-bold mt-1 text-slate-400 opacity-60">No fee structure configured for {selected.className}</p>
+                      )}
+                    </div>
+                  ) : (
+                    <div className="space-y-3">
+                      {monthEntries.map(([month, insts]) => {
+                        const monthTotal = insts.reduce((s, i) => s + i.amount, 0);
+                        const monthPaid = insts.reduce((s, i) => s + i.paidAmount + i.writeOffAmount, 0);
+                        const monthDue = Math.max(0, monthTotal - monthPaid);
+                        const allPaid = insts.every(i => i.status === 'PAID' || i.status === 'WAIVED' || i.status === 'WRITTEN_OFF');
+                        return (
+                          <div key={month} className={`bg-white rounded-2xl border shadow-sm overflow-hidden ${allPaid ? 'border-emerald-100' : 'border-slate-100'}`}>
+                            {/* Month header */}
+                            <div className={`flex items-center justify-between px-4 py-2.5 ${allPaid ? 'bg-emerald-50' : 'bg-slate-50'}`}>
+                              <div className="flex items-center gap-2">
+                                <Calendar size={13} className={allPaid ? 'text-emerald-600' : 'text-slate-500'} />
+                                <span className="font-black text-slate-800 text-sm">{month}</span>
+                              </div>
+                              <div className="flex items-center gap-2">
+                                {allPaid
+                                  ? <span className="text-[9px] font-black text-emerald-700 bg-emerald-100 px-2 py-0.5 rounded-full">PAID</span>
+                                  : monthDue > 0 && (
+                                    <span className="text-[10px] font-black text-rose-600">₹{monthDue.toLocaleString('en-IN')} due</span>
+                                  )
+                                }
+                              </div>
+                            </div>
+                            {/* Fee heads */}
+                            <div className="divide-y divide-slate-50 px-4">
+                              {insts.map(inst => {
+                                const instDue = Math.max(0, inst.amount - inst.paidAmount - inst.writeOffAmount);
+                                return (
+                                  <div key={inst.id} className="flex items-center justify-between py-2.5 gap-3">
+                                    <div className="flex-1 min-w-0">
+                                      <div className="font-bold text-slate-700 text-sm capitalize">
+                                        {inst.feeType.replace('_', ' ').toLowerCase().replace(/\b\w/g, c => c.toUpperCase())}
+                                      </div>
+                                      <div className="text-[10px] font-bold text-slate-400">Due: {inst.dueDate}</div>
+                                    </div>
+                                    <div className="flex flex-col items-end gap-1 shrink-0">
+                                      <span className="font-black text-slate-900 text-sm">₹{inst.amount.toLocaleString('en-IN')}</span>
+                                      <span className={`text-[9px] font-black px-2 py-0.5 rounded-full uppercase ${statusBadge(inst.status)}`}>
+                                        {inst.status}
+                                      </span>
+                                      {instDue > 0 && (
+                                        <button onClick={() => handleMarkFeePaid(inst)}
+                                          className="text-[9px] font-black text-emerald-700 bg-emerald-50 border border-emerald-200 px-2.5 py-1 rounded-xl active:scale-95 transition-transform">
+                                          Collect ₹{instDue.toLocaleString('en-IN')}
+                                        </button>
+                                      )}
+                                    </div>
+                                  </div>
+                                );
+                              })}
+                            </div>
+                            {/* Month total */}
+                            <div className="flex items-center justify-between px-4 py-2 border-t border-slate-100 bg-slate-50/60">
+                              <span className="text-[10px] font-black uppercase tracking-wide text-slate-400">Month Total</span>
+                              <span className="font-black text-slate-700 text-sm">₹{monthTotal.toLocaleString('en-IN')}</span>
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  )}
+                </>
+              );
+            })()}
 
             {/* ── DOCS TAB ─────────────────────────────── */}
             {activeProfileTab === 'DOCS' && (

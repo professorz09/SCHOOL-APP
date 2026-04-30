@@ -1,8 +1,9 @@
-import React, { useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useState } from 'react';
 import { ArrowLeft, Plus, CircleAlert } from 'lucide-react';
 import { studentDashboardService } from '../../../services/studentDashboard.service';
 import { StudentComplaint } from '../../../types/student.types';
 import { useUIStore } from '../../../store/uiStore';
+import { useRealtimeTable } from '../../../hooks/useRealtimeTable';
 
 type View = 'LIST' | 'CREATE';
 
@@ -19,7 +20,12 @@ export const StudentComplaintsView: React.FC<Props> = ({ onBack }) => {
   const [form, setForm] = useState({ subject: '', description: '' });
   const [isSubmitting, setIsSubmitting] = useState(false);
 
-  useEffect(() => { studentDashboardService.getComplaints().then(setComplaints); }, []);
+  const loadComplaints = useCallback(() => {
+    studentDashboardService.getComplaints().then(setComplaints);
+  }, []);
+
+  useEffect(() => { loadComplaints(); }, [loadComplaints]);
+  useRealtimeTable('complaints', loadComplaints);
 
   const handleSubmit = async () => {
     if (!form.subject || !form.description) { showToast('Subject and description required', 'error'); return; }

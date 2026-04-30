@@ -1,8 +1,9 @@
-import React, { useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useState } from 'react';
 import { ArrowLeft, Plus, Send, Bell } from 'lucide-react';
 import { useUIStore } from '../../../store/uiStore';
 import { teacherService } from '../../../services/teacher.service';
 import { TeacherClass } from '../../../types/teacher.types';
+import { useRealtimeTable } from '../../../hooks/useRealtimeTable';
 
 interface TeacherNotice {
   id: string;
@@ -43,6 +44,10 @@ export const TeacherNoticesView: React.FC<Props> = ({ onBack }) => {
     type: 'GENERAL',
   });
 
+  const loadNotices = useCallback(() => {
+    teacherService.getMyNotices().catch(() => []).then(setNotices);
+  }, []);
+
   useEffect(() => {
     let cancelled = false;
     Promise.all([
@@ -64,6 +69,8 @@ export const TeacherNoticesView: React.FC<Props> = ({ onBack }) => {
     });
     return () => { cancelled = true; };
   }, []);
+
+  useRealtimeTable('notices', loadNotices);
 
   const handleCreate = async () => {
     if (!form.title.trim() || !form.body.trim()) { showToast('Title and message required', 'error'); return; }
