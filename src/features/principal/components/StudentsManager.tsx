@@ -6,7 +6,7 @@ import {
   Bus, Briefcase, Droplets, GraduationCap, Shield, Heart,
   CreditCard, Building2, TrendingUp, Home as HomeIcon,
   Archive, UserCheck, UserX, Award, Trash2, AlertTriangle, RefreshCw,
-  Lock, Edit2,
+  Lock, Edit2, History,
 } from 'lucide-react';
 import { studentService } from '../../../services/student.service';
 import { Student, CreateStudentInput, StudentAcademicRecord, STREAMS, STREAM_CLASSES, StudentStream, StudentDoc } from '../../../types/principal.types';
@@ -95,6 +95,7 @@ export const StudentsManager: React.FC<Props> = ({ onBack, initialView }) => {
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [feeInstallments, setFeeInstallments] = useState<FeeInstallment[]>([]);
   const [studentFeeStructure, setStudentFeeStructure] = useState<FeeStructureRecord | null>(null);
+  const [feePaymentHistory, setFeePaymentHistory] = useState<import('../../../services/fee.service').PaymentRecord[]>([]);
   const [academicRecord, setAcademicRecord] = useState<StudentAcademicRecord | null>(null);
   const [activeProfileTab, setActiveProfileTab] = useState<'INFO' | 'ALLOTMENT' | 'FAMILY' | 'RESULTS' | 'FEES' | 'DOCS'>('INFO');
   const [studentTransport, setStudentTransport] = useState<{ vehicle: TransportVehicle; assignment: StudentTransportAssignment } | null>(null);
@@ -210,21 +211,27 @@ export const StudentsManager: React.FC<Props> = ({ onBack, initialView }) => {
     // which would otherwise reject on the UUID cast) cannot blank the
     // whole profile.
     const hasYear = !!student.academicYearId;
-    const [feesRes, recordRes, docsRes, structuresRes] = await Promise.allSettled([
+    const [feesRes, recordRes, docsRes, structuresRes, payRes] = await Promise.allSettled([
       feeService.getStudentInstallmentsDirect(student.id, hasYear ? student.academicYearId : undefined),
       hasYear
         ? studentService.getAcademicRecord(student.id, student.academicYearId)
         : Promise.resolve(null),
       studentService.listDocuments(student.id),
       principalService.getFeeStructures(),
+      (async () => {
+        await feeService.refreshAll();
+        return feeService.getPaymentHistory().filter(p => p.studentId === student.id);
+      })(),
     ]);
     const insts = feesRes.status === 'fulfilled' ? feesRes.value : [];
     const record = recordRes.status === 'fulfilled' ? recordRes.value : null;
     const docs = docsRes.status === 'fulfilled' ? docsRes.value : [];
     const structures = structuresRes.status === 'fulfilled' ? structuresRes.value : [];
+    const payments = payRes.status === 'fulfilled' ? payRes.value : [];
     setFeeInstallments(insts);
     setStudentFeeStructure(structures.find(s => s.className === student.className) ?? null);
     setAcademicRecord(record);
+    setFeePaymentHistory(payments);
     setProfileDocsLive(docs);
     try {
       const assignment = transportService.getAssignmentForStudent(student.id);
@@ -1838,6 +1845,37 @@ export const StudentsManager: React.FC<Props> = ({ onBack, initialView }) => {
                       <span className="text-[9px] font-black text-emerald-400">{pct}% paid</span>
                       <span className="text-[9px] font-bold text-white/40">100%</span>
                     </div>
+                  </div>
+
+
+
+                  {/* Fee payment history timeline */}
+                  <div className="bg-white rounded-2xl border border-slate-100 shadow-sm p-4">
+                    <SectionTitle icon={History} title="Fee Payment History" />
+                    {feePaymentHistory.length === 0 ? (
+                      <p className="text-xs font-bold text-slate-400">No payment entries yet</p>
+                    ) : (
+                      <div className="space-y-2">
+                        {feePaymentHistory.slice(0, 20).map(p => (
+                          <div key={p.id} className="rounded-xl border border-slate-100 bg-slate-50 px-3 py-2">
+                            <div className="flex items-center justify-between gap-2">
+                              <div>
+                                <p className="text-xs font-black text-slate-800">₹{p.amount.toLocaleString('en-IN')} · {p.method}</p>
+                                <p className="text-[10px] font-bold text-slate-500">{p.date} · Receipt {p.receiptNo}</p>
+                              </div>
+                              {p.advanceAmount > 0 && (
+                                <span className="text-[9px] font-black bg-indigo-100 text-indigo-700 px-2 py-0.5 rounded-full">Advance ₹{p.advanceAmount.toLocaleString('en-IN')}</span>
+                              )}
+                            </div>
+                            {p.installmentDetails.length > 0 && (
+                              <p className="text-[10px] font-bold text-slate-500 mt-1">
+                                {p.installmentDetails.map(d => `${d.month} ${d.feeType}`).join(' · ')}
+                              </p>
+                            )}
+                          </div>
+                        ))}
+                      </div>
+                    )}
                   </div>
 
                   {/* Installments grouped by month */}
