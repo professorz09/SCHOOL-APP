@@ -756,34 +756,56 @@ export const principalService = {
     return { rows, isLocked, savedAt: savedAtTs };
   },
 
-  async saveStaffAttendance(date: string, rows: StaffAttendanceRow[]): Promise<string | null> {
+  async saveStaffAttendance(
+    date: string,
+    rows: StaffAttendanceRow[],
+    clearedStaffIds: string[] = [],
+  ): Promise<string | null> {
     const schoolId = getSchoolId();
     const actor = getActor();
-    if (!rows.length) throw new Error('No staff to record');
+    if (!rows.length && !clearedStaffIds.length) throw new Error('No staff to record');
 
-    // Upsert per (staff_id, date). The DB UNIQUE constraint on
-    // (staff_id, date) handles deduplication. We also bump created_at on
-    // every save so the "last saved" timestamp advances on re-save.
     const nowIso = new Date().toISOString();
-    const payload = rows.map(r => ({
-      school_id: schoolId,
-      staff_id: r.staffId,
-      date,
-      status: r.status,
-      marked_by: actor?.id ?? null,
-      created_at: nowIso,
-    }));
-    const { error } = await supabase
-      .from('staff_attendance')
-      .upsert(payload, { onConflict: 'staff_id,date' });
-    if (error) throw new Error(error.message);
+
+    // Cleared rows: drop any prior staff_attendance entries for these
+    // staff on this date so the day reverts to "unmarked" in the DB.
+    // Quick-action "Clear" relies on this — a cleared day must NOT be
+    // identical to All Present.
+    if (clearedStaffIds.length) {
+      const { error: delErr } = await supabase
+        .from('staff_attendance')
+        .delete()
+        .eq('school_id', schoolId)
+        .eq('date', date)
+        .in('staff_id', clearedStaffIds);
+      if (delErr) throw new Error(delErr.message);
+    }
+
+    // Upsert remaining marked rows. The DB UNIQUE constraint on
+    // (staff_id, date) handles deduplication. We bump created_at on
+    // every save so the "last saved" timestamp advances on re-save.
+    if (rows.length) {
+      const payload = rows.map(r => ({
+        school_id: schoolId,
+        staff_id: r.staffId,
+        date,
+        status: r.status,
+        marked_by: actor?.id ?? null,
+        created_at: nowIso,
+      }));
+      const { error } = await supabase
+        .from('staff_attendance')
+        .upsert(payload, { onConflict: 'staff_id,date' });
+      if (error) throw new Error(error.message);
+    }
 
     await logAudit('staff_attendance_saved', 'staff_attendance', date, {
-      date, count: rows.length,
+      date, count: rows.length, cleared: clearedStaffIds.length,
     });
 
     // Re-derive the "last saved" timestamp from the DB so callers see the
-    // canonical value (not the client clock).
+    // canonical value (not the client clock). If everything was cleared
+    // there will be no row → fall back to the client clock.
     const { data: ts } = await supabase
       .from('staff_attendance').select('created_at')
       .eq('school_id', schoolId).eq('date', date)

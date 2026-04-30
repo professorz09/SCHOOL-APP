@@ -88,6 +88,11 @@ export const StaffAttendanceManager: React.FC<Props> = ({ onBack }) => {
   const [isSaving, setIsSaving] = useState(false);
   const [activeStatus, setActiveStatus] = useState<string | null>(null);
   const [search, setSearch] = useState('');
+  // staffIds whose status the principal has cleared this session. These rows
+  // render as "Unmarked" in the list and, on save, the corresponding
+  // staff_attendance row is DELETED on the server (not upserted to PRESENT).
+  // This is how we keep "Clear" semantically distinct from "All Present".
+  const [clearedIds, setClearedIds] = useState<Set<string>>(new Set());
   const [historyMonth, setHistoryMonth] = useState<string>(getCurrentMonthYM());
   const [historyData, setHistoryData] = useState<HistoryData[] | null>(null);
   const [historyLoading, setHistoryLoading] = useState(false);
@@ -98,6 +103,7 @@ export const StaffAttendanceManager: React.FC<Props> = ({ onBack }) => {
     setRecord(null);
     setSaved(false);
     setActiveStatus(null);
+    setClearedIds(new Set());
     try {
       const data = await principalService.getStaffAttendance(date);
       setRecord({ date, rows: data.rows, isLocked: data.isLocked, savedAt: data.savedAt });
@@ -126,9 +132,14 @@ export const StaffAttendanceManager: React.FC<Props> = ({ onBack }) => {
   const counts = useMemo(() => {
     const c: Record<AttendanceStatus, number> = { PRESENT: 0, ABSENT: 0, HALF_DAY: 0, LEAVE: 0, LATE: 0, HOLIDAY: 0 };
     if (!record) return c;
-    for (const row of record.rows) c[row.status]++;
+    // Cleared rows are intentionally excluded from every status bucket so
+    // the summary chips reflect "marked" rows only.
+    for (const row of record.rows) {
+      if (clearedIds.has(row.staffId)) continue;
+      c[row.status]++;
+    }
     return c;
-  }, [record]);
+  }, [record, clearedIds]);
 
   const filtered = useMemo(() =>
     record ? record.rows.filter(s =>
@@ -149,15 +160,18 @@ export const StaffAttendanceManager: React.FC<Props> = ({ onBack }) => {
   const bulkSet = (status: AttendanceStatus) => {
     if (isLocked) return;
     setRecord(r => r ? ({ ...r, rows: r.rows.map(row => ({ ...row, status })) }) : r);
+    // Any prior "cleared" marks are overridden by an explicit bulk action.
+    setClearedIds(new Set());
     setSaved(false);
   };
 
-  // "Clear" reverts every row back to the default PRESENT state. The principal
-  // must still tap Save to persist the change. This pairs with All Present and
-  // Holiday so it is easy to wipe accidental marks before saving.
+  // "Clear" wipes every row's mark for the current view. Cleared rows render
+  // as "Unmarked" and, when saved, their server-side staff_attendance row is
+  // DELETED — making Clear semantically distinct from All Present. The
+  // principal must still tap Save to persist the change.
   const clearAll = () => {
-    if (isLocked) return;
-    setRecord(r => r ? ({ ...r, rows: r.rows.map(row => ({ ...row, status: 'PRESENT' as AttendanceStatus })) }) : r);
+    if (isLocked || !record) return;
+    setClearedIds(new Set(record.rows.map(r => r.staffId)));
     setSaved(false);
     setActiveStatus(null);
   };
@@ -168,6 +182,14 @@ export const StaffAttendanceManager: React.FC<Props> = ({ onBack }) => {
       ...r,
       rows: r.rows.map(row => row.staffId === staffId ? { ...row, status } : row),
     }) : r);
+    // Marking a cleared row removes it from the cleared set so it gets
+    // upserted again on the next save.
+    setClearedIds(prev => {
+      if (!prev.has(staffId)) return prev;
+      const next = new Set(prev);
+      next.delete(staffId);
+      return next;
+    });
     setActiveStatus(null);
     setSaved(false);
   };
@@ -180,14 +202,21 @@ export const StaffAttendanceManager: React.FC<Props> = ({ onBack }) => {
     }
     setIsSaving(true);
     try {
+      // Partition rows into "to-upsert" and "to-delete" before sending.
+      const toUpsert = record.rows.filter(r => !clearedIds.has(r.staffId));
+      const toClear: string[] = Array.from(clearedIds.values());
       const result = await editGuard.gate(
-        () => principalService.saveStaffAttendance(record.date, record.rows),
+        () => principalService.saveStaffAttendance(record.date, toUpsert, toClear),
         { entityType: 'staff_attendance', entityId: record.date },
       );
       if (result === undefined) return;
       setRecord(r => r ? { ...r, savedAt: result } : r);
+      // Cleared rows have been persisted (deleted on the server). The next
+      // load will show them as default PRESENT again, so locally we reset
+      // both flags to keep the UI consistent without a round-trip.
+      setClearedIds(new Set());
       setSaved(true);
-      showToast('Attendance saved');
+      showToast(toClear.length ? 'Attendance saved (cleared rows reset)' : 'Attendance saved');
     } catch (e) {
       showToast((e as Error).message || 'Failed to save', 'error');
     } finally {
@@ -329,18 +358,26 @@ export const StaffAttendanceManager: React.FC<Props> = ({ onBack }) => {
               <div className="bg-white rounded-2xl border border-slate-100 shadow-sm overflow-hidden">
                 {filtered.map((row, idx) => {
                   const cfg = STATUS_CONFIG[row.status];
+                  const isCleared = clearedIds.has(row.staffId);
                   return (
                     <div key={row.staffId}
                       className={`flex items-center gap-3 px-4 py-3 transition-colors ${
                         idx < filtered.length - 1 ? 'border-b border-slate-100' : ''
-                      } ${row.status === 'PRESENT' ? 'bg-emerald-50/40' : row.status === 'ABSENT' ? 'bg-rose-50/40' : 'bg-slate-50/40'}`}>
-                      <div className={`w-2.5 h-2.5 rounded-full shrink-0 ${cfg.dot}`} />
+                      } ${isCleared ? 'bg-white' : row.status === 'PRESENT' ? 'bg-emerald-50/40' : row.status === 'ABSENT' ? 'bg-rose-50/40' : 'bg-slate-50/40'}`}>
+                      <div className={`w-2.5 h-2.5 rounded-full shrink-0 ${isCleared ? 'bg-slate-300' : cfg.dot}`} />
                       <div className="flex-1 min-w-0">
                         <div className="font-bold text-slate-900 text-sm">{row.name}</div>
                         <div className="text-[10px] font-bold text-slate-400 mt-0.5">{ROLE_LABEL[row.role] ?? row.role}</div>
                       </div>
                       {isLocked ? (
                         <span className={`text-[10px] font-black px-2.5 py-1 rounded-lg ${cfg.color} border`}>{cfg.label}</span>
+                      ) : isCleared ? (
+                        <button
+                          onClick={() => setActiveStatus(prev => prev === row.staffId ? null : row.staffId)}
+                          className="relative flex items-center gap-1.5 text-[10px] font-black px-3 py-1.5 rounded-full border bg-slate-50 text-slate-500 border-slate-200 border-dashed active:scale-95 transition-transform">
+                          Unmarked
+                          <span className="text-[8px] opacity-60">▾</span>
+                        </button>
                       ) : (
                         <div className="relative shrink-0">
                           <button
