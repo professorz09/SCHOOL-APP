@@ -958,12 +958,13 @@ export const principalService = {
     const read = async () => {
       const { data, error } = await supabase
         .from('fee_structures')
-        .select('id, name, class_name, fee_heads, monthly_due_dates, late_fee')
+        .select('id, name, class_name, billing_cycle, fee_heads, monthly_due_dates, late_fee')
         .eq('school_id', schoolId).eq('academic_year_id', ayId)
         .order('class_name');
       if (error) throw new Error(error.message);
       return ((data ?? []) as Array<{
         id: string; name: string; class_name: string;
+        billing_cycle: BillingCycle | null;
         fee_heads: FeeStructureRecord['feeHeads'];
         monthly_due_dates: FeeStructureRecord['monthlyDueDates'];
         late_fee: FeeStructureRecord['lateFee'];
@@ -971,6 +972,7 @@ export const principalService = {
         id: r.id,
         name: r.name,
         className: r.class_name,
+        billingCycle: (r.billing_cycle ?? 'MONTHLY') as BillingCycle,
         feeHeads: r.fee_heads ?? [],
         monthlyDueDates: r.monthly_due_dates ?? [],
         lateFee: r.late_fee ?? { enabled: false, gracePeriodDays: 0, type: 'FIXED', amount: 0, maxCap: 0 },
@@ -1056,6 +1058,7 @@ export const principalService = {
       academic_year_id: ayId,
       name: input.name,
       class_name: input.className,
+      billing_cycle: input.billingCycle,
       fee_heads: input.feeHeads,
       monthly_due_dates: input.monthlyDueDates,
       late_fee: input.lateFee,
@@ -1071,7 +1074,7 @@ export const principalService = {
       // Capture the previous structure so the audit log can show a real diff.
       const { data: prev } = await supabase
         .from('fee_structures')
-        .select('name, class_name, fee_heads, monthly_due_dates, late_fee')
+        .select('name, class_name, billing_cycle, fee_heads, monthly_due_dates, late_fee')
         .eq('id', input.id).eq('school_id', schoolId).maybeSingle();
       prevSnap = (prev ?? null) as Record<string, unknown> | null;
       const { error } = await supabase
@@ -1088,6 +1091,7 @@ export const principalService = {
     const newSnap: Record<string, unknown> = {
       name: input.name,
       class_name: input.className,
+      billing_cycle: input.billingCycle,
       fee_heads: input.feeHeads,
       monthly_due_dates: input.monthlyDueDates,
       late_fee: input.lateFee,
@@ -1115,6 +1119,7 @@ export const principalService = {
       academic_year_id: yearId,
       name: input.name,
       class_name: input.className,
+      billing_cycle: input.billingCycle,
       fee_heads: input.feeHeads,
       monthly_due_dates: input.monthlyDueDates,
       late_fee: input.lateFee,
@@ -1255,10 +1260,13 @@ export interface FeePaymentUploadRecord {
   recordedPaymentId: string | null;
 }
 
+export type BillingCycle = 'MONTHLY' | 'QUARTERLY' | 'HALF_YEARLY' | 'ANNUALLY' | 'CUSTOM';
+
 export interface FeeStructureRecord {
   id: string;
   name: string;
   className: string;
+  billingCycle: BillingCycle;
   feeHeads: Array<{ id: string; name: string; amount: number; frequency: 'MONTHLY' | 'ANNUAL' | 'ONE_TIME'; description: string }>;
   monthlyDueDates: Array<{ month: string; date: string }>;
   lateFee: { enabled: boolean; gracePeriodDays: number; type: 'FIXED' | 'PERCENTAGE'; amount: number; maxCap: number };
