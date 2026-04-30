@@ -828,12 +828,23 @@ export const StudentsManager: React.FC<Props> = ({ onBack, initialView }) => {
   // ─── ARCHIVE (Lifecycle buckets) ────────────────────────────────────────
 
   if (!renderProfile && mainView === 'ARCHIVE') {
-    const filtered = archiveStudents.filter(s =>
-      !search ||
-      s.name.toLowerCase().includes(search.toLowerCase()) ||
-      s.admissionNo.toLowerCase().includes(search.toLowerCase()) ||
-      s.rollNo.includes(search)
-    );
+    const aq = search.trim().toLowerCase();
+    const aDigits = aq.replace(/\D/g, '');
+    const filtered = archiveStudents.filter(s => {
+      if (!aq) return true;
+      if (s.name.toLowerCase().includes(aq)) return true;
+      if (s.admissionNo.toLowerCase().includes(aq)) return true;
+      if (s.rollNo.includes(search)) return true;
+      // Mobile-number search (item 5.3): match digit-only prefix against
+      // either parent's phone, ignoring formatting. Same semantics as the
+      // ADMISSION list above so principals only need to remember one rule.
+      if (aDigits && aDigits.length >= 3) {
+        const fp = (s.fatherPhone || '').replace(/\D/g, '');
+        const mp = (s.motherPhone || '').replace(/\D/g, '');
+        if (fp.includes(aDigits) || mp.includes(aDigits)) return true;
+      }
+      return false;
+    });
 
     return (
       <div className="w-full bg-slate-50 flex flex-col animate-in slide-in-from-right-8 duration-300">
@@ -879,7 +890,7 @@ export const StudentsManager: React.FC<Props> = ({ onBack, initialView }) => {
             <div className="relative">
               <Search size={15} className="absolute left-3.5 top-1/2 -translate-y-1/2 text-slate-400" />
               <input value={search} onChange={e => setSearch(e.target.value)}
-                placeholder="Search in this bucket…"
+                placeholder="Search by name, roll, admission or mobile…"
                 className="w-full bg-slate-50 border border-slate-200 rounded-xl pl-10 pr-4 py-2.5 font-bold text-sm outline-none focus:border-indigo-500 focus:bg-white transition-colors" />
             </div>
           </div>

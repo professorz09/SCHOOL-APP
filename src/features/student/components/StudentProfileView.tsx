@@ -1,7 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import {
   ArrowLeft, User, Phone, Mail, MapPin, Calendar, Droplet,
-  GraduationCap, IdCard, Lock, LogOut, X, Eye, EyeOff,
+  GraduationCap, IdCard, Lock, LogOut, X, Eye, EyeOff, Fingerprint,
 } from 'lucide-react';
 import { supabase } from '../../../lib/supabase';
 import { useAuthStore } from '../../../store/authStore';
@@ -22,6 +22,10 @@ interface ProfileRow {
   address: string | null;
   email: string | null;
   phone: string | null;
+  /** Master Aadhaar number stored on the students table — read-only here. */
+  aadhaar_no: string | null;
+  /** Public/signed URL or storage path of the student photo. */
+  photo: string | null;
   father_name: string | null;
   father_phone: string | null;
   mother_name: string | null;
@@ -29,6 +33,20 @@ interface ProfileRow {
   guardian_name: string | null;
   guardian_phone: string | null;
 }
+
+/**
+ * Aadhaar numbers are 12 digits. We only show the last 4 to keep the
+ * sensitive ID off-screen by default, in line with UIDAI masking guidance.
+ * Empty / partial values are returned verbatim so the "—" placeholder
+ * still works for missing data.
+ */
+const maskAadhaar = (raw: string | null): string => {
+  if (!raw) return '—';
+  const digits = raw.replace(/\D/g, '');
+  if (digits.length < 4) return raw;
+  const last4 = digits.slice(-4);
+  return `XXXX-XXXX-${last4}`;
+};
 
 const formatDate = (iso: string | null): string => {
   if (!iso) return '—';
@@ -68,6 +86,7 @@ export const StudentProfileView: React.FC<Props> = ({ onBack }) => {
           .from('students')
           .select(
             'admission_no, roll_no, dob, gender, blood_group, address, email, phone, ' +
+            'aadhaar_no, photo, ' +
             'father_name, father_phone, mother_name, mother_phone, guardian_name, guardian_phone'
           )
           .eq('id', c.studentId)
@@ -127,9 +146,16 @@ export const StudentProfileView: React.FC<Props> = ({ onBack }) => {
         {/* Hero */}
         <div className="bg-gradient-to-br from-emerald-500 to-teal-600 rounded-3xl p-6 text-white">
           <div className="flex items-center gap-4">
-            <div className="w-[72px] h-[72px] rounded-2xl bg-white/20 border-2 border-white/40 flex items-center justify-center font-black text-2xl shrink-0">
-              {initials}
-            </div>
+            {profile?.photo ? (
+              // Student photo — read-only here. Editing happens in the
+              // principal's StudentsManager (admission flow).
+              <img src={profile.photo} alt={displayName}
+                className="w-[72px] h-[72px] rounded-2xl object-cover border-2 border-white/40 shrink-0 bg-white/20" />
+            ) : (
+              <div className="w-[72px] h-[72px] rounded-2xl bg-white/20 border-2 border-white/40 flex items-center justify-center font-black text-2xl shrink-0">
+                {initials}
+              </div>
+            )}
             <div className="flex-1 min-w-0">
               <h2 className="font-black text-xl leading-tight truncate">{displayName}</h2>
               <div className="flex items-center gap-1.5 mt-1 opacity-90">
@@ -174,12 +200,13 @@ export const StudentProfileView: React.FC<Props> = ({ onBack }) => {
             <div className="bg-white rounded-2xl border border-slate-100 shadow-sm overflow-hidden">
               <p className="text-[9px] font-black uppercase tracking-widest text-slate-400 px-4 pt-4 pb-2">Personal</p>
               {[
-                { icon: Calendar, label: 'Date of Birth', val: formatDate(profile?.dob ?? null) },
-                { icon: User,     label: 'Gender',        val: profile?.gender || '—' },
-                { icon: Droplet,  label: 'Blood Group',   val: profile?.blood_group || '—' },
-                { icon: Phone,    label: 'Mobile',        val: profile?.phone || session?.mobileNumber || '—' },
-                { icon: Mail,     label: 'Email',         val: profile?.email || '—' },
-                { icon: MapPin,   label: 'Address',       val: profile?.address || '—' },
+                { icon: Calendar,    label: 'Date of Birth', val: formatDate(profile?.dob ?? null) },
+                { icon: User,        label: 'Gender',        val: profile?.gender || '—' },
+                { icon: Droplet,     label: 'Blood Group',   val: profile?.blood_group || '—' },
+                { icon: Fingerprint, label: 'Aadhaar',       val: maskAadhaar(profile?.aadhaar_no ?? null) },
+                { icon: Phone,       label: 'Mobile',        val: profile?.phone || session?.mobileNumber || '—' },
+                { icon: Mail,        label: 'Email',         val: profile?.email || '—' },
+                { icon: MapPin,      label: 'Address',       val: profile?.address || '—' },
               ].map(({ icon: Icon, label, val }, idx, arr) => (
                 <div key={label}
                   className={`flex items-start gap-3 px-4 py-3.5 ${idx < arr.length - 1 ? 'border-b border-slate-50' : ''}`}>
