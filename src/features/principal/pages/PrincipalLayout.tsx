@@ -1,6 +1,8 @@
 import React, { useState, useEffect } from 'react';
+import { Calendar, Sparkles, Lock } from 'lucide-react';
 import { ToastContainer } from '../../../components/ui/Toast';
 import { useUIStore } from '../../../store/uiStore';
+import { useAcademicYear } from '../../../context/AcademicYearContext';
 import { PrincipalDashboard } from '../components/PrincipalDashboard';
 import { StudentsManager } from '../components/StudentsManager';
 import { StaffManager } from '../components/StaffManager';
@@ -47,6 +49,7 @@ export type PrincipalView =
 export const PrincipalLayout: React.FC = () => {
   const [view, setView] = useState<PrincipalView>('DASHBOARD');
   const { isSubView, setSubView } = useUIStore();
+  const { academicYears, isLoading } = useAcademicYear();
 
   const goTo = (v: PrincipalView) => { setView(v); setSubView(true); };
   const goBack = () => { setView('DASHBOARD'); setSubView(false); };
@@ -55,6 +58,36 @@ export const PrincipalLayout: React.FC = () => {
 
   // When footer HOME pressed, isSubView becomes false → reset to dashboard
   useEffect(() => { if (!isSubView) setView('DASHBOARD'); }, [isSubView]);
+
+  // Always allow the academic year manager so the principal can create the first year.
+  if (view === 'YEAR_CLOSING') return <AcademicYearManager onBack={goBack} />;
+
+  // Lock every other feature until at least one academic year has been created.
+  if (!isLoading && academicYears.length === 0) {
+    return (
+      <div className="min-h-screen bg-slate-50 flex flex-col items-center justify-center p-6 text-center gap-6">
+        <div className="w-20 h-20 rounded-3xl bg-gradient-to-br from-indigo-500 to-violet-600 flex items-center justify-center shadow-lg">
+          <Lock size={32} className="text-white" />
+        </div>
+        <div className="space-y-2 max-w-xs">
+          <h2 className="text-xl font-black text-slate-900">Academic Year Zaroori Hai</h2>
+          <p className="text-[13px] font-bold text-slate-500 leading-relaxed">
+            Sabhi features tab tak lock hain jab tak aap pehla academic year setup nahi karte.
+            Students, staff, fees, attendance — sab ke liye ek active year hona zaroori hai.
+          </p>
+        </div>
+        <button
+          onClick={() => goTo('YEAR_CLOSING')}
+          className="flex items-center gap-2 bg-indigo-600 hover:bg-indigo-700 text-white font-black text-sm px-6 py-3.5 rounded-2xl shadow-md active:scale-95 transition-transform"
+        >
+          <Calendar size={18} />
+          Pehla Academic Year Banayein
+          <Sparkles size={16} className="opacity-80" />
+        </button>
+        <ToastContainer />
+      </div>
+    );
+  }
 
   if (view === 'STUDENTS')      return <StudentsManager        onBack={goBack} />;
   if (view === 'ADMISSION')     return <StudentsManager        onBack={goBack} initialView="ADMISSION" />;
@@ -76,7 +109,6 @@ export const PrincipalLayout: React.FC = () => {
   if (view === 'TIMETABLE')     return <TimetableManager       onBack={goBack} />;
   if (view === 'FEE_LEDGER')    return <FeeLedger              onBack={goBack} />;
   if (view === 'SALARY_LEDGER') return <SalaryLedger           onBack={goBack} />;
-  if (view === 'YEAR_CLOSING')     return <AcademicYearManager    onBack={goBack} />;
   if (view === 'STAFF_ATTENDANCE') return <StaffAttendanceManager onBack={goBack} />;
   if (view === 'ATTENDANCE')       return <AttendanceHub          onBack={goBack} />;
   if (view === 'TRANSPORT_MGMT')   return <TransportManager       onBack={goBack} />;
