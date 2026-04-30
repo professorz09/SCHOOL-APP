@@ -602,6 +602,43 @@ export const principalService = {
     });
   },
 
+  async getSectionsForYear(yearId: string): Promise<Array<{
+    id: string;
+    className: string;
+    section: string;
+    studentCount: number;
+    capacity: number;
+    classTeacher: string | null;
+    stream: string | null;
+  }>> {
+    const schoolId = getSchoolId();
+    const { data, error } = await supabase
+      .from('sections')
+      .select('id, class_name, section, student_count, capacity, class_teacher, stream')
+      .eq('school_id', schoolId)
+      .eq('academic_year_id', yearId)
+      .order('class_name')
+      .order('section');
+    if (error) throw new Error(error.message);
+    return ((data ?? []) as Array<{
+      id: string;
+      class_name: string;
+      section: string;
+      student_count: number;
+      capacity: number;
+      class_teacher: string | null;
+      stream: string | null;
+    }>).map(r => ({
+      id: r.id,
+      className: r.class_name,
+      section: r.section,
+      studentCount: r.student_count,
+      capacity: r.capacity,
+      classTeacher: r.class_teacher,
+      stream: r.stream,
+    }));
+  },
+
   async updateAYConfig(id: string, input: Partial<AcademicYearConfig>): Promise<AcademicYearConfig> {
     const schoolId = getSchoolId();
     if (input.classes) {

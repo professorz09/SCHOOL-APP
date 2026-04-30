@@ -21,6 +21,7 @@ import {
 import { storageService } from '../../../services/storage.service';
 import { StudentClassAssignmentModal } from './StudentClassAssignmentModal';
 import { useAcademicYear } from '../../../context/AcademicYearContext';
+import { principalService } from '../../../services/principal.service';
 
 type MainView = 'MENU' | 'ADMISSION' | 'FEES' | 'CLASSES' | 'ARCHIVE';
 type SubView = 'LIST' | 'CREATE' | 'PROFILE' | 'CLASS_DETAIL' | 'SECTION_DETAIL';
@@ -75,7 +76,7 @@ const BLANK_FORM_WITH_PARENT: FormWithParent = {
 
 export const StudentsManager: React.FC<Props> = ({ onBack, initialView }) => {
   const { showToast } = useUIStore();
-  const { activeYear } = useAcademicYear();
+  const { activeYear, academicYears } = useAcademicYear();
   const [mainView, setMainView] = useState<MainView>(initialView ?? 'CLASSES');
   const [subView, setSubView] = useState<SubView>('LIST');
   const [students, setStudents] = useState<Student[]>([]);
@@ -134,12 +135,25 @@ export const StudentsManager: React.FC<Props> = ({ onBack, initialView }) => {
   const [archiveCounts, setArchiveCounts] = useState<Record<ArchiveTab, number>>({
     ACTIVE: 0, INACTIVE: 0, TC_ISSUED: 0, ALUMNI: 0, UNASSIGNED: 0,
   });
+
+  // DB-backed sections for the active academic year (includes empty sections)
+  type DbSection = {
+    id: string; className: string; section: string;
+    studentCount: number; capacity: number;
+    classTeacher: string | null; stream: string | null;
+  };
+  const [dbSections, setDbSections] = useState<DbSection[]>([]);
   const [assignTarget, setAssignTarget] = useState<Student | null>(null);
   const [tcModal, setTcModal] = useState<{ student: Student; tcNumber: string; reason: string } | null>(null);
   const [profileDocsLive, setProfileDocsLive] = useState<StudentDoc[]>([]);
   const [profileDocUploading, setProfileDocUploading] = useState<DocumentUpload['type'] | null>(null);
 
   useEffect(() => { void studentService.getAll().then(setStudents); }, [activeYear?.id]);
+  useEffect(() => {
+    if (!activeYear?.id) { setDbSections([]); return; }
+    void principalService.getSectionsForYear(activeYear.id)
+      .then(setDbSections).catch(() => setDbSections([]));
+  }, [activeYear?.id]);
   useEffect(() => { schoolInfoService.get().then(setSchoolInfo).catch(() => setSchoolInfo(null)); }, []);
 
   const refreshArchive = React.useCallback(async () => {
@@ -719,14 +733,16 @@ export const StudentsManager: React.FC<Props> = ({ onBack, initialView }) => {
                     <div className="flex-1 min-w-0">
                       <div className="font-extrabold text-slate-900 text-sm truncate">{student.name}</div>
                       <div className="flex items-center gap-2 mt-0.5">
-                        <span className="text-[10px] font-bold text-slate-400">{student.className}-{student.section}</span>
+                        <span className="text-[10px] font-bold text-slate-400">
+                          {student.className ? `${student.className}·${student.section}` : 'Unassigned'}
+                        </span>
                         <span className="text-[9px] font-bold text-slate-300">·</span>
                         <span className="text-[10px] font-bold text-indigo-500">{student.admissionNo}</span>
                       </div>
                     </div>
                     <div className="flex flex-col items-end gap-1">
                       <span className={`text-[9px] font-black px-2 py-0.5 rounded-full uppercase ${
-                        student.feeStatus === 'PAID' ? 'bg-emerald-100 text-emerald-700' :
+                        student.feeStatus === PaymentStatus.PAID ? 'bg-emerald-100 text-emerald-700' :
                         student.feeStatus === 'PARTIAL' ? 'bg-amber-100 text-amber-700' :
                         'bg-rose-100 text-rose-600'
                       }`}>
@@ -992,7 +1008,9 @@ export const StudentsManager: React.FC<Props> = ({ onBack, initialView }) => {
                   </div>
                   <div className="flex-1">
                     <div className="font-extrabold text-slate-900 text-sm">{student.name}</div>
-                    <div className="text-[10px] font-bold text-slate-400 mt-0.5">{student.className}-{student.section} · ₹{((student.totalFee - student.paidFee) / 1000).toFixed(0)}K due</div>
+                    <div className="text-[10px] font-bold text-slate-400 mt-0.5">
+                      {student.className ? `${student.className}-${student.section}` : 'Unassigned'} · ₹{((student.totalFee - student.paidFee) / 1000).toFixed(0)}K due
+                    </div>
                   </div>
                   <span className={`text-[9px] font-black px-2 py-0.5 rounded-full uppercase ${PAYMENT_COLORS[student.feeStatus]}`}>
                     {student.feeStatus}
@@ -1009,10 +1027,30 @@ export const StudentsManager: React.FC<Props> = ({ onBack, initialView }) => {
   // ─── CLASSES (Class → Section → Students) ────────────────────────────────
 
   if (!renderProfile && mainView === 'CLASSES') {
-    const classes = [...new Set(students.map(s => s.className))].sort();
-    const sections = selectedClass
-      ? [...new Set(students.filter(s => s.className === selectedClass).map(s => s.section))].sort()
+    // Sort helper: Pre-KG → LKG → UKG → Class 1 … Class 12
+    const sortClassNames = (a: string, b: string) => {
+      const order = ['Pre-KG', 'LKG', 'UKG'];
+      const ia = order.indexOf(a), ib = order.indexOf(b);
+      if (ia !== -1 && ib !== -1) return ia - ib;
+      if (ia !== -1) return -1;
+      if (ib !== -1) return 1;
+      return (parseInt(a.replace('Class ', ''), 10) || 0) - (parseInt(b.replace('Class ', ''), 10) || 0);
+    };
+
+    // Class list: use DB sections (shows classes even if no students assigned yet)
+    // Falls back to student-derived list when DB sections haven't loaded.
+    const classNames = dbSections.length
+      ? [...new Set(dbSections.map(s => s.className))].sort(sortClassNames)
+      : [...new Set(students.map(s => s.className).filter(Boolean))].sort(sortClassNames);
+
+    // Sections for selected class: from DB (includes empty/unfilled sections)
+    const classSections: DbSection[] = selectedClass
+      ? dbSections.length
+        ? dbSections.filter(s => s.className === selectedClass).sort((a, b) => a.section.localeCompare(b.section))
+        : [...new Set(students.filter(s => s.className === selectedClass).map(s => s.section))].sort()
+            .map(sec => ({ id: sec, className: selectedClass, section: sec, studentCount: 0, capacity: 45, classTeacher: null, stream: null }))
       : [];
+
     const classStudents = selectedClass && selectedSection
       ? students.filter(s => s.className === selectedClass && s.section === selectedSection)
       : [];
@@ -1023,6 +1061,7 @@ export const StudentsManager: React.FC<Props> = ({ onBack, initialView }) => {
         s.name.toLowerCase().includes(search.toLowerCase()) ||
         s.rollNo.includes(search)
       );
+      const secMeta = classSections.find(s => s.section === selectedSection);
 
       return (
         <div className="w-full bg-slate-50 flex flex-col animate-in slide-in-from-right-8 duration-300">
@@ -1035,7 +1074,10 @@ export const StudentsManager: React.FC<Props> = ({ onBack, initialView }) => {
                 <h2 className="text-xl font-black text-slate-900 uppercase tracking-tight">
                   {selectedClass.replace('Class ', '')}-{selectedSection}
                 </h2>
-                <p className="text-[10px] font-bold text-slate-400">{classStudents.length} students</p>
+                <p className="text-[10px] font-bold text-slate-400">
+                  {classStudents.length}{secMeta?.capacity ? `/${secMeta.capacity}` : ''} students
+                  {secMeta?.classTeacher ? ` · ${secMeta.classTeacher}` : ''}
+                </p>
               </div>
             </div>
             <div className="relative">
@@ -1048,12 +1090,14 @@ export const StudentsManager: React.FC<Props> = ({ onBack, initialView }) => {
 
           <div className="flex-1 overflow-y-auto p-4">
             <div className="bg-white rounded-2xl border border-slate-100 shadow-sm overflow-hidden">
-              {filteredClassStudents.map((s, idx) => (
+              {filteredClassStudents
+                .sort((a, b) => (parseInt(a.rollNo, 10) || 0) - (parseInt(b.rollNo, 10) || 0))
+                .map((s, idx) => (
                 <button key={s.id}
-                  onClick={() => { setSelected(s); loadStudentData(s); setActiveProfileTab('INFO'); setSubView('PROFILE'); }}
+                  onClick={() => { setSelected(s); void loadStudentData(s); setActiveProfileTab('INFO'); setSubView('PROFILE'); }}
                   className={`w-full flex items-center gap-4 px-4 py-3.5 text-left active:bg-slate-50 transition-colors ${idx < filteredClassStudents.length - 1 ? 'border-b border-slate-100' : ''}`}>
                   <div className="w-10 h-10 rounded-full bg-indigo-100 text-indigo-700 flex items-center justify-center font-black text-sm shrink-0">
-                    {s.name.split(' ').map(w => w[0]).join('').slice(0, 2)}
+                    {s.name.split(' ').map((w: string) => w[0]).join('').slice(0, 2)}
                   </div>
                   <div className="flex-1">
                     <div className="font-extrabold text-slate-900 text-sm">{s.name}</div>
@@ -1070,7 +1114,7 @@ export const StudentsManager: React.FC<Props> = ({ onBack, initialView }) => {
               {filteredClassStudents.length === 0 && (
                 <div className="flex flex-col items-center py-10 text-slate-400">
                   <Users size={28} className="mb-2 opacity-40" />
-                  <p className="font-bold text-sm">No students found</p>
+                  <p className="font-bold text-sm">{search ? 'No students found' : 'No students assigned to this section'}</p>
                 </div>
               )}
             </div>
@@ -1090,41 +1134,56 @@ export const StudentsManager: React.FC<Props> = ({ onBack, initialView }) => {
             </button>
             <div>
               <h2 className="text-xl font-black text-slate-900 uppercase tracking-tight">Class {clsNum}</h2>
-              <p className="text-[10px] font-bold text-slate-400">{sections.length} section{sections.length !== 1 ? 's' : ''}</p>
+              <p className="text-[10px] font-bold text-slate-400">{classSections.length} section{classSections.length !== 1 ? 's' : ''}</p>
             </div>
           </div>
 
           <div className="flex-1 overflow-y-auto p-4">
             <div className="bg-white rounded-2xl border border-slate-100 shadow-sm overflow-hidden">
-              {sections.map((section, idx) => {
-                const count = students.filter(s => s.className === selectedClass && s.section === section).length;
-                const sectionStudents = students.filter(s => s.className === selectedClass && s.section === section);
-                const highAtt = sectionStudents.filter(s => s.attendancePercent >= 75).length;
+              {classSections.map((sec, idx) => {
+                const liveCount = students.filter(s => s.className === selectedClass && s.section === sec.section).length;
+                const highAtt = students.filter(s => s.className === selectedClass && s.section === sec.section && s.attendancePercent >= 75).length;
+                const isFull = sec.capacity > 0 && liveCount >= sec.capacity;
                 return (
-                  <button key={section}
-                    onClick={() => { setSelectedSection(section); setSearch(''); }}
-                    className={`w-full flex items-center gap-4 px-4 py-4 text-left active:bg-slate-50 transition-colors ${idx < sections.length - 1 ? 'border-b border-slate-100' : ''}`}>
+                  <button key={sec.id}
+                    onClick={() => { setSelectedSection(sec.section); setSearch(''); }}
+                    className={`w-full flex items-center gap-4 px-4 py-4 text-left active:bg-slate-50 transition-colors ${idx < classSections.length - 1 ? 'border-b border-slate-100' : ''}`}>
                     <div className="w-11 h-11 rounded-xl bg-indigo-100 text-indigo-700 flex items-center justify-center font-black text-lg shrink-0">
-                      {section}
+                      {sec.section}
                     </div>
-                    <div className="flex-1">
-                      <div className="font-extrabold text-slate-900 text-sm">{clsNum}-{section}</div>
-                      <div className="text-[10px] font-bold text-slate-400 mt-0.5">{count} students · {highAtt} good attendance</div>
+                    <div className="flex-1 min-w-0">
+                      <div className="font-extrabold text-slate-900 text-sm">{clsNum}-{sec.section}</div>
+                      <div className="flex flex-wrap items-center gap-x-1.5 mt-0.5">
+                        <span className="text-[10px] font-bold text-slate-400">
+                          {liveCount}{sec.capacity > 0 ? `/${sec.capacity}` : ''} enrolled
+                        </span>
+                        {highAtt > 0 && <span className="text-[9px] font-black text-emerald-600">· {highAtt} ≥75% att</span>}
+                        {sec.classTeacher && <span className="text-[9px] font-bold text-slate-400 truncate">· {sec.classTeacher}</span>}
+                      </div>
                     </div>
-                    <div className="bg-indigo-50 text-indigo-700 text-[10px] font-black px-2.5 py-1 rounded-lg">
-                      {count}
+                    <div className={`text-[10px] font-black px-2.5 py-1 rounded-lg shrink-0 ${
+                      isFull ? 'bg-rose-50 text-rose-600' : 'bg-indigo-50 text-indigo-700'
+                    }`}>
+                      {liveCount}
                     </div>
                     <ChevronRight size={16} className="text-slate-300" />
                   </button>
                 );
               })}
+              {classSections.length === 0 && (
+                <div className="flex flex-col items-center py-10 text-slate-400">
+                  <BookOpen size={28} className="mb-2 opacity-40" />
+                  <p className="font-bold text-sm">No sections configured</p>
+                  <p className="text-xs font-bold mt-1 opacity-60">Add sections in Academic Year setup</p>
+                </div>
+              )}
             </div>
           </div>
         </div>
       );
     }
 
-    // ── Class Directory (2×2 Grid) ─────────────────────────────────────────
+    // ── Class Directory ────────────────────────────────────────────────────
     return (
       <div className="w-full bg-slate-50 flex flex-col animate-in slide-in-from-right-8 duration-300">
         <div className="sticky top-0 z-10 bg-white border-b border-slate-100 shadow-sm">
@@ -1134,17 +1193,20 @@ export const StudentsManager: React.FC<Props> = ({ onBack, initialView }) => {
             </button>
             <div>
               <h2 className="text-xl font-black text-slate-900 uppercase tracking-tight">Students Directory</h2>
-              <p className="text-[10px] font-bold text-slate-400">{students.length} total students · {classes.length} classes</p>
+              <p className="text-[10px] font-bold text-slate-400">
+                {students.length} enrolled · {classNames.length} class{classNames.length !== 1 ? 'es' : ''}
+              </p>
             </div>
           </div>
         </div>
 
         <div className="flex-1 overflow-y-auto p-4">
           <div className="grid grid-cols-2 gap-3">
-            {classes.map(cls => {
+            {classNames.map(cls => {
               const count = students.filter(s => s.className === cls).length;
               const clsNum = cls.replace('Class ', '');
-              const paid = students.filter(s => s.className === cls && s.feeStatus === 'PAID').length;
+              const paid = students.filter(s => s.className === cls && s.feeStatus === PaymentStatus.PAID).length;
+              const numSections = dbSections.filter(s => s.className === cls).length;
               return (
                 <button key={cls}
                   onClick={() => { setSelectedClass(cls); setSearch(''); }}
@@ -1153,20 +1215,24 @@ export const StudentsManager: React.FC<Props> = ({ onBack, initialView }) => {
                     {clsNum}
                   </div>
                   <div className="font-black text-slate-900 text-sm">{cls}</div>
-                  <div className="flex items-center gap-2 mt-1">
-                    <span className="text-[10px] font-black text-slate-400">{count} students</span>
-                    {paid > 0 && <span className="text-[9px] font-black text-emerald-600 bg-emerald-50 px-1.5 py-0.5 rounded-full">{paid} paid</span>}
+                  <div className="text-[10px] font-bold text-slate-400 mt-0.5">
+                    {numSections > 0 ? `${numSections} sec · ` : ''}{count} students
                   </div>
+                  {paid > 0 && (
+                    <span className="inline-block mt-1 text-[9px] font-black text-emerald-600 bg-emerald-50 px-1.5 py-0.5 rounded-full">
+                      {paid} paid
+                    </span>
+                  )}
                 </button>
               );
             })}
           </div>
 
-          {classes.length === 0 && (
+          {classNames.length === 0 && (
             <div className="flex flex-col items-center py-16 text-slate-400">
               <Users size={32} className="mb-3 opacity-40" />
-              <p className="font-bold text-sm">No students yet</p>
-              <p className="text-xs font-bold mt-1 opacity-60">Add students via Admission section</p>
+              <p className="font-bold text-sm">No classes yet</p>
+              <p className="text-xs font-bold mt-1 opacity-60">Create classes in the Academic Year setup</p>
             </div>
           )}
         </div>
@@ -1245,11 +1311,13 @@ export const StudentsManager: React.FC<Props> = ({ onBack, initialView }) => {
                   <p className="text-[10px] font-bold text-white/60 mt-0.5">{selected.admissionNo}</p>
                   <div className="flex flex-wrap gap-1.5 mt-2">
                     <span className="text-[9px] font-black bg-white/20 text-white px-2 py-0.5 rounded-full">
-                      {selected.className}-{selected.section}
+                      {selected.className ? `${selected.className}-${selected.section}` : 'Unassigned'}
                     </span>
-                    <span className="text-[9px] font-black bg-white/20 text-white px-2 py-0.5 rounded-full">
-                      Roll #{selected.rollNo}
-                    </span>
+                    {selected.rollNo && (
+                      <span className="text-[9px] font-black bg-white/20 text-white px-2 py-0.5 rounded-full">
+                        Roll #{selected.rollNo}
+                      </span>
+                    )}
                     {selected.stream && (
                       <span className="text-[9px] font-black bg-white/20 text-white px-2 py-0.5 rounded-full">
                         {selected.stream}
@@ -1335,6 +1403,7 @@ export const StudentsManager: React.FC<Props> = ({ onBack, initialView }) => {
                     <ProfileField label="Roll Number" value={selected.rollNo || '—'} />
                     <ProfileField label="Class & Section" value={selected.className ? `${selected.className} – ${selected.section}` : 'Unassigned'} />
                     {selected.stream && <ProfileField label="Stream" value={selected.stream} />}
+                    <ProfileField label="Academic Year" value={academicYears.find(y => y.id === selected.academicYearId)?.name ?? (selected.academicYearId ? 'Unknown Year' : 'Not assigned')} />
                     <ProfileField label="Admission Date" value={fmtAdm} />
                   </div>
                   <div className="mt-3 pt-3 border-t border-slate-100">
