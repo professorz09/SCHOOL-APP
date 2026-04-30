@@ -282,11 +282,46 @@ export const staffService = {
   },
 
   async suspend(id: string): Promise<StaffMember> {
-    return this.update(id, { status: 'SUSPENDED' });
+    const schoolId = getSchoolId();
+    const { data: row } = await supabase
+      .from('staff').select('user_id')
+      .eq('id', id).eq('school_id', schoolId).maybeSingle();
+
+    const updated = await this.update(id, { status: 'SUSPENDED' });
+
+    const { data: ay } = await supabase
+      .from('academic_years').select('id')
+      .eq('school_id', schoolId).eq('is_active', true).maybeSingle();
+    const ayId = (ay as { id: string } | null)?.id ?? null;
+
+    if (ayId) {
+      await supabase.from('staff_permissions')
+        .delete().eq('school_id', schoolId).eq('academic_year_id', ayId).eq('staff_id', id);
+      await supabase.from('staff_class_assignments')
+        .delete().eq('school_id', schoolId).eq('academic_year_id', ayId).eq('staff_id', id);
+    }
+
+    const userId = (row as { user_id: string | null } | null)?.user_id ?? null;
+    if (userId) {
+      try { await adminApi.setSchoolUserActive(userId, false); } catch { /* best-effort */ }
+    }
+
+    await logAudit('staff_suspended', 'staff', id, { detachedFromClasses: !!ayId });
+    return updated;
   },
 
   async reinstate(id: string): Promise<StaffMember> {
-    return this.update(id, { status: 'ACTIVE' });
+    const schoolId = getSchoolId();
+    const { data: row } = await supabase
+      .from('staff').select('user_id')
+      .eq('id', id).eq('school_id', schoolId).maybeSingle();
+    const updated = await this.update(id, { status: 'ACTIVE' });
+    const userId = (row as { user_id: string | null } | null)?.user_id ?? null;
+    if (userId) {
+      try { await adminApi.setSchoolUserActive(userId, true); } catch { /* best-effort */ }
+    }
+    await logAudit('staff_reinstated', 'staff', id);
+    return updated;
   },
 
   /**

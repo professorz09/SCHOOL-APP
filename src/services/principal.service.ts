@@ -999,12 +999,13 @@ export const principalService = {
     const read = async () => {
       const { data, error } = await supabase
         .from('fee_structures')
-        .select('id, name, class_name, billing_cycle, fee_heads, monthly_due_dates, late_fee')
+        .select('id, name, class_name, structure_type, billing_cycle, fee_heads, monthly_due_dates, late_fee')
         .eq('school_id', schoolId).eq('academic_year_id', ayId)
         .order('class_name');
       if (error) throw new Error(error.message);
       return ((data ?? []) as Array<{
         id: string; name: string; class_name: string;
+        structure_type: FeeStructureType | null;
         billing_cycle: BillingCycle | null;
         fee_heads: FeeStructureRecord['feeHeads'];
         monthly_due_dates: FeeStructureRecord['monthlyDueDates'];
@@ -1013,6 +1014,7 @@ export const principalService = {
         id: r.id,
         name: r.name,
         className: r.class_name,
+        structureType: (r.structure_type ?? 'CLASS') as FeeStructureType,
         billingCycle: (r.billing_cycle ?? 'MONTHLY') as BillingCycle,
         feeHeads: r.fee_heads ?? [],
         monthlyDueDates: r.monthly_due_dates ?? [],
@@ -1099,6 +1101,7 @@ export const principalService = {
       academic_year_id: ayId,
       name: input.name,
       class_name: input.className,
+      structure_type: input.structureType ?? 'CLASS',
       billing_cycle: input.billingCycle,
       fee_heads: input.feeHeads,
       monthly_due_dates: input.monthlyDueDates,
@@ -1115,7 +1118,7 @@ export const principalService = {
       // Capture the previous structure so the audit log can show a real diff.
       const { data: prev } = await supabase
         .from('fee_structures')
-        .select('name, class_name, billing_cycle, fee_heads, monthly_due_dates, late_fee')
+        .select('name, class_name, structure_type, billing_cycle, fee_heads, monthly_due_dates, late_fee')
         .eq('id', input.id).eq('school_id', schoolId).maybeSingle();
       prevSnap = (prev ?? null) as Record<string, unknown> | null;
       const { error } = await supabase
@@ -1132,6 +1135,7 @@ export const principalService = {
     const newSnap: Record<string, unknown> = {
       name: input.name,
       class_name: input.className,
+      structure_type: input.structureType ?? 'CLASS',
       billing_cycle: input.billingCycle,
       fee_heads: input.feeHeads,
       monthly_due_dates: input.monthlyDueDates,
@@ -1147,7 +1151,7 @@ export const principalService = {
       mode: prevSnap ? 'update' : 'create',
       changes,
     });
-    return { ...input, id };
+    return { ...input, structureType: input.structureType ?? 'CLASS', id };
   },
 
   async saveFeeStructureForYear(
@@ -1160,6 +1164,7 @@ export const principalService = {
       academic_year_id: yearId,
       name: input.name,
       class_name: input.className,
+      structure_type: input.structureType ?? 'CLASS',
       billing_cycle: input.billingCycle,
       fee_heads: input.feeHeads,
       monthly_due_dates: input.monthlyDueDates,
@@ -1171,7 +1176,7 @@ export const principalService = {
     if (error) throw new Error(error.message);
     const id = (data as { id: string }).id;
     await logAudit('fee_structure_saved', 'fee_structures', id, { name: input.name, mode: 'create' });
-    return { ...input, id };
+    return { ...input, structureType: input.structureType ?? 'CLASS', id };
   },
 
   async deleteFeeStructure(id: string): Promise<void> {
@@ -1303,10 +1308,13 @@ export interface FeePaymentUploadRecord {
 
 export type BillingCycle = 'MONTHLY' | 'QUARTERLY' | 'HALF_YEARLY' | 'ANNUALLY' | 'CUSTOM';
 
+export type FeeStructureType = 'CLASS' | 'VEHICLE';
+
 export interface FeeStructureRecord {
   id: string;
   name: string;
   className: string;
+  structureType: FeeStructureType;
   billingCycle: BillingCycle;
   feeHeads: Array<{ id: string; name: string; amount: number; frequency: 'MONTHLY' | 'ANNUAL' | 'ONE_TIME'; description: string }>;
   monthlyDueDates: Array<{ month: string; date: string }>;

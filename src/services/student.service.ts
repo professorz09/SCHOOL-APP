@@ -949,6 +949,10 @@ export const studentService = {
 
     // Step 4: transport assignment (handled by transport service).
     if (input.transport) {
+      const { principalService } = await import('./principal.service');
+      const allFs = await principalService.getFeeStructures();
+      const hasVehicleFs = allFs.some(f => (f as any).structureType === 'VEHICLE');
+      if (!hasVehicleFs) throw new Error('Transport assign karne se pehle Vehicle fee structure banana zaroori hai.');
       // Lazy import to avoid a circular dep between student↔transport
       // services (transportService imports from supabase + auth only,
       // but keeping this lazy is the safer pattern).
