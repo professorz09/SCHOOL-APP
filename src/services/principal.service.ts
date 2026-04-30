@@ -1007,7 +1007,11 @@ export const principalService = {
       .from('academic_years').select('id')
       .eq('school_id', schoolId).eq('is_active', true).maybeSingle();
     if (ayErr) throw new Error(ayErr.message);
-    if (!ay) throw new Error('No active academic year');
+    // Surface a clear, actionable message: this branch is hit when the
+    // principal closed the previous year and tried to save a fee structure
+    // before opening a new one. The vague "No active academic year" string
+    // was being swallowed by the toast and looked like a generic failure.
+    if (!ay) throw new Error('Koi active academic year nahi hai. Fee structure save karne ke liye pehle Academic Year section me naya year start karein.');
     const ayId = (ay as { id: string }).id;
 
     const payload = {

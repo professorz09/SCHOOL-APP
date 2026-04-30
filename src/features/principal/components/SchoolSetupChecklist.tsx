@@ -7,7 +7,14 @@ import { PrincipalView } from '../pages/PrincipalLayout';
 
 interface Props {
   schoolId: string | null;
-  academicYearsCount: number;
+  /**
+   * Truthy only when the school currently has at least one OPEN
+   * (non-closed) academic year. Closed years still exist as historical
+   * records but cannot host new sections / fees / staff / students, so
+   * they MUST NOT mark Step 1 as done — otherwise the principal sees
+   * subsequent steps unlocked while saves fail with "no active year".
+   */
+  hasActiveYear: boolean;
   sectionsCount: number;
   feeStructuresCount: number;
   staffCount: number;
@@ -27,7 +34,7 @@ interface Step {
 }
 
 export const SchoolSetupChecklist: React.FC<Props> = ({
-  schoolId, academicYearsCount, sectionsCount, feeStructuresCount,
+  schoolId, hasActiveYear, sectionsCount, feeStructuresCount,
   staffCount, studentsCount, onNavigate,
 }) => {
   const storageKey = schoolId ? `eg.setup_collapsed_${schoolId}` : null;
@@ -56,7 +63,9 @@ export const SchoolSetupChecklist: React.FC<Props> = ({
       title: 'Academic Year',
       desc: 'Start date, end date aur board (CBSE / ICSE / State) set karein',
       view: 'YEAR_CLOSING',
-      done: academicYearsCount > 0,
+      // Closed-only years count as zero here — Step 1 stays "todo" until
+      // the principal opens a fresh year via the wizard.
+      done: hasActiveYear,
     },
     {
       key: 'classes',
@@ -98,7 +107,7 @@ export const SchoolSetupChecklist: React.FC<Props> = ({
       view: 'ADMISSION',
       done: studentsCount > 0,
     },
-  ], [academicYearsCount, sectionsCount, feeStructuresCount, staffCount, studentsCount]);
+  ], [hasActiveYear, sectionsCount, feeStructuresCount, staffCount, studentsCount]);
 
   const doneCount = steps.filter(s => s.done).length;
   const totalCount = steps.length;

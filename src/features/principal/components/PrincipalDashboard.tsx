@@ -42,7 +42,7 @@ export const PrincipalDashboard: React.FC<Props> = ({ onNavigate }) => {
   const [stats, setStats] = useState({
     totalStudents: 0, avgAttendance: 0, paidFees: 0, totalFees: 0,
     totalStaff: 0, openComplaints: 0, pendingApprovals: 0,
-    feeStructuresCount: 0, academicYearsCount: 0, sectionsCount: 0,
+    feeStructuresCount: 0, hasActiveYear: false, sectionsCount: 0,
   });
   const [vehicles, setVehicles] = useState<{ id: string; vehicleNo: string; routeName: string; driverName: string; isActive: boolean; currentStop: string }[]>([]);
   const [liveClasses, setLiveClasses] = useState<LiveClassRow[]>([]);
@@ -70,9 +70,14 @@ export const PrincipalDashboard: React.FC<Props> = ({ onNavigate }) => {
         principalService.getFeeStructures().catch(() => []),
         principalService.getAYConfig().catch(() => []),
       ]);
-      // Sections count for the *active* year (or first year if none active) —
-      // the checklist's "Classes & Sections" step is per-AY, not all-time.
-      const activeAY = ayConfigs.find(c => c.isActive) ?? ayConfigs[0] ?? null;
+      // Sections count is scoped to the *active* year only. We deliberately
+      // do NOT fall back to the first (closed) year — Step 2 of the setup
+      // checklist measures whether the principal has classes set up for the
+      // current operating year, and a closed year's sections cannot host
+      // new students/fees. Without this scoping, closing a year would leave
+      // Step 2 falsely "done" and let the principal advance to fees/staff
+      // before opening a fresh academic year.
+      const activeAY = ayConfigs.find(c => c.isActive) ?? null;
       const sectionsCount = activeAY
         ? activeAY.classes.reduce((s, cl) => s + cl.sections.length, 0)
         : 0;
@@ -103,7 +108,7 @@ export const PrincipalDashboard: React.FC<Props> = ({ onNavigate }) => {
         openComplaints: complaints.filter(c => c.status !== 'RESOLVED').length,
         pendingApprovals: approvals.filter(a => a.status === 'PENDING').length,
         feeStructuresCount: feeStructures.length,
-        academicYearsCount: ayConfigs.length,
+        hasActiveYear: !!activeAY,
         sectionsCount,
       });
       setVehicles(allVehicles.filter(v => v.isActive).map(v => ({
@@ -149,7 +154,7 @@ export const PrincipalDashboard: React.FC<Props> = ({ onNavigate }) => {
       <div className="pt-1">
         <SchoolSetupChecklist
           schoolId={session?.schoolId ?? null}
-          academicYearsCount={stats.academicYearsCount}
+          hasActiveYear={stats.hasActiveYear}
           sectionsCount={stats.sectionsCount}
           feeStructuresCount={stats.feeStructuresCount}
           staffCount={stats.totalStaff}

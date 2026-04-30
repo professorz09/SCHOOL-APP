@@ -23,15 +23,41 @@ export const AcademicYearManager: React.FC<Props> = ({ onBack }) => {
   // ─── Wizard state ───────────────────────────────────────────────────────
   const [showWizard, setShowWizard] = useState(false);
   const wizardDefaults = useMemo(() => {
+    // Default to the year AFTER the latest existing year so the auto-filled
+    // label cannot collide with the UNIQUE(school_id, label) constraint on
+    // academic_years (migration 0001). Without this, after the principal
+    // closes "2026-27" today, the wizard would re-suggest "2026-27" and
+    // the create RPC would fail with a duplicate-label error — exactly the
+    // "step 1 breaks after closing year" bug we're fixing.
     const today = new Date();
-    const startYr = today.getMonth() >= 3 ? today.getFullYear() : today.getFullYear() - 1;
+    let startYr = today.getMonth() >= 3 ? today.getFullYear() : today.getFullYear() - 1;
+    if (academicYears.length > 0) {
+      // academicYears are ordered by start_date DESC by the context, so
+      // the first entry is the most recent year. Bump start to the year
+      // AFTER its end_date.
+      const latestEnd = new Date(academicYears[0].endDate);
+      if (!Number.isNaN(latestEnd.getTime())) {
+        const nextStart = latestEnd.getFullYear() +
+          (latestEnd.getMonth() >= 3 ? 1 : 0);
+        if (nextStart > startYr) startYr = nextStart;
+      }
+    }
+    const fallbackBoard = academicYears[0]?.board ?? 'CBSE';
     return {
       label: `${startYr}-${String(startYr + 1).slice(-2)}`,
       start: `${startYr}-04-01`,
       end:   `${startYr + 1}-03-31`,
-      board: activeYear?.board ?? 'CBSE',
+      board: activeYear?.board ?? fallbackBoard,
     };
-  }, [activeYear?.board]);
+  }, [activeYear?.board, academicYears]);
+
+  // True when the school has historical years but ALL of them are closed —
+  // i.e. the principal closed the last year and hasn't opened a new one.
+  // In this state the rest of the app (sections, fees, staff, students)
+  // cannot make progress until a fresh AY is created, so we render a
+  // prominent CTA above the year list (the small "Add Academic Year" link
+  // alone is too easy to miss right after a year-close).
+  const noActiveYear = academicYears.length > 0 && !activeYear;
 
   // ─── "Make active" confirmation state ──────────────────────────────────
   const [activatingId, setActivatingId] = useState<string | null>(null);
@@ -291,6 +317,35 @@ export const AcademicYearManager: React.FC<Props> = ({ onBack }) => {
           </div>
         ) : (
           <>
+            {/* ─── No active year warning ──────────────────────────────────
+               Shown right after a year-close when every year on file is
+               locked. Without this prompt the principal lands on a page
+               full of locked years and the *only* affordance to move
+               forward is the small dashed "Add Academic Year" link below
+               — which several principals reported missing entirely. */}
+            {noActiveYear && (
+              <div className="bg-white rounded-2xl border-2 border-rose-300 shadow-sm p-5 space-y-3">
+                <div className="flex items-start gap-3">
+                  <div className="w-10 h-10 bg-rose-100 rounded-2xl flex items-center justify-center shrink-0">
+                    <AlertTriangle size={20} className="text-rose-600" />
+                  </div>
+                  <div className="flex-1 min-w-0">
+                    <p className="text-sm font-black text-slate-900">Koi active academic year nahi hai</p>
+                    <p className="text-[11px] font-bold text-slate-500 leading-relaxed mt-1">
+                      Pichla year close ho chuka hai. Sections, fees, staff aur students
+                      add karne ke liye pehle naya academic year start karein.
+                    </p>
+                  </div>
+                </div>
+                <button
+                  onClick={() => setShowWizard(true)}
+                  className="w-full text-white font-black text-sm rounded-xl py-3 bg-rose-600 hover:bg-rose-700 flex items-center justify-center gap-2"
+                >
+                  <Sparkles size={16} /> Naya Academic Year Start Karein
+                </button>
+              </div>
+            )}
+
             {/* ─── Add new year button ──────────────────────────────────── */}
             <button
               onClick={() => setShowWizard(true)}
