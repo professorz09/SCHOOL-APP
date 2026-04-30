@@ -25,6 +25,8 @@ import { useAcademicYear } from '../../../context/AcademicYearContext';
 import { principalService } from '../../../services/principal.service';
 import { useEditorModeStore } from '../../../store/editorModeStore';
 
+const PAGE_SIZE = 50;
+
 type MainView = 'MENU' | 'ADMISSION' | 'FEES' | 'CLASSES' | 'ARCHIVE';
 type SubView = 'LIST' | 'CREATE' | 'PROFILE' | 'CLASS_DETAIL' | 'SECTION_DETAIL';
 type ArchiveTab = 'ACTIVE' | 'INACTIVE' | 'TC_ISSUED' | 'ALUMNI' | 'UNASSIGNED';
@@ -108,6 +110,10 @@ export const StudentsManager: React.FC<Props> = ({ onBack, initialView }) => {
   const [changeBusy, setChangeBusy] = useState(false);
   const [changeError, setChangeError] = useState<string | null>(null);
 
+  const [showCountAdmission, setShowCountAdmission] = useState(PAGE_SIZE);
+  const [showCountArchive, setShowCountArchive] = useState(PAGE_SIZE);
+  const [showCountFees, setShowCountFees] = useState(PAGE_SIZE);
+
   // Cancel-transport modal
   const [cancelTransportOpen, setCancelTransportOpen] = useState(false);
   const [cancelTransportReason, setCancelTransportReason] = useState('');
@@ -187,6 +193,10 @@ export const StudentsManager: React.FC<Props> = ({ onBack, initialView }) => {
   useEffect(() => {
     if (mainView === 'ARCHIVE') void refreshArchive();
   }, [mainView, refreshArchive, activeYear?.id]);
+
+  useEffect(() => { setShowCountAdmission(PAGE_SIZE); }, [search]);
+  useEffect(() => { setShowCountArchive(PAGE_SIZE); }, [search, archiveTab]);
+  useEffect(() => { setShowCountFees(PAGE_SIZE); }, [search, classFilter]);
 
   const loadStudentData = async (student: Student) => {
     // Fetch docs from `student_documents` directly — getAll/getById return
@@ -723,7 +733,7 @@ export const StudentsManager: React.FC<Props> = ({ onBack, initialView }) => {
 
         <div className="flex-1 overflow-y-auto p-4">
           <div className="space-y-2">
-            {filteredStudents.map(student => {
+            {filteredStudents.slice(0, showCountAdmission).map(student => {
               const initials = student.name.split(' ').map(w => w[0]).join('').slice(0, 2);
               return (
                 <button key={student.id}
@@ -763,6 +773,17 @@ export const StudentsManager: React.FC<Props> = ({ onBack, initialView }) => {
                 <p className="font-bold text-sm">{search ? 'No students found' : 'No students admitted yet'}</p>
                 {!search && <p className="text-xs font-bold mt-1 opacity-60">Tap New to admit the first student</p>}
               </div>
+            )}
+            {showCountAdmission < filteredStudents.length && (
+              <button onClick={() => setShowCountAdmission(c => c + PAGE_SIZE)}
+                className="w-full py-3 mt-2 bg-white border border-slate-200 rounded-2xl text-xs font-black text-slate-500 uppercase tracking-widest active:scale-95 transition-transform">
+                Load More ({filteredStudents.length - showCountAdmission} remaining)
+              </button>
+            )}
+            {showCountAdmission >= filteredStudents.length && filteredStudents.length > PAGE_SIZE && (
+              <p className="text-center text-[9px] font-bold text-slate-300 py-3">
+                All {filteredStudents.length} students shown
+              </p>
             )}
           </div>
         </div>
@@ -844,7 +865,7 @@ export const StudentsManager: React.FC<Props> = ({ onBack, initialView }) => {
             </div>
           )}
           <div className="space-y-2">
-            {filtered.map(student => {
+            {filtered.slice(0, showCountArchive).map(student => {
               const initials = student.name.split(' ').map(w => w[0]).join('').slice(0, 2);
               const isUnassigned = !student.className;
               return (
@@ -903,6 +924,17 @@ export const StudentsManager: React.FC<Props> = ({ onBack, initialView }) => {
                 </div>
               );
             })}
+            {showCountArchive < filtered.length && (
+              <button onClick={() => setShowCountArchive(c => c + PAGE_SIZE)}
+                className="w-full py-3 mt-2 bg-white border border-slate-200 rounded-2xl text-xs font-black text-slate-500 uppercase tracking-widest active:scale-95 transition-transform">
+                Load More ({filtered.length - showCountArchive} remaining)
+              </button>
+            )}
+            {showCountArchive >= filtered.length && filtered.length > PAGE_SIZE && (
+              <p className="text-center text-[9px] font-bold text-slate-300 py-3">
+                All {filtered.length} students shown
+              </p>
+            )}
           </div>
         </div>
 
@@ -1001,7 +1033,7 @@ export const StudentsManager: React.FC<Props> = ({ onBack, initialView }) => {
           </div>
 
           <div className="space-y-2">
-            {filteredFees.map(student => (
+            {filteredFees.slice(0, showCountFees).map(student => (
               <button key={student.id}
                 onClick={() => { setSelected(student); loadStudentData(student); setActiveProfileTab('FEES'); setSubView('PROFILE'); }}
                 className="w-full bg-white rounded-2xl border border-slate-100 shadow-sm p-4 text-left active:bg-slate-50 transition-colors">
@@ -1021,6 +1053,17 @@ export const StudentsManager: React.FC<Props> = ({ onBack, initialView }) => {
                 </div>
               </button>
             ))}
+            {showCountFees < filteredFees.length && (
+              <button onClick={() => setShowCountFees(c => c + PAGE_SIZE)}
+                className="w-full py-3 mt-2 bg-white border border-slate-200 rounded-2xl text-xs font-black text-slate-500 uppercase tracking-widest active:scale-95 transition-transform">
+                Load More ({filteredFees.length - showCountFees} remaining)
+              </button>
+            )}
+            {showCountFees >= filteredFees.length && filteredFees.length > PAGE_SIZE && (
+              <p className="text-center text-[9px] font-bold text-slate-300 py-3">
+                All {filteredFees.length} students shown
+              </p>
+            )}
           </div>
         </div>
       </div>
