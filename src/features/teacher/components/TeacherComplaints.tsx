@@ -8,8 +8,20 @@ type View = 'LIST' | 'CREATE';
 
 interface Props { onBack: () => void; }
 
-const statusColor = (s: string) =>
-  s === 'OPEN' ? 'bg-rose-50 text-rose-700' : 'bg-emerald-50 text-emerald-700';
+const STATUS_LABEL: Record<string, string> = {
+  PENDING:   'Pending',
+  IN_REVIEW: 'In Review',
+  RESOLVED:  'Resolved',
+  REJECTED:  'Rejected',
+};
+
+const statusColor = (s: string) => {
+  if (s === 'PENDING')   return 'bg-rose-50 text-rose-700';
+  if (s === 'IN_REVIEW') return 'bg-amber-50 text-amber-700';
+  if (s === 'RESOLVED')  return 'bg-emerald-50 text-emerald-700';
+  if (s === 'REJECTED')  return 'bg-slate-200 text-slate-700';
+  return 'bg-slate-100 text-slate-500';
+};
 
 export const TeacherComplaintsView: React.FC<Props> = ({ onBack }) => {
   const { showToast } = useUIStore();
@@ -80,14 +92,16 @@ export const TeacherComplaintsView: React.FC<Props> = ({ onBack }) => {
         {complaints.map(c => (
           <div key={c.id} className="bg-white rounded-2xl border border-slate-100 shadow-sm p-4">
             <div className="flex items-start justify-between gap-2 mb-2">
-              <span className={`text-[9px] font-black px-2 py-0.5 rounded-full uppercase ${statusColor(c.status)}`}>{c.status}</span>
+              <span className={`text-[9px] font-black px-2 py-0.5 rounded-full uppercase ${statusColor(c.status)}`}>{STATUS_LABEL[c.status] ?? c.status}</span>
               <span className="text-[10px] font-bold text-slate-400">{c.createdAt}</span>
             </div>
             <div className="font-extrabold text-slate-900 text-sm">{c.subject}</div>
             <div className="text-[11px] font-bold text-slate-400 mt-1 line-clamp-2">{c.description}</div>
             {c.response && (
               <div className="mt-3 pt-3 border-t border-slate-50">
-                <p className="text-[10px] font-black text-emerald-600 mb-1">Principal's Response</p>
+                <p className={`text-[10px] font-black mb-1 ${c.status === 'REJECTED' ? 'text-slate-600' : 'text-emerald-600'}`}>
+                  {c.status === 'REJECTED' ? 'Reason for rejection' : 'Principal\'s Response'}
+                </p>
                 <p className="text-[11px] font-bold text-slate-600">{c.response}</p>
               </div>
             )}

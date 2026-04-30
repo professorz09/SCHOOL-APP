@@ -615,17 +615,30 @@ export const studentService = {
       id: string; subject: string; description: string | null; status: string;
       created_at: string; resolved_at: string | null; response: string | null;
       from_role: string; from_name: string | null;
-    }>).map(c => ({
-      id: c.id,
-      from: (c.from_role === 'TEACHER' || c.from_role === 'PARENT' ? c.from_role : 'STUDENT') as 'STUDENT' | 'TEACHER' | 'PARENT',
-      fromName: c.from_name ?? '',
-      subject: c.subject,
-      description: c.description ?? '',
-      status: c.status as 'OPEN' | 'IN_PROGRESS' | 'RESOLVED',
-      createdAt: c.created_at,
-      resolvedAt: c.resolved_at,
-      response: c.response,
-    }));
+    }>).map(c => {
+      // Defensive mapping: legacy OPEN/IN_PROGRESS rows still exist on
+      // pre-0033 environments. Migration 0033 backfills them.
+      const raw = (c.status ?? '').toUpperCase();
+      let status: import('../types/principal.types').ComplaintStatus;
+      if (raw === 'OPEN') status = 'PENDING';
+      else if (raw === 'IN_PROGRESS') status = 'IN_REVIEW';
+      else if (raw === 'PENDING' || raw === 'IN_REVIEW' ||
+               raw === 'RESOLVED' || raw === 'REJECTED') {
+        status = raw as import('../types/principal.types').ComplaintStatus;
+      } else status = 'PENDING';
+
+      return {
+        id: c.id,
+        from: (c.from_role === 'TEACHER' || c.from_role === 'PARENT' ? c.from_role : 'STUDENT') as 'STUDENT' | 'TEACHER' | 'PARENT',
+        fromName: c.from_name ?? '',
+        subject: c.subject,
+        description: c.description ?? '',
+        status,
+        createdAt: c.created_at,
+        resolvedAt: c.resolved_at,
+        response: c.response,
+      };
+    });
 
     return {
       studentId, academicYearId,

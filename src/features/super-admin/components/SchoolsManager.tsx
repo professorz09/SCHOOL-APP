@@ -1,7 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import {
   ArrowLeft, Plus, Search, Building2, MapPin, Phone, Users,
-  Edit2, Trash2, CheckCircle2, XCircle, Save, UserCheck,
+  Edit2, CheckCircle2, XCircle, Save, UserCheck,
   IndianRupee, Copy, ChevronRight, BookOpen, TrendingUp, AlertCircle,
 } from 'lucide-react';
 import { useSchoolStore } from '../../../store/schoolStore';
@@ -51,7 +51,10 @@ type RealStaff = Awaited<ReturnType<typeof schoolService.getSchoolStaff>>[number
 type RealStudent = Awaited<ReturnType<typeof schoolService.getSchoolStudents>>[number];
 
 export const SchoolsManager: React.FC<Props> = ({ onBack }) => {
-  const { schools, fetchSchools, addSchool, updateSchool, deleteSchool } = useSchoolStore();
+  // Hard-delete is intentionally omitted from this UI — Super Admins can only
+  // toggle a school's status (ACTIVE ↔ INACTIVE) via handleStatusToggle. The
+  // store still exposes deleteSchool for migration scripts / dev tooling.
+  const { schools, fetchSchools, addSchool, updateSchool } = useSchoolStore();
   const { billingYears, fetchAll: fetchBilling } = useBillingStore();
   const { showToast } = useUIStore();
 
@@ -61,7 +64,6 @@ export const SchoolsManager: React.FC<Props> = ({ onBack }) => {
   const [search, setSearch]     = useState('');
   const [activeAYIdx, setActiveAYIdx] = useState(0);
   const [isSubmitting, setIsSubmitting] = useState(false);
-  const [confirmDelete, setConfirmDelete]     = useState<School | null>(null);
   const [confirmDeactivate, setConfirmDeactivate] = useState<School | null>(null);
   const [createdCredentials, setCreatedCredentials] = useState<{ schoolName: string; mobile: string; password: string } | null>(null);
   const [schoolStaff, setSchoolStaff]       = useState<RealStaff[]>([]);
@@ -150,17 +152,6 @@ export const SchoolsManager: React.FC<Props> = ({ onBack }) => {
     } catch (e) {
       showToast(e instanceof Error ? e.message : 'Update failed', 'error');
     } finally { setIsSubmitting(false); }
-  };
-
-  const handleDelete = async (school: School) => {
-    try {
-      await deleteSchool(school.id);
-      setConfirmDelete(null);
-      setView('LIST');
-      showToast(`${school.name} removed`, 'info');
-    } catch (e) {
-      showToast(e instanceof Error ? e.message : 'Failed to remove school', 'error');
-    }
   };
 
   const handleStatusToggle = (school: School) => {
@@ -418,9 +409,6 @@ export const SchoolsManager: React.FC<Props> = ({ onBack }) => {
             <button onClick={() => handleStatusToggle(selected)}
               className={`p-2 rounded-full transition-colors ${isActive ? 'bg-rose-50 text-rose-600 hover:bg-rose-100' : 'bg-emerald-50 text-emerald-600 hover:bg-emerald-100'}`}>
               {isActive ? <XCircle size={18} /> : <CheckCircle2 size={18} />}
-            </button>
-            <button onClick={() => setConfirmDelete(selected)} className="p-2 bg-rose-50 text-rose-600 rounded-full hover:bg-rose-100 transition-colors">
-              <Trash2 size={18} />
             </button>
           </div>
         )}
@@ -858,27 +846,6 @@ export const SchoolsManager: React.FC<Props> = ({ onBack }) => {
           <div className="flex gap-3">
             <button onClick={() => setConfirmDeactivate(null)} className="flex-1 py-3 rounded-2xl border border-slate-200 font-black text-slate-600 active:scale-95 transition-transform">Cancel</button>
             <button onClick={() => doStatusChange(confirmDeactivate, SchoolStatus.INACTIVE)} className="flex-1 py-3 rounded-2xl bg-rose-600 text-white font-black active:scale-95 transition-transform">Deactivate</button>
-          </div>
-        </div>
-      </div>
-    );
-  }
-
-  // ── Delete confirm ────────────────────────────────────────────────────────────
-  if (confirmDelete) {
-    return (
-      <div className="absolute inset-0 z-60 bg-slate-900/60 flex items-end justify-center animate-in fade-in">
-        <div className="bg-white w-full rounded-t-3xl p-6 pb-10 animate-in slide-in-from-bottom-4">
-          <div className="w-10 h-10 rounded-2xl bg-rose-100 text-rose-600 flex items-center justify-center mb-4">
-            <Trash2 size={22} />
-          </div>
-          <h3 className="font-black text-slate-900 text-lg mb-2">Delete School?</h3>
-          <p className="text-sm text-slate-500 mb-6">
-            "<span className="font-black text-slate-800">{confirmDelete.name}</span>" and all related data will be permanently removed.
-          </p>
-          <div className="flex gap-3">
-            <button onClick={() => setConfirmDelete(null)} className="flex-1 py-3 rounded-2xl border border-slate-200 font-black text-slate-600 active:scale-95 transition-transform">Cancel</button>
-            <button onClick={() => handleDelete(confirmDelete)} className="flex-1 py-3 rounded-2xl bg-rose-600 text-white font-black active:scale-95 transition-transform">Delete</button>
           </div>
         </div>
       </div>

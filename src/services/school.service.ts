@@ -107,7 +107,9 @@ export const schoolService = {
   async update(id: string, input: UpdateSchoolInput): Promise<School> {
     const updates: Record<string, unknown> = { updated_at: new Date().toISOString() };
     if (input.name !== undefined) updates.name = input.name;
-    if (input.code !== undefined) updates.code = input.code;
+    // School code is immutable once a school is onboarded — see spec
+    // gap audit item 1.1. We deliberately drop `input.code` here even if
+    // the caller passes it, so a stale form value can never overwrite it.
     if (input.location !== undefined) updates.location = input.location;
     if (input.address !== undefined) updates.address = input.address;
     if (input.phone !== undefined) updates.phone = input.phone;

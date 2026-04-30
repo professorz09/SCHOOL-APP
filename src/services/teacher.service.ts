@@ -311,11 +311,22 @@ interface ComplaintRow {
 }
 
 function rowToComplaint(r: ComplaintRow): TeacherComplaint {
+  // Defensive mapping: legacy 'OPEN'/'IN_PROGRESS' values still exist in
+  // the wild before migration 0033 backfills them on this environment.
+  const raw = (r.status ?? '').toUpperCase();
+  let status: TeacherComplaint['status'];
+  if (raw === 'OPEN') status = 'PENDING';
+  else if (raw === 'IN_PROGRESS') status = 'IN_REVIEW';
+  else if (raw === 'PENDING' || raw === 'IN_REVIEW' ||
+           raw === 'RESOLVED' || raw === 'REJECTED') {
+    status = raw as TeacherComplaint['status'];
+  } else status = 'PENDING';
+
   return {
     id: r.id,
     subject: r.subject,
     description: r.description ?? '',
-    status: r.status === 'RESOLVED' ? 'RESOLVED' : 'OPEN',
+    status,
     createdAt: (r.resolved_at ?? r.created_at).slice(0, 10),
     response: r.response,
   };
@@ -752,7 +763,7 @@ export const teacherService = {
         from_user_id: userId,
         subject,
         description,
-        status: 'OPEN',
+        status: 'PENDING',
       })
       .select('id, subject, description, status, response, created_at, resolved_at')
       .single();
@@ -781,9 +792,11 @@ export const teacherService = {
     const sectionIds = await resolveMySectionIds().catch(() => [] as string[]);
 
     // Build a single OR filter — section ids are UUIDs so safe to embed.
+    // STAFF audience covers all non-student staff (teachers + others).
     const orParts = [
       'audience.eq.ALL',
       'audience.eq.TEACHERS',
+      'audience.eq.STAFF',
       `sent_by.eq.${userId}`,
       ...sectionIds.map(sid => `audience.like.SECTION:${sid}:%`),
     ];

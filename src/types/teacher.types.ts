@@ -94,7 +94,7 @@ export interface TeacherComplaint {
   id: string;
   subject: string;
   description: string;
-  status: 'OPEN' | 'RESOLVED';
+  status: 'PENDING' | 'IN_REVIEW' | 'RESOLVED' | 'REJECTED';
   createdAt: string;
   response: string | null;
 }

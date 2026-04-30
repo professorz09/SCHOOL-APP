@@ -265,6 +265,20 @@ function inferNoticeCategory(title: string, body: string): StudentNotice['catego
   return 'GENERAL';
 }
 
+// ─── Complaint status normalisation ─────────────────────────────────────────
+// Migration 0033 backfills legacy values, but we keep this defensive mapping
+// so older rows still render correctly on environments yet to be migrated.
+function mapComplaintStatus(raw: string | null): StudentComplaint['status'] {
+  const v = (raw ?? '').toUpperCase();
+  if (v === 'OPEN') return 'PENDING';
+  if (v === 'IN_PROGRESS') return 'IN_REVIEW';
+  if (v === 'PENDING' || v === 'IN_REVIEW' ||
+      v === 'RESOLVED' || v === 'REJECTED') {
+    return v as StudentComplaint['status'];
+  }
+  return 'PENDING';
+}
+
 // ─── Homework status derivation ─────────────────────────────────────────────
 function deriveHwStatus(dueDate: string | null): HomeworkItem['status'] {
   if (!dueDate) return 'PENDING';
@@ -562,7 +576,7 @@ export const studentDashboardService = {
       id: c.id,
       subject: c.subject,
       description: c.description ?? '',
-      status: (c.status as StudentComplaint['status']) ?? 'OPEN',
+      status: mapComplaintStatus(c.status),
       createdAt: c.created_at.slice(0, 10),
       response: c.response,
     }));
@@ -583,7 +597,7 @@ export const studentDashboardService = {
         from_class: fromClass,
         subject,
         description,
-        status: 'OPEN',
+        status: 'PENDING',
       })
       .select('id, subject, description, status, created_at, response').single();
     if (error) throw new Error(error.message);
@@ -603,7 +617,7 @@ export const studentDashboardService = {
       id: r.id,
       subject: r.subject,
       description: r.description ?? '',
-      status: (r.status as StudentComplaint['status']) ?? 'OPEN',
+      status: mapComplaintStatus(r.status),
       createdAt: r.created_at.slice(0, 10),
       response: r.response,
     };
