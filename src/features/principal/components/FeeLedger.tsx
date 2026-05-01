@@ -36,6 +36,11 @@ interface StudentFeeProfile {
   isRte: boolean;
 }
 
+// Neutral fallback used when the DB returns a status the UI doesn't yet
+// know about (defensive — prevents the whole list from crashing on an
+// `undefined` lookup if a new status enum value lands before the UI ships).
+const STATUS_COLOR_FALLBACK = 'bg-slate-100 text-slate-500 border-slate-200';
+const STATUS_BAR_FALLBACK = 'bg-slate-300';
 const STATUS_COLOR: Record<FeeStatus, string> = {
   PAID:        'bg-emerald-50 text-emerald-700 border-emerald-200',
   PARTIAL:     'bg-amber-50 text-amber-700 border-amber-200',
@@ -43,11 +48,13 @@ const STATUS_COLOR: Record<FeeStatus, string> = {
   OVERDUE:     'bg-red-100 text-red-700 border-red-300',
   WAIVED:      'bg-slate-100 text-slate-500 border-slate-200',
   WRITTEN_OFF: 'bg-slate-100 text-slate-500 border-slate-200',
+  CANCELLED:   'bg-slate-100 text-slate-500 border-slate-200 line-through',
 };
 const STATUS_BAR: Record<FeeStatus, string> = {
   PAID: 'bg-emerald-500', PARTIAL: 'bg-amber-400', UNPAID: 'bg-rose-400',
   OVERDUE: 'bg-red-500',
   WAIVED: 'bg-slate-300', WRITTEN_OFF: 'bg-slate-300',
+  CANCELLED: 'bg-slate-300',
 };
 const STATUS_ICON = (s: FeeStatus) => {
   if (s === 'PAID')    return <CheckCircle2 size={11} className="text-emerald-500" />;
@@ -56,6 +63,15 @@ const STATUS_ICON = (s: FeeStatus) => {
   if (s === 'OVERDUE') return <AlertTriangle size={11} className="text-red-600" />;
   return <X size={11} className="text-slate-400" />;
 };
+
+// Safe initials from a possibly-empty/null name. Always returns 1–2 chars.
+function getInitials(name: string | null | undefined): string {
+  const trimmed = (name ?? '').trim();
+  if (!trimmed) return '?';
+  const parts = trimmed.split(/\s+/).filter(Boolean);
+  const initials = parts.map(p => p[0]).join('').slice(0, 2).toUpperCase();
+  return initials || '?';
+}
 const FEE_TYPE_COLOR: Record<FeeType, string> = {
   TUITION:   'bg-indigo-100 text-indigo-700',
   TRANSPORT: 'bg-orange-100 text-orange-700',
@@ -585,7 +601,7 @@ export const FeeLedger: React.FC<Props> = ({ onBack }) => {
                 <div key={inst.id} className="bg-white rounded-2xl border border-slate-100 shadow-sm overflow-hidden">
                   {/* Status left strip */}
                   <div className="flex">
-                    <div className={`w-1 shrink-0 ${STATUS_BAR[inst.status]}`} />
+                    <div className={`w-1 shrink-0 ${STATUS_BAR[inst.status] ?? STATUS_BAR_FALLBACK}`} />
                     <div className="flex-1 p-4">
                       <div className="flex items-start justify-between gap-2">
                         <div className="flex-1">
@@ -614,7 +630,7 @@ export const FeeLedger: React.FC<Props> = ({ onBack }) => {
                       </div>
 
                       <div className="flex items-center gap-2 mt-2 flex-wrap">
-                        <span className={`flex items-center gap-1 text-[9px] font-black px-2 py-0.5 rounded-full border ${STATUS_COLOR[inst.status]}`}>
+                        <span className={`flex items-center gap-1 text-[9px] font-black px-2 py-0.5 rounded-full border ${STATUS_COLOR[inst.status] ?? STATUS_COLOR_FALLBACK}`}>
                           {STATUS_ICON(inst.status)} {inst.status}
                         </span>
                         {receipt && (
@@ -1094,7 +1110,7 @@ export const FeeLedger: React.FC<Props> = ({ onBack }) => {
               <div className="flex items-center gap-3">
                 {/* Avatar */}
                 <div className={`w-10 h-10 rounded-xl flex items-center justify-center font-black text-sm shrink-0 ${isDue ? 'bg-rose-100 text-rose-700' : 'bg-emerald-100 text-emerald-700'}`}>
-                  {student.name.split(' ').map(w => w[0]).join('').slice(0, 2)}
+                  {getInitials(student.name)}
                 </div>
 
                 <div className="flex-1 min-w-0">

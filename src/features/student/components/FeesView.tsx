@@ -12,6 +12,7 @@ import { FeePaymentUpload } from '../../../types/student.types';
 import { useUIStore } from '../../../store/uiStore';
 import { feeService, FeeInstallment, FeeType, PaymentRecord } from '../../../services/fee.service';
 import { studentService } from '../../../services/student.service';
+import { schoolInfoService } from '../../../services/schoolInfo.service';
 
 type View = 'MAIN' | 'QR_PAY' | 'HISTORY';
 type YearGroup = { academicYearId: string; yearLabel: string; isActive: boolean; installments: FeeInstallment[] };
@@ -34,17 +35,20 @@ const FEE_TYPE_COLOR: Record<FeeType, string> = {
 
 interface Props { onBack: () => void; }
 
-const UPI_ID = 'school@upi';
 
 const statusBadge = (s: string) =>
   s === 'PENDING'  ? 'bg-amber-100 text-amber-700' :
   s === 'APPROVED' ? 'bg-emerald-100 text-emerald-700' : 'bg-rose-100 text-rose-700';
 
 const instStatusColor = (s: string) =>
-  s === 'PAID'    ? 'bg-emerald-100 text-emerald-700' :
-  s === 'PARTIAL' ? 'bg-amber-100 text-amber-700' :
-  s === 'WAIVED'  ? 'bg-slate-100 text-slate-500' :
-                    'bg-rose-100 text-rose-600';
+  s === 'PAID'        ? 'bg-emerald-100 text-emerald-700' :
+  s === 'PARTIAL'     ? 'bg-amber-100 text-amber-700' :
+  s === 'WAIVED'      ? 'bg-slate-100 text-slate-500' :
+  s === 'WRITTEN_OFF' ? 'bg-slate-100 text-slate-500' :
+  // CANCELLED rows are frozen historical transport entries — render as
+  // neutral/settled, not as an outstanding due item.
+  s === 'CANCELLED'   ? 'bg-slate-100 text-slate-500 line-through' :
+                        'bg-rose-100 text-rose-600';
 
 const formatDateLong = (iso: string) =>
   new Date(iso).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' });
@@ -74,6 +78,8 @@ export const FeesView: React.FC<Props> = ({ onBack }) => {
   const [nextDueDate, setNextDueDate] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState<string | null>(null);
+  const [upiId, setUpiId] = useState('');
+  const [paymentQrUrl, setPaymentQrUrl] = useState<string | null>(null);
 
   // Compute days remaining until the next unpaid PARENT installment (NULL
   // when nothing is due — we hide the urgency badge in that case).
@@ -130,6 +136,13 @@ export const FeesView: React.FC<Props> = ({ onBack }) => {
         setNextDueDate(nextUnpaid?.dueDate ?? null);
         setUploads(uploadsRows);
         setIsRte(studentRow?.rte ?? false);
+        const sch = await schoolInfoService.get().catch(() => null);
+        setUpiId(sch?.upiId ?? '');
+        if (sch?.paymentQrPath) {
+          setPaymentQrUrl(await schoolInfoService.getPaymentQrUrl(sch.paymentQrPath));
+        } else {
+          setPaymentQrUrl(null);
+        }
       } catch (err) {
         if (!cancelled) setLoadError((err as Error).message ?? 'Failed to load fees');
       } finally {
@@ -257,18 +270,14 @@ export const FeesView: React.FC<Props> = ({ onBack }) => {
         {/* QR Card */}
         <div className="bg-[#0d1b3e] rounded-3xl p-6 flex flex-col items-center text-white">
           <p className="text-[10px] font-black uppercase tracking-widest text-blue-300 mb-4">Scan & Pay</p>
-          <div className="w-44 h-44 bg-white rounded-2xl p-3 mb-5">
-            <div className="w-full h-full grid grid-cols-7 gap-px">
-              {Array.from({ length: 49 }, (_, i) => (
-                <div key={i} className={`rounded-sm ${(i * 7 + i) % 3 === 0 ? 'bg-slate-900' : 'bg-white'}`} />
-              ))}
-            </div>
+          <div className="w-44 h-44 bg-white rounded-2xl p-3 mb-5 flex items-center justify-center">
+            {paymentQrUrl ? <img src={paymentQrUrl} className="max-w-full max-h-full object-contain" /> : <QrCode size={52} className="text-slate-300" />}
           </div>
           <div className="text-4xl font-black mb-1">₹{feeSummary.total.toLocaleString('en-IN')}</div>
           <div className="text-blue-200 text-xs font-bold mb-2">Total Outstanding</div>
           <div className="flex items-center gap-2 bg-white/10 px-3 py-1.5 rounded-full">
             <QrCode size={13} className="text-blue-300" />
-            <span className="text-[11px] font-black text-blue-100">{UPI_ID}</span>
+            <span className="text-[11px] font-black text-blue-100">{upiId || 'UPI not configured'}</span>
           </div>
         </div>
 

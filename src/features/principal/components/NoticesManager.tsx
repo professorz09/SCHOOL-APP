@@ -7,13 +7,14 @@ import { useRealtimeTable } from '../../../hooks/useRealtimeTable';
 
 type View = 'LIST' | 'COMPOSE';
 
-const AUDIENCES: NoticeAudience[] = ['ALL', 'STUDENTS', 'TEACHERS', 'PARENTS'];
+const AUDIENCES: NoticeAudience[] = ['ALL', 'STUDENTS', 'TEACHERS', 'STAFF', 'PARENTS'];
 
 const audienceColor = (a: NoticeAudience) => {
   const map: Record<NoticeAudience, string> = {
     ALL: 'bg-slate-900 text-white',
     STUDENTS: 'bg-indigo-50 text-indigo-700',
     TEACHERS: 'bg-blue-50 text-blue-700',
+    STAFF: 'bg-emerald-50 text-emerald-700',
     PARENTS: 'bg-violet-50 text-violet-700',
   };
   return map[a];
@@ -74,14 +75,17 @@ export const NoticesManager: React.FC<Props> = ({ onBack }) => {
         <div className="bg-white rounded-2xl border border-slate-100 shadow-sm p-4 space-y-4">
           <div>
             <label className="block text-[10px] font-black uppercase tracking-widest text-slate-500 mb-1.5">Send To</label>
-            <div className="flex gap-2">
+            <div className="grid grid-cols-3 gap-2">
               {AUDIENCES.map(a => (
                 <button key={a} onClick={() => setForm(f => ({ ...f, audience: a }))}
-                  className={`flex-1 py-2 rounded-xl text-[10px] font-black uppercase tracking-widest transition-colors ${form.audience === a ? audienceColor(a) : 'bg-slate-50 border border-slate-200 text-slate-400'}`}>
+                  className={`py-2 rounded-xl text-[10px] font-black uppercase tracking-widest transition-colors ${form.audience === a ? audienceColor(a) : 'bg-slate-50 border border-slate-200 text-slate-400'}`}>
                   {a}
                 </button>
               ))}
             </div>
+            <p className="text-[10px] font-bold text-slate-400 mt-1.5">
+              STAFF reaches all teachers and non-teaching staff (drivers, peons, accountants, etc.).
+            </p>
           </div>
           <div>
             <label className="block text-[10px] font-black uppercase tracking-widest text-slate-500 mb-1.5">Title *</label>

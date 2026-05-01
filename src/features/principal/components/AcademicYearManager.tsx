@@ -260,6 +260,22 @@ export const AcademicYearManager: React.FC<Props> = ({ onBack }) => {
                     <Power size={10} /> Make Active
                   </button>
                 )}
+                {!isActive && locked && (
+                  <span
+                    title="Locked years cannot be made active. Unlock or open a new year."
+                    className="px-2.5 py-1.5 rounded-full bg-slate-100 text-slate-400 text-[10px] font-black flex items-center gap-1 cursor-not-allowed"
+                  >
+                    <Power size={10} /> Make Active
+                  </span>
+                )}
+                {isActive && (
+                  <span
+                    title="This year is already active for the school."
+                    className="px-2.5 py-1.5 rounded-full bg-emerald-50 text-emerald-600 text-[10px] font-black flex items-center gap-1 cursor-not-allowed border border-emerald-200"
+                  >
+                    <Power size={10} /> Already Active
+                  </span>
+                )}
                 {!locked && (
                   <button
                     type="button"

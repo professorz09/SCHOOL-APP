@@ -21,6 +21,19 @@ const ATT_TEXT  = (pct: number) => pct >= 90 ? 'text-emerald-600' : pct >= 75 ? 
 const ATT_BG    = (pct: number) => pct >= 90 ? 'bg-emerald-50' : pct >= 75 ? 'bg-amber-50' : 'bg-rose-50';
 const avg       = (nums: number[]) => nums.length ? Math.round(nums.reduce((a, b) => a + b, 0) / nums.length) : 0;
 const todayStr  = () => new Date().toISOString().split('T')[0];
+const dayShort = (d: string) => new Date(d).toLocaleDateString('en-IN', { weekday: 'short' });
+const dayNum   = (d: string) => new Date(d).getDate();
+const monthShort = (d: string) => new Date(d).toLocaleDateString('en-IN', { month: 'short' });
+const isToday  = (d: string) => d === todayStr();
+const buildDateStrip = (count = 14): string[] => {
+  const out: string[] = [];
+  for (let i = count - 1; i >= 0; i--) {
+    const d = new Date();
+    d.setDate(d.getDate() - i);
+    out.push(d.toISOString().split('T')[0]);
+  }
+  return out;
+};
 
 export const StudentAttendanceManager: React.FC<Props> = ({ onBack }) => {
   const { showToast } = useUIStore();
@@ -42,6 +55,7 @@ export const StudentAttendanceManager: React.FC<Props> = ({ onBack }) => {
   const [markClass, setMarkClass]     = useState('');
   const [markSection, setMarkSection] = useState('');
   const [markDate, setMarkDate]       = useState(todayStr());
+  const dateStrip = useMemo(() => buildDateStrip(14), []);
   const [markStudents, setMarkStudents] = useState<AttendanceStudentRecord[]>([]);
   const [markConflict, setMarkConflict] = useState<SharedAttendanceRecord | null>(null);
 
@@ -389,15 +403,24 @@ export const StudentAttendanceManager: React.FC<Props> = ({ onBack }) => {
             {/* Date */}
             <div>
               <label className="text-[9px] font-black uppercase tracking-widest text-slate-400 mb-1 block">Date</label>
-              <div className="relative">
-                <Calendar size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400"/>
-                <input
-                  type="date"
-                  value={markDate}
-                  max={todayStr()}
-                  onChange={e => handleMarkDateChange(e.target.value)}
-                  className="w-full border border-slate-200 rounded-xl pl-9 pr-3 py-2.5 text-sm font-bold text-slate-800 focus:outline-none focus:border-blue-400"
-                />
+              <div className="flex overflow-x-auto hide-scrollbar border border-slate-100 rounded-xl p-1">
+                {dateStrip.map(d => {
+                  const sel = markDate === d;
+                  const t = isToday(d);
+                  return (
+                    <button key={d}
+                      onClick={() => handleMarkDateChange(d)}
+                      className={`shrink-0 flex flex-col items-center mx-0.5 px-2.5 py-1.5 rounded-xl border-2 transition-colors ${
+                        sel
+                          ? t ? 'bg-blue-600 border-blue-600 text-white' : 'bg-slate-800 border-slate-800 text-white'
+                          : t ? 'border-blue-200 text-blue-600 bg-blue-50' : 'border-transparent text-slate-400'
+                      }`}>
+                      <span className="text-[9px] font-black uppercase tracking-widest">{dayShort(d)}</span>
+                      <span className="text-base font-black leading-none my-0.5">{dayNum(d)}</span>
+                      <span className="text-[8px] font-bold uppercase tracking-wide opacity-75">{monthShort(d)}</span>
+                    </button>
+                  );
+                })}
               </div>
             </div>
           </div>

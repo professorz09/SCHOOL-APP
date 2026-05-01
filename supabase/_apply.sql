@@ -5815,3 +5815,403 @@ GRANT EXECUTE ON FUNCTION public.salary_reminders(UUID, TEXT) TO authenticated;
 
 COMMIT;
 
+
+-- =============================================================
+-- 0028_sections_student_count_trigger.sql
+-- =============================================================
+-- 0028_sections_student_count_trigger.sql
+-- Auto-maintain sections.student_count via trigger on student_academic_records.
+-- Also adds missing RLS policies for the sections table.
+
+-- ── Trigger function ─────────────────────────────────────────────────────────
+
+CREATE OR REPLACE FUNCTION _update_section_student_count()
+RETURNS TRIGGER LANGUAGE plpgsql SECURITY DEFINER
+SET search_path = public
+AS $$
+DECLARE
+  v_old_section UUID;
+  v_new_section UUID;
+BEGIN
+  v_old_section := CASE WHEN TG_OP IN ('UPDATE','DELETE') THEN OLD.section_id ELSE NULL END;
+  v_new_section := CASE WHEN TG_OP IN ('INSERT','UPDATE') THEN NEW.section_id ELSE NULL END;
+
+  -- Recount the old section (on UPDATE when section changed, or on DELETE)
+  IF v_old_section IS NOT NULL AND v_old_section IS DISTINCT FROM v_new_section THEN
+    UPDATE sections
+    SET student_count = (
+      SELECT COUNT(*)
+      FROM student_academic_records
+      WHERE section_id = v_old_section
+        AND status IN ('STUDYING', 'REPEATING')
+    )
+    WHERE id = v_old_section;
+  END IF;
+
+  -- Recount the new/current section
+  IF v_new_section IS NOT NULL THEN
+    UPDATE sections
+    SET student_count = (
+      SELECT COUNT(*)
+      FROM student_academic_records
+      WHERE section_id = v_new_section
+        AND status IN ('STUDYING', 'REPEATING')
+    )
+    WHERE id = v_new_section;
+  END IF;
+
+  RETURN CASE WHEN TG_OP = 'DELETE' THEN OLD ELSE NEW END;
+END;
+$$;
+
+-- ── Attach trigger ───────────────────────────────────────────────────────────
+
+DROP TRIGGER IF EXISTS trg_section_student_count ON student_academic_records;
+CREATE TRIGGER trg_section_student_count
+  AFTER INSERT OR UPDATE OR DELETE ON student_academic_records
+  FOR EACH ROW EXECUTE FUNCTION _update_section_student_count();
+
+-- ── Backfill current counts ───────────────────────────────────────────────────
+
+UPDATE sections s
+SET student_count = (
+  SELECT COUNT(*)
+  FROM student_academic_records sar
+  WHERE sar.section_id = s.id
+    AND sar.status IN ('STUDYING', 'REPEATING')
+);
+
+-- ── RLS for sections ─────────────────────────────────────────────────────────
+
+ALTER TABLE sections ENABLE ROW LEVEL SECURITY;
+
+-- All school members (principals, teachers, students, parents, drivers) can read
+-- sections belonging to their school.
+CREATE POLICY sections_read_own_school ON sections
+  FOR SELECT
+  USING (
+    school_id = (SELECT school_id FROM users WHERE id = auth.uid() LIMIT 1)
+    OR (SELECT role FROM users WHERE id = auth.uid() LIMIT 1) = 'SUPER_ADMIN'
+  );
+
+-- Only the principal can insert / update / delete sections in their school.
+CREATE POLICY sections_principal_insert ON sections
+  FOR INSERT
+  WITH CHECK (
+    school_id = (SELECT school_id FROM users WHERE id = auth.uid() LIMIT 1)
+    AND (SELECT role FROM users WHERE id = auth.uid() LIMIT 1) = 'PRINCIPAL'
+  );
+
+CREATE POLICY sections_principal_update ON sections
+  FOR UPDATE
+  USING (
+    school_id = (SELECT school_id FROM users WHERE id = auth.uid() LIMIT 1)
+    AND (SELECT role FROM users WHERE id = auth.uid() LIMIT 1) = 'PRINCIPAL'
+  );
+
+CREATE POLICY sections_principal_delete ON sections
+  FOR DELETE
+  USING (
+    school_id = (SELECT school_id FROM users WHERE id = auth.uid() LIMIT 1)
+    AND (SELECT role FROM users WHERE id = auth.uid() LIMIT 1) = 'PRINCIPAL'
+  );
+
+-- The trigger function runs as SECURITY DEFINER so it can bypass RLS when
+-- updating section counts from student_academic_records events.
+
+
+-- =============================================================
+-- 0029_fee_structure_billing_cycle.sql
+-- =============================================================
+-- 0029_fee_structure_billing_cycle.sql
+-- Adds billing_cycle column to fee_structures so the principal can choose
+-- Monthly / Quarterly / Half-Yearly / Annually / Custom billing periods.
+
+ALTER TABLE public.fee_structures
+  ADD COLUMN IF NOT EXISTS billing_cycle TEXT NOT NULL DEFAULT 'MONTHLY'
+    CHECK (billing_cycle IN ('MONTHLY','QUARTERLY','HALF_YEARLY','ANNUALLY','CUSTOM'));
+
+
+-- =============================================================
+-- 0030_enable_realtime.sql
+-- =============================================================
+-- Enable Supabase Realtime for messaging tables so notices, complaints, and
+-- homework assignments push instantly to subscribed clients without polling.
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_publication_tables
+    WHERE pubname = 'supabase_realtime' AND tablename = 'notices'
+  ) THEN
+    ALTER PUBLICATION supabase_realtime ADD TABLE public.notices;
+  END IF;
+
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_publication_tables
+    WHERE pubname = 'supabase_realtime' AND tablename = 'complaints'
+  ) THEN
+    ALTER PUBLICATION supabase_realtime ADD TABLE public.complaints;
+  END IF;
+
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_publication_tables
+    WHERE pubname = 'supabase_realtime' AND tablename = 'homework_assignments'
+  ) THEN
+    ALTER PUBLICATION supabase_realtime ADD TABLE public.homework_assignments;
+  END IF;
+END $$;
+
+
+-- =============================================================
+-- 0031_fee_structure_types.sql
+-- =============================================================
+-- 0031_fee_structure_types.sql
+ALTER TABLE public.fee_structures
+  ADD COLUMN IF NOT EXISTS structure_type TEXT NOT NULL DEFAULT 'CLASS';
+
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint WHERE conname = 'fee_structures_structure_type_chk'
+  ) THEN
+    ALTER TABLE public.fee_structures
+      ADD CONSTRAINT fee_structures_structure_type_chk CHECK (structure_type IN ('CLASS','VEHICLE'));
+  END IF;
+END $$;
+
+
+-- =============================================================
+-- 0032_payment_qr_settings.sql
+-- =============================================================
+-- Add principal-managed payment settings
+ALTER TABLE public.schools
+  ADD COLUMN IF NOT EXISTS upi_id TEXT,
+  ADD COLUMN IF NOT EXISTS payment_qr_path TEXT;
+
+-- Storage bucket for school assets (payment QR etc.)
+INSERT INTO storage.buckets (id, name, public)
+VALUES ('school-assets', 'school-assets', true)
+ON CONFLICT (id) DO NOTHING;
+
+
+-- =============================================================
+-- 0033_complaint_statuses.sql
+-- =============================================================
+-- 0033_complaint_statuses.sql
+-- Spec gap audit · item 20.2 — adopt the canonical complaint status set:
+--   PENDING · IN_REVIEW · RESOLVED · REJECTED
+--
+-- The complaints.status column is plain TEXT (no CHECK constraint), so this
+-- migration only normalises legacy values. New rows are written with the new
+-- status names from the application layer.
+
+UPDATE public.complaints
+   SET status = 'PENDING'
+ WHERE status = 'OPEN';
+
+UPDATE public.complaints
+   SET status = 'IN_REVIEW'
+ WHERE status = 'IN_PROGRESS';
+
+-- Also make 'PENDING' the column default so any future direct insert
+-- (e.g. via the SQL console) lands on the canonical value.
+ALTER TABLE public.complaints
+  ALTER COLUMN status SET DEFAULT 'PENDING';
+
+
+-- =============================================================
+-- 0034_transport_fee_structure.sql
+-- =============================================================
+-- ============================================================================
+-- 0034 — Transport fee structures (Task #29)
+--
+-- Wires VEHICLE-type fee_structures all the way through transport assignment
+-- so transport bills are generated from a structure (heads + due dates),
+-- traceable back to the structure, the same way class assignment already is.
+--
+-- Changes:
+--   1. Add fee_structure_id UUID (nullable, FK → fee_structures.id) to
+--      student_transport_assignments. New transport rows MUST populate it
+--      (enforced in app code); legacy rows stay NULL so historical data is
+--      preserved.
+--   2. Mirror the same column on student_academic_records so the audit trail
+--      for class assignments is symmetric (kept nullable for backward
+--      compatibility with rows created before this migration).
+--   3. RPC `generate_transport_fee_schedule(p_student_id, p_year_id,
+--      p_assignment_id, p_heads, p_due_dates)` — mirrors
+--      `generate_student_fee_schedule` (0005) but ONLY touches TRANSPORT
+--      installments tied to `p_assignment_id`. Drops only unpaid TRANSPORT
+--      rows for the assignment, then re-inserts from the structure's heads
+--      x due-dates with `fee_type='TRANSPORT'`, `payer_type='PARENT'`,
+--      `related_id = p_assignment_id`.
+--
+-- Idempotent — every column / index / function uses IF NOT EXISTS or
+-- CREATE OR REPLACE.
+-- ============================================================================
+
+ALTER TABLE public.student_transport_assignments
+  ADD COLUMN IF NOT EXISTS fee_structure_id UUID
+  REFERENCES public.fee_structures(id) ON DELETE SET NULL;
+
+CREATE INDEX IF NOT EXISTS sta_fee_structure_idx
+  ON public.student_transport_assignments (fee_structure_id);
+
+ALTER TABLE public.student_academic_records
+  ADD COLUMN IF NOT EXISTS fee_structure_id UUID
+  REFERENCES public.fee_structures(id) ON DELETE SET NULL;
+
+CREATE INDEX IF NOT EXISTS sar_fee_structure_idx
+  ON public.student_academic_records (fee_structure_id);
+
+-- An earlier draft of this migration shipped the RPC with a JSONB-based
+-- signature (heads + due_dates supplied by the client). The hardened
+-- version below takes only the structure id and looks the heads up
+-- server-side, so we drop the old signature first to avoid an overload
+-- ambiguity at call time.
+DROP FUNCTION IF EXISTS public.generate_transport_fee_schedule(UUID, UUID, UUID, JSONB, JSONB);
+
+-- ----------------------------------------------------------------------------
+-- generate_transport_fee_schedule
+--
+-- Schedule generator for TRANSPORT installments tied to a single
+-- student_transport_assignments row. Modeled on
+-- generate_student_fee_schedule (0005) with four deliberate differences:
+--
+--   * Scope is narrowed to ONE assignment via `related_id = p_assignment_id`
+--     so re-running it for a different vehicle on the same student in the
+--     same year doesn't wipe other transport rows.
+--   * Only UNPAID/no-write-off rows are dropped. Paid / partially-paid rows
+--     stay intact — receipts are immutable.
+--   * Every inserted row is fee_type='TRANSPORT' regardless of head name,
+--     and payer_type is always 'PARENT' (transport fees are never
+--     RTE/government-paid).
+--   * Heads + due-dates are read SERVER-SIDE from fee_structures by id —
+--     never accepted from the client. The structure is validated to be
+--     same-school + structure_type='VEHICLE' + same academic year so a
+--     tampered client payload can't silently bill the wrong amounts.
+--
+-- Frequencies: MONTHLY → one row per due-date, ANNUAL/ONE_TIME → single
+-- row using earliest due-date (matches the class-side behaviour).
+-- ----------------------------------------------------------------------------
+CREATE OR REPLACE FUNCTION public.generate_transport_fee_schedule(
+  p_student_id       UUID,
+  p_year_id          UUID,
+  p_assignment_id    UUID,
+  p_fee_structure_id UUID
+) RETURNS INT
+LANGUAGE plpgsql SECURITY DEFINER SET search_path = public AS $$
+DECLARE
+  v_school_id          UUID;
+  v_caller             UUID := auth.uid();
+  v_count              INT  := 0;
+  v_head               JSONB;
+  v_dd                 JSONB;
+  v_freq               TEXT;
+  v_amt                BIGINT;
+  v_heads              JSONB;
+  v_due_dates          JSONB;
+  v_struct_school      UUID;
+  v_struct_year        UUID;
+  v_struct_type        TEXT;
+BEGIN
+  IF v_caller IS NULL THEN RAISE EXCEPTION 'unauthenticated'; END IF;
+  IF p_assignment_id    IS NULL THEN RAISE EXCEPTION 'assignment_id required'; END IF;
+  IF p_fee_structure_id IS NULL THEN RAISE EXCEPTION 'fee_structure_id required'; END IF;
+
+  SELECT school_id INTO v_school_id FROM public.students WHERE id = p_student_id;
+  IF v_school_id IS NULL THEN RAISE EXCEPTION 'student not found'; END IF;
+
+  IF NOT (public.is_super_admin()
+          OR (public.is_principal() AND public.current_user_school_id() = v_school_id)) THEN
+    RAISE EXCEPTION 'forbidden';
+  END IF;
+
+  -- Server-authoritative structure lookup. Reject any structure that
+  -- doesn't belong to the same school, isn't VEHICLE-type, or doesn't
+  -- match the assignment's academic year — protects against tampered
+  -- client payloads silently billing the wrong amounts.
+  SELECT school_id, academic_year_id, structure_type, fee_heads, monthly_due_dates
+    INTO v_struct_school, v_struct_year, v_struct_type, v_heads, v_due_dates
+    FROM public.fee_structures
+   WHERE id = p_fee_structure_id;
+  IF v_struct_school IS NULL THEN RAISE EXCEPTION 'fee structure not found'; END IF;
+  IF v_struct_school <> v_school_id THEN
+    RAISE EXCEPTION 'fee structure belongs to a different school';
+  END IF;
+  IF v_struct_year <> p_year_id THEN
+    RAISE EXCEPTION 'fee structure year mismatch';
+  END IF;
+  IF COALESCE(v_struct_type, 'CLASS') <> 'VEHICLE' THEN
+    RAISE EXCEPTION 'fee structure is not VEHICLE-type';
+  END IF;
+  IF v_due_dates IS NULL OR jsonb_typeof(v_due_dates) <> 'array' OR jsonb_array_length(v_due_dates) = 0 THEN
+    RAISE EXCEPTION 'fee structure has no monthly due dates';
+  END IF;
+
+  -- Defense in depth: make sure the assignment row actually belongs to
+  -- this student + year before we touch any installments. Catches caller
+  -- bugs and tampered RPC payloads where the assignment id was swapped
+  -- for someone else's. PERFORM raises NO_DATA_FOUND if zero rows match.
+  PERFORM 1
+    FROM public.student_transport_assignments
+   WHERE id               = p_assignment_id
+     AND student_id       = p_student_id
+     AND academic_year_id = p_year_id;
+  IF NOT FOUND THEN
+    RAISE EXCEPTION 'assignment % does not belong to student % / year %',
+      p_assignment_id, p_student_id, p_year_id;
+  END IF;
+
+  -- Drop only unpaid TRANSPORT rows tied to THIS assignment so re-running
+  -- after a structure edit doesn't duplicate, and so other transport
+  -- assignments for the same student/year (legacy) aren't disturbed.
+  DELETE FROM public.fee_installments
+   WHERE student_id       = p_student_id
+     AND academic_year_id = p_year_id
+     AND fee_type         = 'TRANSPORT'
+     AND related_id       = p_assignment_id
+     AND paid_amount      = 0
+     AND write_off_amount = 0;
+
+  -- Re-create from the structure.
+  FOR v_head IN SELECT * FROM jsonb_array_elements(v_heads)
+  LOOP
+    v_amt  := COALESCE((v_head->>'amount')::BIGINT, 0);
+    v_freq := COALESCE(v_head->>'frequency', 'MONTHLY');
+
+    IF v_amt = 0 THEN CONTINUE; END IF;
+
+    IF v_freq = 'MONTHLY' THEN
+      FOR v_dd IN SELECT * FROM jsonb_array_elements(v_due_dates)
+      LOOP
+        INSERT INTO public.fee_installments
+          (student_id, academic_year_id, school_id, month, due_date,
+           fee_type, amount, payer_type, related_id)
+        VALUES
+          (p_student_id, p_year_id, v_school_id,
+           v_dd->>'month',
+           (v_dd->>'date')::DATE,
+           'TRANSPORT', v_amt, 'PARENT', p_assignment_id);
+        v_count := v_count + 1;
+      END LOOP;
+    ELSE  -- ANNUAL or ONE_TIME
+      INSERT INTO public.fee_installments
+        (student_id, academic_year_id, school_id, month, due_date,
+         fee_type, amount, payer_type, related_id)
+      VALUES
+        (p_student_id, p_year_id, v_school_id,
+         CASE WHEN v_freq = 'ONE_TIME' THEN 'OneTime' ELSE 'Annual' END,
+         (SELECT MIN((dd->>'date')::DATE) FROM jsonb_array_elements(v_due_dates) dd),
+         'TRANSPORT', v_amt, 'PARENT', p_assignment_id);
+      v_count := v_count + 1;
+    END IF;
+  END LOOP;
+
+  PERFORM public.refresh_student_fee_aggregate(p_student_id, p_year_id);
+  RETURN v_count;
+END $$;
+
+GRANT EXECUTE ON FUNCTION
+  public.generate_transport_fee_schedule(UUID, UUID, UUID, UUID)
+  TO authenticated;
+

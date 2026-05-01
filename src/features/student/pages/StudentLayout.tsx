@@ -9,15 +9,16 @@ import { StudentNoticesView } from '../components/StudentNoticesView';
 import { StudentComplaintsView } from '../components/StudentComplaintsView';
 import { AttendanceView } from '../components/AttendanceView';
 import { StudentLeaveView } from '../components/StudentLeaveView';
+import { StudentProfileView } from '../components/StudentProfileView';
 import {
   Calendar, Trophy, CreditCard, Bus, Bell,
-  UserCheck, HeadphonesIcon, Clock, FileText,
+  UserCheck, HeadphonesIcon, Clock, FileText, User,
 } from 'lucide-react';
 import { timetableService, PERIOD_SLOTS } from '../../../services/timetable.service';
 import { useAuthStore } from '../../../store/authStore';
 import { studentDashboardService, type ActiveStudentContext } from '../../../services/studentDashboard.service';
 
-type StudentView = 'DASHBOARD' | 'TIMETABLE' | 'RESULTS' | 'FEES' | 'TRANSPORT' | 'NOTICES' | 'COMPLAINTS' | 'ATTENDANCE' | 'LEAVE';
+type StudentView = 'DASHBOARD' | 'TIMETABLE' | 'RESULTS' | 'FEES' | 'TRANSPORT' | 'NOTICES' | 'COMPLAINTS' | 'ATTENDANCE' | 'LEAVE' | 'PROFILE';
 
 const getTodaySchedule = (classLabel: string | null) => {
   if (!classLabel) return [];
@@ -85,7 +86,11 @@ export const StudentLayout: React.FC = () => {
   if (view === 'LEAVE')       return ctx
     ? <StudentLeaveView onBack={goBack} studentId={ctx.studentId} />
     : <div className="p-6 text-sm text-slate-400">Loading…</div>;
+  if (view === 'PROFILE')     return <StudentProfileView    onBack={goBack} />;
 
+  // 9 tiles in a 4-column grid → 2 full rows + a 9th tile that anchors the
+  // start of the third row. Profile is intentionally placed last because it
+  // is a "settings" affordance rather than a daily-use module.
   const MODULES: { icon: React.ReactNode; label: string; view: StudentView; iconColor: string }[] = [
     { icon: <Calendar       size={22} />, label: 'Timetable',  view: 'TIMETABLE',  iconColor: 'text-blue-600' },
     { icon: <Trophy         size={22} />, label: 'Results',    view: 'RESULTS',    iconColor: 'text-amber-500' },
@@ -95,6 +100,7 @@ export const StudentLayout: React.FC = () => {
     { icon: <UserCheck      size={22} />, label: 'Attendance', view: 'ATTENDANCE', iconColor: 'text-emerald-600' },
     { icon: <FileText       size={22} />, label: 'Leave',      view: 'LEAVE',      iconColor: 'text-violet-500' },
     { icon: <HeadphonesIcon size={22} />, label: 'Helpdesk',   view: 'COMPLAINTS', iconColor: 'text-rose-500' },
+    { icon: <User           size={22} />, label: 'Profile',    view: 'PROFILE',    iconColor: 'text-slate-700' },
   ];
 
   return (

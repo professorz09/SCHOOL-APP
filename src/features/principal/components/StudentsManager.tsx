@@ -6,7 +6,7 @@ import {
   Bus, Briefcase, Droplets, GraduationCap, Shield, Heart,
   CreditCard, Building2, TrendingUp, Home as HomeIcon,
   Archive, UserCheck, UserX, Award, Trash2, AlertTriangle, RefreshCw,
-  Lock, Edit2,
+  Lock, Edit2, History,
 } from 'lucide-react';
 import { studentService } from '../../../services/student.service';
 import { Student, CreateStudentInput, StudentAcademicRecord, STREAMS, STREAM_CLASSES, StudentStream, StudentDoc } from '../../../types/principal.types';
@@ -95,6 +95,7 @@ export const StudentsManager: React.FC<Props> = ({ onBack, initialView }) => {
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [feeInstallments, setFeeInstallments] = useState<FeeInstallment[]>([]);
   const [studentFeeStructure, setStudentFeeStructure] = useState<FeeStructureRecord | null>(null);
+  const [feePaymentHistory, setFeePaymentHistory] = useState<import('../../../services/fee.service').PaymentRecord[]>([]);
   const [academicRecord, setAcademicRecord] = useState<StudentAcademicRecord | null>(null);
   const [activeProfileTab, setActiveProfileTab] = useState<'INFO' | 'ALLOTMENT' | 'FAMILY' | 'RESULTS' | 'FEES' | 'DOCS'>('INFO');
   const [studentTransport, setStudentTransport] = useState<{ vehicle: TransportVehicle; assignment: StudentTransportAssignment } | null>(null);
@@ -210,21 +211,27 @@ export const StudentsManager: React.FC<Props> = ({ onBack, initialView }) => {
     // which would otherwise reject on the UUID cast) cannot blank the
     // whole profile.
     const hasYear = !!student.academicYearId;
-    const [feesRes, recordRes, docsRes, structuresRes] = await Promise.allSettled([
+    const [feesRes, recordRes, docsRes, structuresRes, payRes] = await Promise.allSettled([
       feeService.getStudentInstallmentsDirect(student.id, hasYear ? student.academicYearId : undefined),
       hasYear
         ? studentService.getAcademicRecord(student.id, student.academicYearId)
         : Promise.resolve(null),
       studentService.listDocuments(student.id),
       principalService.getFeeStructures(),
+      (async () => {
+        await feeService.refreshAll();
+        return feeService.getPaymentHistory().filter(p => p.studentId === student.id);
+      })(),
     ]);
     const insts = feesRes.status === 'fulfilled' ? feesRes.value : [];
     const record = recordRes.status === 'fulfilled' ? recordRes.value : null;
     const docs = docsRes.status === 'fulfilled' ? docsRes.value : [];
     const structures = structuresRes.status === 'fulfilled' ? structuresRes.value : [];
+    const payments = payRes.status === 'fulfilled' ? payRes.value : [];
     setFeeInstallments(insts);
     setStudentFeeStructure(structures.find(s => s.className === student.className) ?? null);
     setAcademicRecord(record);
+    setFeePaymentHistory(payments);
     setProfileDocsLive(docs);
     try {
       const assignment = transportService.getAssignmentForStudent(student.id);
@@ -579,11 +586,23 @@ export const StudentsManager: React.FC<Props> = ({ onBack, initialView }) => {
   // ─── ADMISSION (Add/Search) ────────────────────────────────────────────
 
   if (!renderProfile && mainView === 'ADMISSION') {
+    const q = search.trim().toLowerCase();
+    const digits = q.replace(/\D/g, '');
     const filteredStudents = students
-      .filter(s =>
-        s.name.toLowerCase().includes(search.toLowerCase()) ||
-        s.rollNo.includes(search) || s.admissionNo.toLowerCase().includes(search.toLowerCase())
-      )
+      .filter(s => {
+        if (!q) return true;
+        if (s.name.toLowerCase().includes(q)) return true;
+        if (s.rollNo.includes(search)) return true;
+        if (s.admissionNo.toLowerCase().includes(q)) return true;
+        // Mobile-number search (item 5.3): match digit-only prefix
+        // against either parent's phone, ignoring formatting.
+        if (digits && digits.length >= 3) {
+          const fp = (s.fatherPhone || '').replace(/\D/g, '');
+          const mp = (s.motherPhone || '').replace(/\D/g, '');
+          if (fp.includes(digits) || mp.includes(digits)) return true;
+        }
+        return false;
+      })
       .sort((a, b) => new Date(b.admissionDate ?? 0).getTime() - new Date(a.admissionDate ?? 0).getTime());
 
     if (subView === 'CREATE') return (
@@ -740,7 +759,7 @@ export const StudentsManager: React.FC<Props> = ({ onBack, initialView }) => {
           <div className="px-4 pb-3">
             <div className="relative">
               <Search size={15} className="absolute left-3.5 top-1/2 -translate-y-1/2 text-slate-400" />
-              <input value={search} onChange={e => setSearch(e.target.value)} placeholder="Search by name, roll no or admission no…"
+              <input value={search} onChange={e => setSearch(e.target.value)} placeholder="Search by name, roll, admission or mobile…"
                 className="w-full bg-slate-50 border border-slate-200 rounded-xl pl-10 pr-4 py-2.5 font-bold text-sm outline-none focus:border-indigo-500 focus:bg-white transition-colors" />
             </div>
           </div>
@@ -809,12 +828,23 @@ export const StudentsManager: React.FC<Props> = ({ onBack, initialView }) => {
   // ─── ARCHIVE (Lifecycle buckets) ────────────────────────────────────────
 
   if (!renderProfile && mainView === 'ARCHIVE') {
-    const filtered = archiveStudents.filter(s =>
-      !search ||
-      s.name.toLowerCase().includes(search.toLowerCase()) ||
-      s.admissionNo.toLowerCase().includes(search.toLowerCase()) ||
-      s.rollNo.includes(search)
-    );
+    const aq = search.trim().toLowerCase();
+    const aDigits = aq.replace(/\D/g, '');
+    const filtered = archiveStudents.filter(s => {
+      if (!aq) return true;
+      if (s.name.toLowerCase().includes(aq)) return true;
+      if (s.admissionNo.toLowerCase().includes(aq)) return true;
+      if (s.rollNo.includes(search)) return true;
+      // Mobile-number search (item 5.3): match digit-only prefix against
+      // either parent's phone, ignoring formatting. Same semantics as the
+      // ADMISSION list above so principals only need to remember one rule.
+      if (aDigits && aDigits.length >= 3) {
+        const fp = (s.fatherPhone || '').replace(/\D/g, '');
+        const mp = (s.motherPhone || '').replace(/\D/g, '');
+        if (fp.includes(aDigits) || mp.includes(aDigits)) return true;
+      }
+      return false;
+    });
 
     return (
       <div className="w-full bg-slate-50 flex flex-col animate-in slide-in-from-right-8 duration-300">
@@ -860,7 +890,7 @@ export const StudentsManager: React.FC<Props> = ({ onBack, initialView }) => {
             <div className="relative">
               <Search size={15} className="absolute left-3.5 top-1/2 -translate-y-1/2 text-slate-400" />
               <input value={search} onChange={e => setSearch(e.target.value)}
-                placeholder="Search in this bucket…"
+                placeholder="Search by name, roll, admission or mobile…"
                 className="w-full bg-slate-50 border border-slate-200 rounded-xl pl-10 pr-4 py-2.5 font-bold text-sm outline-none focus:border-indigo-500 focus:bg-white transition-colors" />
             </div>
           </div>
@@ -1795,6 +1825,8 @@ export const StudentsManager: React.FC<Props> = ({ onBack, initialView }) => {
                 if (status === 'PAID') return 'bg-emerald-100 text-emerald-700';
                 if (status === 'PARTIAL') return 'bg-amber-100 text-amber-700';
                 if (status === 'WAIVED' || status === 'WRITTEN_OFF') return 'bg-slate-100 text-slate-500';
+                // CANCELLED rows (frozen transport after vehicle change) — neutral, not "due".
+                if (status === 'CANCELLED') return 'bg-slate-100 text-slate-500 line-through';
                 if (status === 'OVERDUE') return 'bg-rose-200 text-rose-700';
                 return 'bg-rose-100 text-rose-600';
               };
@@ -1838,6 +1870,37 @@ export const StudentsManager: React.FC<Props> = ({ onBack, initialView }) => {
                       <span className="text-[9px] font-black text-emerald-400">{pct}% paid</span>
                       <span className="text-[9px] font-bold text-white/40">100%</span>
                     </div>
+                  </div>
+
+
+
+                  {/* Fee payment history timeline */}
+                  <div className="bg-white rounded-2xl border border-slate-100 shadow-sm p-4">
+                    <SectionTitle icon={History} title="Fee Payment History" />
+                    {feePaymentHistory.length === 0 ? (
+                      <p className="text-xs font-bold text-slate-400">No payment entries yet</p>
+                    ) : (
+                      <div className="space-y-2">
+                        {feePaymentHistory.slice(0, 20).map(p => (
+                          <div key={p.id} className="rounded-xl border border-slate-100 bg-slate-50 px-3 py-2">
+                            <div className="flex items-center justify-between gap-2">
+                              <div>
+                                <p className="text-xs font-black text-slate-800">₹{p.amount.toLocaleString('en-IN')} · {p.method}</p>
+                                <p className="text-[10px] font-bold text-slate-500">{p.date} · Receipt {p.receiptNo}</p>
+                              </div>
+                              {p.advanceAmount > 0 && (
+                                <span className="text-[9px] font-black bg-indigo-100 text-indigo-700 px-2 py-0.5 rounded-full">Advance ₹{p.advanceAmount.toLocaleString('en-IN')}</span>
+                              )}
+                            </div>
+                            {p.installmentDetails.length > 0 && (
+                              <p className="text-[10px] font-bold text-slate-500 mt-1">
+                                {p.installmentDetails.map(d => `${d.month} ${d.feeType}`).join(' · ')}
+                              </p>
+                            )}
+                          </div>
+                        ))}
+                      </div>
+                    )}
                   </div>
 
                   {/* Installments grouped by month */}

@@ -81,6 +81,19 @@ interface ComplaintRow {
 const COMPLAINT_FIELDS = 'id, from_role, from_name, from_class, subject, description, status, response, created_at, resolved_at';
 
 function rowToComplaint(r: ComplaintRow): Complaint {
+  // Map legacy DB values onto the canonical status set used by the UI.
+  // Migration 0033 backfills existing rows, but we keep this defensive
+  // mapping so that any stragglers (or rows inserted by older clients)
+  // still render correctly.
+  const rawStatus = (r.status ?? '').toUpperCase();
+  let status: Complaint['status'];
+  if (rawStatus === 'OPEN') status = 'PENDING';
+  else if (rawStatus === 'IN_PROGRESS') status = 'IN_REVIEW';
+  else if (rawStatus === 'PENDING' || rawStatus === 'IN_REVIEW' ||
+           rawStatus === 'RESOLVED' || rawStatus === 'REJECTED') {
+    status = rawStatus as Complaint['status'];
+  } else status = 'PENDING';
+
   return {
     id: r.id,
     from: (r.from_role as Complaint['from']) ?? 'STUDENT',
@@ -88,7 +101,7 @@ function rowToComplaint(r: ComplaintRow): Complaint {
     fromClass: r.from_class ?? undefined,
     subject: r.subject,
     description: r.description ?? '',
-    status: (r.status as Complaint['status']) ?? 'OPEN',
+    status,
     createdAt: r.created_at.slice(0, 10),
     resolvedAt: r.resolved_at ? r.resolved_at.slice(0, 10) : null,
     response: r.response,
@@ -238,6 +251,22 @@ export const principalService = {
       .select(COMPLAINT_FIELDS).single();
     if (error) throw new Error(error.message);
     await logAudit('complaint_resolved', 'complaint', id, { response_length: response.length });
+    return rowToComplaint(data as ComplaintRow);
+  },
+
+  async rejectComplaint(id: string, reason: string): Promise<Complaint> {
+    const schoolId = getSchoolId();
+    const { data, error } = await supabase
+      .from('complaints')
+      .update({
+        status: 'REJECTED',
+        response: reason,
+        resolved_at: new Date().toISOString(),
+      })
+      .eq('id', id).eq('school_id', schoolId)
+      .select(COMPLAINT_FIELDS).single();
+    if (error) throw new Error(error.message);
+    await logAudit('complaint_rejected', 'complaint', id, { reason_length: reason.length });
     return rowToComplaint(data as ComplaintRow);
   },
 
@@ -727,34 +756,56 @@ export const principalService = {
     return { rows, isLocked, savedAt: savedAtTs };
   },
 
-  async saveStaffAttendance(date: string, rows: StaffAttendanceRow[]): Promise<string | null> {
+  async saveStaffAttendance(
+    date: string,
+    rows: StaffAttendanceRow[],
+    clearedStaffIds: string[] = [],
+  ): Promise<string | null> {
     const schoolId = getSchoolId();
     const actor = getActor();
-    if (!rows.length) throw new Error('No staff to record');
+    if (!rows.length && !clearedStaffIds.length) throw new Error('No staff to record');
 
-    // Upsert per (staff_id, date). The DB UNIQUE constraint on
-    // (staff_id, date) handles deduplication. We also bump created_at on
-    // every save so the "last saved" timestamp advances on re-save.
     const nowIso = new Date().toISOString();
-    const payload = rows.map(r => ({
-      school_id: schoolId,
-      staff_id: r.staffId,
-      date,
-      status: r.status,
-      marked_by: actor?.id ?? null,
-      created_at: nowIso,
-    }));
-    const { error } = await supabase
-      .from('staff_attendance')
-      .upsert(payload, { onConflict: 'staff_id,date' });
-    if (error) throw new Error(error.message);
+
+    // Cleared rows: drop any prior staff_attendance entries for these
+    // staff on this date so the day reverts to "unmarked" in the DB.
+    // Quick-action "Clear" relies on this — a cleared day must NOT be
+    // identical to All Present.
+    if (clearedStaffIds.length) {
+      const { error: delErr } = await supabase
+        .from('staff_attendance')
+        .delete()
+        .eq('school_id', schoolId)
+        .eq('date', date)
+        .in('staff_id', clearedStaffIds);
+      if (delErr) throw new Error(delErr.message);
+    }
+
+    // Upsert remaining marked rows. The DB UNIQUE constraint on
+    // (staff_id, date) handles deduplication. We bump created_at on
+    // every save so the "last saved" timestamp advances on re-save.
+    if (rows.length) {
+      const payload = rows.map(r => ({
+        school_id: schoolId,
+        staff_id: r.staffId,
+        date,
+        status: r.status,
+        marked_by: actor?.id ?? null,
+        created_at: nowIso,
+      }));
+      const { error } = await supabase
+        .from('staff_attendance')
+        .upsert(payload, { onConflict: 'staff_id,date' });
+      if (error) throw new Error(error.message);
+    }
 
     await logAudit('staff_attendance_saved', 'staff_attendance', date, {
-      date, count: rows.length,
+      date, count: rows.length, cleared: clearedStaffIds.length,
     });
 
     // Re-derive the "last saved" timestamp from the DB so callers see the
-    // canonical value (not the client clock).
+    // canonical value (not the client clock). If everything was cleared
+    // there will be no row → fall back to the client clock.
     const { data: ts } = await supabase
       .from('staff_attendance').select('created_at')
       .eq('school_id', schoolId).eq('date', date)
@@ -999,12 +1050,13 @@ export const principalService = {
     const read = async () => {
       const { data, error } = await supabase
         .from('fee_structures')
-        .select('id, name, class_name, billing_cycle, fee_heads, monthly_due_dates, late_fee')
+        .select('id, name, class_name, structure_type, billing_cycle, fee_heads, monthly_due_dates, late_fee')
         .eq('school_id', schoolId).eq('academic_year_id', ayId)
         .order('class_name');
       if (error) throw new Error(error.message);
       return ((data ?? []) as Array<{
         id: string; name: string; class_name: string;
+        structure_type: FeeStructureType | null;
         billing_cycle: BillingCycle | null;
         fee_heads: FeeStructureRecord['feeHeads'];
         monthly_due_dates: FeeStructureRecord['monthlyDueDates'];
@@ -1013,6 +1065,7 @@ export const principalService = {
         id: r.id,
         name: r.name,
         className: r.class_name,
+        structureType: (r.structure_type ?? 'CLASS') as FeeStructureType,
         billingCycle: (r.billing_cycle ?? 'MONTHLY') as BillingCycle,
         feeHeads: r.fee_heads ?? [],
         monthlyDueDates: r.monthly_due_dates ?? [],
@@ -1099,6 +1152,7 @@ export const principalService = {
       academic_year_id: ayId,
       name: input.name,
       class_name: input.className,
+      structure_type: input.structureType ?? 'CLASS',
       billing_cycle: input.billingCycle,
       fee_heads: input.feeHeads,
       monthly_due_dates: input.monthlyDueDates,
@@ -1115,7 +1169,7 @@ export const principalService = {
       // Capture the previous structure so the audit log can show a real diff.
       const { data: prev } = await supabase
         .from('fee_structures')
-        .select('name, class_name, billing_cycle, fee_heads, monthly_due_dates, late_fee')
+        .select('name, class_name, structure_type, billing_cycle, fee_heads, monthly_due_dates, late_fee')
         .eq('id', input.id).eq('school_id', schoolId).maybeSingle();
       prevSnap = (prev ?? null) as Record<string, unknown> | null;
       const { error } = await supabase
@@ -1132,6 +1186,7 @@ export const principalService = {
     const newSnap: Record<string, unknown> = {
       name: input.name,
       class_name: input.className,
+      structure_type: input.structureType ?? 'CLASS',
       billing_cycle: input.billingCycle,
       fee_heads: input.feeHeads,
       monthly_due_dates: input.monthlyDueDates,
@@ -1147,7 +1202,7 @@ export const principalService = {
       mode: prevSnap ? 'update' : 'create',
       changes,
     });
-    return { ...input, id };
+    return { ...input, structureType: input.structureType ?? 'CLASS', id };
   },
 
   async saveFeeStructureForYear(
@@ -1160,6 +1215,7 @@ export const principalService = {
       academic_year_id: yearId,
       name: input.name,
       class_name: input.className,
+      structure_type: input.structureType ?? 'CLASS',
       billing_cycle: input.billingCycle,
       fee_heads: input.feeHeads,
       monthly_due_dates: input.monthlyDueDates,
@@ -1171,7 +1227,7 @@ export const principalService = {
     if (error) throw new Error(error.message);
     const id = (data as { id: string }).id;
     await logAudit('fee_structure_saved', 'fee_structures', id, { name: input.name, mode: 'create' });
-    return { ...input, id };
+    return { ...input, structureType: input.structureType ?? 'CLASS', id };
   },
 
   async deleteFeeStructure(id: string): Promise<void> {
@@ -1303,10 +1359,13 @@ export interface FeePaymentUploadRecord {
 
 export type BillingCycle = 'MONTHLY' | 'QUARTERLY' | 'HALF_YEARLY' | 'ANNUALLY' | 'CUSTOM';
 
+export type FeeStructureType = 'CLASS' | 'VEHICLE';
+
 export interface FeeStructureRecord {
   id: string;
   name: string;
   className: string;
+  structureType: FeeStructureType;
   billingCycle: BillingCycle;
   feeHeads: Array<{ id: string; name: string; amount: number; frequency: 'MONTHLY' | 'ANNUAL' | 'ONE_TIME'; description: string }>;
   monthlyDueDates: Array<{ month: string; date: string }>;

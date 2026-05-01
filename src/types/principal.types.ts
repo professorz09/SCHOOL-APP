@@ -5,12 +5,12 @@ export type Gender = 'MALE' | 'FEMALE' | 'OTHER';
 export type StaffRole = 'TEACHER' | 'VICE_PRINCIPAL' | 'ACCOUNTANT' | 'LIBRARIAN' | 'LAB_INCHARGE' | 'DRIVER' | 'PEON' | 'SECURITY';
 export type StaffStatus = 'ACTIVE' | 'ON_LEAVE' | 'SUSPENDED' | 'RELIEVED';
 export type SalaryPaymentMethod = 'CASH' | 'BANK_TRANSFER' | 'UPI' | 'CHEQUE' | 'OTHER';
-export type ComplaintStatus = 'OPEN' | 'IN_PROGRESS' | 'RESOLVED';
+export type ComplaintStatus = 'PENDING' | 'IN_REVIEW' | 'RESOLVED' | 'REJECTED';
 export type ComplaintFrom = 'STUDENT' | 'TEACHER' | 'PARENT';
 export type ApprovalType = 'LEAVE' | 'FEE_PAYMENT' | 'ATTENDANCE_CORRECTION';
 export type ApprovalStatus = 'PENDING' | 'APPROVED' | 'REJECTED';
 export type AssetCategory = 'BOOK' | 'LAB_EQUIPMENT' | 'VEHICLE';
-export type NoticeAudience = 'ALL' | 'STUDENTS' | 'TEACHERS' | 'PARENTS';
+export type NoticeAudience = 'ALL' | 'STUDENTS' | 'TEACHERS' | 'STAFF' | 'PARENTS';
 
 export type StudentStream = 'Science' | 'Commerce' | 'Arts';
 export const STREAMS: StudentStream[] = ['Science', 'Commerce', 'Arts'];
