@@ -1283,7 +1283,7 @@ export const StudentsManager: React.FC<Props> = ({ onBack, initialView }) => {
               <ArrowLeft size={20} />
             </button>
             <div>
-              <h2 className="text-xl font-black text-slate-900">Classes</h2>
+              <h2 className="text-xl font-black text-slate-900">Students</h2>
               <p className="text-[11px] font-semibold text-slate-400">
                 {classNames.length} class{classNames.length !== 1 ? 'es' : ''}
               </p>

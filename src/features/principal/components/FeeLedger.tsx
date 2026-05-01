@@ -355,7 +355,7 @@ export const FeeLedger: React.FC<Props> = ({ onBack }) => {
       ? `<table style="width:100%;border-collapse:collapse;margin:12px 0;">
           <thead><tr><th style="text-align:left;font-size:10px;color:#64748b;padding:4px 0;border-bottom:1px solid #e2e8f0;">Month / Type</th><th style="text-align:right;font-size:10px;color:#64748b;padding:4px 0;border-bottom:1px solid #e2e8f0;">Amount</th></tr></thead>
           <tbody>
-            ${r.installmentDetails.map(d => `<tr><td style="font-size:12px;padding:5px 0;border-bottom:1px solid #f1f5f9;">${d.month} · ${FEE_TYPE_LABEL[d.feeType]}</td><td style="text-align:right;font-size:12px;font-weight:700;padding:5px 0;border-bottom:1px solid #f1f5f9;">₹${d.amount.toLocaleString('en-IN')}</td></tr>`).join('')}
+            ${r.installmentDetails.map(d => `<tr><td style="font-size:12px;padding:5px 0;border-bottom:1px solid #f1f5f9;">${d.month} · ${FEE_TYPE_LABEL[d.feeType] ?? d.feeType}</td><td style="text-align:right;font-size:12px;font-weight:700;padding:5px 0;border-bottom:1px solid #f1f5f9;">₹${d.amount.toLocaleString('en-IN')}</td></tr>`).join('')}
             ${r.advanceAmount > 0 ? `<tr><td style="font-size:12px;color:#7c3aed;padding:5px 0;">Advance Credit</td><td style="text-align:right;font-size:12px;color:#7c3aed;font-weight:700;padding:5px 0;">₹${r.advanceAmount.toLocaleString('en-IN')}</td></tr>` : ''}
           </tbody>
         </table>`
@@ -609,8 +609,8 @@ export const FeeLedger: React.FC<Props> = ({ onBack }) => {
                         <div className="flex-1">
                           <div className="flex items-center gap-2 mb-1 flex-wrap">
                             <span className="font-extrabold text-slate-900 text-sm">{inst.month}</span>
-                            <span className={`text-[8px] font-black px-2 py-0.5 rounded-full ${FEE_TYPE_COLOR[inst.feeType]}`}>
-                              {FEE_TYPE_LABEL[inst.feeType]}
+                            <span className={`text-[8px] font-black px-2 py-0.5 rounded-full ${FEE_TYPE_COLOR[inst.feeType] ?? 'bg-slate-100 text-slate-600'}`}>
+                              {FEE_TYPE_LABEL[inst.feeType] ?? inst.feeType}
                             </span>
                             {inst.payerType === 'GOVERNMENT' && (
                               <span className="text-[8px] font-black px-2 py-0.5 rounded-full bg-emerald-50 text-emerald-700">
