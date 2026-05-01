@@ -43,12 +43,16 @@ export const StudentClassAssignmentModal: React.FC<Props> = ({ student, onClose,
   const [discountAmount, setDiscountAmount] = useState<number>(0);
   const [discountPct, setDiscountPct] = useState<number>(0);
 
-  // Transport (optional)
+  // Transport (optional). When enabled the principal MUST also pick a
+  // VEHICLE-type fee structure — bills are generated from the structure's
+  // due dates the same way class fees are, so the dropdown is a hard
+  // pre-condition for save (Task #29).
   const [transportEnabled, setTransportEnabled] = useState<boolean>(false);
   const [vehicles, setVehicles] = useState<TransportVehicle[]>([]);
   const [vehicleId, setVehicleId] = useState<string>('');
   const [stopId, setStopId] = useState<string>('');
   const [transportAmount, setTransportAmount] = useState<number>(500);
+  const [transportStructureId, setTransportStructureId] = useState<string>('');
 
   // ── async state ──
   const [loadingMeta, setLoadingMeta] = useState(true);
@@ -139,9 +143,33 @@ export const StudentClassAssignmentModal: React.FC<Props> = ({ student, onClose,
   // (clerks usually want a class-specific structure), with a fallback
   // to "any" when none match.
   const matchingStructures = useMemo(() => {
-    const classStructures = structures.filter(s => (s as any).structureType !== 'VEHICLE');
+    const classStructures = structures.filter(s => s.structureType !== 'VEHICLE');
     return classStructures;
   }, [structures]);
+
+  // VEHICLE-type structures for the transport bill schedule. Already
+  // scoped to the active academic year by principalService.getFeeStructures
+  // — no extra filter needed here, just the type predicate.
+  const vehicleStructures = useMemo(
+    () => structures.filter(s => s.structureType === 'VEHICLE'),
+    [structures],
+  );
+  const selectedTransportStructure = useMemo(
+    () => vehicleStructures.find(s => s.id === transportStructureId) || null,
+    [vehicleStructures, transportStructureId],
+  );
+
+  // Auto-fill the displayed monthly amount from the structure's MONTHLY
+  // heads when the principal picks a structure. Keeps the existing
+  // amount input as a read-only-ish summary so the principal can still
+  // see what's about to be billed each month.
+  useEffect(() => {
+    if (!selectedTransportStructure) return;
+    const monthly = selectedTransportStructure.feeHeads
+      .filter(h => h.frequency === 'MONTHLY')
+      .reduce((sum, h) => sum + Number(h.amount || 0), 0);
+    if (monthly > 0) setTransportAmount(monthly);
+  }, [selectedTransportStructure]);
 
   const selectedVehicle = useMemo(
     () => vehicles.find(v => v.id === vehicleId) || null,
@@ -165,6 +193,10 @@ export const StudentClassAssignmentModal: React.FC<Props> = ({ student, onClose,
       showToast('Choose a vehicle and stop or disable transport', 'error');
       return;
     }
+    if (transportEnabled && !selectedTransportStructure) {
+      showToast('Pick a Transport Fee Structure — every transport assignment needs a bill schedule', 'error');
+      return;
+    }
     setSubmitting(true);
     try {
       const summary = await studentService.assignStudentToClass({
@@ -182,8 +214,9 @@ export const StudentClassAssignmentModal: React.FC<Props> = ({ student, onClose,
           discountAmount,
           discountPct,
         },
-        transport: transportEnabled ? {
+        transport: transportEnabled && selectedTransportStructure ? {
           vehicleId, stopId, monthlyAmount: transportAmount,
+          feeStructureId: selectedTransportStructure.id,
         } : undefined,
       });
       // Surface the freshly-generated schedule details in the success toast
@@ -348,11 +381,46 @@ export const StudentClassAssignmentModal: React.FC<Props> = ({ student, onClose,
                     ))}
                   </select>
                 </div>
+                {/*
+                  Required transport fee structure picker (Task #29).
+                  Same UX shape as the class fee structure dropdown above:
+                  required, scoped to active year, shows installment count
+                  hint, and blocks save until selected.
+                */}
+                <div>
+                  <label className="text-[10px] font-black uppercase text-slate-500">Transport Fee Structure *</label>
+                  <select
+                    value={transportStructureId}
+                    onChange={e => setTransportStructureId(e.target.value)}
+                    disabled={loadingMeta}
+                    className={`w-full mt-1 px-3 py-2 bg-slate-50 border rounded-lg text-xs font-bold
+                      ${transportEnabled && !selectedTransportStructure ? 'border-rose-300' : 'border-slate-200'}`}>
+                    <option value="">— Choose a transport bill schedule (required) —</option>
+                    {vehicleStructures.map(s => (
+                      <option key={s.id} value={s.id}>{s.name}</option>
+                    ))}
+                  </select>
+                  {vehicleStructures.length === 0 && !loadingMeta && (
+                    <p className="text-[10px] font-bold text-amber-600 mt-1">
+                      No vehicle fee structures yet. Settings → Fees → + Add Structure → Vehicle.
+                    </p>
+                  )}
+                  {selectedTransportStructure && (
+                    <p className="text-[10px] font-bold text-slate-500 mt-1">
+                      {selectedTransportStructure.feeHeads.length} heads · {selectedTransportStructure.monthlyDueDates.length} monthly installments
+                    </p>
+                  )}
+                </div>
                 <div>
                   <label className="text-[10px] font-black uppercase text-slate-500">Monthly amount (₹)</label>
                   <input type="number" min={0} value={transportAmount}
                     onChange={e => setTransportAmount(Math.max(0, parseInt(e.target.value) || 0))}
                     className="w-full mt-1 px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-xs font-bold" />
+                  {selectedTransportStructure && (
+                    <p className="text-[10px] font-bold text-slate-400 mt-1">
+                      Auto-filled from structure (sum of MONTHLY heads). Editable for the displayed monthly_amount column only — bill schedule comes from the structure.
+                    </p>
+                  )}
                 </div>
               </>
             )}
@@ -366,7 +434,13 @@ export const StudentClassAssignmentModal: React.FC<Props> = ({ student, onClose,
             Cancel
           </button>
           <button onClick={submit}
-            disabled={submitting || rollAvailable === false}
+            disabled={
+              submitting
+              || rollAvailable === false
+              || !rollNo.trim()
+              || !selectedStructure
+              || (transportEnabled && (!vehicleId || !stopId || !selectedTransportStructure))
+            }
             className="flex-1 px-4 py-3 bg-indigo-600 text-white font-black text-xs rounded-xl active:scale-95 disabled:opacity-60 flex items-center justify-center gap-1.5">
             {submitting && <Loader2 size={14} className="animate-spin" />}
             {submitting ? 'Assigning…' : 'Assign'}

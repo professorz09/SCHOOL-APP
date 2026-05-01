@@ -366,6 +366,17 @@ export const transportService = {
     academicYearId?: string,
     endDate?: string | null,
     reason?: string | null,
+    /**
+     * Optional VEHICLE-type fee structure id to drive bill generation.
+     * When provided, the id is persisted on the assignment row AND a
+     * structure-aware schedule (one TRANSPORT installment per monthly
+     * due-date) is generated via the `generate_transport_fee_schedule`
+     * RPC, which authoritatively reads heads + due-dates from the
+     * `fee_structures` row server-side (so a tampered client payload
+     * cannot bill the wrong amounts). When absent (legacy bulk paths)
+     * we fall back to the flat monthly schedule generator.
+     */
+    feeStructureId?: string,
   ): Promise<StudentTransportAssignment> {
     const schoolId = getSchoolId();
     let ayId = academicYearId;
@@ -425,6 +436,7 @@ export const transportService = {
       end_date: endDate ?? null,
       reason: reason ?? null,
       is_active: true,
+      fee_structure_id: feeStructureId ?? null,
     }).select('id').single();
     if (error) {
       // Roll the prior row back so the student isn't stranded transport-less.
@@ -441,18 +453,52 @@ export const transportService = {
     }
     const newId = (data as { id: string }).id;
 
-    // Auto-generate monthly TRANSPORT installments for the new assignment
-    // (lazy import to keep the module dep graph one-way).
-    try {
+    // Auto-generate monthly TRANSPORT installments for the new assignment.
+    // Two distinct error policies:
+    //   * Structure-driven (Task #29): mirrors the class-side
+    //     generate_student_fee_schedule contract — if the RPC rejects
+    //     (wrong year, wrong type, tampered id, etc.) we FAIL THE WHOLE
+    //     ASSIGNMENT so the principal sees the toast and can correct
+    //     instead of ending up with an active assignment that has no
+    //     bill schedule. We roll the new row back and restore the prior
+    //     active row so the student isn't stranded.
+    //   * Legacy flat-monthly (no structure id): bulk reassign and other
+    //     pre-Task-#29 callers tolerate a quiet failure so the bulk job
+    //     keeps moving — they can re-trigger schedule generation later.
+    if (feeStructureId) {
+      const { error: rpcErr } = await supabase.rpc('generate_transport_fee_schedule', {
+        p_student_id:       studentId,
+        p_year_id:          ayId,
+        p_assignment_id:    newId,
+        p_fee_structure_id: feeStructureId,
+      });
+      if (rpcErr) {
+        // Roll the new row + restore prior active state.
+        await supabase.from('student_transport_assignments').delete().eq('id', newId);
+        if (prior) {
+          await supabase.from('student_transport_assignments')
+            .update({
+              is_active: true,
+              end_date: prior.end_date,
+              end_reason: prior.end_reason,
+            })
+            .eq('id', prior.id);
+        }
+        throw new Error(`Transport fee schedule failed: ${rpcErr.message}`);
+      }
       const { feeService } = await import('./fee.service');
-      await feeService.addTransportFeeSchedule(
-        studentId, monthlyAmount, startIso, endDate ?? null, newId,
-      );
-    } catch (e) {
-      // Don't fail the assignment if installment generation hits a hiccup —
-      // the principal can re-trigger via a "Regenerate" action later.
-      // eslint-disable-next-line no-console
-      console.warn('[transport] installment generation failed:', e);
+      await feeService.refreshAll();
+    } else {
+      try {
+        const { feeService } = await import('./fee.service');
+        await feeService.addTransportFeeSchedule(
+          studentId, monthlyAmount, startIso, endDate ?? null, newId,
+        );
+      } catch (e) {
+        // Bulk/legacy path — keep moving; principal can regenerate later.
+        // eslint-disable-next-line no-console
+        console.warn('[transport] legacy installment generation failed:', e);
+      }
     }
 
     await logAudit('transport_assigned', 'student_transport_assignment', newId, {
