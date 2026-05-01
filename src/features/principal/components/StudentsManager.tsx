@@ -1283,37 +1283,32 @@ export const StudentsManager: React.FC<Props> = ({ onBack, initialView }) => {
               <ArrowLeft size={20} />
             </button>
             <div>
-              <h2 className="text-xl font-black text-slate-900 uppercase tracking-tight">Students Directory</h2>
-              <p className="text-[10px] font-bold text-slate-400">
-                {students.length} enrolled · {classNames.length} class{classNames.length !== 1 ? 'es' : ''}
+              <h2 className="text-xl font-black text-slate-900">Classes</h2>
+              <p className="text-[11px] font-semibold text-slate-400">
+                {classNames.length} class{classNames.length !== 1 ? 'es' : ''}
               </p>
             </div>
           </div>
         </div>
 
-        <div className="flex-1 overflow-y-auto p-4">
+        <div className="flex-1 overflow-y-auto p-3">
           <div className="grid grid-cols-2 gap-3">
             {classNames.map(cls => {
               const count = students.filter(s => s.className === cls).length;
               const clsNum = cls.replace('Class ', '');
-              const paid = students.filter(s => s.className === cls && s.feeStatus === PaymentStatus.PAID).length;
               const numSections = dbSections.filter(s => s.className === cls).length;
               return (
                 <button key={cls}
                   onClick={() => { setSelectedClass(cls); setSearch(''); }}
                   className="bg-white rounded-2xl border border-slate-100 shadow-sm p-4 text-left active:scale-95 transition-transform">
-                  <div className="w-12 h-12 rounded-xl bg-indigo-50 text-indigo-600 flex items-center justify-center font-black text-xl mb-3">
-                    {clsNum}
+                  <div className="flex items-start justify-between mb-2">
+                    <span className="font-black text-slate-900 text-base leading-tight">{clsNum}</span>
+                    <ChevronRight size={18} className="text-slate-300 mt-0.5" />
                   </div>
-                  <div className="font-black text-slate-900 text-sm">{cls}</div>
-                  <div className="text-[10px] font-bold text-slate-400 mt-0.5">
-                    {numSections > 0 ? `${numSections} sec · ` : ''}{count} students
+                  <div className="text-3xl font-black text-indigo-600 leading-none mb-1">{count}</div>
+                  <div className="text-[10px] font-black uppercase tracking-widest text-slate-400">
+                    {numSections} section{numSections !== 1 ? 's' : ''}
                   </div>
-                  {paid > 0 && (
-                    <span className="inline-block mt-1 text-[9px] font-black text-emerald-600 bg-emerald-50 px-1.5 py-0.5 rounded-full">
-                      {paid} paid
-                    </span>
-                  )}
                 </button>
               );
             })}
