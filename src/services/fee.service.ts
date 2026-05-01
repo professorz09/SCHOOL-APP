@@ -9,11 +9,16 @@
 import { supabase } from '../lib/supabase';
 import { useAuthStore } from '../store/authStore';
 import { logAudit } from '../lib/audit';
+import { registerCacheResetter } from '../lib/cacheBus';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
 export type FeeType = 'TUITION' | 'TRANSPORT' | 'EXAM' | 'OTHER';
-export type FeeStatus = 'PAID' | 'PARTIAL' | 'UNPAID' | 'OVERDUE' | 'WAIVED' | 'WRITTEN_OFF';
+// CANCELLED is written by `cancelTransportInstallmentsAfter` for partially-paid
+// transport installments after a vehicle change/un-assign — frozen at the paid
+// portion so historical receipts still tie out. UI must render it (it does NOT
+// indicate a future bill).
+export type FeeStatus = 'PAID' | 'PARTIAL' | 'UNPAID' | 'OVERDUE' | 'WAIVED' | 'WRITTEN_OFF' | 'CANCELLED';
 export type PayerType = 'PARENT' | 'GOVERNMENT';
 
 export interface PaymentRecord {
@@ -121,6 +126,17 @@ let _paymentHistoryCache: PaymentRecord[] = [];
 let _govtPaymentsCache: GovernmentPaymentRecord[] = [];
 let _advanceCache = new Map<string, number>();
 let _cacheLoadedFor: string | null = null;
+
+// Drop everything so the next refreshAll() pulls fresh rows. Wired to the
+// cache bus so AcademicYearContext can flush us on year switch.
+function _resetCache(): void {
+  _installmentsCache = [];
+  _paymentHistoryCache = [];
+  _govtPaymentsCache = [];
+  _advanceCache = new Map<string, number>();
+  _cacheLoadedFor = null;
+}
+registerCacheResetter(_resetCache);
 
 // ─── Cache refresh ───────────────────────────────────────────────────────────
 
@@ -324,7 +340,10 @@ export const feeService = {
     let last: string | null = null;
     for (const m of months) {
       const allPaid = insts.filter(i => i.month === m).every(
-        i => i.status === 'PAID' || i.status === 'WAIVED' || i.status === 'WRITTEN_OFF',
+        // CANCELLED rows (frozen transport after vehicle change) count as
+        // settled — they aren't future obligations and shouldn't block the
+        // "paid through" marker from advancing.
+        i => i.status === 'PAID' || i.status === 'WAIVED' || i.status === 'WRITTEN_OFF' || i.status === 'CANCELLED',
       );
       if (allPaid) last = m; else break;
     }

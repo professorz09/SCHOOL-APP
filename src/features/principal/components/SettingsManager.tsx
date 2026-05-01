@@ -10,6 +10,7 @@ import { schoolInfoService, SchoolInfo } from '../../../services/schoolInfo.serv
 import { FeeStructureForm, FeeStructureItem } from './FeeStructureForm';
 import { AuditLogsViewer } from './AuditLogsViewer';
 import { useEditorModeStore } from '../../../store/editorModeStore';
+import { useAcademicYear } from '../../../context/AcademicYearContext';
 
 type View = 'MENU' | 'SCHOOL_INFO' | 'CLASSES' | 'FEE_STRUCT' | 'FEE_STRUCT_EDIT' | 'PAYMENTS' | 'SECURITY' | 'DATA_EXPORT' | 'ACTIVITY_LOG';
 
@@ -18,6 +19,7 @@ interface Props { onBack: () => void; initialView?: View; }
 
 export const SettingsManager: React.FC<Props> = ({ onBack, initialView }) => {
   const { showToast } = useUIStore();
+  const { activeYear } = useAcademicYear();
   const [view, setView] = useState<View>(initialView ?? 'MENU');
   const [configs, setConfigs] = useState<AcademicYearConfig[]>([]);
   const [activeConfig, setActiveConfig] = useState<AcademicYearConfig | null>(null);
@@ -29,6 +31,8 @@ export const SettingsManager: React.FC<Props> = ({ onBack, initialView }) => {
   const [upiSaved, setUpiSaved] = useState(false);
   const [qrFileName, setQrFileName] = useState('');
   const [qrPreviewUrl, setQrPreviewUrl] = useState('');
+  const [qrPreviewBroken, setQrPreviewBroken] = useState(false);
+  const [qrUploading, setQrUploading] = useState(false);
   const [feeStructures, setFeeStructures] = useState<FeeStructureItem[]>([]);
   const [editingFs, setEditingFs] = useState<FeeStructureItem | null>(null);
   const [feeStructuresLoading, setFeeStructuresLoading] = useState(false);
@@ -45,7 +49,10 @@ export const SettingsManager: React.FC<Props> = ({ onBack, initialView }) => {
       if (info.paymentQrPath) {
         setQrFileName(info.paymentQrPath.split('/').pop() || 'payment-qr');
         const url = await schoolInfoService.getPaymentQrUrl(info.paymentQrPath);
-        setQrPreviewUrl(url ?? '');
+        // Cache-buster on initial load too — the public URL is stable so an
+        // image swapped from another device would otherwise stay cached.
+        setQrPreviewUrl(url ? `${url}${url.includes('?') ? '&' : '?'}t=${Date.now()}` : '');
+        setQrPreviewBroken(false);
       }
     }).catch(e => showToast(e instanceof Error ? e.message : 'Failed to load school info', 'error'));
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -93,8 +100,12 @@ export const SettingsManager: React.FC<Props> = ({ onBack, initialView }) => {
       .then(rows => setFeeStructures(rows))
       .catch(e => showToast(e instanceof Error ? e.message : 'Failed to load fee structures', 'error'))
       .finally(() => setFeeStructuresLoading(false));
+    // Depend on activeYear?.id so the list re-fetches after a year switch.
+    // principalService.getFeeStructures resolves the year internally via the
+    // active session — flipping the active year invalidates upstream caches
+    // and we need to re-pull to show the new year's structures.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [view]);
+  }, [view, activeYear?.id]);
 
   const handleChangePassword = async () => {
     if (!session) return;
@@ -469,15 +480,30 @@ export const SettingsManager: React.FC<Props> = ({ onBack, initialView }) => {
               if (h.frequency === 'MONTHLY') return s + h.amount * 12;
               return s + h.amount;
             }, 0);
+            // structureType is 'CLASS' (default) or 'VEHICLE' — distinguishes
+            // class-wide tuition/fee templates from per-vehicle transport
+            // schedules. Field comes back from principalService.getFeeStructures.
+            const isVehicle = (fs as { structureType?: 'CLASS' | 'VEHICLE' }).structureType === 'VEHICLE';
+            const tileLabel = isVehicle ? 'BUS' : fs.className.replace('Class ', '').slice(0, 4);
+            const tileClass = isVehicle
+              ? 'w-10 h-10 rounded-xl bg-orange-50 text-orange-700 flex items-center justify-center font-black text-xs shrink-0 text-center leading-tight'
+              : 'w-10 h-10 rounded-xl bg-emerald-50 text-emerald-700 flex items-center justify-center font-black text-xs shrink-0 text-center leading-tight';
             return (
               <div key={fs.id} className="bg-white rounded-2xl border border-slate-100 shadow-sm overflow-hidden">
                 <div className="flex items-center gap-3 px-4 py-3.5">
-                  <div className="w-10 h-10 rounded-xl bg-emerald-50 text-emerald-700 flex items-center justify-center font-black text-xs shrink-0 text-center leading-tight">
-                    {fs.className.replace('Class ', '').slice(0, 4)}
+                  <div className={tileClass}>
+                    {tileLabel}
                   </div>
                   <div className="flex-1 min-w-0">
-                    <div className="font-extrabold text-slate-900 text-sm truncate">{fs.name}</div>
-                    <div className="text-[10px] font-bold text-slate-400 mt-0.5">
+                    <div className="flex items-center gap-1.5 mb-0.5">
+                      <span className="font-extrabold text-slate-900 text-sm truncate">{fs.name}</span>
+                      <span className={`shrink-0 text-[8px] font-black uppercase tracking-widest px-1.5 py-0.5 rounded-full ${
+                        isVehicle ? 'bg-orange-100 text-orange-700' : 'bg-emerald-100 text-emerald-700'
+                      }`}>
+                        {isVehicle ? 'Vehicle' : 'Class'}
+                      </span>
+                    </div>
+                    <div className="text-[10px] font-bold text-slate-400">
                       {fs.className} · {fs.feeHeads.length} fee heads · ₹{annualTotal.toLocaleString('en-IN')}/yr
                       {fs.lateFee.enabled && <span className="ml-1 text-amber-600">· Late fee on</span>}
                     </div>
@@ -551,9 +577,19 @@ export const SettingsManager: React.FC<Props> = ({ onBack, initialView }) => {
           </div>
           <p className="text-xs font-bold text-slate-500">Upload a QR code image. Parents can scan this to pay fees directly.</p>
 
-          <div className="w-36 h-36 mx-auto bg-slate-100 rounded-2xl border-2 border-dashed border-slate-300 flex flex-col items-center justify-center gap-2">
-            {qrPreviewUrl ? (
-              <img src={qrPreviewUrl} className="w-full h-full object-contain rounded-2xl" />
+          <div className="w-36 h-36 mx-auto bg-slate-100 rounded-2xl border-2 border-dashed border-slate-300 flex flex-col items-center justify-center gap-2 overflow-hidden">
+            {qrPreviewUrl && !qrPreviewBroken ? (
+              <img
+                src={qrPreviewUrl}
+                alt="Payment QR code"
+                className="w-full h-full object-contain rounded-2xl"
+                onError={() => setQrPreviewBroken(true)}
+              />
+            ) : qrPreviewUrl && qrPreviewBroken ? (
+              <>
+                <QrCode size={28} className="text-rose-300" />
+                <span className="text-[9px] font-black text-rose-400 uppercase tracking-widest text-center px-2">Image unavailable</span>
+              </>
             ) : (
               <>
                 <QrCode size={28} className="text-slate-300" />
@@ -562,27 +598,46 @@ export const SettingsManager: React.FC<Props> = ({ onBack, initialView }) => {
             )}
           </div>
 
-          <label className="w-full flex items-center justify-center gap-2 bg-violet-600 text-white font-black text-xs uppercase tracking-widest py-3 rounded-2xl cursor-pointer active:scale-95 transition-transform">
-            <Plus size={14} /> {qrFileName ? 'Replace QR Image' : 'Upload QR Image'}
-            <input type="file" accept="image/*" className="hidden" onChange={e => {
+          <label className={`w-full flex items-center justify-center gap-2 bg-violet-600 text-white font-black text-xs uppercase tracking-widest py-3 rounded-2xl cursor-pointer active:scale-95 transition-transform ${qrUploading ? 'opacity-60 pointer-events-none' : ''}`}>
+            <Plus size={14} /> {qrUploading ? 'Uploading…' : (qrFileName ? 'Replace QR Image' : 'Upload QR Image')}
+            <input type="file" accept="image/*" className="hidden" disabled={qrUploading} onChange={e => {
               const file = e.target.files?.[0];
-              if (file) {
-                (async () => {
-                  const path = await schoolInfoService.uploadPaymentQr(file);
-                  await schoolInfoService.save({ paymentQrPath: path });
-                  const url = await schoolInfoService.getPaymentQrUrl(path);
-                  setQrFileName(file.name);
-                  setQrPreviewUrl(url ?? '');
-                  showToast(`QR image "${file.name}" uploaded`);
-                })().catch(err => showToast(err instanceof Error ? err.message : 'QR upload failed', 'error'));
+              // Reset the input so picking the same file again still fires onChange.
+              e.target.value = '';
+              if (!file) return;
+              // Guardrails: image MIME + 2 MB cap. Storage will accept anything,
+              // but parents view this on slow mobile connections so we want
+              // small, image-only payloads.
+              if (!file.type.startsWith('image/')) {
+                showToast('Please pick an image file (PNG, JPG, etc.)', 'error');
+                return;
               }
+              const MAX_BYTES = 2 * 1024 * 1024;
+              if (file.size > MAX_BYTES) {
+                showToast('QR image must be 2 MB or smaller', 'error');
+                return;
+              }
+              setQrUploading(true);
+              (async () => {
+                const path = await schoolInfoService.uploadPaymentQr(file);
+                await schoolInfoService.save({ paymentQrPath: path });
+                const url = await schoolInfoService.getPaymentQrUrl(path);
+                setQrFileName(file.name);
+                // Cache-buster — the storage object name is stable, so without
+                // a query param the browser keeps showing the previous image.
+                setQrPreviewUrl(url ? `${url}${url.includes('?') ? '&' : '?'}t=${Date.now()}` : '');
+                setQrPreviewBroken(false);
+                showToast(`QR image "${file.name}" uploaded`);
+              })()
+                .catch(err => showToast(err instanceof Error ? err.message : 'QR upload failed', 'error'))
+                .finally(() => setQrUploading(false));
             }} />
           </label>
 
           {qrFileName && (
             <div className="flex items-center justify-between bg-slate-50 rounded-xl px-3 py-2.5">
               <span className="text-xs font-bold text-slate-600 truncate">{qrFileName}</span>
-              <button onClick={async () => { await schoolInfoService.save({ paymentQrPath: '' }); setQrFileName(''); setQrPreviewUrl(''); }} className="text-slate-400 hover:text-rose-500 transition-colors ml-2 shrink-0"><Trash2 size={13} /></button>
+              <button onClick={async () => { await schoolInfoService.save({ paymentQrPath: '' }); setQrFileName(''); setQrPreviewUrl(''); setQrPreviewBroken(false); }} className="text-slate-400 hover:text-rose-500 transition-colors ml-2 shrink-0"><Trash2 size={13} /></button>
             </div>
           )}
         </div>

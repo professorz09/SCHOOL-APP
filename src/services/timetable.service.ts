@@ -12,6 +12,7 @@ import { useAuthStore } from '../store/authStore';
 import { useCorrectionStore } from '../store/correctionStore';
 import { useEditingYearStore } from '../store/editingYearStore';
 import { logAudit } from '../lib/audit';
+import { registerCacheResetter } from '../lib/cacheBus';
 
 export type TDay = 'Monday' | 'Tuesday' | 'Wednesday' | 'Thursday' | 'Friday' | 'Saturday' | 'Sunday';
 export type SlotType = 'CLASS' | 'BREAK' | 'LUNCH' | 'ASSEMBLY' | 'FREE';
@@ -72,6 +73,15 @@ let _entriesCache: TimetableEntry[] = [];
 let _teachersCache: TimetableTeacher[] = [];
 let _activeYearId: string | null = null;
 let _yearIsClosed = false;
+
+// Wired to the cache bus so AcademicYearContext flushes us on year switch —
+// the cached entries + resolved active year id belong to the previous year.
+registerCacheResetter(() => {
+  _entriesCache = [];
+  _teachersCache = [];
+  _activeYearId = null;
+  _yearIsClosed = false;
+});
 
 interface EntryRow {
   id: string; section_id: string; class_id: string;

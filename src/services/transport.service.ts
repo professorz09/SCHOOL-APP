@@ -9,6 +9,7 @@
 import { supabase } from '../lib/supabase';
 import { useAuthStore } from '../store/authStore';
 import { logAudit } from '../lib/audit';
+import { registerCacheResetter } from '../lib/cacheBus';
 
 const calculateDistance = (lat1: number, lng1: number, lat2: number, lng2: number): number => {
   const R = 6371000;
@@ -106,6 +107,13 @@ export interface TransportStudent {
 
 let _vehiclesCache: TransportVehicle[] = [];
 let _assignmentsCache: StudentTransportAssignment[] = [];
+
+// Wired to the cache bus so AcademicYearContext flushes us on year switch —
+// otherwise stale per-year vehicle assignments leak across years.
+registerCacheResetter(() => {
+  _vehiclesCache = [];
+  _assignmentsCache = [];
+});
 
 interface VehicleRow {
   id: string; vehicle_no: string; type: string; capacity: number;

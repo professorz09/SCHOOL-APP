@@ -65,7 +65,10 @@ interface AcademicRecordRow {
 function recordToStudent(s: StudentRow, ar?: AcademicRecordRow | null): Student {
   return {
     id: s.id,
-    name: s.name,
+    // Coalesce defensively — `students.name` is non-null at the schema level,
+    // but historical rows or mid-edit fixtures have surfaced as null in the
+    // wild and crash the principal Fees list when split() is called.
+    name: s.name ?? '',
     rollNo: ar?.roll_no ?? s.roll_no ?? '',
     admissionNo: s.admission_no,
     className: ar?.class_name ?? '',

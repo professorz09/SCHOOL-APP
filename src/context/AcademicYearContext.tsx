@@ -4,6 +4,7 @@ import { useAuthStore } from '../store/authStore';
 import { useEditingYearStore } from '../store/editingYearStore';
 import { logAudit } from '../lib/audit';
 import type { AcademicYearStatus } from '../types/yearClosing.types';
+import { resetAllCaches } from '../lib/cacheBus';
 
 export interface AcademicYear {
   id: string;
@@ -132,6 +133,17 @@ export const AcademicYearProvider: React.FC<{ children: ReactNode }> = ({ childr
   const setActiveYear = useCallback(async (id: string) => {
     const { error } = await supabase.rpc('set_active_academic_year', { p_year_id: id });
     if (error) throw new Error(error.message);
+    // Flush every service-level cache BEFORE re-fetching the year list so
+    // any consumer that re-runs (keyed off `activeYear?.id`) hits the
+    // services in their cleared state and pulls fresh per-year rows. Without
+    // this, stale fee_installments / payments / transport data from the
+    // previous year leak through until a hard refresh.
+    await resetAllCaches();
+    // If the principal had a closed-year override active for the previous
+    // year, drop it — the override only makes sense for the year the user
+    // explicitly entered Correction Mode for.
+    setCurrentEditingYearIdState(null);
+    useEditingYearStore.getState().setEditingYear(null);
     await refresh();
   }, [refresh]);
 
