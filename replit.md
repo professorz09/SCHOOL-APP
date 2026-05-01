@@ -2,6 +2,25 @@
 
 A school management application with React frontend and Supabase (Postgres + Auth + RLS) backend. Supports Super Admin, Principal, Teacher, Student/Parent, and Driver roles.
 
+## Replit Environment Setup
+
+**Stack:** React 19 + Vite 6, Zustand, Tailwind CSS v4, TypeScript. Backend is Supabase (PostgreSQL + GoTrue Auth + Storage + RLS + RPCs).
+
+**Run command:** `npm run dev` (starts Vite on port 5000)
+
+**Required secrets (set in Replit Secrets):**
+- `SUPABASE_URL` — your Supabase project URL
+- `SUPABASE_ANON_KEY` — Supabase public anon key (used by the React frontend)
+- `SUPABASE_SERVICE_ROLE_KEY` — Supabase service role key (used server-side by `vite-plugins/admin-api.ts` for admin operations)
+- `GEMINI_API_KEY` — Google Gemini API key for AI features (optional)
+
+**Architecture notes:**
+- All database access goes through `@supabase/supabase-js` in `src/services/` — do not replace with Drizzle/pg
+- `vite-plugins/admin-api.ts` is the server-side layer (runs inside the Vite dev/preview middleware) — it handles privileged admin operations using the service role key
+- `src/lib/supabase.ts` gracefully degrades if env vars are missing (logs a warning, uses placeholder values)
+- `server/db.ts` exposes a raw `pg.Pool` connected to the Replit-provisioned PostgreSQL — available for future use but not currently used by the app
+- Schema lives in Supabase (34 migrations in `supabase/migrations/`); apply with `npm run db:apply` after setting `SUPABASE_DB_PASSWORD`
+
 ## Task #8 — Year closing without auto-promote + Correction Mode
 
 The "close academic year" flow no longer auto-promotes students,
