@@ -1825,6 +1825,8 @@ export const StudentsManager: React.FC<Props> = ({ onBack, initialView }) => {
                 if (status === 'PAID') return 'bg-emerald-100 text-emerald-700';
                 if (status === 'PARTIAL') return 'bg-amber-100 text-amber-700';
                 if (status === 'WAIVED' || status === 'WRITTEN_OFF') return 'bg-slate-100 text-slate-500';
+                // CANCELLED rows (frozen transport after vehicle change) — neutral, not "due".
+                if (status === 'CANCELLED') return 'bg-slate-100 text-slate-500 line-through';
                 if (status === 'OVERDUE') return 'bg-rose-200 text-rose-700';
                 return 'bg-rose-100 text-rose-600';
               };

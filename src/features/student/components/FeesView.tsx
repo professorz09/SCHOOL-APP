@@ -41,10 +41,14 @@ const statusBadge = (s: string) =>
   s === 'APPROVED' ? 'bg-emerald-100 text-emerald-700' : 'bg-rose-100 text-rose-700';
 
 const instStatusColor = (s: string) =>
-  s === 'PAID'    ? 'bg-emerald-100 text-emerald-700' :
-  s === 'PARTIAL' ? 'bg-amber-100 text-amber-700' :
-  s === 'WAIVED'  ? 'bg-slate-100 text-slate-500' :
-                    'bg-rose-100 text-rose-600';
+  s === 'PAID'        ? 'bg-emerald-100 text-emerald-700' :
+  s === 'PARTIAL'     ? 'bg-amber-100 text-amber-700' :
+  s === 'WAIVED'      ? 'bg-slate-100 text-slate-500' :
+  s === 'WRITTEN_OFF' ? 'bg-slate-100 text-slate-500' :
+  // CANCELLED rows are frozen historical transport entries — render as
+  // neutral/settled, not as an outstanding due item.
+  s === 'CANCELLED'   ? 'bg-slate-100 text-slate-500 line-through' :
+                        'bg-rose-100 text-rose-600';
 
 const formatDateLong = (iso: string) =>
   new Date(iso).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' });
