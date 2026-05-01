@@ -143,11 +143,13 @@ export const FeeLedger: React.FC<Props> = ({ onBack }) => {
         await feeService.refreshAll();
         const all = await studentService.getAll();
         const profiles = all.map(s =>
-          feeService.getStudentFeeProfile(s.id, s.name, `${s.className}-${s.section}`, s.admissionNo, s.rte)
+          feeService.getStudentFeeProfile(s.id, s.name ?? '', `${s.className ?? ''}-${s.section ?? ''}`, s.admissionNo ?? '', s.rte)
         );
         setStudents(profiles);
         setPaymentTransactions(feeService.getPaymentHistory());
         setGovtTransactions(feeService.getGovernmentPayments());
+      } catch (e) {
+        console.error('[FeeLedger] load error', e);
       } finally {
         setLoading(false);
       }
@@ -440,9 +442,9 @@ export const FeeLedger: React.FC<Props> = ({ onBack }) => {
   };
 
   const searchMatch = (s: StudentFeeProfile) =>
-    s.name.toLowerCase().includes(search.toLowerCase()) ||
-    s.admissionNo.toLowerCase().includes(search.toLowerCase()) ||
-    s.className.toLowerCase().includes(search.toLowerCase());
+    (s.name ?? '').toLowerCase().includes(search.toLowerCase()) ||
+    (s.admissionNo ?? '').toLowerCase().includes(search.toLowerCase()) ||
+    (s.className ?? '').toLowerCase().includes(search.toLowerCase());
 
   const dueStudents     = students.filter(s => hasDue(s));
   const clearedStudents = students.filter(s => !hasDue(s));

@@ -70,7 +70,7 @@ function recordToStudent(s: StudentRow, ar?: AcademicRecordRow | null): Student 
     // wild and crash the principal Fees list when split() is called.
     name: s.name ?? '',
     rollNo: ar?.roll_no ?? s.roll_no ?? '',
-    admissionNo: s.admission_no,
+    admissionNo: s.admission_no ?? '',
     className: ar?.class_name ?? '',
     section: ar?.section ?? '',
     dob: s.dob ?? '',
