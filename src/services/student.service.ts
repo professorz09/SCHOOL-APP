@@ -156,6 +156,15 @@ export interface AssignStudentInput {
     vehicleId: string;
     stopId: string;
     monthlyAmount: number;
+    /**
+     * VEHICLE-type fee structure id that drives transport bill generation.
+     * REQUIRED for the single-student assignment path (Task #29) — the
+     * service throws if missing. The id is stored on the assignment row
+     * and the SQL RPC authoritatively reads heads + due-dates from
+     * fee_structures server-side so client tampering can't bill the
+     * wrong amounts.
+     */
+    feeStructureId?: string;
   };
 }
 
@@ -964,11 +973,14 @@ export const studentService = {
     }
 
     // Step 4: transport assignment (handled by transport service).
+    // Hard-require a VEHICLE-type fee structure on the single-student
+    // path (Task #29). Bulk reassignment paths still call
+    // transportService.assignStudent without a structure and remain
+    // intentionally unaffected per task spec.
     if (input.transport) {
-      const { principalService } = await import('./principal.service');
-      const allFs = await principalService.getFeeStructures();
-      const hasVehicleFs = allFs.some(f => (f as any).structureType === 'VEHICLE');
-      if (!hasVehicleFs) throw new Error('Transport assign karne se pehle Vehicle fee structure banana zaroori hai.');
+      if (!input.transport.feeStructureId) {
+        throw new Error('Transport assign karne ke liye Vehicle fee structure chunna zaroori hai.');
+      }
       // Lazy import to avoid a circular dep between student↔transport
       // services (transportService imports from supabase + auth only,
       // but keeping this lazy is the safer pattern).
@@ -979,6 +991,8 @@ export const studentService = {
         input.transport.stopId, '',
         input.transport.monthlyAmount,
         undefined, ayId,
+        null, null,
+        input.transport.feeStructureId,
       );
     }
 
