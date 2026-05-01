@@ -601,7 +601,7 @@ export const FeeLedger: React.FC<Props> = ({ onBack }) => {
                 <div key={inst.id} className="bg-white rounded-2xl border border-slate-100 shadow-sm overflow-hidden">
                   {/* Status left strip */}
                   <div className="flex">
-                    <div className={`w-1 shrink-0 ${STATUS_BAR[inst.status]}`} />
+                    <div className={`w-1 shrink-0 ${STATUS_BAR[inst.status] ?? STATUS_BAR_FALLBACK}`} />
                     <div className="flex-1 p-4">
                       <div className="flex items-start justify-between gap-2">
                         <div className="flex-1">
@@ -630,7 +630,7 @@ export const FeeLedger: React.FC<Props> = ({ onBack }) => {
                       </div>
 
                       <div className="flex items-center gap-2 mt-2 flex-wrap">
-                        <span className={`flex items-center gap-1 text-[9px] font-black px-2 py-0.5 rounded-full border ${STATUS_COLOR[inst.status]}`}>
+                        <span className={`flex items-center gap-1 text-[9px] font-black px-2 py-0.5 rounded-full border ${STATUS_COLOR[inst.status] ?? STATUS_COLOR_FALLBACK}`}>
                           {STATUS_ICON(inst.status)} {inst.status}
                         </span>
                         {receipt && (
