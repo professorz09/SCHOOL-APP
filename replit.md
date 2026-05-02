@@ -28,9 +28,10 @@ A school management application with React frontend and Supabase (Postgres + Aut
   - `server/middleware/auth.ts` — `requireAuth` (JWT → `req.user` + `req.jwt`), `requireRole(...roles)`
   - `server/routes/auth.ts` — POST /api/auth/login, logout, me, change-password
   - `server/routes/academic-year.ts` — GET/POST /api/academic-year/{create,set-active,close}
-  - `server/routes/students.ts` — GET/POST /api/students/{create,assign,deactivate}
+  - `server/routes/students.ts` — GET/POST /api/students/{create,assign,deactivate,update,change-request,class-movement,fail,issue-tc,readmit}
   - `server/routes/fees.ts` — GET/POST /api/fees/{structure/create,schedule/generate,pay,govt-pay,writeoff,student/:id}
-  - `server/routes/transport.ts` — POST /api/transport/{assign,remove}
+  - `server/routes/transport.ts` — POST /api/transport/{assign,remove} (full atomic: close prior, cancel installments, insert, generate schedule with rollback)
+  - `server/routes/staff.ts` — POST /api/staff/{deactivate,salary/pay,salary/update,relieve}
   - `server/routes/attendance.ts` — GET/POST /api/attendance/{submit,approve}
   - `server/routes/exams.ts` — GET/POST /api/exam/{create,result/upload}
   - `server/routes/promotion.ts` — GET/POST /api/promotion/{preview,execute}
@@ -38,9 +39,10 @@ A school management application with React frontend and Supabase (Postgres + Aut
   - `server/routes/settings.ts` — GET/PUT /api/settings
 - **Frontend API client** (`src/shared/lib/apiClient.ts`):
   - `apiAuth` — login (unauthenticated fetch → `supabase.auth.setSession()`), logout, me, changePassword
-  - `apiStudents` — list, getById, create, assign, deactivate
+  - `apiStudents` — list, getById, create, assign, deactivate, update, changeRequest, classMovement, fail, issueTC, readmit
   - `apiFees` — pay, govtPay, writeoff, createStructure, generateSchedule, getStudentFees, getStructures
   - `apiTransport` — assign, remove, getVehicles, getStudentAssignments
+  - `apiStaff` — deactivate, paySalary, updateSalary, relieve
   - `apiAttendance` — get, submit, approve
   - `apiExams` — list, create, uploadResults, getResults
   - `apiPromotion` — preview, execute

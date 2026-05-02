@@ -501,18 +501,11 @@ export const feeService = {
     discountAmount = 0,
     discountPct = 0,
   ): Promise<number> {
-    const { data, error } = await supabase.rpc('generate_student_fee_schedule', {
-      p_student_id: studentId,
-      p_year_id: academicYearId,
-      p_heads: heads,
-      p_due_dates: dueDates,
-      p_is_rte: isRte,
-      p_discount_amount: discountAmount,
-      p_discount_pct: discountPct,
+    const { installmentCount } = await apiFees.generateSchedule({
+      studentId, yearId: academicYearId, heads, dueDates, isRte, discountAmount, discountPct,
     });
-    if (error) throw new Error(error.message);
     await this.refreshAll();
-    return Number(data) || 0;
+    return Number(installmentCount) || 0;
   },
 
   /**

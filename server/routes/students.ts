@@ -225,3 +225,130 @@ studentsRouter.post('/deactivate', requireAuth, requireRole('PRINCIPAL'), async 
     ok(res, { studentId, deactivated: true, reason: reason ?? null });
   } catch (err) { fail(res, err); }
 });
+
+// POST /api/students/update — patch non-critical fields on students + academic record
+studentsRouter.post('/update', requireAuth, requireRole('PRINCIPAL'), async (req, res) => {
+  try {
+    const body = requireBody<{
+      studentId: string;
+      patch: Record<string, unknown>;
+      academicYearPatch?: Record<string, unknown>;
+      academicYearId?: string;
+    }>(req, ['studentId', 'patch']);
+
+    if (Object.keys(body.patch).length > 0) {
+      const { error } = await adminDb.from('students')
+        .update({ ...body.patch, updated_at: new Date().toISOString() })
+        .eq('id', body.studentId)
+        .eq('school_id', req.user.school_id!);
+      if (error) throw new ApiError(500, error.message);
+    }
+
+    if (body.academicYearPatch && body.academicYearId && Object.keys(body.academicYearPatch).length > 0) {
+      await adminDb.from('student_academic_records')
+        .update(body.academicYearPatch)
+        .eq('student_id', body.studentId)
+        .eq('academic_year_id', body.academicYearId);
+    }
+
+    ok(res, { studentId: body.studentId });
+  } catch (err) { fail(res, err); }
+});
+
+// POST /api/students/change-request — submit_change_request RPC
+studentsRouter.post('/change-request', requireAuth, requireRole('PRINCIPAL'), async (req, res) => {
+  try {
+    const body = requireBody<{
+      studentId: string; field: string; newValue: string; reason: string; proofUrl?: string;
+    }>(req, ['studentId', 'field', 'newValue', 'reason']);
+
+    const db = userDb(req.jwt);
+    const { error } = await db.rpc('submit_change_request', {
+      p_student_id: body.studentId,
+      p_field:      body.field,
+      p_new_value:  body.newValue,
+      p_reason:     body.reason,
+      p_proof:      body.proofUrl ?? null,
+    });
+    if (error) throw new ApiError(500, error.message);
+
+    ok(res, { studentId: body.studentId, field: body.field });
+  } catch (err) { fail(res, err); }
+});
+
+// POST /api/students/class-movement — record_class_movement RPC
+studentsRouter.post('/class-movement', requireAuth, requireRole('PRINCIPAL'), async (req, res) => {
+  try {
+    const body = requireBody<{
+      studentId: string; academicYearId: string;
+      newClass: string; newSection: string;
+      effectiveDate: string; reason: string;
+    }>(req, ['studentId', 'academicYearId', 'newClass', 'newSection', 'effectiveDate', 'reason']);
+
+    const db = userDb(req.jwt);
+    const { error } = await db.rpc('record_class_movement', {
+      p_student_id:     body.studentId,
+      p_year_id:        body.academicYearId,
+      p_new_class:      body.newClass,
+      p_new_section:    body.newSection,
+      p_effective_date: body.effectiveDate,
+      p_reason:         body.reason,
+    });
+    if (error) throw new ApiError(500, error.message);
+
+    ok(res, { studentId: body.studentId });
+  } catch (err) { fail(res, err); }
+});
+
+// POST /api/students/fail — mark student failed in active year
+studentsRouter.post('/fail', requireAuth, requireRole('PRINCIPAL'), async (req, res) => {
+  try {
+    const body = requireBody<{ studentId: string; academicYearId: string; reason?: string }>(
+      req, ['studentId', 'academicYearId'],
+    );
+
+    const { error } = await adminDb.from('student_academic_records')
+      .update({ status: 'FAILED' })
+      .eq('student_id', body.studentId)
+      .eq('academic_year_id', body.academicYearId);
+    if (error) throw new ApiError(500, error.message);
+
+    ok(res, { studentId: body.studentId });
+  } catch (err) { fail(res, err); }
+});
+
+// POST /api/students/issue-tc — issue Transfer Certificate
+studentsRouter.post('/issue-tc', requireAuth, requireRole('PRINCIPAL'), async (req, res) => {
+  try {
+    const body = requireBody<{ studentId: string; tcNumber: string; reason?: string }>(
+      req, ['studentId', 'tcNumber'],
+    );
+    if (!body.tcNumber.trim()) throw new ApiError(400, 'TC number required');
+
+    const { error } = await adminDb.from('students').update({
+      is_active: false,
+      status:    'TC_ISSUED',
+      tc_number: body.tcNumber.trim(),
+      updated_at: new Date().toISOString(),
+    }).eq('id', body.studentId).eq('school_id', req.user.school_id!);
+    if (error) throw new ApiError(500, error.message);
+
+    ok(res, { studentId: body.studentId, tcNumber: body.tcNumber.trim() });
+  } catch (err) { fail(res, err); }
+});
+
+// POST /api/students/readmit — re-activate a previously deactivated student
+studentsRouter.post('/readmit', requireAuth, requireRole('PRINCIPAL'), async (req, res) => {
+  try {
+    const { studentId } = requireBody<{ studentId: string }>(req, ['studentId']);
+
+    const { error } = await adminDb.from('students').update({
+      is_active: true,
+      status:    'ACTIVE',
+      updated_at: new Date().toISOString(),
+    }).eq('id', studentId).eq('school_id', req.user.school_id!);
+    if (error) throw new ApiError(500, error.message);
+
+    ok(res, { studentId });
+  } catch (err) { fail(res, err); }
+});

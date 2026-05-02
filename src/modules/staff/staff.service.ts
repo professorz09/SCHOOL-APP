@@ -7,6 +7,7 @@ import { useAuthStore } from '@/shared/store/authStore';
 import { adminApi } from '@/shared/lib/adminApi';
 import { logAudit } from '@/shared/lib/audit';
 import { staffStorageService } from '@/modules/staff/staffStorage.service';
+import { apiStaff } from '@/shared/lib/apiClient';
 import type {
   StaffMember, SalaryPayment, StaffRole, StaffStatus,
   StaffSalaryHistoryEntry, StaffStatusHistoryEntry, StaffDocument,
@@ -330,17 +331,11 @@ export const staffService = {
    */
   async delete(id: string): Promise<void> {
     const schoolId = getSchoolId();
-    const { data: row, error: rErr } = await supabase
+    const { data: row } = await supabase
       .from('staff').select('user_id').eq('id', id).eq('school_id', schoolId).maybeSingle();
-    if (rErr) throw new Error(rErr.message);
     const userId = (row as { user_id: string | null } | null)?.user_id ?? null;
 
-    const { error } = await supabase.from('staff').update({
-      is_active: false,
-      status: 'SUSPENDED',
-      updated_at: new Date().toISOString(),
-    }).eq('id', id).eq('school_id', schoolId);
-    if (error) throw new Error(error.message);
+    await apiStaff.deactivate(id);
 
     if (userId) {
       try { await adminApi.setSchoolUserActive(userId, false); } catch { /* best-effort */ }
@@ -373,15 +368,12 @@ export const staffService = {
     transactionId?: string | null,
   ): Promise<StaffMember> {
     if (!Number.isFinite(amount) || amount <= 0) throw new Error('Amount must be positive');
-    const { error } = await supabase.rpc('record_salary_payment', {
-      p_staff_id: staffId,
-      p_month:    month,
-      p_amount:   amount,
-      p_note:     note || null,
-      p_method:   method || null,
-      p_txn_id:   transactionId || null,
+    await apiStaff.paySalary({
+      staffId, month, amount,
+      note:          note || undefined,
+      method:        method ?? undefined,
+      transactionId: transactionId ?? undefined,
     });
-    if (error) throw new Error(error.message);
     const fresh = await this.getById(staffId);
     if (!fresh) throw new Error('Staff not found after pay');
     return fresh;
@@ -420,13 +412,12 @@ export const staffService = {
     if (!Number.isFinite(newAmount) || newAmount < 0) {
       throw new Error('Salary must be non-negative');
     }
-    const { error } = await supabase.rpc('update_staff_salary', {
-      p_staff_id:       staffId,
-      p_new_amount:     Math.round(newAmount),
-      p_effective_from: effectiveFrom || new Date().toISOString().slice(0, 10),
-      p_reason:         reason || null,
+    await apiStaff.updateSalary({
+      staffId,
+      newAmount,
+      effectiveFrom: effectiveFrom || new Date().toISOString().slice(0, 10),
+      reason,
     });
-    if (error) throw new Error(error.message);
   },
 
   // ─── Payment history (per staff) ─────────────────────────────────────────
@@ -470,12 +461,7 @@ export const staffService = {
   // ─── Relieving date / status history ─────────────────────────────────────
   async setRelievingDate(staffId: string, date: string, reason: string): Promise<void> {
     if (!date) throw new Error('Relieving date required');
-    const { error } = await supabase.rpc('set_staff_relieving_date', {
-      p_staff_id: staffId,
-      p_date:     date,
-      p_reason:   reason || null,
-    });
-    if (error) throw new Error(error.message);
+    await apiStaff.relieve({ staffId, date, reason });
   },
 
   async getStatusHistory(staffId: string): Promise<StaffStatusHistoryEntry[]> {

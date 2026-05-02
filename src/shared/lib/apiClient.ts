@@ -89,6 +89,23 @@ export const apiStudents = {
   }) => post<{ record: any; installmentCount: number; totalAmount: number }>('/students/assign', body),
   deactivate: (studentId: string, reason?: string) =>
     post<any>('/students/deactivate', { studentId, reason }),
+  update: (body: {
+    studentId: string; patch: Record<string, unknown>;
+    academicYearPatch?: Record<string, unknown>; academicYearId?: string;
+  }) => post<any>('/students/update', body),
+  changeRequest: (body: {
+    studentId: string; field: string; newValue: string; reason: string; proofUrl?: string;
+  }) => post<any>('/students/change-request', body),
+  classMovement: (body: {
+    studentId: string; academicYearId: string; newClass: string; newSection: string;
+    effectiveDate: string; reason: string;
+  }) => post<any>('/students/class-movement', body),
+  fail: (body: { studentId: string; academicYearId: string; reason?: string }) =>
+    post<any>('/students/fail', body),
+  issueTC: (body: { studentId: string; tcNumber: string; reason?: string }) =>
+    post<any>('/students/issue-tc', body),
+  readmit: (studentId: string) =>
+    post<any>('/students/readmit', { studentId }),
 };
 
 // ─── Fees ────────────────────────────────────────────────────────────────────
@@ -118,6 +135,22 @@ export const apiFees = {
     post<any>('/fees/govt-pay', body),
   writeoff: (body: { installmentId: string; amount: number; reason: string }) =>
     post<any>('/fees/writeoff', body),
+};
+
+// ─── Staff ───────────────────────────────────────────────────────────────────
+
+export const apiStaff = {
+  deactivate: (staffId: string) =>
+    post<any>('/staff/deactivate', { staffId }),
+  paySalary: (body: {
+    staffId: string; month: string; amount: number;
+    note?: string; method?: string; transactionId?: string;
+  }) => post<any>('/staff/salary/pay', body),
+  updateSalary: (body: {
+    staffId: string; newAmount: number; effectiveFrom: string; reason: string;
+  }) => post<any>('/staff/salary/update', body),
+  relieve: (body: { staffId: string; date: string; reason: string }) =>
+    post<any>('/staff/relieve', body),
 };
 
 // ─── Transport ───────────────────────────────────────────────────────────────

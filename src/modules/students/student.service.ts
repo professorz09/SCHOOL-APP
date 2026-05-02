@@ -16,6 +16,7 @@ import { adminApi } from '@/shared/lib/adminApi';
 import { logAudit } from '@/shared/lib/audit';
 import { PaymentStatus } from '@/shared/config/constants';
 import { apiStudents, apiTransport } from '@/shared/lib/apiClient';
+// FIELD_TO_DB: maps camelCase Student fields → DB column names for patch payloads
 import type {
   Student, StudentAcademicRecord, FeeRecord, CreateStudentInput,
   StudentDoc, ExamResult, AttendanceMonth,
@@ -414,27 +415,24 @@ export const studentService = {
       }
     }
 
-    const patch: Record<string, unknown> = { updated_at: new Date().toISOString() };
+    const patch: Record<string, unknown> = {};
     for (const [k, v] of Object.entries(input)) {
       const dbCol = FIELD_TO_DB[k];
       if (dbCol) patch[dbCol] = v;
     }
-    if (Object.keys(patch).length > 1) {
-      const { error } = await supabase.from('students').update(patch).eq('id', id).eq('school_id', schoolId);
-      if (error) throw new Error(error.message);
-    }
 
-    // Per-year fields (rollNo, totalFee) on academic record.
+    let academicYearPatch: Record<string, unknown> | undefined;
+    let ayId: string | undefined;
     if (input.totalFee !== undefined || input.rollNo !== undefined) {
-      const ayId = await activeYearId(schoolId);
+      ayId = await activeYearId(schoolId) ?? undefined;
       if (ayId) {
-        const arPatch: Record<string, unknown> = {};
-        if (input.totalFee !== undefined) arPatch.total_fee = input.totalFee;
-        if (input.rollNo !== undefined) arPatch.roll_no = input.rollNo;
-        await supabase.from('student_academic_records').update(arPatch)
-          .eq('student_id', id).eq('academic_year_id', ayId);
+        academicYearPatch = {};
+        if (input.totalFee !== undefined) academicYearPatch.total_fee = input.totalFee;
+        if (input.rollNo !== undefined) academicYearPatch.roll_no = input.rollNo;
       }
     }
+
+    await apiStudents.update({ studentId: id, patch, academicYearPatch, academicYearId: ayId });
 
     // Build a structured changes[] so the Activity Logs viewer can render
     // a real before/after diff instead of just listing field names.
@@ -467,14 +465,7 @@ export const studentService = {
     const dbField = FIELD_TO_DB[field] ?? field;
     // RPC signature: (p_student_id, p_field, p_new_value, p_reason, p_proof).
     // Old value is captured by the RPC itself from the live students row.
-    const { error } = await supabase.rpc('submit_change_request', {
-      p_student_id: studentId,
-      p_field: dbField,
-      p_new_value: newValue,
-      p_reason: reason,
-      p_proof: proofUrl ?? null,
-    });
-    if (error) throw new Error(error.message);
+    await apiStudents.changeRequest({ studentId, field: dbField, newValue, reason, proofUrl });
     await logAudit('student_change_requested', 'student', studentId, { field });
   },
 
@@ -496,15 +487,7 @@ export const studentService = {
     const oldClass = (prev as { class_name: string | null } | null)?.class_name ?? null;
     const oldSection = (prev as { section: string | null } | null)?.section ?? null;
 
-    const { error } = await supabase.rpc('record_class_movement', {
-      p_student_id: studentId,
-      p_year_id: ayId,
-      p_new_class: newClass,
-      p_new_section: newSection,
-      p_effective_date: effectiveDate,
-      p_reason: reason,
-    });
-    if (error) throw new Error(error.message);
+    await apiStudents.classMovement({ studentId, academicYearId: ayId, newClass, newSection, effectiveDate, reason });
     await logAudit('student_class_changed', 'student', studentId, {
       newClass, newSection, effectiveDate, reason,
       changes: [
@@ -524,10 +507,7 @@ export const studentService = {
       .from('students').select('user_id').eq('id', id).eq('school_id', schoolId).maybeSingle();
     const userId = (row as { user_id: string | null } | null)?.user_id ?? null;
 
-    const { error } = await supabase.from('students').update({
-      is_active: false, status: 'TC_ISSUED', updated_at: new Date().toISOString(),
-    }).eq('id', id).eq('school_id', schoolId);
-    if (error) throw new Error(error.message);
+    await apiStudents.deactivate(id);
 
     if (userId) {
       try { await adminApi.setSchoolUserActive(userId, false); } catch { /* best-effort */ }
@@ -968,12 +948,7 @@ export const studentService = {
     const schoolId = getSchoolId();
     const ayId = await activeYearId(schoolId);
     if (!ayId) throw new Error('No active academic year');
-    const { error } = await supabase
-      .from('student_academic_records')
-      .update({ status: 'FAILED' })
-      .eq('student_id', studentId)
-      .eq('academic_year_id', ayId);
-    if (error) throw new Error(error.message);
+    await apiStudents.fail({ studentId, academicYearId: ayId, reason });
     await logAudit('student_marked_failed', 'student', studentId,
       { reason: reason ?? null, academicYearId: ayId });
   },
@@ -993,13 +968,7 @@ export const studentService = {
       .eq('id', studentId).eq('school_id', schoolId).maybeSingle();
     const userId = (row as { user_id: string | null } | null)?.user_id ?? null;
 
-    const { error } = await supabase.from('students').update({
-      is_active: false,
-      status: 'TC_ISSUED',
-      tc_number: cleanTc,
-      updated_at: new Date().toISOString(),
-    }).eq('id', studentId).eq('school_id', schoolId);
-    if (error) throw new Error(error.message);
+    await apiStudents.issueTC({ studentId, tcNumber: cleanTc, reason });
 
     if (userId) {
       try { await adminApi.setSchoolUserActive(userId, false); }
@@ -1021,12 +990,7 @@ export const studentService = {
       .eq('id', studentId).eq('school_id', schoolId).maybeSingle();
     const userId = (row as { user_id: string | null } | null)?.user_id ?? null;
 
-    const { error } = await supabase.from('students').update({
-      is_active: true,
-      status: 'ACTIVE',
-      updated_at: new Date().toISOString(),
-    }).eq('id', studentId).eq('school_id', schoolId);
-    if (error) throw new Error(error.message);
+    await apiStudents.readmit(studentId);
 
     if (userId) {
       try { await adminApi.setSchoolUserActive(userId, true); }
