@@ -216,6 +216,24 @@ academicYearRouter.post('/commit-closing', requireAuth, PRINCIPAL, async (req, r
   } catch (err) { fail(res, err); }
 });
 
+// POST /api/academic-year/delete — delete a non-locked year
+academicYearRouter.post('/delete', requireAuth, PRINCIPAL, async (req, res) => {
+  try {
+    const { yearId } = requireBody<{ yearId: string }>(req, ['yearId']);
+
+    const { data: year } = await adminDb
+      .from('academic_years').select('id, is_closed, label')
+      .eq('id', yearId).eq('school_id', req.user.school_id!).maybeSingle();
+    if (!year) throw new ApiError(404, 'Academic year not found');
+    if ((year as any).is_closed) throw new ApiError(400, 'Cannot delete a locked year');
+
+    const { error } = await adminDb.from('academic_years').delete().eq('id', yearId);
+    if (error) throw new ApiError(500, error.message);
+
+    ok(res, { yearId, label: (year as any).label });
+  } catch (err) { fail(res, err); }
+});
+
 // GET /api/academic-year/:yearId/sections
 academicYearRouter.get('/:yearId/sections', requireAuth, requireRole('PRINCIPAL', 'TEACHER'), async (req, res) => {
   try {

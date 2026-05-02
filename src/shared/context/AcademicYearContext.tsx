@@ -5,6 +5,7 @@ import { useEditingYearStore } from '@/shared/store/editingYearStore';
 import { logAudit } from '@/shared/lib/audit';
 import type { AcademicYearStatus } from '@/shared/types/yearClosing.types';
 import { resetAllCaches } from '@/shared/lib/cacheBus';
+import { apiAcademicYear } from '@/shared/lib/apiClient';
 
 export interface AcademicYear {
   id: string;
@@ -118,21 +119,19 @@ export const AcademicYearProvider: React.FC<{ children: ReactNode }> = ({ childr
   const addAcademicYear = useCallback(async (
     newYear: Omit<AcademicYear, 'id' | 'isActive' | 'status'>,
   ): Promise<string> => {
-    const { data, error } = await supabase.rpc('create_academic_year', {
-      p_label: newYear.name,
-      p_start: newYear.startDate,
-      p_end: newYear.endDate,
-      p_board: newYear.board ?? 'CBSE',
-      p_medium: 'English',
+    const result = await apiAcademicYear.create({
+      label: newYear.name,
+      startDate: newYear.startDate,
+      endDate: newYear.endDate,
+      board: newYear.board ?? 'CBSE',
+      medium: 'English',
     });
-    if (error) throw new Error(error.message);
     await refresh();
-    return data as string;
+    return (result as any).yearId ?? (result as any).id ?? (result as string);
   }, [refresh]);
 
   const setActiveYear = useCallback(async (id: string) => {
-    const { error } = await supabase.rpc('set_active_academic_year', { p_year_id: id });
-    if (error) throw new Error(error.message);
+    await apiAcademicYear.setActive(id);
     // Flush every service-level cache BEFORE re-fetching the year list so
     // any consumer that re-runs (keyed off `activeYear?.id`) hits the
     // services in their cleared state and pulls fresh per-year rows. Without
@@ -148,8 +147,7 @@ export const AcademicYearProvider: React.FC<{ children: ReactNode }> = ({ childr
   }, [refresh]);
 
   const lockYear = useCallback(async (id: string) => {
-    const { error } = await supabase.rpc('close_academic_year', { p_year_id: id });
-    if (error) throw new Error(error.message);
+    await apiAcademicYear.close(id);
     await refresh();
   }, [refresh]);
 
@@ -157,8 +155,7 @@ export const AcademicYearProvider: React.FC<{ children: ReactNode }> = ({ childr
     const target = academicYears.find(y => y.id === id);
     if (!target) return;
     if (target.status === 'LOCKED') throw new Error('Cannot delete a locked year');
-    const { error } = await supabase.from('academic_years').delete().eq('id', id);
-    if (error) throw new Error(error.message);
+    await apiAcademicYear.delete(id);
     await logAudit('delete_academic_year', 'academic_year', id, { name: target.name });
     await refresh();
   }, [academicYears, refresh]);

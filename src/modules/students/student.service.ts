@@ -213,156 +213,32 @@ export const studentService = {
 
   async create(input: CreateStudentInput): Promise<{ student: Student; parent: { mobile: string; reused: boolean } | null }> {
     const schoolId = getSchoolId();
-
-    // Step 1: duplicate check. Use .limit(1) array probe (NOT .maybeSingle())
-    // because PostgREST returns an error when multiple rows match a maybeSingle()
-    // query — that would silently bypass the duplicate guard. We also surface
-    // any select-error explicitly so a transient query failure does not let an
-    // accidental dupe through.
-    const aadhaar = (input.aadhaarNo ?? '').replace(/\s+/g, '');
-    if (aadhaar) {
-      const { data: dups, error: dupErr } = await supabase
-        .from('students').select('id, name, admission_no')
-        .eq('school_id', schoolId).eq('aadhaar_no', aadhaar).limit(1);
-      if (dupErr) throw new Error(`Aadhaar duplicate-check failed: ${dupErr.message}`);
-      const dup = (dups ?? [])[0] as { name: string } | undefined;
-      if (dup) throw new Error(`Aadhaar already registered: ${dup.name}`);
-    }
-    const fatherPhone = (input.fatherPhone ?? '').replace(/\D/g, '').slice(-10);
-    if (fatherPhone) {
-      const { data: dups, error: dupErr } = await supabase
-        .from('students').select('id, name')
-        .eq('school_id', schoolId).eq('father_phone', fatherPhone).limit(1);
-      if (dupErr) throw new Error(`Father-phone duplicate-check failed: ${dupErr.message}`);
-      const dup = (dups ?? [])[0] as { name: string } | undefined;
-      if (dup) throw new Error(`Father phone already registered: ${dup.name}`);
-    }
-
-    // Step 2: provision parent auth account. Track whether the account is new
-    // or pre-existing so the UI can surface accurate credentials (default
-    // password = mobile only on first creation).
-    let parentUserId: string | null = null;
-    let parentReused: boolean | null = null;
-    if (fatherPhone) {
-      try {
-        const res = await adminApi.createSchoolUser({
-          mobile: fatherPhone, name: input.fatherName || 'Parent', role: 'PARENT',
-        });
-        parentUserId = res.userId;
-        parentReused = !!res.reused;
-      } catch (e) {
-        const msg = (e instanceof Error ? e.message : '') || '';
-        if (!/already exists/i.test(msg)) throw e;
-        parentReused = true;
-        // Fallback: if the admin endpoint threw "already exists" without
-        // returning a reused-user payload, look up the parent row by mobile
-        // so step 4 can still link parent ↔ student. RLS scopes this to the
-        // principal's own school.
-        const { data: existingParent } = await supabase
-          .from('users')
-          .select('id')
-          .eq('mobile_number', fatherPhone)
-          .eq('role', 'PARENT')
-          .maybeSingle();
-        if (existingParent && (existingParent as { id: string }).id) {
-          parentUserId = (existingParent as { id: string }).id;
-        }
-      }
-    }
-
-    // Step 3: insert permanent students row.
-    const stuPayload = {
-      school_id: schoolId,
-      user_id: null,
-      name: input.name,
-      admission_no: input.admissionNo,
-      roll_no: input.rollNo || null,
-      dob: input.dob || null,
-      gender: input.gender,
-      blood_group: input.bloodGroup,
-      aadhaar_no: aadhaar || null,
-      phone: input.phone || null,
-      email: input.email || null,
-      address: input.address || null,
-      photo: input.photo || null,
-      father_name: input.fatherName || null,
-      // Use the already-normalized father phone (digits-only, last 10) so the
-      // value persisted to DB matches the value used for duplicate detection
-      // and parent auth provisioning above. Inserting raw input.fatherPhone
-      // would let "+91 98765 43210" and "9876543210" coexist as distinct
-      // father numbers and bypass the duplicate check on subsequent admissions.
-      father_phone: fatherPhone || null,
-      father_email: input.fatherEmail || null,
-      father_occupation: input.fatherOccupation || null,
-      father_income: input.fatherIncome || null,
-      mother_name: input.motherName || null,
-      mother_phone: input.motherPhone || null,
-      mother_occupation: input.motherOccupation || null,
-      guardian_name: input.guardianName || null,
-      guardian_phone: input.guardianPhone || null,
-      guardian_relation: input.guardianRelation || null,
-      religion: input.religion || null,
-      caste: input.caste || null,
-      pen_number: input.penNumber || null,
-      birth_cert_no: input.birthCertNo || null,
-      tc_number: input.tcNumber || null,
-      is_rte: !!input.rte,
-      is_active: true,
-      status: 'ACTIVE',
-      admission_date: input.admissionDate || new Date().toISOString().slice(0, 10),
-    };
-    const { data: stuRow, error: stuErr } = await supabase
-      .from('students').insert(stuPayload).select(STU_FIELDS).single();
-    if (stuErr) throw new Error(stuErr.message);
-    const stu = stuRow as unknown as StudentRow;
-
-    // Step 4: link parent → student.
-    if (parentUserId) {
-      try {
-        await adminApi.linkParentStudent({
-          parentUserId, studentId: stu.id, relation: 'FATHER',
-        });
-      } catch { /* best-effort — parent may already be linked */ }
-    }
-
-    // Step 5: insert per-year academic record (active year), but ONLY if a
-    // class+section was supplied. The new admission flow leaves the
-    // academic record blank — the principal explicitly assigns the
-    // student to a class/section/roll afterwards via the
-    // "Assign to Class" modal (which also generates the fee schedule
-    // and optionally a transport assignment in one transaction). New
-    // admissions without a class therefore land in the UNASSIGNED
-    // archive bucket until they are placed.
     const ayId = input.academicYearId || await activeYearId(schoolId);
-    let ar: AcademicRecordRow | null = null;
-    if (ayId && input.className && input.section) {
-      // Resolve section_id (best-effort).
-      let sectionId: string | null = null;
-      const { data: sec } = await supabase
-        .from('sections').select('id')
-        .eq('school_id', schoolId).eq('academic_year_id', ayId)
-        .eq('class_name', input.className).eq('section', input.section).maybeSingle();
-      sectionId = (sec as { id: string } | null)?.id ?? null;
 
-      const { data: arRow, error: arErr } = await supabase
-        .from('student_academic_records').insert({
-          student_id: stu.id,
-          academic_year_id: ayId,
-          section_id: sectionId,
-          class_name: input.className,
-          section: input.section,
-          roll_no: input.rollNo || null,
-          fee_status: 'PENDING',
-          total_fee: input.totalFee || 0,
-          paid_fee: 0,
-          attendance_percent: 0,
-          status: 'STUDYING',
-        })
-        .select('id, student_id, academic_year_id, class_name, section, roll_no, fee_status, total_fee, paid_fee, attendance_percent, status')
-        .single();
-      if (arErr) throw new Error(arErr.message);
-      ar = arRow as AcademicRecordRow;
-    }
+    const result = await apiStudents.create({
+      name: input.name,
+      admissionNo: input.admissionNo, rollNo: input.rollNo,
+      dob: input.dob, gender: input.gender, bloodGroup: input.bloodGroup,
+      aadhaarNo: input.aadhaarNo, phone: input.phone, email: input.email,
+      address: input.address, photo: input.photo, rte: input.rte,
+      fatherName: input.fatherName, fatherPhone: input.fatherPhone,
+      fatherEmail: input.fatherEmail, fatherOccupation: input.fatherOccupation,
+      fatherIncome: input.fatherIncome,
+      motherName: input.motherName, motherPhone: input.motherPhone,
+      motherOccupation: input.motherOccupation,
+      guardianName: input.guardianName, guardianPhone: input.guardianPhone,
+      guardianRelation: input.guardianRelation,
+      religion: input.religion, caste: input.caste,
+      penNumber: input.penNumber, birthCertNo: input.birthCertNo,
+      tcNumber: input.tcNumber, admissionDate: input.admissionDate,
+      className: input.className, section: input.section,
+      academicYearId: ayId ?? undefined,
+      totalFee: input.totalFee,
+    });
+
+    const stu = (result as any).studentRow as StudentRow;
+    const ar = (result as any).academicRecordRow as AcademicRecordRow | null;
+    const parent = (result as any).parent as { mobile: string; reused: boolean } | null;
 
     await logAudit('student_admitted', 'student', stu.id, {
       admissionNo: stu.admission_no,
@@ -371,12 +247,7 @@ export const studentService = {
       assigned: !!ar,
     });
 
-    return {
-      student: recordToStudent(stu, ar),
-      parent: fatherPhone && parentReused !== null
-        ? { mobile: fatherPhone, reused: parentReused }
-        : null,
-    };
+    return { student: recordToStudent(stu, ar), parent };
   },
 
   /**

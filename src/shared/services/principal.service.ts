@@ -6,6 +6,7 @@
 import { supabase } from '@/shared/lib/supabase';
 import { useAuthStore } from '@/shared/store/authStore';
 import { logAudit } from '@/shared/lib/audit';
+import { apiPrincipal } from '@/shared/lib/apiClient';
 import type {
   Complaint, Expense, Notice, Approval, NoticeAudience,
   LibraryBook, BookIssue, LabEquipment, Vehicle, AcademicYearConfig,
@@ -199,30 +200,17 @@ export const principalService = {
   },
 
   async sendNotice(input: Omit<Notice, 'id' | 'sentAt'>): Promise<Notice> {
-    const schoolId = getSchoolId();
     const actor = getActor();
-    const payload = {
-      school_id: schoolId,
-      title: input.title,
-      body: input.body,
-      audience: input.audience,
-      pinned: input.pinned,
-      sent_by: actor?.id ?? null,
-      sent_by_name: input.sentBy || actor?.name || '',
-    };
-    const { data, error } = await supabase
-      .from('notices').insert(payload).select(NOTICE_FIELDS).single();
-    if (error) throw new Error(error.message);
-    await logAudit('notice_sent', 'notice', data.id, { audience: input.audience, title: input.title });
-    return rowToNotice(data as NoticeRow);
+    const raw = await apiPrincipal.noticeCreate({
+      title: input.title, body: input.body, audience: input.audience,
+      pinned: input.pinned, sentBy: input.sentBy || actor?.name || '',
+    });
+    await logAudit('notice_sent', 'notice', raw.id, { audience: input.audience, title: input.title });
+    return rowToNotice(raw as NoticeRow);
   },
 
   async deleteNotice(id: string): Promise<void> {
-    const schoolId = getSchoolId();
-    // Soft-delete to preserve history.
-    const { error } = await supabase
-      .from('notices').update({ is_active: false }).eq('id', id).eq('school_id', schoolId);
-    if (error) throw new Error(error.message);
+    await apiPrincipal.noticeDelete(id);
     await logAudit('notice_deleted', 'notice', id);
   },
 
@@ -239,35 +227,15 @@ export const principalService = {
   },
 
   async resolveComplaint(id: string, response: string): Promise<Complaint> {
-    const schoolId = getSchoolId();
-    const { data, error } = await supabase
-      .from('complaints')
-      .update({
-        status: 'RESOLVED',
-        response,
-        resolved_at: new Date().toISOString(),
-      })
-      .eq('id', id).eq('school_id', schoolId)
-      .select(COMPLAINT_FIELDS).single();
-    if (error) throw new Error(error.message);
+    const raw = await apiPrincipal.complaintResolve(id, response);
     await logAudit('complaint_resolved', 'complaint', id, { response_length: response.length });
-    return rowToComplaint(data as ComplaintRow);
+    return rowToComplaint(raw as ComplaintRow);
   },
 
   async rejectComplaint(id: string, reason: string): Promise<Complaint> {
-    const schoolId = getSchoolId();
-    const { data, error } = await supabase
-      .from('complaints')
-      .update({
-        status: 'REJECTED',
-        response: reason,
-        resolved_at: new Date().toISOString(),
-      })
-      .eq('id', id).eq('school_id', schoolId)
-      .select(COMPLAINT_FIELDS).single();
-    if (error) throw new Error(error.message);
+    const raw = await apiPrincipal.complaintReject(id, reason);
     await logAudit('complaint_rejected', 'complaint', id, { reason_length: reason.length });
-    return rowToComplaint(data as ComplaintRow);
+    return rowToComplaint(raw as ComplaintRow);
   },
 
   // ─── Expenses ─────────────────────────────────────────────────────────────
@@ -292,21 +260,13 @@ export const principalService = {
   },
 
   async addExpense(input: Omit<Expense, 'id'>): Promise<Expense> {
-    const schoolId = getSchoolId();
     const actor = getActor();
-    const payload = {
-      school_id: schoolId,
-      category: input.category,
-      description: input.description,
-      amount: input.amount,
-      date: input.date,
-      created_by: actor?.id ?? null,
-    };
-    const { data, error } = await supabase
-      .from('expenses').insert(payload).select(EXPENSE_FIELDS).single();
-    if (error) throw new Error(error.message);
-    await logAudit('expense_added', 'expense', data.id, { category: input.category, amount: input.amount });
-    return rowToExpense(data as ExpenseRow, input.approvedBy || actor?.name || '');
+    const raw = await apiPrincipal.expenseAdd({
+      category: input.category, description: input.description,
+      amount: input.amount, date: input.date,
+    });
+    await logAudit('expense_added', 'expense', raw.id, { category: input.category, amount: input.amount });
+    return rowToExpense(raw as ExpenseRow, input.approvedBy || actor?.name || '');
   },
 
   // ─── Approvals ────────────────────────────────────────────────────────────
@@ -322,65 +282,15 @@ export const principalService = {
   },
 
   async approveRequest(id: string): Promise<Approval> {
-    const schoolId = getSchoolId();
-    // Read first so we know what kind of request it is.
-    const { data: row, error: readErr } = await supabase
-      .from('approvals').select(APPROVAL_FIELDS)
-      .eq('id', id).eq('school_id', schoolId).single();
-    if (readErr) throw new Error(readErr.message);
-    const a = row as ApprovalRow;
-
-    // For change requests: persist the change via apply_change_request RPC.
-    // The RPC also flips the approvals row to APPROVED inside the same tx.
-    if (a.request_type === 'PROFILE_CHANGE' || a.request_type === 'STUDENT_FIELD_CHANGE') {
-      const { error: rpcErr } = await supabase.rpc('apply_change_request', {
-        p_approval_id: id, p_approve: true, p_reason: null,
-      });
-      if (rpcErr) throw new Error(rpcErr.message);
-    } else {
-      const actor = getActor();
-      const { error } = await supabase
-        .from('approvals')
-        .update({
-          status: 'APPROVED',
-          approved_by: actor?.id ?? null,
-          approved_at: new Date().toISOString(),
-        })
-        .eq('id', id).eq('school_id', schoolId);
-      if (error) throw new Error(error.message);
-    }
-
-    const { data: updated, error: refErr } = await supabase
-      .from('approvals').select(APPROVAL_FIELDS)
-      .eq('id', id).eq('school_id', schoolId).single();
-    if (refErr) throw new Error(refErr.message);
-    await logAudit('approval_approved', 'approval', id, { type: a.request_type });
-    return rowToApproval(updated as ApprovalRow);
+    const raw = await apiPrincipal.approvalApprove(id);
+    await logAudit('approval_approved', 'approval', id, { type: (raw as any)?.request_type ?? '' });
+    return rowToApproval(raw as ApprovalRow);
   },
 
   async rejectRequest(id: string, reason?: string): Promise<Approval> {
-    const schoolId = getSchoolId();
-    const actor = getActor();
-    // Fetch current new_value to merge rejection reason.
-    const { data: cur, error: readErr } = await supabase
-      .from('approvals').select('new_value').eq('id', id).eq('school_id', schoolId).single();
-    if (readErr) throw new Error(readErr.message);
-    const nv = (cur?.new_value as Record<string, unknown>) ?? {};
-    nv['rejectionReason'] = reason ?? null;
-
-    const { data, error } = await supabase
-      .from('approvals')
-      .update({
-        status: 'REJECTED',
-        new_value: nv,
-        approved_by: actor?.id ?? null,
-        approved_at: new Date().toISOString(),
-      })
-      .eq('id', id).eq('school_id', schoolId)
-      .select(APPROVAL_FIELDS).single();
-    if (error) throw new Error(error.message);
+    const raw = await apiPrincipal.approvalReject(id, reason);
     await logAudit('approval_rejected', 'approval', id, { reason: reason ?? null });
-    return rowToApproval(data as ApprovalRow);
+    return rowToApproval(raw as ApprovalRow);
   },
 
   async submitStudentLeave(
@@ -391,30 +301,11 @@ export const principalService = {
     toDate: string,
     reason: string,
   ): Promise<Approval> {
-    const schoolId = getSchoolId();
-    const actor = getActor();
-    const newValue = {
-      fromName: studentName,
-      fromRole: 'STUDENT',
-      subject: title,
-      description: `From: ${fromDate}  To: ${toDate}\nReason: ${reason}`,
-      fromDate, toDate, reason,
-    };
-    const { data, error } = await supabase
-      .from('approvals')
-      .insert({
-        school_id: schoolId,
-        request_type: 'LEAVE',
-        requested_by: actor?.id ?? null,
-        entity_type: 'student',
-        entity_id: studentId,
-        new_value: newValue,
-        status: 'PENDING',
-      })
-      .select(APPROVAL_FIELDS).single();
-    if (error) throw new Error(error.message);
-    await logAudit('leave_submitted', 'approval', data.id, { studentId, fromDate, toDate });
-    return rowToApproval(data as ApprovalRow);
+    const raw = await apiPrincipal.leaveSubmit({
+      studentId, studentName, title, fromDate, toDate, reason,
+    });
+    await logAudit('leave_submitted', 'approval', raw.id, { studentId, fromDate, toDate });
+    return rowToApproval(raw as ApprovalRow);
   },
 
   async getStudentLeaves(studentId: string): Promise<Approval[]> {
@@ -472,15 +363,12 @@ export const principalService = {
   },
 
   async addBook(input: Omit<LibraryBook, 'id' | 'issuedTo' | 'availableCopies'>): Promise<LibraryBook> {
-    const schoolId = getSchoolId();
-    const { data, error } = await supabase.from('assets').insert({
-      school_id: schoolId, category: 'BOOK', name: input.title,
-      details: { author: input.author, isbn: input.isbn, subject: input.subject },
-      total_count: input.totalCopies, available_count: input.totalCopies,
-    }).select('id').single();
-    if (error) throw new Error(error.message);
+    const raw = await apiPrincipal.bookAdd({
+      title: input.title, author: input.author, isbn: input.isbn,
+      subject: input.subject, totalCopies: input.totalCopies,
+    });
     return {
-      id: (data as { id: string }).id,
+      id: raw.id,
       title: input.title, author: input.author, isbn: input.isbn, subject: input.subject,
       totalCopies: input.totalCopies, availableCopies: input.totalCopies,
       issuedTo: [],
@@ -488,10 +376,7 @@ export const principalService = {
   },
 
   async deleteBook(id: string): Promise<void> {
-    const schoolId = getSchoolId();
-    const { error } = await supabase.from('assets').delete()
-      .eq('id', id).eq('school_id', schoolId);
-    if (error) throw new Error(error.message);
+    await apiPrincipal.bookDelete(id);
   },
 
   // Atomic — wraps INSERT into asset_issues + UPDATE assets.available_count
@@ -499,26 +384,14 @@ export const principalService = {
   async issueBook(
     bookId: string, studentId: string, studentName: string, note?: string,
   ): Promise<LibraryBook> {
-    const { error } = await supabase.rpc('issue_asset', {
-      p_asset_id: bookId,
-      p_student_id: studentId || null,
-      p_borrower_name: studentName,
-      p_loan_days: 14,
-      p_note: note?.trim() || null,
-    });
-    if (error) throw new Error(error.message);
+    await apiPrincipal.bookIssue({ bookId, studentId, studentName, note });
     return (await this.getBooks()).find(b => b.id === bookId)!;
   },
 
   async returnBook(
     bookId: string, studentId: string, note?: string,
   ): Promise<LibraryBook> {
-    const { error } = await supabase.rpc('return_asset', {
-      p_asset_id: bookId,
-      p_student_id: studentId || null,
-      p_note: note?.trim() || null,
-    });
-    if (error) throw new Error(error.message);
+    await apiPrincipal.bookReturn({ bookId, studentId, note });
     return (await this.getBooks()).find(b => b.id === bookId)!;
   },
 
@@ -542,42 +415,24 @@ export const principalService = {
   },
 
   async addEquipment(input: Omit<LabEquipment, 'id'>): Promise<LabEquipment> {
-    const schoolId = getSchoolId();
-    const { data, error } = await supabase.from('assets').insert({
-      school_id: schoolId, category: 'LAB_EQUIPMENT', name: input.name,
-      details: { labType: input.labType, lastServiced: input.lastServiced },
-      total_count: input.quantity, available_count: input.workingCount,
-    }).select('id').single();
-    if (error) throw new Error(error.message);
-    return { ...input, id: (data as { id: string }).id };
+    const raw = await apiPrincipal.equipmentAdd({
+      name: input.name, labType: input.labType,
+      quantity: input.quantity, workingCount: input.workingCount,
+      lastServiced: input.lastServiced,
+    });
+    return { ...input, id: raw.id };
   },
 
   async deleteEquipment(id: string): Promise<void> {
-    const schoolId = getSchoolId();
-    const { error } = await supabase.from('assets').delete()
-      .eq('id', id).eq('school_id', schoolId);
-    if (error) throw new Error(error.message);
+    await apiPrincipal.equipmentDelete(id);
   },
 
   async updateEquipment(id: string, input: Partial<LabEquipment>): Promise<LabEquipment> {
-    const schoolId = getSchoolId();
-    const patch: Record<string, unknown> = {};
-    if (input.name !== undefined) patch.name = input.name;
-    if (input.quantity !== undefined) patch.total_count = input.quantity;
-    if (input.workingCount !== undefined) patch.available_count = input.workingCount;
-    if (input.labType !== undefined || input.lastServiced !== undefined) {
-      const { data: cur } = await supabase.from('assets').select('details')
-        .eq('id', id).eq('school_id', schoolId).single();
-      const curDet = ((cur as { details?: Record<string, unknown> } | null)?.details) ?? {};
-      patch.details = {
-        ...curDet,
-        ...(input.labType !== undefined ? { labType: input.labType } : {}),
-        ...(input.lastServiced !== undefined ? { lastServiced: input.lastServiced } : {}),
-      };
-    }
-    const { error } = await supabase.from('assets').update(patch)
-      .eq('id', id).eq('school_id', schoolId);
-    if (error) throw new Error(error.message);
+    await apiPrincipal.equipmentUpdate({
+      equipmentId: id, name: input.name, quantity: input.quantity,
+      workingCount: input.workingCount, labType: input.labType,
+      lastServiced: input.lastServiced,
+    });
     const list = await this.getEquipment();
     const found = list.find(e => e.id === id);
     if (!found) throw new Error('Equipment not found');
@@ -669,8 +524,8 @@ export const principalService = {
   },
 
   async updateAYConfig(id: string, input: Partial<AcademicYearConfig>): Promise<AcademicYearConfig> {
-    const schoolId = getSchoolId();
     if (input.classes) {
+      const schoolId = getSchoolId();
       // Diff existing sections vs requested set.
       const { data: existing, error } = await supabase
         .from('sections').select('id, class_name, section')
@@ -683,24 +538,17 @@ export const principalService = {
       const requested = new Set<string>();
       input.classes.forEach(cls => cls.sections.forEach(sec => requested.add(`${cls.name}|${sec}`)));
 
-      const toInsert: Array<{ school_id: string; academic_year_id: string; class_name: string; section: string }> = [];
+      const toInsert: Array<{ class_name: string; section: string }> = [];
       requested.forEach(key => {
         if (!existingSet.has(key)) {
           const [class_name, section] = key.split('|');
-          toInsert.push({ school_id: schoolId, academic_year_id: id, class_name, section });
+          toInsert.push({ class_name, section });
         }
       });
       const toDelete: string[] = [];
       existingSet.forEach((sid, key) => { if (!requested.has(key)) toDelete.push(sid); });
 
-      if (toInsert.length) {
-        const { error: insErr } = await supabase.from('sections').insert(toInsert);
-        if (insErr) throw new Error(insErr.message);
-      }
-      if (toDelete.length) {
-        const { error: delErr } = await supabase.from('sections').delete().in('id', toDelete);
-        if (delErr) throw new Error(delErr.message);
-      }
+      await apiPrincipal.ayConfigSections({ yearId: id, toInsert, toDelete });
       await logAudit('ay_config_updated', 'academic_year', id, { added: toInsert.length, removed: toDelete.length });
     }
     const fresh = await this.getAYConfig();
@@ -761,56 +609,15 @@ export const principalService = {
     rows: StaffAttendanceRow[],
     clearedStaffIds: string[] = [],
   ): Promise<string | null> {
-    const schoolId = getSchoolId();
-    const actor = getActor();
-    if (!rows.length && !clearedStaffIds.length) throw new Error('No staff to record');
-
-    const nowIso = new Date().toISOString();
-
-    // Cleared rows: drop any prior staff_attendance entries for these
-    // staff on this date so the day reverts to "unmarked" in the DB.
-    // Quick-action "Clear" relies on this — a cleared day must NOT be
-    // identical to All Present.
-    if (clearedStaffIds.length) {
-      const { error: delErr } = await supabase
-        .from('staff_attendance')
-        .delete()
-        .eq('school_id', schoolId)
-        .eq('date', date)
-        .in('staff_id', clearedStaffIds);
-      if (delErr) throw new Error(delErr.message);
-    }
-
-    // Upsert remaining marked rows. The DB UNIQUE constraint on
-    // (staff_id, date) handles deduplication. We bump created_at on
-    // every save so the "last saved" timestamp advances on re-save.
-    if (rows.length) {
-      const payload = rows.map(r => ({
-        school_id: schoolId,
-        staff_id: r.staffId,
-        date,
-        status: r.status,
-        marked_by: actor?.id ?? null,
-        created_at: nowIso,
-      }));
-      const { error } = await supabase
-        .from('staff_attendance')
-        .upsert(payload, { onConflict: 'staff_id,date' });
-      if (error) throw new Error(error.message);
-    }
-
+    const result = await apiPrincipal.staffAttendanceSave({
+      date,
+      rows: rows.map(r => ({ staffId: r.staffId, status: r.status })),
+      clearedStaffIds,
+    });
     await logAudit('staff_attendance_saved', 'staff_attendance', date, {
       date, count: rows.length, cleared: clearedStaffIds.length,
     });
-
-    // Re-derive the "last saved" timestamp from the DB so callers see the
-    // canonical value (not the client clock). If everything was cleared
-    // there will be no row → fall back to the client clock.
-    const { data: ts } = await supabase
-      .from('staff_attendance').select('created_at')
-      .eq('school_id', schoolId).eq('date', date)
-      .order('created_at', { ascending: false }).limit(1).maybeSingle();
-    return (ts as { created_at: string } | null)?.created_at ?? nowIso;
+    return result.savedAt ?? null;
   },
 
   // Returns per-staff attendance summary for a given month (YYYY-MM).
@@ -984,58 +791,18 @@ export const principalService = {
     className: string, section: string, teacherId: string,
     perms: { canMarkAttendance: boolean; canUploadResults: boolean; canScheduleExam: boolean },
   ): Promise<void> {
-    const schoolId = getSchoolId();
-    const { data: ay, error: ayErr } = await supabase
-      .from('academic_years').select('id')
-      .eq('school_id', schoolId).eq('is_active', true).maybeSingle();
-    if (ayErr) throw new Error(ayErr.message);
-    if (!ay) throw new Error('No active academic year');
-    const ayId = (ay as { id: string }).id;
-
-    const { data: sec, error: sErr } = await supabase
-      .from('sections').select('id')
-      .eq('school_id', schoolId).eq('academic_year_id', ayId)
-      .eq('class_name', className).eq('section', section).maybeSingle();
-    if (sErr) throw new Error(sErr.message);
-    if (!sec) throw new Error(`Section ${className}-${section} not found in active year`);
-    const sectionId = (sec as { id: string }).id;
-
-    // Wipe stale rows for this (staff, section) inside the active AY.
-    const { error: dErr } = await supabase
-      .from('staff_permissions').delete()
-      .eq('school_id', schoolId).eq('academic_year_id', ayId)
-      .eq('staff_id', teacherId).eq('section_id', sectionId);
-    if (dErr) throw new Error(dErr.message);
-
-    const rows: Array<{ school_id: string; staff_id: string; academic_year_id: string; section_id: string; permission: string }> = [];
-    if (perms.canMarkAttendance) rows.push({ school_id: schoolId, staff_id: teacherId, academic_year_id: ayId, section_id: sectionId, permission: 'MARK_ATTENDANCE' });
-    if (perms.canUploadResults)  rows.push({ school_id: schoolId, staff_id: teacherId, academic_year_id: ayId, section_id: sectionId, permission: 'UPLOAD_RESULTS' });
-    if (perms.canScheduleExam)   rows.push({ school_id: schoolId, staff_id: teacherId, academic_year_id: ayId, section_id: sectionId, permission: 'SCHEDULE_EXAM' });
-    if (rows.length) {
-      const { error: iErr } = await supabase.from('staff_permissions').insert(rows);
-      if (iErr) throw new Error(iErr.message);
-    }
-    await logAudit('staff_permission_set', 'staff_permissions', `${teacherId}:${sectionId}`, perms);
+    await apiPrincipal.permissionsSet({
+      teacherId, className, section,
+      canMarkAttendance: perms.canMarkAttendance,
+      canUploadResults: perms.canUploadResults,
+      canScheduleExam: perms.canScheduleExam,
+    });
+    await logAudit('staff_permission_set', 'staff_permissions', `${teacherId}:${className}:${section}`, perms);
   },
 
   async removeStaffPermissions(className: string, section: string, teacherId: string): Promise<void> {
-    const schoolId = getSchoolId();
-    const { data: ay } = await supabase
-      .from('academic_years').select('id')
-      .eq('school_id', schoolId).eq('is_active', true).maybeSingle();
-    if (!ay) return;
-    const ayId = (ay as { id: string }).id;
-    const { data: sec } = await supabase
-      .from('sections').select('id')
-      .eq('school_id', schoolId).eq('academic_year_id', ayId)
-      .eq('class_name', className).eq('section', section).maybeSingle();
-    if (!sec) return;
-    const { error } = await supabase
-      .from('staff_permissions').delete()
-      .eq('school_id', schoolId).eq('academic_year_id', ayId)
-      .eq('staff_id', teacherId).eq('section_id', (sec as { id: string }).id);
-    if (error) throw new Error(error.message);
-    await logAudit('staff_permission_removed', 'staff_permissions', `${teacherId}:${(sec as { id: string }).id}`);
+    await apiPrincipal.permissionsRemove({ teacherId, className, section });
+    await logAudit('staff_permission_removed', 'staff_permissions', `${teacherId}:${className}:${section}`);
   },
 
   // ─── Fee structures (per active AY) ──────────────────────────────────────
@@ -1087,110 +854,32 @@ export const principalService = {
 
   // Internal — see getFeeStructures(). Inserts canonical Indian-school
   // defaults for the active academic year. Idempotent at the call site
-  // (caller only invokes when the table is empty) and additionally
-  // safe-guarded by re-checking row count inside a defensive try/catch.
-  async _seedDefaultFeeStructures(schoolId: string, ayId: string): Promise<void> {
-    const { count } = await supabase
-      .from('fee_structures')
-      .select('id', { count: 'exact', head: true })
-      .eq('school_id', schoolId).eq('academic_year_id', ayId);
-    if ((count ?? 0) > 0) return;
-
-    const defaults = [
-      {
-        school_id: schoolId, academic_year_id: ayId,
-        name: 'Standard Fees - Class 1', class_name: 'Class 1',
-        fee_heads: [
-          { id: 'h1', name: 'Tuition Fee', amount: 1500, frequency: 'MONTHLY', description: 'Monthly tuition charges' },
-          { id: 'h2', name: 'Admission Fee', amount: 2000, frequency: 'ONE_TIME', description: '' },
-          { id: 'h3', name: 'Exam Fee', amount: 1200, frequency: 'ANNUAL', description: '' },
-          { id: 'h4', name: 'Smart Class Fee', amount: 200, frequency: 'MONTHLY', description: '' },
-        ],
-        monthly_due_dates: [],
-        late_fee: { enabled: false, gracePeriodDays: 5, type: 'FIXED', amount: 100, maxCap: 1000 },
-      },
-      {
-        school_id: schoolId, academic_year_id: ayId,
-        name: 'Standard Fees - Class 9', class_name: 'Class 9',
-        fee_heads: [
-          { id: 'h1', name: 'Tuition Fee', amount: 2800, frequency: 'MONTHLY', description: '' },
-          { id: 'h2', name: 'Admission Fee', amount: 3000, frequency: 'ONE_TIME', description: '' },
-          { id: 'h3', name: 'Exam Fee', amount: 2000, frequency: 'ANNUAL', description: '' },
-          { id: 'h4', name: 'Lab Fee', amount: 300, frequency: 'MONTHLY', description: '' },
-        ],
-        monthly_due_dates: [],
-        late_fee: { enabled: true, gracePeriodDays: 5, type: 'FIXED', amount: 100, maxCap: 1000 },
-      },
-    ];
-
-    const { error } = await supabase.from('fee_structures').insert(defaults);
-    if (error) {
-      // Don't throw — a seed failure (e.g. RLS, race) shouldn't break the
-      // principal's view. Surface as no-op; the caller will return [].
+  // (caller only invokes when the table is empty).
+  async _seedDefaultFeeStructures(_schoolId: string, ayId: string): Promise<void> {
+    try {
+      const result = await apiPrincipal.feeStructureSeed(ayId);
+      if (result.seeded && result.count) {
+        await logAudit('fee_structures_seeded', 'fee_structures', ayId, { count: result.count });
+      }
+    } catch (e) {
+      // Don't throw — a seed failure shouldn't break the principal's view.
       // eslint-disable-next-line no-console
-      console.warn('[principal.service] seed defaults failed:', error.message);
-    } else {
-      await logAudit('fee_structures_seeded', 'fee_structures', ayId, { count: defaults.length });
+      console.warn('[principal.service] seed defaults failed:', (e as Error).message);
     }
   },
 
   async saveFeeStructure(input: FeeStructureRecord): Promise<FeeStructureRecord> {
-    const schoolId = getSchoolId();
-    const { data: ay, error: ayErr } = await supabase
-      .from('academic_years').select('id')
-      .eq('school_id', schoolId).eq('is_active', true).maybeSingle();
-    if (ayErr) throw new Error(ayErr.message);
-    // Surface a clear, actionable message: this branch is hit when the
-    // principal closed the previous year and tried to save a fee structure
-    // before opening a new one. The vague "No active academic year" string
-    // was being swallowed by the toast and looked like a generic failure.
-    if (!ay) throw new Error('Koi active academic year nahi hai. Fee structure save karne ke liye pehle Academic Year section me naya year start karein.');
-    const ayId = (ay as { id: string }).id;
-
-    const payload = {
-      school_id: schoolId,
-      academic_year_id: ayId,
-      name: input.name,
-      class_name: input.className,
-      structure_type: input.structureType ?? 'CLASS',
-      billing_cycle: input.billingCycle,
-      fee_heads: input.feeHeads,
-      monthly_due_dates: input.monthlyDueDates,
-      late_fee: input.lateFee,
-      updated_at: new Date().toISOString(),
-    };
-
-    // Treat client-side ids (e.g. "fs1") as new rows. Only persisted UUIDs
-    // round-trip as updates.
-    const isUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(input.id);
-    let id = input.id;
-    let prevSnap: Record<string, unknown> | null = null;
-    if (isUuid) {
-      // Capture the previous structure so the audit log can show a real diff.
-      const { data: prev } = await supabase
-        .from('fee_structures')
-        .select('name, class_name, structure_type, billing_cycle, fee_heads, monthly_due_dates, late_fee')
-        .eq('id', input.id).eq('school_id', schoolId).maybeSingle();
-      prevSnap = (prev ?? null) as Record<string, unknown> | null;
-      const { error } = await supabase
-        .from('fee_structures').update(payload).eq('id', input.id).eq('school_id', schoolId);
-      if (error) throw new Error(error.message);
-    } else {
-      const { data, error } = await supabase
-        .from('fee_structures').insert(payload).select('id').single();
-      if (error) throw new Error(error.message);
-      id = (data as { id: string }).id;
-    }
-    // Build a compact changes[] only for the fields that actually moved,
-    // so the Activity Logs viewer can render before/after.
+    const result = await apiPrincipal.feeStructureSave({
+      id: input.id, name: input.name, className: input.className,
+      structureType: input.structureType ?? 'CLASS', billingCycle: input.billingCycle,
+      feeHeads: input.feeHeads, monthlyDueDates: input.monthlyDueDates, lateFee: input.lateFee,
+    });
+    const { id, prev: prevSnap, mode } = result;
+    // Build audit diff
     const newSnap: Record<string, unknown> = {
-      name: input.name,
-      class_name: input.className,
-      structure_type: input.structureType ?? 'CLASS',
-      billing_cycle: input.billingCycle,
-      fee_heads: input.feeHeads,
-      monthly_due_dates: input.monthlyDueDates,
-      late_fee: input.lateFee,
+      name: input.name, class_name: input.className,
+      structure_type: input.structureType ?? 'CLASS', billing_cycle: input.billingCycle,
+      fee_heads: input.feeHeads, monthly_due_dates: input.monthlyDueDates, late_fee: input.lateFee,
     };
     const changes = prevSnap
       ? Object.keys(newSnap)
@@ -1198,9 +887,7 @@ export const principalService = {
           .map(k => ({ field: k, oldValue: prevSnap![k] ?? null, newValue: newSnap[k] }))
       : [];
     await logAudit('fee_structure_saved', 'fee_structures', id, {
-      name: input.name,
-      mode: prevSnap ? 'update' : 'create',
-      changes,
+      name: input.name, mode, changes,
     });
     return { ...input, structureType: input.structureType ?? 'CLASS', id };
   },
@@ -1209,32 +896,18 @@ export const principalService = {
     yearId: string,
     input: Omit<FeeStructureRecord, 'id'>,
   ): Promise<FeeStructureRecord> {
-    const schoolId = getSchoolId();
-    const payload = {
-      school_id: schoolId,
-      academic_year_id: yearId,
-      name: input.name,
-      class_name: input.className,
-      structure_type: input.structureType ?? 'CLASS',
-      billing_cycle: input.billingCycle,
-      fee_heads: input.feeHeads,
-      monthly_due_dates: input.monthlyDueDates,
-      late_fee: input.lateFee,
-      updated_at: new Date().toISOString(),
-    };
-    const { data, error } = await supabase
-      .from('fee_structures').insert(payload).select('id').single();
-    if (error) throw new Error(error.message);
-    const id = (data as { id: string }).id;
+    const result = await apiPrincipal.feeStructureSaveForYear({
+      yearId, name: input.name, className: input.className,
+      structureType: input.structureType ?? 'CLASS', billingCycle: input.billingCycle,
+      feeHeads: input.feeHeads, monthlyDueDates: input.monthlyDueDates, lateFee: input.lateFee,
+    });
+    const id = result.id;
     await logAudit('fee_structure_saved', 'fee_structures', id, { name: input.name, mode: 'create' });
     return { ...input, structureType: input.structureType ?? 'CLASS', id };
   },
 
   async deleteFeeStructure(id: string): Promise<void> {
-    const schoolId = getSchoolId();
-    const { error } = await supabase
-      .from('fee_structures').delete().eq('id', id).eq('school_id', schoolId);
-    if (error) throw new Error(error.message);
+    await apiPrincipal.feeStructureDelete(id);
     await logAudit('fee_structure_deleted', 'fee_structures', id);
   },
 
@@ -1307,13 +980,7 @@ export const principalService = {
     decision: 'APPROVED' | 'REJECTED',
     note?: string,
   ): Promise<{ paymentId: string | null }> {
-    const { data, error } = await supabase.rpc('review_fee_payment_upload', {
-      p_upload_id: id,
-      p_decision: decision,
-      p_note: note?.trim() || null,
-    });
-    if (error) throw new Error(error.message);
-    return { paymentId: (data as string | null) ?? null };
+    return apiPrincipal.feeUploadReview({ uploadId: id, decision, note });
   },
 
   /**

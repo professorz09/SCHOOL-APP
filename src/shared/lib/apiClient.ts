@@ -83,6 +83,7 @@ export const apiAcademicYear = {
   }) => post<{ newYearId: string; promoted: number; writtenOffRows: number; writtenOffAmt: number }>(
     '/academic-year/commit-closing', body,
   ),
+  delete: (yearId: string) => post<{ yearId: string; label: string }>('/academic-year/delete', { yearId }),
 };
 
 // ─── Students ────────────────────────────────────────────────────────────────
@@ -230,6 +231,12 @@ export const apiAttendance = {
   }) => post<any>('/attendance/submit', body),
   approve: (attendanceId: string) =>
     post<any>('/attendance/approve', { attendanceId }),
+  reject: (attendanceId: string, reason?: string) =>
+    post<any>('/attendance/reject', { attendanceId, reason }),
+  updateStudents: (body: {
+    attendanceId: string;
+    students: { studentId: string; isPresent: boolean }[];
+  }) => post<any>('/attendance/update-students', body),
   markByPrincipal: (body: {
     className: string; section: string; date: string;
     records: { studentId: string; isPresent: boolean }[];
@@ -290,6 +297,100 @@ export const apiSettings = {
     currency_symbol: string;
     academic_year_auto_close: boolean;
   }>) => put<any>('/settings', body),
+};
+
+// ─── Principal ────────────────────────────────────────────────────────────────
+
+export const apiPrincipal = {
+  // Notices
+  noticeCreate: (body: { title: string; body: string; audience: string; pinned?: boolean; sentBy?: string }) =>
+    post<any>('/principal/notice/create', body),
+  noticeDelete: (noticeId: string) =>
+    post<any>('/principal/notice/delete', { noticeId }),
+
+  // Complaints
+  complaintResolve: (complaintId: string, response: string) =>
+    post<any>('/principal/complaint/resolve', { complaintId, response }),
+  complaintReject: (complaintId: string, reason: string) =>
+    post<any>('/principal/complaint/reject', { complaintId, reason }),
+
+  // Expenses
+  expenseAdd: (body: { category: string; description: string; amount: number; date: string }) =>
+    post<any>('/principal/expense/add', body),
+
+  // Approvals
+  approvalApprove: (approvalId: string) =>
+    post<any>('/principal/approval/approve', { approvalId }),
+  approvalReject: (approvalId: string, reason?: string) =>
+    post<any>('/principal/approval/reject', { approvalId, reason }),
+  leaveSubmit: (body: {
+    studentId: string; studentName: string; title: string;
+    fromDate: string; toDate: string; reason: string;
+  }) => post<any>('/principal/leave/submit', body),
+
+  // Library — Books
+  bookAdd: (body: { title: string; author?: string; isbn?: string; subject?: string; totalCopies: number }) =>
+    post<any>('/principal/library/book/add', body),
+  bookDelete: (bookId: string) =>
+    post<any>('/principal/library/book/delete', { bookId }),
+  bookIssue: (body: { bookId: string; studentId: string; studentName: string; note?: string }) =>
+    post<any>('/principal/library/book/issue', body),
+  bookReturn: (body: { bookId: string; studentId: string; note?: string }) =>
+    post<any>('/principal/library/book/return', body),
+
+  // Library — Equipment
+  equipmentAdd: (body: { name: string; labType?: string; quantity: number; workingCount: number; lastServiced?: string }) =>
+    post<any>('/principal/library/equipment/add', body),
+  equipmentDelete: (equipmentId: string) =>
+    post<any>('/principal/library/equipment/delete', { equipmentId }),
+  equipmentUpdate: (body: {
+    equipmentId: string; name?: string; quantity?: number;
+    workingCount?: number; labType?: string; lastServiced?: string;
+  }) => post<any>('/principal/library/equipment/update', body),
+
+  // Academic Year Config — Sections
+  ayConfigSections: (body: {
+    yearId: string;
+    toInsert: { class_name: string; section: string }[];
+    toDelete: string[];
+  }) => post<any>('/principal/ay-config/sections', body),
+
+  // Staff Attendance
+  staffAttendanceSave: (body: {
+    date: string;
+    rows: { staffId: string; status: string }[];
+    clearedStaffIds?: string[];
+  }) => post<{ savedAt: string }>('/principal/staff-attendance/save', body),
+
+  // Permissions
+  permissionsSet: (body: {
+    teacherId: string; className: string; section: string;
+    canMarkAttendance: boolean; canUploadResults: boolean; canScheduleExam: boolean;
+  }) => post<any>('/principal/permissions/set', body),
+  permissionsRemove: (body: { teacherId: string; className: string; section: string }) =>
+    post<any>('/principal/permissions/remove', body),
+
+  // Fee Structures
+  feeStructureSave: (body: {
+    id: string; name: string; className: string;
+    structureType?: string; billingCycle: string;
+    feeHeads: any[]; monthlyDueDates: any[]; lateFee?: any;
+  }) => post<{ id: string; prev: Record<string, unknown> | null; mode: 'create' | 'update' }>(
+    '/principal/fee-structure/save', body,
+  ),
+  feeStructureSaveForYear: (body: {
+    yearId: string; name: string; className: string;
+    structureType?: string; billingCycle: string;
+    feeHeads: any[]; monthlyDueDates: any[]; lateFee?: any;
+  }) => post<{ id: string }>('/principal/fee-structure/save-for-year', body),
+  feeStructureDelete: (structureId: string) =>
+    post<any>('/principal/fee-structure/delete', { structureId }),
+  feeStructureSeed: (ayId: string) =>
+    post<{ seeded: boolean; count?: number }>('/principal/fee-structure/seed', { ayId }),
+
+  // Fee Upload Review
+  feeUploadReview: (body: { uploadId: string; decision: 'APPROVED' | 'REJECTED'; note?: string }) =>
+    post<{ paymentId: string | null }>('/principal/fee-upload/review', body),
 };
 
 // ─── Health check ─────────────────────────────────────────────────────────────

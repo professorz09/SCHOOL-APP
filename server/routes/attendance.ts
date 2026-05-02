@@ -175,6 +175,77 @@ attendanceRouter.post('/mark-by-principal', requireAuth, requireRole('PRINCIPAL'
   } catch (err) { fail(res, err); }
 });
 
+// POST /api/attendance/reject — principal rejects a teacher-submitted record
+attendanceRouter.post('/reject', requireAuth, requireRole('PRINCIPAL'), async (req, res) => {
+  try {
+    const body = requireBody<{ attendanceId: string; reason?: string }>(req, ['attendanceId']);
+
+    const { data: record } = await adminDb.from('attendance_records')
+      .select('id, school_id').eq('id', body.attendanceId).maybeSingle();
+    if (!record) throw new ApiError(404, 'Attendance record not found');
+    if ((record as any).school_id !== req.user.school_id) throw new ApiError(403, 'Access denied');
+
+    const { error } = await adminDb.from('attendance_records')
+      .update({ approval_status: 'REJECTED', approved_by: req.user.id })
+      .eq('id', body.attendanceId);
+    if (error) throw new ApiError(500, error.message);
+
+    ok(res, { attendanceId: body.attendanceId, rejected: true });
+  } catch (err) { fail(res, err); }
+});
+
+// POST /api/attendance/update-students — correction-mode: replace per-student rows
+attendanceRouter.post('/update-students', requireAuth, requireRole('PRINCIPAL', 'TEACHER'), async (req, res) => {
+  try {
+    const body = requireBody<{
+      attendanceId: string;
+      students: { studentId: string; isPresent: boolean }[];
+    }>(req, ['attendanceId', 'students']);
+
+    // Verify record belongs to this school
+    const { data: own } = await adminDb.from('attendance_records')
+      .select('id, school_id').eq('id', body.attendanceId)
+      .eq('school_id', req.user.school_id!).maybeSingle();
+    if (!own) throw new ApiError(404, 'Attendance record not found');
+
+    if (body.students.length) {
+      const rows = body.students.map(s => ({
+        attendance_id: body.attendanceId,
+        student_id:    s.studentId,
+        is_present:    s.isPresent,
+      }));
+      const { error: uErr } = await adminDb.from('attendance_student_details')
+        .upsert(rows, { onConflict: 'attendance_id,student_id' });
+      if (uErr) throw new ApiError(500, uErr.message);
+    }
+
+    // Drop rows for students no longer in the input
+    const keepIds = new Set(body.students.map(s => s.studentId));
+    const { data: existing } = await adminDb.from('attendance_student_details')
+      .select('student_id').eq('attendance_id', body.attendanceId);
+    const toDelete = ((existing ?? []) as { student_id: string }[])
+      .map(r => r.student_id).filter(sid => !keepIds.has(sid));
+
+    if (toDelete.length) {
+      const { error: dErr } = await adminDb.from('attendance_student_details').delete()
+        .eq('attendance_id', body.attendanceId).in('student_id', toDelete);
+      if (dErr) throw new ApiError(500, dErr.message);
+    }
+
+    const present = body.students.filter(s => s.isPresent).length;
+    const absent  = body.students.length - present;
+
+    const { error: rErr } = await adminDb.from('attendance_records').update({
+      total_present:  present,
+      total_absent:   absent,
+      total_students: body.students.length,
+    }).eq('id', body.attendanceId);
+    if (rErr) throw new ApiError(500, rErr.message);
+
+    ok(res, { attendanceId: body.attendanceId, present, absent, total: body.students.length });
+  } catch (err) { fail(res, err); }
+});
+
 // POST /api/attendance/approve — principal approves & locks
 attendanceRouter.post('/approve', requireAuth, requireRole('PRINCIPAL'), async (req, res) => {
   try {

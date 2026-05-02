@@ -11,6 +11,7 @@ import { teacherRouter }      from './routes/teacher';
 import { settingsRouter }     from './routes/settings';
 import { staffRouter }        from './routes/staff';
 import { timetableRouter }    from './routes/timetable';
+import { principalRouter }   from './routes/principal';
 
 export const app = express();
 
@@ -33,6 +34,7 @@ app.use('/api/teacher',       teacherRouter);
 app.use('/api/settings',      settingsRouter);
 app.use('/api/staff',         staffRouter);
 app.use('/api/timetable',     timetableRouter);
+app.use('/api/principal',    principalRouter);
 
 app.use((_req, res) => {
   res.status(404).json({ ok: false, error: 'API route not found' });

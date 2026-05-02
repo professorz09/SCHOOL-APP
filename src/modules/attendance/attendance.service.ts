@@ -216,92 +216,26 @@ export const sharedAttendance = {
 
   /** Approve a teacher-submitted record. */
   async approve(id: string): Promise<void> {
-    const schoolId = getSchoolId();
-    const yearId = await getActiveYearId();
-    const userId = getUserId();
-    const { data, error } = await supabase
-      .from('attendance_records')
-      .update({ approval_status: 'APPROVED', approved_by: userId })
-      .eq('id', id).eq('school_id', schoolId).eq('academic_year_id', yearId)
-      .select('id');
-    if (error) throw new Error(error.message);
-    if (!data || (data as unknown[]).length === 0) {
-      throw new Error('Attendance record not found in current school/year');
-    }
+    await apiAttendance.approve(id);
     await logAudit('attendance_approved', 'attendance_records', id);
   },
 
   /** Reject a teacher-submitted record (teacher may re-submit). */
   async reject(id: string, reason?: string): Promise<void> {
-    const schoolId = getSchoolId();
-    const yearId = await getActiveYearId();
-    const userId = getUserId();
-    const { data, error } = await supabase
-      .from('attendance_records')
-      .update({ approval_status: 'REJECTED', approved_by: userId })
-      .eq('id', id).eq('school_id', schoolId).eq('academic_year_id', yearId)
-      .select('id');
-    if (error) throw new Error(error.message);
-    if (!data || (data as unknown[]).length === 0) {
-      throw new Error('Attendance record not found in current school/year');
-    }
+    await apiAttendance.reject(id, reason);
     await logAudit('attendance_rejected', 'attendance_records', id, { reason: reason ?? null });
   },
 
   /** Replace per-student rows + recompute totals for a record. */
   async updateStudents(id: string, students: AttendanceStudentRecord[]): Promise<void> {
-    const schoolId = getSchoolId();
-    const yearId = await getActiveYearId();
-
-    // Verify the record belongs to this tenant/year before mutating.
-    const { data: own, error: oErr } = await supabase
-      .from('attendance_records').select('id')
-      .eq('id', id).eq('school_id', schoolId).eq('academic_year_id', yearId)
-      .maybeSingle();
-    if (oErr) throw new Error(oErr.message);
-    if (!own) throw new Error('Attendance record not found in current school/year');
-
-    // Upsert avoids the delete→insert window; UNIQUE(attendance_id, student_id)
-    // makes onConflict deterministic.
-    if (students.length) {
-      const rows = students.map(s => ({
-        attendance_id: id, student_id: s.id, is_present: s.isPresent,
-      }));
-      const { error: uErr } = await supabase
-        .from('attendance_student_details')
-        .upsert(rows, { onConflict: 'attendance_id,student_id' });
-      if (uErr) throw new Error(uErr.message);
-    }
-
-    // Drop any rows for students no longer in the input set (e.g. removed
-    // roster). We fetch the existing IDs and delete by an explicit list to
-    // avoid PostgREST tuple-string escaping.
-    const keepIds = new Set(students.map(s => s.id));
-    const { data: existing, error: eErr } = await supabase
-      .from('attendance_student_details').select('student_id')
-      .eq('attendance_id', id);
-    if (eErr) throw new Error(eErr.message);
-    const toDelete = ((existing ?? []) as { student_id: string }[])
-      .map(r => r.student_id).filter(sid => !keepIds.has(sid));
-    if (toDelete.length) {
-      const { error: dErr } = await supabase
-        .from('attendance_student_details').delete()
-        .eq('attendance_id', id).in('student_id', toDelete);
-      if (dErr) throw new Error(dErr.message);
-    }
-
+    await apiAttendance.updateStudents({
+      attendanceId: id,
+      students: students.map(s => ({ studentId: s.id, isPresent: s.isPresent })),
+    });
     const present = students.filter(s => s.isPresent).length;
     const absent = students.length - present;
-    const { error: rErr } = await supabase
-      .from('attendance_records')
-      .update({
-        total_present: present, total_absent: absent, total_students: students.length,
-      })
-      .eq('id', id).eq('school_id', schoolId).eq('academic_year_id', yearId);
-    if (rErr) throw new Error(rErr.message);
-
     await logAudit('attendance_edited', 'attendance_records', id, {
       present, absent, total: students.length,
     });
   },
-};
+}

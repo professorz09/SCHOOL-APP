@@ -377,6 +377,175 @@ studentsRouter.post('/document/add', requireAuth, requireRole('PRINCIPAL'), asyn
   } catch (err) { fail(res, err); }
 });
 
+// POST /api/students/create — full admission flow
+// Replicates upsertSchoolUser + linkParentStudent logic (from vite-plugins/admin-api.ts)
+// entirely server-side so no business logic stays in the browser.
+studentsRouter.post('/create', requireAuth, requireRole('PRINCIPAL'), async (req, res) => {
+  try {
+    const body = requireBody<{
+      name: string;
+      admissionNo?: string; rollNo?: string; dob?: string; gender?: string;
+      bloodGroup?: string; aadhaarNo?: string; phone?: string; email?: string;
+      address?: string; photo?: string; rte?: boolean;
+      fatherName?: string; fatherPhone?: string; fatherEmail?: string;
+      fatherOccupation?: string; fatherIncome?: number;
+      motherName?: string; motherPhone?: string; motherOccupation?: string;
+      guardianName?: string; guardianPhone?: string; guardianRelation?: string;
+      religion?: string; caste?: string; penNumber?: string;
+      birthCertNo?: string; tcNumber?: string; admissionDate?: string;
+      className?: string; section?: string; academicYearId?: string; totalFee?: number;
+    }>(req, ['name']);
+
+    const schoolId = req.user.school_id!;
+
+    // ── Duplicate checks ──────────────────────────────────────────────────────
+    const aadhaar = (body.aadhaarNo ?? '').replace(/\s+/g, '');
+    if (aadhaar) {
+      const { data: dups, error: dupErr } = await adminDb
+        .from('students').select('id, name').eq('school_id', schoolId).eq('aadhaar_no', aadhaar).limit(1);
+      if (dupErr) throw new ApiError(500, `Aadhaar duplicate-check failed: ${dupErr.message}`);
+      const dup = (dups ?? [])[0] as { name: string } | undefined;
+      if (dup) throw new ApiError(409, `Aadhaar already registered: ${dup.name}`);
+    }
+    const fatherPhone = (body.fatherPhone ?? '').replace(/\D/g, '').slice(-10);
+    if (fatherPhone) {
+      const { data: dups, error: dupErr } = await adminDb
+        .from('students').select('id, name').eq('school_id', schoolId).eq('father_phone', fatherPhone).limit(1);
+      if (dupErr) throw new ApiError(500, `Father-phone duplicate-check failed: ${dupErr.message}`);
+      const dup = (dups ?? [])[0] as { name: string } | undefined;
+      if (dup) throw new ApiError(409, `Father phone already registered: ${dup.name}`);
+    }
+
+    // ── Provision parent auth account (upsertSchoolUser pattern) ─────────────
+    const MOBILE_EMAIL_DOMAIN = '@edugrow.local';
+    let parentUserId: string | null = null;
+    let parentReused: boolean | null = null;
+    if (fatherPhone) {
+      // Check if user already exists in public.users
+      const { data: existing } = await adminDb
+        .from('users').select('id, school_id, role, is_active')
+        .eq('mobile_number', fatherPhone).maybeSingle();
+      if (existing) {
+        const ex = existing as { id: string; school_id: string | null; role: string };
+        if (ex.role !== 'PARENT') {
+          throw new ApiError(409, `mobile ${fatherPhone} already registered as ${ex.role}`);
+        }
+        if (ex.school_id && ex.school_id !== schoolId) {
+          throw new ApiError(409, `mobile ${fatherPhone} is already registered with another school`);
+        }
+        parentUserId = ex.id;
+        parentReused = true;
+      } else {
+        const parentEmail = `${fatherPhone}${MOBILE_EMAIL_DOMAIN}`;
+        const parentName = body.fatherName || 'Parent';
+        const created = await adminDb.auth.admin.createUser({
+          email: parentEmail, password: fatherPhone, email_confirm: true,
+          user_metadata: { mobile_number: fatherPhone, name: parentName, role: 'PARENT' },
+        });
+        let authUserId: string;
+        let createdNew = false;
+        if (created.error) {
+          // Auth user might already exist — walk pages to find it
+          let found: string | null = null;
+          for (let page = 1; page <= 10; page++) {
+            const { data: pg } = await adminDb.auth.admin.listUsers({ page, perPage: 200 });
+            const u = pg.users.find((u: any) =>
+              (u.email ?? '').toLowerCase() === parentEmail.toLowerCase(),
+            );
+            if (u) { found = u.id; break; }
+            if (pg.users.length < 200) break;
+          }
+          if (!found) throw new ApiError(500, created.error.message);
+          authUserId = found;
+        } else {
+          authUserId = created.data.user.id;
+          createdNew = true;
+        }
+        const { error: insErr } = await adminDb.from('users').insert({
+          id: authUserId, mobile_number: fatherPhone, role: 'PARENT',
+          name: parentName, email: body.fatherEmail ?? null,
+          school_id: schoolId, first_login_changed: false, is_active: true,
+        });
+        if (insErr) {
+          if (createdNew) {
+            try { await adminDb.auth.admin.deleteUser(authUserId); } catch { /* ignore */ }
+          }
+          throw new ApiError(500, insErr.message);
+        }
+        parentUserId = authUserId;
+        parentReused = false;
+      }
+    }
+
+    // ── Insert student row ────────────────────────────────────────────────────
+    const STU_FIELDS =
+      'id, school_id, user_id, name, admission_no, roll_no, dob, gender, blood_group, ' +
+      'aadhaar_no, phone, email, address, photo, ' +
+      'father_name, father_phone, father_email, father_occupation, father_income, ' +
+      'mother_name, mother_phone, mother_occupation, ' +
+      'guardian_name, guardian_phone, guardian_relation, ' +
+      'religion, caste, pen_number, birth_cert_no, tc_number, ' +
+      'is_rte, is_active, status, admission_date, created_at';
+    const { data: stuRow, error: stuErr } = await adminDb.from('students').insert({
+      school_id: schoolId, user_id: null,
+      name: body.name, admission_no: body.admissionNo,
+      roll_no: body.rollNo || null, dob: body.dob || null,
+      gender: body.gender, blood_group: body.bloodGroup,
+      aadhaar_no: aadhaar || null, phone: body.phone || null,
+      email: body.email || null, address: body.address || null,
+      photo: body.photo || null,
+      father_name: body.fatherName || null, father_phone: fatherPhone || null,
+      father_email: body.fatherEmail || null, father_occupation: body.fatherOccupation || null,
+      father_income: body.fatherIncome || null,
+      mother_name: body.motherName || null, mother_phone: body.motherPhone || null,
+      mother_occupation: body.motherOccupation || null,
+      guardian_name: body.guardianName || null, guardian_phone: body.guardianPhone || null,
+      guardian_relation: body.guardianRelation || null,
+      religion: body.religion || null, caste: body.caste || null,
+      pen_number: body.penNumber || null, birth_cert_no: body.birthCertNo || null,
+      tc_number: body.tcNumber || null,
+      is_rte: !!body.rte, is_active: true, status: 'ACTIVE',
+      admission_date: body.admissionDate || new Date().toISOString().slice(0, 10),
+    }).select(STU_FIELDS).single();
+    if (stuErr) throw new ApiError(500, stuErr.message);
+    const stu = stuRow as any;
+
+    // ── Link parent → student (linkParentStudent pattern) ─────────────────────
+    if (parentUserId) {
+      try {
+        await adminDb.from('parent_student_links').upsert({
+          parent_user_id: parentUserId, student_id: stu.id, relation: 'FATHER',
+        }, { onConflict: 'parent_user_id,student_id' });
+      } catch { /* best-effort */ }
+    }
+
+    // ── Insert academic record (if class+section provided) ─────────────────────
+    let ar: Record<string, unknown> | null = null;
+    const ayId = body.academicYearId;
+    if (ayId && body.className && body.section) {
+      const { data: sec } = await adminDb.from('sections').select('id')
+        .eq('school_id', schoolId).eq('academic_year_id', ayId)
+        .eq('class_name', body.className).eq('section', body.section).maybeSingle();
+      const sectionId = (sec as { id: string } | null)?.id ?? null;
+      const { data: arRow, error: arErr } = await adminDb.from('student_academic_records').insert({
+        student_id: stu.id, academic_year_id: ayId, section_id: sectionId,
+        class_name: body.className, section: body.section,
+        roll_no: body.rollNo || null, fee_status: 'PENDING',
+        total_fee: body.totalFee || 0, paid_fee: 0,
+        attendance_percent: 0, status: 'STUDYING',
+      }).select('id, student_id, academic_year_id, class_name, section, roll_no, fee_status, total_fee, paid_fee, attendance_percent, status').single();
+      if (arErr) throw new ApiError(500, arErr.message);
+      ar = arRow as Record<string, unknown>;
+    }
+
+    ok(res, {
+      studentRow: stu,
+      academicRecordRow: ar,
+      parent: fatherPhone && parentReused !== null ? { mobile: fatherPhone, reused: parentReused } : null,
+    }, 201);
+  } catch (err) { fail(res, err); }
+});
+
 // POST /api/students/document/remove — delete student_documents row
 studentsRouter.post('/document/remove', requireAuth, requireRole('PRINCIPAL'), async (req, res) => {
   try {
