@@ -485,16 +485,9 @@ export const staffService = {
   },
 
   async removeDocument(documentId: string): Promise<void> {
-    const { data: row, error: rErr } = await supabase
-      .from('staff_documents').select('doc_url, staff_id')
-      .eq('id', documentId).maybeSingle();
-    if (rErr) throw new Error(rErr.message);
-    const staffId = (row as { staff_id: string } | null)?.staff_id ?? null;
-    const path = (row as { doc_url: string } | null)?.doc_url ?? null;
-    const { error } = await supabase.from('staff_documents').delete().eq('id', documentId);
-    if (error) throw new Error(error.message);
-    if (path) await staffStorageService.removeStaffDocument(path).catch(() => {});
-    if (staffId) await logAudit('staff_doc_deleted', 'staff', staffId, { documentId });
+    const { docUrl } = await apiStaff.deleteDocument(documentId);
+    if (docUrl) await staffStorageService.removeStaffDocument(docUrl).catch(() => {});
+    await logAudit('staff_doc_deleted', 'staff', 'unknown', { documentId });
   },
 
   async getDocumentSignedUrl(storagePath: string): Promise<string | null> {

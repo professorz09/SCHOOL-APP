@@ -88,6 +88,27 @@ staffRouter.post('/relieve', requireAuth, requireRole('PRINCIPAL'), async (req, 
   } catch (err) { fail(res, err); }
 });
 
+// POST /api/staff/document/delete — delete staff_documents row
+staffRouter.post('/document/delete', requireAuth, requireRole('PRINCIPAL'), async (req, res) => {
+  try {
+    const { documentId } = requireBody<{ documentId: string }>(req, ['documentId']);
+
+    // Verify document belongs to this school via staff join
+    const { data: row } = await adminDb
+      .from('staff_documents')
+      .select('id, doc_url, staff_id, staff!inner(school_id)')
+      .eq('id', documentId)
+      .maybeSingle();
+    if (!row) throw new ApiError(404, 'Document not found');
+    if ((row as any).staff?.school_id !== req.user.school_id) throw new ApiError(403, 'Access denied');
+
+    const { error } = await adminDb.from('staff_documents').delete().eq('id', documentId);
+    if (error) throw new ApiError(500, error.message);
+
+    ok(res, { documentId, docUrl: (row as any).doc_url });
+  } catch (err) { fail(res, err); }
+});
+
 // POST /api/staff/create — insert staff row + seed salary + class assignments
 staffRouter.post('/create', requireAuth, requireRole('PRINCIPAL'), async (req, res) => {
   try {

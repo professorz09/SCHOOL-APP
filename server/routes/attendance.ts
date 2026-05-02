@@ -105,6 +105,76 @@ attendanceRouter.post('/submit', requireAuth, requireRole('TEACHER', 'PRINCIPAL'
   } catch (err) { fail(res, err); }
 });
 
+// POST /api/attendance/mark-by-principal — principal marks directly (APPROVED immediately)
+attendanceRouter.post('/mark-by-principal', requireAuth, requireRole('PRINCIPAL'), async (req, res) => {
+  try {
+    const body = requireBody<{
+      className: string; section: string; date: string;
+      records: { studentId: string; isPresent: boolean }[];
+    }>(req, ['className', 'section', 'date', 'records']);
+
+    if (!Array.isArray(body.records) || body.records.length === 0) {
+      throw new ApiError(400, 'records array required');
+    }
+
+    // Resolve active year + section
+    const { data: ay } = await adminDb
+      .from('academic_years').select('id')
+      .eq('school_id', req.user.school_id!).eq('is_active', true).maybeSingle();
+    if (!ay) throw new ApiError(400, 'No active academic year');
+    const yearId = (ay as any).id as string;
+
+    const { data: secRows } = await adminDb
+      .from('sections').select('id')
+      .eq('school_id', req.user.school_id!)
+      .eq('academic_year_id', yearId)
+      .eq('class_name', body.className)
+      .eq('section', body.section)
+      .limit(1);
+    const sectionId = ((secRows ?? [])[0] as any)?.id;
+    if (!sectionId) throw new ApiError(404, `Section ${body.className}-${body.section} not found`);
+
+    const present = body.records.filter(r => r.isPresent).length;
+    const absent  = body.records.length - present;
+
+    const { data: rec, error: rErr } = await adminDb
+      .from('attendance_records').insert({
+        school_id:        req.user.school_id,
+        academic_year_id: yearId,
+        section_id:       sectionId,
+        class_name:       body.className,
+        section:          body.section,
+        date:             body.date,
+        total_present:    present,
+        total_absent:     absent,
+        total_students:   body.records.length,
+        marked_by:        req.user.id,
+        approved_by:      req.user.id,
+        approval_status:  'APPROVED',
+        is_locked:        true,
+      }).select('id').single();
+    if (rErr) {
+      if (/duplicate/i.test(rErr.message))
+        throw new ApiError(409, 'Attendance already marked for this date');
+      throw new ApiError(500, rErr.message);
+    }
+    const attendanceId = (rec as any).id as string;
+
+    const detail = body.records.map(r => ({
+      attendance_id: attendanceId,
+      student_id:    r.studentId,
+      is_present:    r.isPresent,
+    }));
+    const { error: dErr } = await adminDb.from('attendance_student_details').insert(detail);
+    if (dErr) {
+      await adminDb.from('attendance_records').delete().eq('id', attendanceId);
+      throw new ApiError(500, dErr.message);
+    }
+
+    ok(res, { attendanceId, date: body.date, present, absent, total: body.records.length }, 201);
+  } catch (err) { fail(res, err); }
+});
+
 // POST /api/attendance/approve — principal approves & locks
 attendanceRouter.post('/approve', requireAuth, requireRole('PRINCIPAL'), async (req, res) => {
   try {

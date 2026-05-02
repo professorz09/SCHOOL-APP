@@ -352,3 +352,46 @@ studentsRouter.post('/readmit', requireAuth, requireRole('PRINCIPAL'), async (re
     ok(res, { studentId });
   } catch (err) { fail(res, err); }
 });
+
+// POST /api/students/document/add — insert student_documents row
+studentsRouter.post('/document/add', requireAuth, requireRole('PRINCIPAL'), async (req, res) => {
+  try {
+    const body = requireBody<{
+      studentId: string; docType: string; docUrl: string;
+    }>(req, ['studentId', 'docType', 'docUrl']);
+
+    // Verify student belongs to this school
+    const { data: st } = await adminDb
+      .from('students').select('id')
+      .eq('id', body.studentId).eq('school_id', req.user.school_id!).maybeSingle();
+    if (!st) throw new ApiError(404, 'Student not found');
+
+    const { data, error } = await adminDb.from('student_documents').insert({
+      student_id: body.studentId,
+      doc_type:   body.docType,
+      doc_url:    body.docUrl,
+    }).select('id, doc_type, doc_url, uploaded_at').single();
+    if (error) throw new ApiError(500, error.message);
+
+    ok(res, data, 201);
+  } catch (err) { fail(res, err); }
+});
+
+// POST /api/students/document/remove — delete student_documents row
+studentsRouter.post('/document/remove', requireAuth, requireRole('PRINCIPAL'), async (req, res) => {
+  try {
+    const { documentId } = requireBody<{ documentId: string }>(req, ['documentId']);
+
+    const { data: row } = await adminDb
+      .from('student_documents')
+      .select('id, doc_url, student_id, students!inner(school_id)')
+      .eq('id', documentId).maybeSingle();
+    if (!row) throw new ApiError(404, 'Document not found');
+    if ((row as any).students?.school_id !== req.user.school_id) throw new ApiError(403, 'Access denied');
+
+    const { error } = await adminDb.from('student_documents').delete().eq('id', documentId);
+    if (error) throw new ApiError(500, error.message);
+
+    ok(res, { documentId, docUrl: (row as any).doc_url });
+  } catch (err) { fail(res, err); }
+});

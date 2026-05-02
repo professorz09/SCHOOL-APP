@@ -70,6 +70,19 @@ export const apiAcademicYear = {
   getSections: (yearId: string) => get<any[]>(`/academic-year/${yearId}/sections`),
   createSections: (yearId: string, sections: { className: string; section: string; classTeacher?: string }[]) =>
     post<any[]>('/academic-year/sections', { yearId, sections }),
+  createWithSections: (body: {
+    label: string; startDate: string; endDate: string;
+    board: string; medium: string; streams: string[];
+    sections: { className: string; section: string; stream?: string | null; capacity: number }[];
+  }) => post<{ yearId: string }>('/academic-year/create-with-sections', body),
+  commitClosing: (body: {
+    oldYearId: string; newLabel: string; newStart: string; newEnd: string;
+    newBoard: string; newMedium: string;
+    decisions: { student_id: string; action: string; new_class_name?: string; new_section?: string }[];
+    duesHandling: 'WRITEOFF' | 'ARREARS' | 'NONE';
+  }) => post<{ newYearId: string; promoted: number; writtenOffRows: number; writtenOffAmt: number }>(
+    '/academic-year/commit-closing', body,
+  ),
 };
 
 // ─── Students ────────────────────────────────────────────────────────────────
@@ -106,6 +119,10 @@ export const apiStudents = {
     post<any>('/students/issue-tc', body),
   readmit: (studentId: string) =>
     post<any>('/students/readmit', { studentId }),
+  addDocument: (body: { studentId: string; docType: string; docUrl: string }) =>
+    post<any>('/students/document/add', body),
+  removeDocument: (documentId: string) =>
+    post<{ documentId: string; docUrl: string }>('/students/document/remove', { documentId }),
 };
 
 // ─── Fees ────────────────────────────────────────────────────────────────────
@@ -160,6 +177,8 @@ export const apiStaff = {
   update: (body: {
     id: string; patch: Record<string, unknown>; assignedClasses?: string[];
   }) => post<any>('/staff/update', body),
+  deleteDocument: (documentId: string) =>
+    post<{ documentId: string; docUrl: string }>('/staff/document/delete', { documentId }),
 };
 
 // ─── Transport ───────────────────────────────────────────────────────────────
@@ -211,6 +230,10 @@ export const apiAttendance = {
   }) => post<any>('/attendance/submit', body),
   approve: (attendanceId: string) =>
     post<any>('/attendance/approve', { attendanceId }),
+  markByPrincipal: (body: {
+    className: string; section: string; date: string;
+    records: { studentId: string; isPresent: boolean }[];
+  }) => post<any>('/attendance/mark-by-principal', body),
 };
 
 // ─── Exams ───────────────────────────────────────────────────────────────────

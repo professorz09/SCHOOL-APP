@@ -532,10 +532,7 @@ export const studentService = {
   },
 
   async addDocument(studentId: string, type: StudentDoc['type'], docUrl: string): Promise<void> {
-    const { error } = await supabase.from('student_documents').insert({
-      student_id: studentId, doc_type: type, doc_url: docUrl,
-    });
-    if (error) throw new Error(error.message);
+    await apiStudents.addDocument({ studentId, docType: type, docUrl });
   },
 
   // ── Per-year academic record (used by profile/results/attendance views) ──
@@ -689,13 +686,7 @@ export const studentService = {
     type: StudentDoc['type'],
     storagePath: string,
   ): Promise<StudentDoc> {
-    const { data, error } = await supabase.from('student_documents').insert({
-      student_id: studentId,
-      doc_type: type,
-      doc_url: storagePath,
-    }).select('id, doc_type, doc_url, uploaded_at').single();
-    if (error) throw new Error(error.message);
-    const row = data as { id: string; doc_type: string; doc_url: string; uploaded_at: string };
+    const row = await apiStudents.addDocument({ studentId, docType: type, docUrl: storagePath });
     await logAudit('student_document_uploaded', 'student_document', row.id,
       { studentId, docType: type });
     return {
@@ -709,24 +700,13 @@ export const studentService = {
 
   /** Remove a document row + its bytes (best-effort on storage). */
   async removeDocument(documentId: string): Promise<void> {
-    const { data: row } = await supabase
-      .from('student_documents')
-      .select('id, doc_url, student_id')
-      .eq('id', documentId).maybeSingle();
-    const { error } = await supabase
-      .from('student_documents').delete().eq('id', documentId);
-    if (error) throw new Error(error.message);
-    const r = row as { doc_url: string; student_id: string } | null;
-    if (r?.doc_url) {
-      // Storage delete is best-effort: an orphaned object is harmless
-      // (the row that referenced it is gone) but row-level RLS may block
-      // delete for non-principal callers — we swallow errors.
+    const { docUrl } = await apiStudents.removeDocument(documentId);
+    if (docUrl) {
       try {
-        await supabase.storage.from('student-documents').remove([r.doc_url]);
+        await supabase.storage.from('student-documents').remove([docUrl]);
       } catch { /* ignore */ }
     }
-    await logAudit('student_document_removed', 'student_document', documentId,
-      { studentId: r?.student_id ?? null });
+    await logAudit('student_document_removed', 'student_document', documentId, {});
   },
 
   // ── Archive / lifecycle ──────────────────────────────────────────────────

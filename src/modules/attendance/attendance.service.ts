@@ -8,6 +8,7 @@
 // and lets the principal manage it.
 
 import { supabase } from '@/shared/lib/supabase';
+import { apiAttendance } from '@/shared/lib/apiClient';
 import { useAuthStore } from '@/shared/store/authStore';
 import { useEditingYearStore } from '@/shared/store/editingYearStore';
 import { logAudit } from '@/shared/lib/audit';
@@ -195,66 +196,21 @@ export const sharedAttendance = {
     className: string, section: string, date: string,
     students: AttendanceStudentRecord[],
   ): Promise<SharedAttendanceRecord> {
+    const res = await apiAttendance.markByPrincipal({
+      className,
+      section,
+      date,
+      records: students.map(s => ({ studentId: s.id, isPresent: s.isPresent })),
+    });
+    await logAudit('attendance_marked_by_principal', 'attendance_records', res.attendanceId, {
+      className, section, date, present: res.present, absent: res.absent, total: res.total,
+    });
+    // Re-fetch fully populated row (with marker name) so the UI shows it correctly.
     const schoolId = getSchoolId();
     const yearId = await getActiveYearId();
-    const userId = getUserId();
-
-    // Resolve section_id from class_name + section in active year.
-    const { data: secRows, error: secErr } = await supabase
-      .from('sections').select('id')
-      .eq('school_id', schoolId).eq('academic_year_id', yearId)
-      .eq('class_name', className).eq('section', section).limit(1);
-    if (secErr) throw new Error(secErr.message);
-    const sec = ((secRows ?? []) as { id: string }[])[0];
-    if (!sec) throw new Error(`Section ${className}-${section} not found for active year`);
-
-    const present = students.filter(s => s.isPresent).length;
-    const absent = students.length - present;
-
-    const { data: insRec, error: rErr } = await supabase
-      .from('attendance_records')
-      .insert({
-        school_id: schoolId,
-        academic_year_id: yearId,
-        section_id: sec.id,
-        class_name: className,
-        section,
-        date,
-        total_present: present,
-        total_absent: absent,
-        total_students: students.length,
-        marked_by: userId,
-        approved_by: userId,
-        approval_status: 'APPROVED',
-      })
-      .select('id').single();
-    if (rErr) {
-      if (/duplicate/i.test(rErr.message)) {
-        throw new Error('Attendance already marked for this date');
-      }
-      throw new Error(rErr.message);
-    }
-    const recId = (insRec as { id: string }).id;
-
-    if (students.length) {
-      const detail = students.map(s => ({
-        attendance_id: recId, student_id: s.id, is_present: s.isPresent,
-      }));
-      const { error: dErr } = await supabase
-        .from('attendance_student_details').insert(detail);
-      if (dErr) {
-        await supabase.from('attendance_records').delete().eq('id', recId);
-        throw new Error(dErr.message);
-      }
-    }
-
-    await logAudit('attendance_marked_by_principal', 'attendance_records', recId, {
-      className, section, date, present, absent, total: students.length,
-    });
-
-    // Re-fetch fully populated row (with marker name) so the UI shows it correctly.
     const { data: full } = await supabase
-      .from('attendance_records').select(ATT_FIELDS).eq('id', recId).single();
+      .from('attendance_records').select(ATT_FIELDS)
+      .eq('id', res.attendanceId).single();
     return mapRow(full as unknown as AttendanceRow);
   },
 

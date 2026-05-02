@@ -11,6 +11,7 @@
 // session, NOT persistent data.
 
 import { supabase } from '@/shared/lib/supabase';
+import { apiAcademicYear } from '@/shared/lib/apiClient';
 import { logAudit } from '@/shared/lib/audit';
 import type {
   StreamDefinition,
@@ -183,8 +184,7 @@ export const yearClosingService = {
   // ── Write: lock year (helper — same as close_academic_year RPC) ─────────
 
   async lockYear(yearId: string): Promise<void> {
-    const { error } = await supabase.rpc('close_academic_year', { p_year_id: yearId });
-    if (error) throw new Error(error.message);
+    await apiAcademicYear.close(yearId);
   },
 
   // ── Close-only flow ──────────────────────────────────────────────────────
@@ -201,8 +201,7 @@ export const yearClosingService = {
   //   • Outstanding fees stay on the locked year — no carry, no write-off.
   //   • The principal opens the next year separately via AcademicYearWizard.
   async closeAcademicYear(yearId: string): Promise<void> {
-    const { error } = await supabase.rpc('close_academic_year', { p_year_id: yearId });
-    if (error) throw new Error(error.message);
+    await apiAcademicYear.close(yearId);
     await logAudit('close_academic_year', 'academic_year', yearId, {
       mode: 'manual_close_only',
     });
@@ -534,26 +533,18 @@ export const yearClosingService = {
         : config.outstandingDuesHandling === 'ARREARS' ? 'ARREARS'
         : 'NONE';
 
-      const { data: rpcResult, error: rpcErr } = await supabase.rpc('commit_year_closing', {
-        p_old_year_id: config.fromYearId,
-        p_new_label: config.nextYearName,
-        p_new_start: config.nextYearStartDate,
-        p_new_end: config.nextYearEndDate,
-        p_new_board: config.board ?? 'CBSE',
-        p_new_medium: config.nextYearMedium ?? 'English',
-        p_decisions: decisions,
-        p_dues_handling: duesHandling,
+      const result = await apiAcademicYear.commitClosing({
+        oldYearId:   config.fromYearId,
+        newLabel:    config.nextYearName,
+        newStart:    config.nextYearStartDate,
+        newEnd:      config.nextYearEndDate,
+        newBoard:    config.board ?? 'CBSE',
+        newMedium:   config.nextYearMedium ?? 'English',
+        decisions,
+        duesHandling,
       });
-      if (rpcErr) throw new Error(`Year closing failed: ${rpcErr.message}`);
-
-      const result = (rpcResult ?? {}) as {
-        new_year_id?: string;
-        promoted?: number;
-        written_off_rows?: number;
-        written_off_amt?: number;
-      };
-      const newYearId = result.new_year_id;
-      if (!newYearId) throw new Error('RPC returned no new_year_id');
+      const newYearId = result.newYearId;
+      if (!newYearId) throw new Error('API returned no newYearId');
 
       // Stream count — informational (per-section assignment is a follow-up
       // step the principal handles after the new year is opened)
