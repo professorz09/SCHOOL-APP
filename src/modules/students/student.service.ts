@@ -631,12 +631,12 @@ export const studentService = {
       // Defensive mapping: legacy OPEN/IN_PROGRESS rows still exist on
       // pre-0033 environments. Migration 0033 backfills them.
       const raw = (c.status ?? '').toUpperCase();
-      let status: import('../types/principal.types').ComplaintStatus;
+      let status: import('@/shared/types/principal.types').ComplaintStatus;
       if (raw === 'OPEN') status = 'PENDING';
       else if (raw === 'IN_PROGRESS') status = 'IN_REVIEW';
       else if (raw === 'PENDING' || raw === 'IN_REVIEW' ||
                raw === 'RESOLVED' || raw === 'REJECTED') {
-        status = raw as import('../types/principal.types').ComplaintStatus;
+        status = raw as import('@/shared/types/principal.types').ComplaintStatus;
       } else status = 'PENDING';
 
       return {

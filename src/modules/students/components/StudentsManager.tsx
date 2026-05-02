@@ -95,7 +95,7 @@ export const StudentsManager: React.FC<Props> = ({ onBack, initialView }) => {
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [feeInstallments, setFeeInstallments] = useState<FeeInstallment[]>([]);
   const [studentFeeStructure, setStudentFeeStructure] = useState<FeeStructureRecord | null>(null);
-  const [feePaymentHistory, setFeePaymentHistory] = useState<import('../../../services/fee.service').PaymentRecord[]>([]);
+  const [feePaymentHistory, setFeePaymentHistory] = useState<import('@/modules/fees/fee.service').PaymentRecord[]>([]);
   const [academicRecord, setAcademicRecord] = useState<StudentAcademicRecord | null>(null);
   const [activeProfileTab, setActiveProfileTab] = useState<'INFO' | 'ALLOTMENT' | 'FAMILY' | 'RESULTS' | 'FEES' | 'DOCS'>('INFO');
   const [studentTransport, setStudentTransport] = useState<{ vehicle: TransportVehicle; assignment: StudentTransportAssignment } | null>(null);

@@ -194,7 +194,7 @@ export const TestsManager: React.FC<Props> = ({ onBack }) => {
           maxMarks:     uploadExam.maxMarks,
           studentResults: stuRows.map(r => ({
             studentId:    r.studentId,
-            obtainedMarks: hasSubjects ? Object.values(r.subjectMarks).reduce((a, v) => a + (+v || 0), 0) : +r.marks,
+            obtainedMarks: hasSubjects ? Object.values(r.subjectMarks).reduce((a: number, v) => a + (Number(v) || 0), 0) : +r.marks,
             note:         r.note,
           })),
           allStudents: cls?.students.map(s => ({ id: s.id, name: s.name, rollNo: s.rollNo })) ?? [],

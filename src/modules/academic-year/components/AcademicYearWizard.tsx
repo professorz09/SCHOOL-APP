@@ -218,6 +218,7 @@ export const AcademicYearWizard: React.FC<Props> = ({
                 description: 'Monthly tuition charges',
               }],
               monthlyDueDates: [],
+              structureType: 'CLASS' as const,
               lateFee: { enabled: false, gracePeriodDays: 5, type: 'FIXED', amount: 100, maxCap: 1000 },
             }),
           ),

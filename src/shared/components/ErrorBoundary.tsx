@@ -1,12 +1,18 @@
-import React from 'react';
+import * as React from 'react';
 import { AlertTriangle, RefreshCw } from 'lucide-react';
 
+interface Props { children: React.ReactNode; label?: string }
 interface State { error: Error | null; info: string }
 
-export class ErrorBoundary extends React.Component<
-  { children: React.ReactNode; label?: string },
-  State
-> {
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+const ReactComponent = (React as any).Component as new <P, S>(props: P) => {
+  props: P;
+  state: S;
+  setState(s: Partial<S>): void;
+  render(): React.ReactNode;
+};
+
+export class ErrorBoundary extends ReactComponent<Props, State> {
   state: State = { error: null, info: '' };
 
   static getDerivedStateFromError(error: Error): State {

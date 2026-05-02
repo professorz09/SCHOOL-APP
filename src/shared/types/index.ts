@@ -1,3 +1,5 @@
+import type { ReactNode } from 'react';
+
 export type AppRole = 'SUPER_ADMIN' | 'PRINCIPAL' | 'TEACHER' | 'STUDENT' | 'DRIVER';
 
 export type NavTab =
@@ -10,7 +12,7 @@ export type NavTab =
 
 export interface ActionItem {
   title: string;
-  icon: React.ReactNode;
+  icon: ReactNode;
   onClick?: () => void;
   color?: string;
 }
