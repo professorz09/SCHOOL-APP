@@ -2,12 +2,12 @@
 // admin-api (default password = mobile, must change on first login). Suspend
 // only flips status — never hard-delete (DB triggers enforce permanent ID).
 
-import { supabase } from '@/shared/lib/supabase';
-import { useAuthStore } from '@/shared/store/authStore';
-import { adminApi } from '@/shared/lib/adminApi';
-import { logAudit } from '@/shared/lib/audit';
+import { supabase } from '@/lib/supabase';
+import { useAuthStore } from '@/store/authStore';
+import { adminApi } from '@/lib/adminApi';
+import { logAudit } from '@/lib/audit';
 import { staffStorageService } from '@/modules/staff/staffStorage.service';
-import { apiStaff } from '@/shared/lib/apiClient';
+import { apiStaff } from '@/lib/apiClient';
 import type {
   StaffMember, SalaryPayment, StaffRole, StaffStatus,
   StaffSalaryHistoryEntry, StaffStatusHistoryEntry, StaffDocument,

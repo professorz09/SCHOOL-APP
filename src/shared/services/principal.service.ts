@@ -3,10 +3,10 @@
 //   library + lab assets (assets + asset_issues tables), and
 //   academic-year-config derived view.
 
-import { supabase } from '@/shared/lib/supabase';
-import { useAuthStore } from '@/shared/store/authStore';
-import { logAudit } from '@/shared/lib/audit';
-import { apiPrincipal } from '@/shared/lib/apiClient';
+import { supabase } from '@/lib/supabase';
+import { useAuthStore } from '@/store/authStore';
+import { logAudit } from '@/lib/audit';
+import { apiPrincipal } from '@/lib/apiClient';
 import type {
   Complaint, Expense, Notice, Approval, NoticeAudience,
   LibraryBook, BookIssue, LabEquipment, Vehicle, AcademicYearConfig,

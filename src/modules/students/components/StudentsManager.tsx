@@ -9,10 +9,10 @@ import {
   Lock, Edit2, History,
 } from 'lucide-react';
 import { studentService } from '@/modules/students/student.service';
-import { apiStudents, apiFees } from '@/shared/lib/apiClient';
+import { apiStudents, apiFees } from '@/lib/apiClient';
 import { Student, CreateStudentInput, StudentAcademicRecord, STREAMS, STREAM_CLASSES, StudentStream, StudentDoc } from '@/shared/types/principal.types';
 import { PaymentStatus, PAYMENT_COLORS } from '@/shared/config/constants';
-import { useUIStore } from '@/shared/store/uiStore';
+import { useUIStore } from '@/store/uiStore';
 type ParentCredsView = { mobileNumber: string; password: string };
 import { schoolInfoService, SchoolInfo } from '@/shared/services/schoolInfo.service';
 import { AdmissionFormPrint } from '@/shared/components/AdmissionFormPrint';
@@ -24,7 +24,7 @@ import { storageService } from '@/shared/services/storage.service';
 import { StudentClassAssignmentModal } from '@/modules/students/components/StudentClassAssignmentModal';
 import { useAcademicYear } from '@/shared/context/AcademicYearContext';
 import { principalService, FeeStructureRecord } from '@/shared/services/principal.service';
-import { useEditorModeStore } from '@/shared/store/editorModeStore';
+import { useEditorModeStore } from '@/store/editorModeStore';
 import { feeService, FeeInstallment } from '@/modules/fees/fee.service';
 
 const PAGE_SIZE = 50;

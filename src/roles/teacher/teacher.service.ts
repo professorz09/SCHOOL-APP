@@ -19,11 +19,11 @@
 //
 // AI exam paper generation calls Google Gemini directly via `lib/gemini`.
 
-import { supabase } from '@/shared/lib/supabase';
-import { useAuthStore } from '@/shared/store/authStore';
-import { useEditingYearStore } from '@/shared/store/editingYearStore';
-import { logAudit } from '@/shared/lib/audit';
-import { generateText, stripJsonFence, GeminiUnavailableError } from '@/shared/lib/gemini';
+import { supabase } from '@/lib/supabase';
+import { useAuthStore } from '@/store/authStore';
+import { useEditingYearStore } from '@/store/editingYearStore';
+import { logAudit } from '@/lib/audit';
+import { generateText, stripJsonFence, GeminiUnavailableError } from '@/lib/gemini';
 import type { PublishResultsInput, FinalExamPublishInput } from '@/shared/types/teacher.types';
 import type {
   TeacherClass,

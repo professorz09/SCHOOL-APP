@@ -5,10 +5,10 @@ import {
 } from 'lucide-react';
 import { teacherService } from '@/roles/teacher/teacher.service';
 import { TestSchedule, TestType, TeacherClass } from '@/shared/types/teacher.types';
-import { useUIStore } from '@/shared/store/uiStore';
-import { useAuthStore } from '@/shared/store/authStore';
+import { useUIStore } from '@/store/uiStore';
+import { useAuthStore } from '@/store/authStore';
 import { useAcademicYear } from '@/shared/context/AcademicYearContext';
-import { useEditGuard } from '@/shared/store/correctionStore';
+import { useEditGuard } from '@/store/correctionStore';
 
 type View = 'LIST' | 'CREATE' | 'UPLOAD';
 

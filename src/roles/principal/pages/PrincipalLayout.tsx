@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { Calendar, Sparkles, Lock } from 'lucide-react';
 import { ToastContainer } from '@/shared/components/ui/Toast';
-import { useUIStore } from '@/shared/store/uiStore';
+import { useUIStore } from '@/store/uiStore';
 import { useAcademicYear } from '@/shared/context/AcademicYearContext';
 import { PrincipalDashboard } from '@/roles/principal/components/PrincipalDashboard';
 import { StudentsManager } from '@/modules/students/components/StudentsManager';

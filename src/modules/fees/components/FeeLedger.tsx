@@ -8,7 +8,7 @@ import {
 import { feeService, FeeInstallment, FeeStatus, FeeType, PaymentRecord, GovernmentPaymentRecord } from '@/modules/fees/fee.service';
 import { studentService } from '@/modules/students/student.service';
 import { principalService, FeeStructureRecord } from '@/shared/services/principal.service';
-import { useUIStore } from '@/shared/store/uiStore';
+import { useUIStore } from '@/store/uiStore';
 import { FeePaymentSubmissionsQueue } from '@/modules/fees/components/FeePaymentSubmissionsQueue';
 
 type YearGroup = { academicYearId: string; yearLabel: string; isActive: boolean; installments: FeeInstallment[] };

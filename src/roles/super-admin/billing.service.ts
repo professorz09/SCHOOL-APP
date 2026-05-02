@@ -1,8 +1,8 @@
 // Supabase-backed billing service. The oldest-due-first allocation logic
 // lives in the public.record_school_payment() RPC.
 
-import { supabase } from '@/shared/lib/supabase';
-import { logAudit } from '@/shared/lib/audit';
+import { supabase } from '@/lib/supabase';
+import { logAudit } from '@/lib/audit';
 import {
   SchoolBilling,
   BillingYear,

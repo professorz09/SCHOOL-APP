@@ -1,7 +1,7 @@
 import React, { useState } from 'react';
 import { User, Phone, Shield, LogOut, ChevronRight, Bell, Lock, GraduationCap, Briefcase, Car, Star, X, Save, Eye, EyeOff } from 'lucide-react';
-import { useAuthStore } from '@/shared/store/authStore';
-import { useUIStore } from '@/shared/store/uiStore';
+import { useAuthStore } from '@/store/authStore';
+import { useUIStore } from '@/store/uiStore';
 
 const ROLE_LABEL: Record<string, string> = {
   SUPER_ADMIN: 'Super Admin',

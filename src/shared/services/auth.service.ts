@@ -3,7 +3,7 @@
 // (`<mobile>@edugrow.local`) for Supabase Auth, since SMS-based phone auth
 // would require an external SMS provider.
 
-import { supabase, mobileToEmail } from '@/shared/lib/supabase';
+import { supabase, mobileToEmail } from '@/lib/supabase';
 
 export type Role =
   | 'SUPER_ADMIN'

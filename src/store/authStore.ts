@@ -1,6 +1,6 @@
 import { create } from 'zustand';
 import { AuthSession, authService } from '@/shared/services/auth.service';
-import { supabase } from '@/shared/lib/supabase';
+import { supabase } from '@/lib/supabase';
 
 interface AuthState {
   session: AuthSession | null;

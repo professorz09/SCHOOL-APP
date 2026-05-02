@@ -3,7 +3,7 @@
 // Reads still go direct via Supabase (RLS protects them).
 // ALL writes go through this client → Express API server.
 
-import { supabase } from '@/shared/lib/supabase';
+import { supabase } from '@/lib/supabase';
 
 // ─── Core fetch wrapper ───────────────────────────────────────────────────────
 

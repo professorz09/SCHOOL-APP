@@ -1,6 +1,6 @@
 import React, { useState, useMemo, useEffect } from 'react';
 import { ToastContainer } from '@/shared/components/ui/Toast';
-import { useUIStore } from '@/shared/store/uiStore';
+import { useUIStore } from '@/store/uiStore';
 import { TimetableView } from '@/roles/student/components/TimetableView';
 import { ResultsView } from '@/roles/student/components/ResultsView';
 import { FeesView } from '@/roles/student/components/FeesView';
@@ -15,7 +15,7 @@ import {
   UserCheck, HeadphonesIcon, Clock, FileText, User,
 } from 'lucide-react';
 import { timetableService, PERIOD_SLOTS } from '@/modules/timetable/timetable.service';
-import { useAuthStore } from '@/shared/store/authStore';
+import { useAuthStore } from '@/store/authStore';
 import { studentDashboardService, type ActiveStudentContext } from '@/modules/students/studentDashboard.service';
 
 type StudentView = 'DASHBOARD' | 'TIMETABLE' | 'RESULTS' | 'FEES' | 'TRANSPORT' | 'NOTICES' | 'COMPLAINTS' | 'ATTENDANCE' | 'LEAVE' | 'PROFILE';

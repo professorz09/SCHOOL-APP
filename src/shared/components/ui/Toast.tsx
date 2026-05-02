@@ -1,6 +1,6 @@
 import React from 'react';
 import { CheckCircle2, XCircle, AlertCircle, Info, X } from 'lucide-react';
-import { useUIStore, Toast as ToastType } from '@/shared/store/uiStore';
+import { useUIStore, Toast as ToastType } from '@/store/uiStore';
 
 const ICONS = {
   success: <CheckCircle2 size={16} className="text-emerald-600" />,

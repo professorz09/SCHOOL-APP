@@ -13,8 +13,8 @@
 // synchronously via useEditingYearStore.getState().getEditingYearId().
 
 import { create } from 'zustand';
-import { useAuthStore } from '@/shared/store/authStore';
-import { useCorrectionStore } from '@/shared/store/correctionStore';
+import { useAuthStore } from '@/store/authStore';
+import { useCorrectionStore } from '@/store/correctionStore';
 
 interface State {
   editingYearId: string | null;

@@ -7,7 +7,7 @@ import { principalService } from '@/shared/services/principal.service';
 import { LibraryBook, LabEquipment } from '@/shared/types/principal.types';
 import { studentService } from '@/modules/students/student.service';
 import { Student } from '@/shared/types/principal.types';
-import { useUIStore } from '@/shared/store/uiStore';
+import { useUIStore } from '@/store/uiStore';
 
 type Tab = 'LIBRARY' | 'LAB';
 type LibrarySubTab = 'BOOKS' | 'HISTORY';

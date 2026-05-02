@@ -9,9 +9,9 @@ import { studentService } from '@/modules/students/student.service';
 import { staffService } from '@/modules/staff/staff.service';
 import { principalService } from '@/shared/services/principal.service';
 import { transportService } from '@/modules/transport/transport.service';
-import { supabase } from '@/shared/lib/supabase';
+import { supabase } from '@/lib/supabase';
 import { PrincipalView } from '@/roles/principal/pages/PrincipalLayout';
-import { useAuthStore } from '@/shared/store/authStore';
+import { useAuthStore } from '@/store/authStore';
 import { useAcademicYear } from '@/shared/context/AcademicYearContext';
 import { SalaryReminderCard } from '@/roles/principal/components/SalaryReminderCard';
 

@@ -1,8 +1,8 @@
 // Supabase-backed audit-log reader. Maps DB entity_type strings to the
 // frontend LogType enum and hydrates entity names from details JSONB / joins.
 
-import { supabase } from '@/shared/lib/supabase';
-import { logAudit } from '@/shared/lib/audit';
+import { supabase } from '@/lib/supabase';
+import { logAudit } from '@/lib/audit';
 import { SystemLog } from '@/shared/types/logs.types';
 import { LogType } from '@/shared/config/constants';
 

@@ -5,7 +5,7 @@ import {
   type FeePaymentUploadRecord,
   type FeeUploadStatus,
 } from '@/shared/services/principal.service';
-import { useUIStore } from '@/shared/store/uiStore';
+import { useUIStore } from '@/store/uiStore';
 
 const STATUS_BADGE: Record<FeeUploadStatus, string> = {
   PENDING:  'bg-amber-50 text-amber-700 border-amber-200',

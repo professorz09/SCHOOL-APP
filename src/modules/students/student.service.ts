@@ -9,13 +9,13 @@
 // RPC and are NOT applied directly. Mid-year class/section change goes through
 // record_class_movement RPC.
 
-import { supabase } from '@/shared/lib/supabase';
-import { useAuthStore } from '@/shared/store/authStore';
-import { useEditingYearStore } from '@/shared/store/editingYearStore';
-import { adminApi } from '@/shared/lib/adminApi';
-import { logAudit } from '@/shared/lib/audit';
+import { supabase } from '@/lib/supabase';
+import { useAuthStore } from '@/store/authStore';
+import { useEditingYearStore } from '@/store/editingYearStore';
+import { adminApi } from '@/lib/adminApi';
+import { logAudit } from '@/lib/audit';
 import { PaymentStatus } from '@/shared/config/constants';
-import { apiStudents, apiTransport } from '@/shared/lib/apiClient';
+import { apiStudents, apiTransport } from '@/lib/apiClient';
 // FIELD_TO_DB: maps camelCase Student fields → DB column names for patch payloads
 import type {
   Student, StudentAcademicRecord, FeeRecord, CreateStudentInput,

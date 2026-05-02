@@ -2,7 +2,7 @@ import React, { useCallback, useEffect, useState } from 'react';
 import { ArrowLeft, Plus, CircleAlert } from 'lucide-react';
 import { studentDashboardService } from '@/modules/students/studentDashboard.service';
 import { StudentComplaint } from '@/shared/types/student.types';
-import { useUIStore } from '@/shared/store/uiStore';
+import { useUIStore } from '@/store/uiStore';
 import { useRealtimeTable } from '@/shared/hooks/useRealtimeTable';
 
 type View = 'LIST' | 'CREATE';

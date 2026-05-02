@@ -1,15 +1,15 @@
 import React, { useEffect, useState } from 'react';
 import { ArrowLeft, Plus, Trash2, ChevronDown, ChevronUp, Save, QrCode, CreditCard, CheckCircle2, Lock, Eye, EyeOff, ShieldCheck, IndianRupee, Edit2, Building2, BookOpen, ChevronRight, X, Download, Database, History, ShieldOff, Unlock } from 'lucide-react';
-import { supabase } from '@/shared/lib/supabase';
+import { supabase } from '@/lib/supabase';
 import { principalService } from '@/shared/services/principal.service';
 import { AcademicYearConfig, ClassConfig } from '@/shared/types/principal.types';
-import { useUIStore } from '@/shared/store/uiStore';
+import { useUIStore } from '@/store/uiStore';
 import { authService } from '@/shared/services/auth.service';
-import { useAuthStore } from '@/shared/store/authStore';
+import { useAuthStore } from '@/store/authStore';
 import { schoolInfoService, SchoolInfo } from '@/shared/services/schoolInfo.service';
 import { FeeStructureForm, FeeStructureItem } from '@/modules/fees/components/FeeStructureForm';
 import { AuditLogsViewer } from '@/roles/principal/components/AuditLogsViewer';
-import { useEditorModeStore } from '@/shared/store/editorModeStore';
+import { useEditorModeStore } from '@/store/editorModeStore';
 import { useAcademicYear } from '@/shared/context/AcademicYearContext';
 
 type View = 'MENU' | 'SCHOOL_INFO' | 'CLASSES' | 'FEE_STRUCT' | 'FEE_STRUCT_EDIT' | 'PAYMENTS' | 'SECURITY' | 'DATA_EXPORT' | 'ACTIVITY_LOG';

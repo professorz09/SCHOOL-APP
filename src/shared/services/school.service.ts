@@ -2,9 +2,9 @@
 // Writes (create / soft-delete) flow through /api/admin/* because they need
 // the service-role key to mint principal Auth accounts.
 
-import { supabase } from '@/shared/lib/supabase';
-import { adminApi } from '@/shared/lib/adminApi';
-import { logAudit } from '@/shared/lib/audit';
+import { supabase } from '@/lib/supabase';
+import { adminApi } from '@/lib/adminApi';
+import { logAudit } from '@/lib/audit';
 import {
   School,
   CreateSchoolInput,

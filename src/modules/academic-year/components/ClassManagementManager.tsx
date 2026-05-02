@@ -7,7 +7,7 @@ import { staffService } from '@/modules/staff/staff.service';
 import { studentService } from '@/modules/students/student.service';
 import { principalService } from '@/shared/services/principal.service';
 import { StaffMember, ClassPermission, Student } from '@/shared/types/principal.types';
-import { useUIStore } from '@/shared/store/uiStore';
+import { useUIStore } from '@/store/uiStore';
 
 interface SectionInfo {
   section: string;

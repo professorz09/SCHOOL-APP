@@ -4,10 +4,10 @@ import {
   Sparkles, Plus, Power, Edit3, FileWarning, History,
 } from 'lucide-react';
 import { useAcademicYear } from '@/shared/context/AcademicYearContext';
-import { useUIStore } from '@/shared/store/uiStore';
+import { useUIStore } from '@/store/uiStore';
 import { yearClosingService } from '@/modules/academic-year/yearClosing.service';
-import { useCorrectionStore } from '@/shared/store/correctionStore';
-import { useEditingYearStore } from '@/shared/store/editingYearStore';
+import { useCorrectionStore } from '@/store/correctionStore';
+import { useEditingYearStore } from '@/store/editingYearStore';
 import type { PreClosingChecklist } from '@/shared/types/yearClosing.types';
 import { AcademicYearWizard } from '@/modules/academic-year/components/AcademicYearWizard';
 import { PromotionWizard } from '@/modules/academic-year/components/PromotionWizard';

@@ -4,7 +4,7 @@ import { staffService } from '@/modules/staff/staff.service';
 import {
   SalaryReminderRow, SalaryPaymentMethod,
 } from '@/shared/types/principal.types';
-import { useUIStore } from '@/shared/store/uiStore';
+import { useUIStore } from '@/store/uiStore';
 import { PrincipalView } from '@/roles/principal/pages/PrincipalLayout';
 
 const monthLabel = (d: Date) =>

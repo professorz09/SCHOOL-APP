@@ -6,11 +6,11 @@
 //
 // Driver dropdown filters staff WHERE role='DRIVER' & is_active=true.
 
-import { supabase } from '@/shared/lib/supabase';
-import { useAuthStore } from '@/shared/store/authStore';
-import { logAudit } from '@/shared/lib/audit';
-import { registerCacheResetter } from '@/shared/lib/cacheBus';
-import { apiTransport } from '@/shared/lib/apiClient';
+import { supabase } from '@/lib/supabase';
+import { useAuthStore } from '@/store/authStore';
+import { logAudit } from '@/lib/audit';
+import { registerCacheResetter } from '@/lib/cacheBus';
+import { apiTransport } from '@/lib/apiClient';
 // NOTE: All writes go through /api/transport/* — no direct supabase writes below vehicle/stop CRUD
 
 const calculateDistance = (lat1: number, lng1: number, lat2: number, lng2: number): number => {

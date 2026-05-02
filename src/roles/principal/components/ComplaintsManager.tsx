@@ -2,7 +2,7 @@ import React, { useCallback, useEffect, useState } from 'react';
 import { ArrowLeft, CircleAlert, XCircle } from 'lucide-react';
 import { principalService } from '@/shared/services/principal.service';
 import { Complaint, ComplaintStatus } from '@/shared/types/principal.types';
-import { useUIStore } from '@/shared/store/uiStore';
+import { useUIStore } from '@/store/uiStore';
 import { useRealtimeTable } from '@/shared/hooks/useRealtimeTable';
 
 type Filter = 'ALL' | ComplaintStatus;

@@ -1,7 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import { ArrowLeft, MailPlus, Send, History, Trash2, Users, School, BookOpen, GraduationCap } from 'lucide-react';
-import { useBroadcastStore } from '@/shared/store/broadcastStore';
-import { useUIStore } from '@/shared/store/uiStore';
+import { useBroadcastStore } from '@/store/broadcastStore';
+import { useUIStore } from '@/store/uiStore';
 import { BroadcastAudience } from '@/shared/config/constants';
 import { Broadcast } from '@/shared/types/broadcast.types';
 

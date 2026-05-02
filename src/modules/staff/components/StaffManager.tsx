@@ -9,7 +9,7 @@ import {
   StaffMember, StaffRole, StaffStatus, SalaryPaymentMethod,
   StaffSalaryHistoryEntry, StaffStatusHistoryEntry, StaffDocument, SalaryPayment,
 } from '@/shared/types/principal.types';
-import { useUIStore } from '@/shared/store/uiStore';
+import { useUIStore } from '@/store/uiStore';
 
 type View = 'LIST' | 'CREATE' | 'PROFILE' | 'EDIT';
 type Tab = 'INFO' | 'SALARY' | 'ATTENDANCE' | 'CLASSES' | 'DOCS' | 'LOG';

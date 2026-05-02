@@ -1,7 +1,7 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { ArrowLeft, Clock, MapPin, BookOpen } from 'lucide-react';
 import { teacherService } from '@/roles/teacher/teacher.service';
-import { useAuthStore } from '@/shared/store/authStore';
+import { useAuthStore } from '@/store/authStore';
 
 interface Props { onBack: () => void; }
 

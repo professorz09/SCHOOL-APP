@@ -4,8 +4,8 @@
 //
 //     <school_id>/<staff_id>/<doc_type>/<timestamp>-<safe_filename>
 
-import { supabase } from '@/shared/lib/supabase';
-import { useAuthStore } from '@/shared/store/authStore';
+import { supabase } from '@/lib/supabase';
+import { useAuthStore } from '@/store/authStore';
 
 export const STAFF_DOCS_BUCKET = 'staff-documents';
 

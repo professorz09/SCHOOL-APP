@@ -1,7 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import { ArrowLeft, BookOpen, Clock, CheckCircle2, AlertCircle, Calendar, User, ChevronDown, ChevronUp, Loader } from 'lucide-react';
 import { studentDashboardService, HomeworkItem } from '@/modules/students/studentDashboard.service';
-import { useUIStore } from '@/shared/store/uiStore';
+import { useUIStore } from '@/store/uiStore';
 
 const SUBJ_ICON: Record<string, string> = {
   Mathematics: '📐', Science: '🔬', English: '📖',

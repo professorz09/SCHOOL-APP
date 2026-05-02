@@ -1,7 +1,7 @@
 import React, { useState } from 'react';
 import { Phone, Lock, Eye, EyeOff, AlertCircle, Loader } from 'lucide-react';
 import { authService } from '@/shared/services/auth.service';
-import { useAuthStore } from '@/shared/store/authStore';
+import { useAuthStore } from '@/store/authStore';
 
 export const LoginPage: React.FC = () => {
   const setSession = useAuthStore((s) => s.setSession);

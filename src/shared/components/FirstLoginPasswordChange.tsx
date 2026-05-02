@@ -1,8 +1,8 @@
 import React, { useState } from 'react';
 import { Lock, Eye, EyeOff, AlertCircle, ShieldCheck, Loader } from 'lucide-react';
 import { authService } from '@/shared/services/auth.service';
-import { useAuthStore } from '@/shared/store/authStore';
-import { useUIStore } from '@/shared/store/uiStore';
+import { useAuthStore } from '@/store/authStore';
+import { useUIStore } from '@/store/uiStore';
 
 export const FirstLoginPasswordChange: React.FC = () => {
   const { session, setSession, logout } = useAuthStore();

@@ -1,7 +1,7 @@
 import React, { useEffect } from 'react';
 import { ArrowLeft, TrendingUp, Users, Activity, IndianRupee, Building2, Award } from 'lucide-react';
-import { useSchoolStore } from '@/shared/store/schoolStore';
-import { useBillingStore } from '@/shared/store/billingStore';
+import { useSchoolStore } from '@/store/schoolStore';
+import { useBillingStore } from '@/store/billingStore';
 import { SchoolStatus, BillingPlan, PLAN_COLORS } from '@/shared/config/constants';
 
 interface Props {

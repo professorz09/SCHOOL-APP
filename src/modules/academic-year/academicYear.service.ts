@@ -1,4 +1,4 @@
-import { apiAcademicYear } from '@/shared/lib/apiClient';
+import { apiAcademicYear } from '@/lib/apiClient';
 
 export interface WizardSection {
   className: string;

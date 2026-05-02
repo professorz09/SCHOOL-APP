@@ -4,9 +4,9 @@ import {
 } from 'lucide-react';
 import { principalService, StaffAttendanceRow, StaffAttendanceStatus }
   from '@/shared/services/principal.service';
-import { useUIStore } from '@/shared/store/uiStore';
+import { useUIStore } from '@/store/uiStore';
 import { useAcademicYear } from '@/shared/context/AcademicYearContext';
-import { useEditGuard } from '@/shared/store/correctionStore';
+import { useEditGuard } from '@/store/correctionStore';
 
 export type AttendanceStatus = StaffAttendanceStatus;
 

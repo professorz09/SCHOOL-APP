@@ -4,8 +4,8 @@ import {
 } from 'lucide-react';
 import { principalService } from '@/shared/services/principal.service';
 import { Approval } from '@/shared/types/principal.types';
-import { useAuthStore } from '@/shared/store/authStore';
-import { useUIStore } from '@/shared/store/uiStore';
+import { useAuthStore } from '@/store/authStore';
+import { useUIStore } from '@/store/uiStore';
 
 interface Props { onBack: () => void; studentId: string; }
 

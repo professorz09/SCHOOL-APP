@@ -1,8 +1,8 @@
 // Supabase-backed broadcast service. Reach count is derived from the
 // active-user counts at send time and cached on the broadcast row.
 
-import { supabase } from '@/shared/lib/supabase';
-import { logAudit } from '@/shared/lib/audit';
+import { supabase } from '@/lib/supabase';
+import { logAudit } from '@/lib/audit';
 import { Broadcast, CreateBroadcastInput, BroadcastStatus } from '@/shared/types/broadcast.types';
 import { BroadcastAudience } from '@/shared/config/constants';
 

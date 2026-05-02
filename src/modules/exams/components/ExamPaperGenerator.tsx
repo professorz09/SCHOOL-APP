@@ -2,7 +2,7 @@ import React, { useEffect, useState } from 'react';
 import { ArrowLeft, Sparkles, Download, Loader2, ScrollText, ChevronRight } from 'lucide-react';
 import { teacherService } from '@/roles/teacher/teacher.service';
 import { ExamPaperRequest, GeneratedExamPaper, TestType } from '@/shared/types/teacher.types';
-import { useUIStore } from '@/shared/store/uiStore';
+import { useUIStore } from '@/store/uiStore';
 
 type View = 'FORM' | 'PREVIEW' | 'SAVED';
 

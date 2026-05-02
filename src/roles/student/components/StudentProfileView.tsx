@@ -3,9 +3,9 @@ import {
   ArrowLeft, User, Phone, Mail, MapPin, Calendar, Droplet,
   GraduationCap, IdCard, Lock, LogOut, X, Eye, EyeOff, Fingerprint,
 } from 'lucide-react';
-import { supabase } from '@/shared/lib/supabase';
-import { useAuthStore } from '@/shared/store/authStore';
-import { useUIStore } from '@/shared/store/uiStore';
+import { supabase } from '@/lib/supabase';
+import { useAuthStore } from '@/store/authStore';
+import { useUIStore } from '@/store/uiStore';
 import { authService } from '@/shared/services/auth.service';
 import {
   studentDashboardService, type ActiveStudentContext,

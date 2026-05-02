@@ -6,7 +6,7 @@
 // use logAuditStrict — it surfaces the underlying RPC error so callers can
 // abort the mutation when the audit row could not be written.
 
-import { supabase } from '@/shared/lib/supabase';
+import { supabase } from '@/lib/supabase';
 
 export async function logAudit(
   action: string,

@@ -1,7 +1,7 @@
 import React, { useEffect } from 'react';
 import { Building2, ShieldCheck, IndianRupee, BarChart3, MailPlus, History, AlertCircle, TrendingUp, Users } from 'lucide-react';
-import { useSchoolStore } from '@/shared/store/schoolStore';
-import { useBillingStore } from '@/shared/store/billingStore';
+import { useSchoolStore } from '@/store/schoolStore';
+import { useBillingStore } from '@/store/billingStore';
 import { SchoolStatus } from '@/shared/config/constants';
 
 interface SADashboardProps {

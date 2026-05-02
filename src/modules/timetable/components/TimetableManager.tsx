@@ -3,9 +3,9 @@ import { ArrowLeft, Plus, Trash2, ChevronDown, AlertTriangle, CheckCircle2, Edit
 import {
   timetableService, PERIOD_SLOTS, DAYS, TimetableEntry, TDay, TimetableTeacher,
 } from '@/modules/timetable/timetable.service';
-import { useUIStore } from '@/shared/store/uiStore';
+import { useUIStore } from '@/store/uiStore';
 import { useAcademicYear } from '@/shared/context/AcademicYearContext';
-import { useEditGuard } from '@/shared/store/correctionStore';
+import { useEditGuard } from '@/store/correctionStore';
 
 const CLASSES = ['8-A', '8-B', '9-A', '9-B', '10-A', '10-B'];
 

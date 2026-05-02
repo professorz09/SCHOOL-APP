@@ -5,7 +5,7 @@ import {
 } from 'lucide-react';
 import { teacherService } from '@/roles/teacher/teacher.service';
 import { TeacherClass } from '@/shared/types/teacher.types';
-import { useUIStore } from '@/shared/store/uiStore';
+import { useUIStore } from '@/store/uiStore';
 import type { DateAttendanceStatus } from '@/modules/attendance/attendance.service';
 
 type View = 'CLASSES' | 'CLASS_DETAIL';

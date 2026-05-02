@@ -7,7 +7,7 @@ import { BroadcastManager } from '@/roles/super-admin/components/BroadcastManage
 import { ReportsView } from '@/roles/super-admin/components/ReportsView';
 import { LogsViewer } from '@/roles/super-admin/components/LogsViewer';
 import { ToastContainer } from '@/shared/components/ui/Toast';
-import { useUIStore } from '@/shared/store/uiStore';
+import { useUIStore } from '@/store/uiStore';
 
 type ActiveView = 'dashboard' | 'schools' | 'billing' | 'admins' | 'broadcast' | 'reports' | 'logs';
 

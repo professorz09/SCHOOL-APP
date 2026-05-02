@@ -9,7 +9,7 @@ import {
   FEE_SCREENSHOT_MIME_TYPES,
 } from '@/modules/students/studentDashboard.service';
 import { FeePaymentUpload } from '@/shared/types/student.types';
-import { useUIStore } from '@/shared/store/uiStore';
+import { useUIStore } from '@/store/uiStore';
 import { feeService, FeeInstallment, FeeType, PaymentRecord } from '@/modules/fees/fee.service';
 import { studentService } from '@/modules/students/student.service';
 import { schoolInfoService } from '@/shared/services/schoolInfo.service';

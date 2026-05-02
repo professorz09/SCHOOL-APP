@@ -1,7 +1,7 @@
 // Client wrapper for /api/admin/* endpoints exposed by vite-plugins/admin-api.ts.
 // Always attaches the current Supabase access token.
 
-import { supabase } from '@/shared/lib/supabase';
+import { supabase } from '@/lib/supabase';
 
 async function authedPost<T>(path: string, body: unknown): Promise<T> {
   const { data: { session } } = await supabase.auth.getSession();

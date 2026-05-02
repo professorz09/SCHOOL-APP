@@ -2,8 +2,8 @@ import React, { useEffect, useState, useMemo, useCallback } from 'react';
 import {
   ArrowLeft, IndianRupee, CheckCircle2, AlertCircle, Plus, CreditCard, Clock, CalendarPlus, Settings,
 } from 'lucide-react';
-import { useBillingStore } from '@/shared/store/billingStore';
-import { useUIStore } from '@/shared/store/uiStore';
+import { useBillingStore } from '@/store/billingStore';
+import { useUIStore } from '@/store/uiStore';
 import {
   Payment, SchoolBillingBreakdown, PaymentAllocationPreview,
 } from '@/shared/types/billing.types';

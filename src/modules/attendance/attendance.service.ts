@@ -7,11 +7,11 @@
 // via teacher.service.submitAttendance — this module reads what teachers wrote
 // and lets the principal manage it.
 
-import { supabase } from '@/shared/lib/supabase';
-import { apiAttendance } from '@/shared/lib/apiClient';
-import { useAuthStore } from '@/shared/store/authStore';
-import { useEditingYearStore } from '@/shared/store/editingYearStore';
-import { logAudit } from '@/shared/lib/audit';
+import { supabase } from '@/lib/supabase';
+import { apiAttendance } from '@/lib/apiClient';
+import { useAuthStore } from '@/store/authStore';
+import { useEditingYearStore } from '@/store/editingYearStore';
+import { logAudit } from '@/lib/audit';
 
 export type AttendanceApprovalStatus = 'PENDING' | 'APPROVED' | 'REJECTED';
 export type DateAttendanceStatus = 'NOT_MARKED' | 'PENDING' | 'APPROVED';

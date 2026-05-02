@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { X, ChevronRight, ChevronLeft, Plus, Trash2, CheckCircle2, AlertTriangle, Sparkles } from 'lucide-react';
-import { useUIStore } from '@/shared/store/uiStore';
+import { useUIStore } from '@/store/uiStore';
 import { academicYearService, type WizardSection } from '@/modules/academic-year/academicYear.service';
 import { principalService } from '@/shared/services/principal.service';
 

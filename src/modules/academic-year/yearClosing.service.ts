@@ -10,9 +10,9 @@
 // memory because it represents UI form state during a single principal
 // session, NOT persistent data.
 
-import { supabase } from '@/shared/lib/supabase';
-import { apiAcademicYear } from '@/shared/lib/apiClient';
-import { logAudit } from '@/shared/lib/audit';
+import { supabase } from '@/lib/supabase';
+import { apiAcademicYear } from '@/lib/apiClient';
+import { logAudit } from '@/lib/audit';
 import type {
   StreamDefinition,
   StreamName,

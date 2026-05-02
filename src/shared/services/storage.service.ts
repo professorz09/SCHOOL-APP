@@ -7,8 +7,8 @@
 // and student from these path segments without joining back through
 // `student_documents`.
 
-import { supabase } from '@/shared/lib/supabase';
-import { useAuthStore } from '@/shared/store/authStore';
+import { supabase } from '@/lib/supabase';
+import { useAuthStore } from '@/store/authStore';
 import type { StudentDoc } from '@/shared/types/principal.types';
 
 export const STUDENT_DOCS_BUCKET = 'student-documents';

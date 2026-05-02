@@ -4,9 +4,9 @@ import { studentService } from '@/modules/students/student.service';
 import { principalService, FeeStructureRecord } from '@/shared/services/principal.service';
 import { transportService, TransportVehicle } from '@/modules/transport/transport.service';
 import { Student } from '@/shared/types/principal.types';
-import { useUIStore } from '@/shared/store/uiStore';
+import { useUIStore } from '@/store/uiStore';
 import { useAcademicYear } from '@/shared/context/AcademicYearContext';
-import { apiAcademicYear } from '@/shared/lib/apiClient';
+import { apiAcademicYear } from '@/lib/apiClient';
 
 const CLASS_OPTIONS = [
   'Nursery','LKG','UKG',

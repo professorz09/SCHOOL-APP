@@ -7,9 +7,9 @@ import {
 import { studentService } from '@/modules/students/student.service';
 import { Student } from '@/shared/types/principal.types';
 import { sharedAttendance, SharedAttendanceRecord, AttendanceStudentRecord } from '@/modules/attendance/attendance.service';
-import { useUIStore } from '@/shared/store/uiStore';
+import { useUIStore } from '@/store/uiStore';
 import { useAcademicYear } from '@/shared/context/AcademicYearContext';
-import { useEditGuard } from '@/shared/store/correctionStore';
+import { useEditGuard } from '@/store/correctionStore';
 
 interface Props { onBack: () => void; }
 

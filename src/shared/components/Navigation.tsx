@@ -5,7 +5,7 @@ import {
   LayoutDashboard, LogOut,
 } from 'lucide-react';
 import { AppRole, NavTab } from '@/shared/types/index';
-import { useAuthStore } from '@/shared/store/authStore';
+import { useAuthStore } from '@/store/authStore';
 
 // ─── Role-specific tab definitions ───────────────────────────────────────────
 

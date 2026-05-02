@@ -7,13 +7,13 @@
 //   - inactive teacher
 //   - timetable for closed academic year (write blocked)
 
-import { supabase } from '@/shared/lib/supabase';
-import { apiTimetable } from '@/shared/lib/apiClient';
-import { useAuthStore } from '@/shared/store/authStore';
-import { useCorrectionStore } from '@/shared/store/correctionStore';
-import { useEditingYearStore } from '@/shared/store/editingYearStore';
-import { logAudit } from '@/shared/lib/audit';
-import { registerCacheResetter } from '@/shared/lib/cacheBus';
+import { supabase } from '@/lib/supabase';
+import { apiTimetable } from '@/lib/apiClient';
+import { useAuthStore } from '@/store/authStore';
+import { useCorrectionStore } from '@/store/correctionStore';
+import { useEditingYearStore } from '@/store/editingYearStore';
+import { logAudit } from '@/lib/audit';
+import { registerCacheResetter } from '@/lib/cacheBus';
 
 export type TDay = 'Monday' | 'Tuesday' | 'Wednesday' | 'Thursday' | 'Friday' | 'Saturday' | 'Sunday';
 export type SlotType = 'CLASS' | 'BREAK' | 'LUNCH' | 'ASSEMBLY' | 'FREE';

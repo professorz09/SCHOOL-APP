@@ -1,8 +1,8 @@
 // Supabase-backed admin service. Manages SUPER_ADMIN + PRINCIPAL accounts.
 // Mutations that need a fresh auth.users row go through /api/admin/*.
 
-import { supabase } from '@/shared/lib/supabase';
-import { adminApi } from '@/shared/lib/adminApi';
+import { supabase } from '@/lib/supabase';
+import { adminApi } from '@/lib/adminApi';
 import { AdminUser, CreateAdminInput, AdminRole, AdminStatus } from '@/shared/types/admin.types';
 
 interface UserRow {

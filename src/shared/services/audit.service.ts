@@ -10,8 +10,8 @@
 // compliance review: student edits, class assignment, TC/readmission,
 // staff attendance, fee structure, fee payment, year close + correction.
 
-import { supabase } from '@/shared/lib/supabase';
-import { useAuthStore } from '@/shared/store/authStore';
+import { supabase } from '@/lib/supabase';
+import { useAuthStore } from '@/store/authStore';
 
 function getSchoolId(): string {
   const id = useAuthStore.getState().session?.schoolId;

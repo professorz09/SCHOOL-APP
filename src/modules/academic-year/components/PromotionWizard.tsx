@@ -4,8 +4,8 @@ import {
   ChevronDown, ChevronUp, GraduationCap,
 } from 'lucide-react';
 import { useAcademicYear } from '@/shared/context/AcademicYearContext';
-import { useUIStore } from '@/shared/store/uiStore';
-import { apiPromotion } from '@/shared/lib/apiClient';
+import { useUIStore } from '@/store/uiStore';
+import { apiPromotion } from '@/lib/apiClient';
 
 interface StudentPromotion {
   studentId: string;

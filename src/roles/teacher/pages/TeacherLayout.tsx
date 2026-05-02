@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { ToastContainer } from '@/shared/components/ui/Toast';
-import { useUIStore } from '@/shared/store/uiStore';
+import { useUIStore } from '@/store/uiStore';
 import {
   FileCheck2, ClipboardList, ScrollText, CircleAlert,
   Bell, CalendarDays, Clock, MapPin,
@@ -12,7 +12,7 @@ import { ExamPaperGeneratorView } from '@/modules/exams/components/ExamPaperGene
 import { TeacherComplaintsView } from '@/roles/teacher/components/TeacherComplaints';
 import { TeacherNoticesView } from '@/modules/notices/components/TeacherNoticesView';
 import { TeacherTimetableView } from '@/modules/timetable/components/TeacherTimetableView';
-import { useAuthStore } from '@/shared/store/authStore';
+import { useAuthStore } from '@/store/authStore';
 import { TeacherClass } from '@/shared/types/teacher.types';
 
 type TeacherView = 'DASHBOARD' | 'ATTENDANCE' | 'TESTS' | 'EXAM_GEN' | 'COMPLAINTS' | 'NOTICES' | 'TIMETABLE';

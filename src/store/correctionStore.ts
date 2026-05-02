@@ -12,7 +12,7 @@
 // demand from audit_logs by AcademicYearManager.
 
 import { create } from 'zustand';
-import { logAuditStrict } from '@/shared/lib/audit';
+import { logAuditStrict } from '@/lib/audit';
 
 interface State {
   enabledByYear: Record<string, boolean>;

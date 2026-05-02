@@ -2,7 +2,7 @@ import React, { useEffect, useState } from 'react';
 import { ArrowLeft, Clock, MapPin } from 'lucide-react';
 import { studentDashboardService } from '@/modules/students/studentDashboard.service';
 import { TimetableDay, TimetablePeriod, PeriodType } from '@/shared/types/student.types';
-import { useUIStore } from '@/shared/store/uiStore';
+import { useUIStore } from '@/store/uiStore';
 
 interface Props { onBack: () => void; }
 

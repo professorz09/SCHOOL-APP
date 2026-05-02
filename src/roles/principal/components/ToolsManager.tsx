@@ -10,9 +10,9 @@ import { schoolInfoService, type SchoolInfo } from '@/shared/services/schoolInfo
 import { AdmissionFormPrint } from '@/shared/components/AdmissionFormPrint';
 import { teacherService } from '@/roles/teacher/teacher.service';
 import type { GeneratedExamPaper } from '@/shared/types/teacher.types';
-import { isGeminiConfigured, GeminiUnavailableError } from '@/shared/lib/gemini';
-import { useUIStore } from '@/shared/store/uiStore';
-import { apiExams } from '@/shared/lib/apiClient';
+import { isGeminiConfigured, GeminiUnavailableError } from '@/lib/gemini';
+import { useUIStore } from '@/store/uiStore';
+import { apiExams } from '@/lib/apiClient';
 
 type ToolView = 'DASHBOARD' | 'PAPERS' | 'TC' | 'IDCARD' | 'MARKSHEET' | 'ADMIT' | 'BONAFIDE' | 'ADMISSION';
 

@@ -1,5 +1,5 @@
 import { useEffect, useRef } from 'react';
-import { supabase } from '@/shared/lib/supabase';
+import { supabase } from '@/lib/supabase';
 
 /**
  * Subscribe to Postgres changes on `table` and call `onRefresh` on any

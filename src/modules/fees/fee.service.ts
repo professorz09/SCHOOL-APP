@@ -6,11 +6,11 @@
 // FeeLedger / FeesView synchronous accessor pattern keeps working — components
 // only need to call `await refreshAll()` once on mount and after any write.
 
-import { supabase } from '@/shared/lib/supabase';
-import { useAuthStore } from '@/shared/store/authStore';
-import { logAudit } from '@/shared/lib/audit';
-import { registerCacheResetter } from '@/shared/lib/cacheBus';
-import { apiFees } from '@/shared/lib/apiClient';
+import { supabase } from '@/lib/supabase';
+import { useAuthStore } from '@/store/authStore';
+import { logAudit } from '@/lib/audit';
+import { registerCacheResetter } from '@/lib/cacheBus';
+import { apiFees } from '@/lib/apiClient';
 // NOTE: All writes go through /api/fees/* — writeOffFee migrated to server
 
 // ─── Types ────────────────────────────────────────────────────────────────────

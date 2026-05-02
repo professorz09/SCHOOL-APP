@@ -1,6 +1,6 @@
-import { supabase } from '@/shared/lib/supabase';
-import { useAuthStore } from '@/shared/store/authStore';
-import { logAudit } from '@/shared/lib/audit';
+import { supabase } from '@/lib/supabase';
+import { useAuthStore } from '@/store/authStore';
+import { logAudit } from '@/lib/audit';
 
 export interface SchoolInfo {
   name: string;

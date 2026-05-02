@@ -1,7 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import { ArrowLeft, CheckCircle2, XCircle, MinusCircle, TrendingUp } from 'lucide-react';
 import { studentDashboardService, AttendanceWeekDay, AttendanceMonth } from '@/modules/students/studentDashboard.service';
-import { useUIStore } from '@/shared/store/uiStore';
+import { useUIStore } from '@/store/uiStore';
 
 type DayStatus = AttendanceWeekDay['status'];
 
