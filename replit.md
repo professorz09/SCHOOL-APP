@@ -40,7 +40,7 @@ A school management application with React frontend and Supabase (Postgres + Aut
   - `server/routes/settings.ts` — GET/PUT /api/settings
 - **Frontend API client** (`src/shared/lib/apiClient.ts`):
   - `apiAuth` — login (unauthenticated fetch → `supabase.auth.setSession()`), logout, me, changePassword
-  - `apiStudents` — list, getById, create, assign, deactivate, update, changeRequest, classMovement, fail, issueTC, readmit
+  - `apiStudents` — list, getById, create, assign, deactivate, update, changeRequest, classMovement, fail, issueTC, readmit, getAcademicHistory
   - `apiFees` — pay, govtPay, writeoff, createStructure, generateSchedule, getStudentFees, getStructures
   - `apiTransport` — assign, remove, getVehicles, getStudentAssignments, addVehicle, updateVehicle, deactivateVehicle, addStop, updateStop, removeStop
   - `apiStaff` — create, update, deactivate, paySalary, updateSalary, relieve

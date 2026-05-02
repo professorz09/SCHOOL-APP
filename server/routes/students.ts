@@ -38,6 +38,28 @@ studentsRouter.get('/', requireAuth, requireRole('PRINCIPAL', 'TEACHER'), async 
   } catch (err) { fail(res, err); }
 });
 
+// GET /api/students/:id/academic-history — all yearly records for a student across all years
+studentsRouter.get('/:id/academic-history', requireAuth, requireRole('PRINCIPAL', 'TEACHER'), async (req, res) => {
+  try {
+    const { data, error } = await adminDb
+      .from('student_academic_records')
+      .select(`
+        id, class_name, section, roll_no, status, fee_status,
+        total_fee, paid_fee, academic_year_id,
+        academic_years!inner(id, name, start_date, end_date, school_id)
+      `)
+      .eq('student_id', req.params.id)
+      .eq('academic_years.school_id', req.user.school_id!);
+    if (error) throw new ApiError(500, error.message);
+    const sorted = (data ?? []).sort((a: any, b: any) => {
+      const ad = (a.academic_years as any)?.start_date ?? '';
+      const bd = (b.academic_years as any)?.start_date ?? '';
+      return bd.localeCompare(ad);
+    });
+    ok(res, sorted);
+  } catch (err) { fail(res, err); }
+});
+
 // GET /api/students/:id
 studentsRouter.get('/:id', requireAuth, requireRole('PRINCIPAL', 'TEACHER', 'PARENT', 'STUDENT'), async (req, res) => {
   try {

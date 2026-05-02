@@ -9,6 +9,7 @@ import {
   Lock, Edit2, History,
 } from 'lucide-react';
 import { studentService } from '@/modules/students/student.service';
+import { apiStudents } from '@/shared/lib/apiClient';
 import { Student, CreateStudentInput, StudentAcademicRecord, STREAMS, STREAM_CLASSES, StudentStream, StudentDoc } from '@/shared/types/principal.types';
 import { PaymentStatus, PAYMENT_COLORS } from '@/shared/config/constants';
 import { useUIStore } from '@/shared/store/uiStore';
@@ -42,7 +43,13 @@ const ARCHIVE_TABS: Array<{ key: ArchiveTab; label: string; icon: React.Componen
 
 interface Props { onBack: () => void; initialView?: MainView; }
 
-const CLASS_OPTIONS = ['Class 1','Class 2','Class 3','Class 4','Class 5','Class 6','Class 7','Class 8','Class 9','Class 10','Class 11','Class 12'];
+const CLASS_OPTIONS = [
+  'Nursery','LKG','UKG',
+  'Class 1','Class 2','Class 3','Class 4','Class 5',
+  'Class 6','Class 7','Class 8','Class 9','Class 10',
+  '11th Science','11th Commerce','11th Arts','11th Maths',
+  '12th Science','12th Commerce','12th Arts','12th Maths',
+];
 const BLOOD_GROUPS = ['A+','A-','B+','B-','O+','O-','AB+','AB-'];
 
 // Class/section/stream/totalFee deliberately blank — the new admission
@@ -97,10 +104,19 @@ export const StudentsManager: React.FC<Props> = ({ onBack, initialView }) => {
   const [studentFeeStructure, setStudentFeeStructure] = useState<FeeStructureRecord | null>(null);
   const [feePaymentHistory, setFeePaymentHistory] = useState<import('@/modules/fees/fee.service').PaymentRecord[]>([]);
   const [academicRecord, setAcademicRecord] = useState<StudentAcademicRecord | null>(null);
-  const [activeProfileTab, setActiveProfileTab] = useState<'INFO' | 'ALLOTMENT' | 'FAMILY' | 'RESULTS' | 'FEES' | 'DOCS'>('INFO');
+  const [activeProfileTab, setActiveProfileTab] = useState<'INFO' | 'ALLOTMENT' | 'FAMILY' | 'RESULTS' | 'FEES' | 'DOCS' | 'CLASS_HISTORY'>('INFO');
   const [studentTransport, setStudentTransport] = useState<{ vehicle: TransportVehicle; assignment: StudentTransportAssignment } | null>(null);
   const [studentTransportHistory, setStudentTransportHistory] = useState<StudentTransportAssignment[]>([]);
   const [transportHistoryError, setTransportHistoryError] = useState<string | null>(null);
+
+  interface AcademicHistoryEntry {
+    id: string; class_name: string; section: string | null; roll_no: string | null;
+    status: string; fee_status: string; total_fee: number; paid_fee: number;
+    academic_year_id: string;
+    academic_years: { id: string; name: string; start_date: string; end_date: string };
+  }
+  const [classHistory, setClassHistory] = useState<AcademicHistoryEntry[]>([]);
+  const [classHistoryLoading, setClassHistoryLoading] = useState(false);
 
   // Change-transport modal
   const [changeModalOpen, setChangeModalOpen] = useState(false);
@@ -257,6 +273,17 @@ export const StudentsManager: React.FC<Props> = ({ onBack, initialView }) => {
       ...d,
       uploaded: docs.some(x => x.type === d.type),
     })));
+
+    // Load full academic history across all years for CLASS_HISTORY tab
+    setClassHistoryLoading(true);
+    try {
+      const history = await apiStudents.getAcademicHistory(student.id);
+      setClassHistory(history as any[]);
+    } catch {
+      setClassHistory([]);
+    } finally {
+      setClassHistoryLoading(false);
+    }
   };
 
   const handleCreate = async () => {
@@ -1354,12 +1381,13 @@ export const StudentsManager: React.FC<Props> = ({ onBack, initialView }) => {
     );
 
     const tabList = [
-      { key: 'INFO' as const,       label: 'Info' },
-      { key: 'ALLOTMENT' as const,  label: 'Allotment' },
-      { key: 'FAMILY' as const,     label: 'Family' },
-      { key: 'RESULTS' as const,    label: 'Results' },
-      { key: 'FEES' as const,       label: 'Fees' },
-      { key: 'DOCS' as const,       label: 'Docs' },
+      { key: 'INFO' as const,          label: 'Info' },
+      { key: 'ALLOTMENT' as const,     label: 'Allotment' },
+      { key: 'FAMILY' as const,        label: 'Family' },
+      { key: 'RESULTS' as const,       label: 'Results' },
+      { key: 'FEES' as const,          label: 'Fees' },
+      { key: 'CLASS_HISTORY' as const, label: 'History' },
+      { key: 'DOCS' as const,          label: 'Docs' },
     ];
 
     return (
@@ -1975,6 +2003,129 @@ export const StudentsManager: React.FC<Props> = ({ onBack, initialView }) => {
                 </>
               );
             })()}
+
+            {/* ── CLASS HISTORY TAB ─────────────────────── */}
+            {activeProfileTab === 'CLASS_HISTORY' && (
+              <>
+                <div className="bg-white rounded-2xl border border-slate-100 shadow-sm p-4">
+                  <SectionTitle icon={History} title="Academic Year History" />
+                  {classHistoryLoading ? (
+                    <div className="flex flex-col items-center py-8 text-slate-400">
+                      <div className="w-6 h-6 border-4 border-slate-200 border-t-indigo-500 rounded-full animate-spin" />
+                      <p className="font-bold text-xs mt-3">Loading history…</p>
+                    </div>
+                  ) : classHistory.length === 0 ? (
+                    <div className="flex flex-col items-center py-8 text-slate-400">
+                      <BookOpen size={28} className="mb-2 opacity-40" />
+                      <p className="font-bold text-sm">No academic history</p>
+                      <p className="text-xs font-bold mt-1 opacity-60">Records will appear once the student is assigned to a class</p>
+                    </div>
+                  ) : (
+                    <div className="relative">
+                      {/* Vertical timeline line */}
+                      <div className="absolute left-4 top-2 bottom-2 w-0.5 bg-slate-100" />
+                      <div className="space-y-3">
+                        {classHistory.map((entry, idx) => {
+                          const isCurrentYear = entry.academic_year_id === activeYear?.id;
+                          const due = Math.max(0, (entry.total_fee ?? 0) - (entry.paid_fee ?? 0));
+                          const pct = (entry.total_fee ?? 0) > 0
+                            ? Math.round(((entry.paid_fee ?? 0) / (entry.total_fee ?? 0)) * 100)
+                            : 0;
+                          const statusColor =
+                            entry.status === 'ACTIVE' ? 'bg-emerald-500' :
+                            entry.status === 'PASSED' ? 'bg-indigo-500' :
+                            entry.status === 'FAILED' ? 'bg-rose-500' : 'bg-slate-400';
+                          const feeColor =
+                            entry.fee_status === 'PAID' ? 'text-emerald-600' :
+                            entry.fee_status === 'PARTIAL' ? 'text-amber-600' : 'text-rose-600';
+                          return (
+                            <div key={entry.id} className="relative flex gap-4 pl-8">
+                              {/* Timeline dot */}
+                              <div className={`absolute left-2.5 top-3 w-3 h-3 rounded-full border-2 border-white shadow ${
+                                isCurrentYear ? 'bg-indigo-600 ring-2 ring-indigo-200' : statusColor
+                              }`} />
+                              <div className={`flex-1 rounded-2xl border p-4 ${
+                                isCurrentYear
+                                  ? 'bg-indigo-50 border-indigo-200'
+                                  : idx === 0 && !isCurrentYear
+                                    ? 'bg-slate-50 border-slate-200'
+                                    : 'bg-white border-slate-100'
+                              }`}>
+                                {/* Year badge + status */}
+                                <div className="flex items-center justify-between mb-2">
+                                  <div className="flex items-center gap-2">
+                                    <span className={`text-[10px] font-black px-2 py-0.5 rounded-full ${
+                                      isCurrentYear ? 'bg-indigo-600 text-white' : 'bg-slate-200 text-slate-600'
+                                    }`}>
+                                      {(entry.academic_years as any)?.name ?? 'Unknown Year'}
+                                    </span>
+                                    {isCurrentYear && (
+                                      <span className="text-[9px] font-black text-indigo-500 uppercase tracking-widest">Current</span>
+                                    )}
+                                  </div>
+                                  <span className={`text-[9px] font-black px-2 py-0.5 rounded-full uppercase ${
+                                    entry.status === 'ACTIVE' ? 'bg-emerald-100 text-emerald-700' :
+                                    entry.status === 'PASSED' ? 'bg-indigo-100 text-indigo-700' :
+                                    entry.status === 'FAILED' ? 'bg-rose-100 text-rose-700' :
+                                    'bg-slate-100 text-slate-500'
+                                  }`}>
+                                    {entry.status}
+                                  </span>
+                                </div>
+
+                                {/* Class / Section / Roll */}
+                                <div className="grid grid-cols-3 gap-2 mb-3">
+                                  <div className="bg-white rounded-xl p-2 text-center border border-slate-100">
+                                    <div className="text-sm font-black text-slate-800 leading-tight">
+                                      {entry.class_name?.replace('Class ', '') ?? '—'}
+                                    </div>
+                                    <div className="text-[9px] font-bold text-slate-400 mt-0.5">Class</div>
+                                  </div>
+                                  <div className="bg-white rounded-xl p-2 text-center border border-slate-100">
+                                    <div className="text-sm font-black text-slate-800">{entry.section ?? '—'}</div>
+                                    <div className="text-[9px] font-bold text-slate-400 mt-0.5">Section</div>
+                                  </div>
+                                  <div className="bg-white rounded-xl p-2 text-center border border-slate-100">
+                                    <div className="text-sm font-black text-slate-800">{entry.roll_no ?? '—'}</div>
+                                    <div className="text-[9px] font-bold text-slate-400 mt-0.5">Roll</div>
+                                  </div>
+                                </div>
+
+                                {/* Fee summary */}
+                                {(entry.total_fee ?? 0) > 0 && (
+                                  <div className="bg-white rounded-xl border border-slate-100 px-3 py-2">
+                                    <div className="flex items-center justify-between mb-1.5">
+                                      <span className="text-[10px] font-black text-slate-500 uppercase tracking-wider">Fee</span>
+                                      <span className={`text-[9px] font-black uppercase px-2 py-0.5 rounded-full ${
+                                        entry.fee_status === 'PAID' ? 'bg-emerald-100 text-emerald-700' :
+                                        entry.fee_status === 'PARTIAL' ? 'bg-amber-100 text-amber-700' :
+                                        'bg-rose-100 text-rose-600'
+                                      }`}>{entry.fee_status}</span>
+                                    </div>
+                                    <div className="flex items-center justify-between text-[11px] font-bold text-slate-600 mb-1.5">
+                                      <span>₹{((entry.paid_fee ?? 0) / 1000).toFixed(1)}K paid</span>
+                                      {due > 0 && <span className="text-rose-600">₹{(due / 1000).toFixed(1)}K due</span>}
+                                    </div>
+                                    <div className="bg-slate-100 rounded-full h-1.5">
+                                      <div className={`h-1.5 rounded-full transition-all ${
+                                        pct === 100 ? 'bg-emerald-500' : pct > 50 ? 'bg-amber-400' : 'bg-rose-400'
+                                      }`} style={{ width: `${pct}%` }} />
+                                    </div>
+                                    <div className="text-right text-[9px] font-black mt-0.5">
+                                      <span className={feeColor}>{pct}%</span>
+                                    </div>
+                                  </div>
+                                )}
+                              </div>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    </div>
+                  )}
+                </div>
+              </>
+            )}
 
             {/* ── DOCS TAB ─────────────────────────────── */}
             {activeProfileTab === 'DOCS' && (
