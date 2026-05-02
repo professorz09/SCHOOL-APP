@@ -15,6 +15,7 @@ import { SettingsManager } from '../components/SettingsManager';
 import { ClassManagementManager } from '../components/ClassManagementManager';
 import { TimetableManager } from '../components/TimetableManager';
 import { FeeLedger } from '../components/FeeLedger';
+import { ErrorBoundary } from '../../../components/ErrorBoundary';
 import { SalaryLedger } from '../components/SalaryLedger';
 import { AcademicYearManager } from '../components/AcademicYearManager';
 import { StaffAttendanceManager } from '../components/StaffAttendanceManager';
@@ -107,7 +108,7 @@ export const PrincipalLayout: React.FC = () => {
   if (view === 'SETTINGS_CLASSES')     return <SettingsManager key="settings-classes"     onBack={goBack} initialView="CLASSES" />;
   if (view === 'CLASS_MGMT')    return <ClassManagementManager onBack={goBack} />;
   if (view === 'TIMETABLE')     return <TimetableManager       onBack={goBack} />;
-  if (view === 'FEE_LEDGER')    return <FeeLedger              onBack={goBack} />;
+  if (view === 'FEE_LEDGER')    return <ErrorBoundary label="Fee Ledger"><FeeLedger onBack={goBack} /></ErrorBoundary>;
   if (view === 'SALARY_LEDGER') return <SalaryLedger           onBack={goBack} />;
   if (view === 'STAFF_ATTENDANCE') return <StaffAttendanceManager onBack={goBack} />;
   if (view === 'ATTENDANCE')       return <AttendanceHub          onBack={goBack} />;

@@ -18,6 +18,7 @@ import { FeesView }            from './features/student/components/FeesView';
 import { StudentNoticesView }  from './features/student/components/StudentNoticesView';
 import { StudentsManager }     from './features/principal/components/StudentsManager';
 import { FeeLedger }           from './features/principal/components/FeeLedger';
+import { ErrorBoundary }       from './components/ErrorBoundary';
 import { SchoolsManager }      from './features/super-admin/components/SchoolsManager';
 import { BillingManager }      from './features/super-admin/components/BillingManager';
 import { AttendanceManager }   from './features/teacher/components/AttendanceManager';
@@ -144,7 +145,7 @@ export default function App() {
     if (tab === 'FEES'    && role === 'STUDENT')    return <FeesView           onBack={goHome} />;
     if (tab === 'NOTICES' && role === 'STUDENT')    return <StudentNoticesView onBack={goHome} />;
     if (tab === 'STUDENTS'    && role === 'PRINCIPAL') return <StudentsManager onBack={goHome} />;
-    if (tab === 'FEE_LEDGER'  && role === 'PRINCIPAL') return <FeeLedger       onBack={goHome} />;
+    if (tab === 'FEE_LEDGER'  && role === 'PRINCIPAL') return <ErrorBoundary label="Fee Ledger"><FeeLedger onBack={goHome} /></ErrorBoundary>;
     if (tab === 'SCHOOLS'  && role === 'SUPER_ADMIN') return <SchoolsManager onBack={goHome} />;
     if (tab === 'BILLING'  && role === 'SUPER_ADMIN') return <BillingManager  onBack={goHome} />;
     if (tab === 'ATTENDANCE' && role === 'TEACHER') return <AttendanceManager  onBack={goHome} />;

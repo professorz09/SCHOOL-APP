@@ -425,6 +425,10 @@ export const FeeLedger: React.FC<Props> = ({ onBack }) => {
     }
   };
 
+  // Reset page when filter/search changes — must be BEFORE any early return
+  // to satisfy React's Rules of Hooks (hook count must be identical every render).
+  useEffect(() => { setShowCount(PAGE_SIZE); }, [search, listTab]);
+
   // ─── Loading ─────────────────────────────────────────────────────────────────
   if (loading) return (
     <div className="w-full bg-slate-50 flex items-center justify-center">
@@ -461,8 +465,6 @@ export const FeeLedger: React.FC<Props> = ({ onBack }) => {
     return true;
   });
 
-  // Reset page when filter/search changes
-  useEffect(() => { setShowCount(PAGE_SIZE); }, [search, listTab]);
   const pagedStudents = visibleStudents.slice(0, showCount);
   const hasMore = showCount < visibleStudents.length;
 
