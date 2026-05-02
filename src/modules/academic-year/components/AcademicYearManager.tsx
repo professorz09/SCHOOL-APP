@@ -10,6 +10,7 @@ import { useCorrectionStore } from '@/shared/store/correctionStore';
 import { useEditingYearStore } from '@/shared/store/editingYearStore';
 import type { PreClosingChecklist } from '@/shared/types/yearClosing.types';
 import { AcademicYearWizard } from '@/modules/academic-year/components/AcademicYearWizard';
+import { PromotionWizard } from '@/modules/academic-year/components/PromotionWizard';
 
 interface Props { onBack: () => void; }
 
@@ -19,6 +20,9 @@ export const AcademicYearManager: React.FC<Props> = ({ onBack }) => {
     setCurrentEditingYear,
   } = useAcademicYear();
   const { showToast } = useUIStore();
+
+  // ─── Promotion wizard state ─────────────────────────────────────────────
+  const [showPromotion, setShowPromotion] = useState(false);
 
   // ─── Wizard state ───────────────────────────────────────────────────────
   const [showWizard, setShowWizard] = useState(false);
@@ -318,6 +322,8 @@ export const AcademicYearManager: React.FC<Props> = ({ onBack }) => {
   ), [academicYears, isYearLocked, enabledByYear, countsByYear, handleToggleCorrection]);
 
   // ─── MAIN page ───────────────────────────────────────────────────────────
+  if (showPromotion) return <PromotionWizard onBack={() => setShowPromotion(false)} />;
+
   return (
     <div className="w-full bg-slate-50 flex flex-col animate-in slide-in-from-right-8 duration-300 min-h-screen">
       <div className="bg-white border-b border-slate-100 px-4 pt-4 pb-4 sticky top-0 z-10 shadow-sm flex items-center gap-3">
@@ -386,13 +392,21 @@ export const AcademicYearManager: React.FC<Props> = ({ onBack }) => {
               </div>
             )}
 
-            {/* ─── Add new year button ──────────────────────────────────── */}
-            <button
-              onClick={() => openWizard()}
-              className="w-full bg-white border-2 border-dashed border-indigo-300 hover:border-indigo-500 text-indigo-600 font-black text-sm rounded-2xl py-3 flex items-center justify-center gap-2"
-            >
-              <Plus size={16} /> Add Academic Year
-            </button>
+            {/* ─── Add new year + Promote Students buttons ─────────────── */}
+            <div className="flex gap-2">
+              <button
+                onClick={() => openWizard()}
+                className="flex-1 bg-white border-2 border-dashed border-indigo-300 hover:border-indigo-500 text-indigo-600 font-black text-sm rounded-2xl py-3 flex items-center justify-center gap-2"
+              >
+                <Plus size={16} /> Add Year
+              </button>
+              <button
+                onClick={() => setShowPromotion(true)}
+                className="flex-1 bg-white border-2 border-dashed border-emerald-300 hover:border-emerald-500 text-emerald-700 font-black text-sm rounded-2xl py-3 flex items-center justify-center gap-2"
+              >
+                <Sparkles size={16} /> Promote Students
+              </button>
+            </div>
 
             {/* ─── Year list ───────────────────────────────────────────── */}
             <div>

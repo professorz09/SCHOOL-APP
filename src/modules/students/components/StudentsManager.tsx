@@ -9,7 +9,7 @@ import {
   Lock, Edit2, History,
 } from 'lucide-react';
 import { studentService } from '@/modules/students/student.service';
-import { apiStudents } from '@/shared/lib/apiClient';
+import { apiStudents, apiFees } from '@/shared/lib/apiClient';
 import { Student, CreateStudentInput, StudentAcademicRecord, STREAMS, STREAM_CLASSES, StudentStream, StudentDoc } from '@/shared/types/principal.types';
 import { PaymentStatus, PAYMENT_COLORS } from '@/shared/config/constants';
 import { useUIStore } from '@/shared/store/uiStore';
@@ -108,6 +108,18 @@ export const StudentsManager: React.FC<Props> = ({ onBack, initialView }) => {
   const [studentTransport, setStudentTransport] = useState<{ vehicle: TransportVehicle; assignment: StudentTransportAssignment } | null>(null);
   const [studentTransportHistory, setStudentTransportHistory] = useState<StudentTransportAssignment[]>([]);
   const [transportHistoryError, setTransportHistoryError] = useState<string | null>(null);
+
+  // Fee payment modal state
+  const [feePayModal, setFeePayModal] = useState<FeeInstallment | null>(null);
+  const [feePayAmount, setFeePayAmount] = useState('');
+  const [feePayMethod, setFeePayMethod] = useState<'CASH' | 'ONLINE' | 'CHEQUE' | 'DD' | 'UPI'>('CASH');
+  const [feePayDate, setFeePayDate] = useState('');
+  const [feePayNote, setFeePayNote] = useState('');
+  const [feePayBusy, setFeePayBusy] = useState(false);
+
+  // FEES main view status filter
+  type FeeStatusFilter = 'ALL' | 'PAID' | 'PARTIAL' | 'UNPAID' | 'OVERDUE';
+  const [feeStatusFilter, setFeeStatusFilter] = useState<FeeStatusFilter>('ALL');
 
   interface AcademicHistoryEntry {
     id: string; class_name: string; section: string | null; roll_no: string | null;
@@ -342,20 +354,45 @@ export const StudentsManager: React.FC<Props> = ({ onBack, initialView }) => {
     }
   };
 
-  const handleMarkFeePaid = async (installment: FeeInstallment) => {
+  const openFeePayModal = (installment: FeeInstallment) => {
     const due = installment.amount - installment.paidAmount - installment.writeOffAmount;
     if (due <= 0) return;
+    setFeePayModal(installment);
+    setFeePayAmount(String(due));
+    setFeePayMethod('CASH');
+    setFeePayDate(new Date().toISOString().split('T')[0]);
+    setFeePayNote('');
+    setFeePayBusy(false);
+  };
+
+  const handleFeePaySubmit = async () => {
+    if (!feePayModal || !selected) return;
+    const amount = parseFloat(feePayAmount);
+    if (!amount || amount <= 0) { showToast('Valid amount required', 'error'); return; }
+    setFeePayBusy(true);
     try {
-      await feeService.refreshAll();
-      await feeService.recordPayment(installment.studentId, due, 'CASH');
+      await apiFees.pay({
+        studentId: feePayModal.studentId,
+        amount,
+        method: feePayMethod,
+        date: feePayDate || undefined,
+        note: feePayNote || undefined,
+      });
       const updated = await feeService.getStudentInstallmentsDirect(
-        installment.studentId,
-        selected?.academicYearId || undefined,
+        feePayModal.studentId,
+        selected.academicYearId || undefined,
       );
       setFeeInstallments(updated);
-      showToast('Payment recorded');
+      await feeService.refreshAll();
+      setFeePaymentHistory(feeService.getPaymentHistory().filter(p => p.studentId === selected.id));
+      setFeePayModal(null);
+      showToast(`₹${amount.toLocaleString('en-IN')} collected successfully`);
+      // Refresh student list to update fee status chips
+      void studentService.getAll().then(setStudents);
     } catch (e) {
       showToast(e instanceof Error ? e.message : 'Payment failed', 'error');
+    } finally {
+      setFeePayBusy(false);
     }
   };
 
@@ -1080,21 +1117,102 @@ export const StudentsManager: React.FC<Props> = ({ onBack, initialView }) => {
   // ─── FEES (Fee Collection) ──────────────────────────────────────────────
 
   if (!renderProfile && mainView === 'FEES') {
-    const filteredFees = students.filter(s =>
-      (classFilter === 'ALL' || s.className === classFilter) &&
-      s.name.toLowerCase().includes(search.toLowerCase())
-    );
+    // School-wide totals from in-memory students list
+    const totalFeeAll  = students.reduce((s, x) => s + x.totalFee, 0);
+    const totalPaidAll = students.reduce((s, x) => s + x.paidFee,  0);
+    const totalDueAll  = Math.max(0, totalFeeAll - totalPaidAll);
+    const countPaid    = students.filter(s => s.feeStatus === 'PAID').length;
+    const countPartial = students.filter(s => s.feeStatus === 'PARTIAL').length;
+    const countUnpaid  = students.filter(s => s.feeStatus === 'UNPAID' || s.feeStatus === 'OVERDUE').length;
+
+    const filteredFees = students.filter(s => {
+      const matchClass  = classFilter === 'ALL' || s.className === classFilter;
+      const matchSearch = s.name.toLowerCase().includes(search.toLowerCase());
+      const matchStatus = feeStatusFilter === 'ALL' || s.feeStatus === feeStatusFilter;
+      return matchClass && matchSearch && matchStatus;
+    });
+
+    const FEE_STATUS_TABS: Array<{ key: 'ALL' | 'PAID' | 'PARTIAL' | 'UNPAID' | 'OVERDUE'; label: string; count: number; color: string }> = [
+      { key: 'ALL',     label: 'All',     count: students.length, color: 'bg-slate-700 text-white' },
+      { key: 'UNPAID',  label: 'Due',     count: countUnpaid,     color: 'bg-rose-600 text-white' },
+      { key: 'PARTIAL', label: 'Partial', count: countPartial,    color: 'bg-amber-500 text-white' },
+      { key: 'PAID',    label: 'Paid',    count: countPaid,       color: 'bg-emerald-600 text-white' },
+    ];
 
     return (
       <div className="w-full bg-slate-50 flex flex-col animate-in slide-in-from-right-8 duration-300">
         {renderHeader('Fee Collection', () => setMainView('MENU'))}
-        <div className="flex-1 overflow-y-auto p-4  space-y-3">
+        <div className="flex-1 overflow-y-auto p-4 space-y-3">
+
+          {/* School-wide fee summary card */}
+          <div className="bg-gradient-to-br from-slate-800 to-slate-900 rounded-2xl p-4 text-white">
+            <p className="text-[9px] font-black uppercase tracking-widest text-white/40 mb-3">
+              {activeYear?.name ?? 'Current Year'} · Fee Overview
+            </p>
+            <div className="grid grid-cols-3 gap-3 text-center mb-4">
+              <div>
+                <div className="text-lg font-black text-white">₹{(totalFeeAll / 1000).toFixed(0)}K</div>
+                <div className="text-[8px] font-bold text-white/40 uppercase mt-0.5">Total Billed</div>
+              </div>
+              <div>
+                <div className="text-lg font-black text-emerald-400">₹{(totalPaidAll / 1000).toFixed(0)}K</div>
+                <div className="text-[8px] font-bold text-white/40 uppercase mt-0.5">Collected</div>
+              </div>
+              <div>
+                <div className="text-lg font-black text-rose-400">₹{(totalDueAll / 1000).toFixed(0)}K</div>
+                <div className="text-[8px] font-bold text-white/40 uppercase mt-0.5">Pending</div>
+              </div>
+            </div>
+            <div className="bg-white/10 rounded-full h-2">
+              <div className="h-2 rounded-full bg-emerald-400 transition-all"
+                style={{ width: totalFeeAll > 0 ? `${Math.round((totalPaidAll / totalFeeAll) * 100)}%` : '0%' }} />
+            </div>
+            <div className="flex justify-between mt-1">
+              <span className="text-[9px] font-bold text-white/30">0%</span>
+              <span className="text-[9px] font-black text-emerald-400">
+                {totalFeeAll > 0 ? Math.round((totalPaidAll / totalFeeAll) * 100) : 0}% collected
+              </span>
+              <span className="text-[9px] font-bold text-white/30">100%</span>
+            </div>
+            {/* Quick status counts */}
+            <div className="grid grid-cols-3 gap-2 mt-3 pt-3 border-t border-white/10">
+              <div className="text-center">
+                <div className="text-sm font-black text-emerald-300">{countPaid}</div>
+                <div className="text-[8px] font-bold text-white/30">Fully Paid</div>
+              </div>
+              <div className="text-center">
+                <div className="text-sm font-black text-amber-300">{countPartial}</div>
+                <div className="text-[8px] font-bold text-white/30">Partial</div>
+              </div>
+              <div className="text-center">
+                <div className="text-sm font-black text-rose-300">{countUnpaid}</div>
+                <div className="text-[8px] font-bold text-white/30">Due/Overdue</div>
+              </div>
+            </div>
+          </div>
+
+          {/* Status filter pills */}
+          <div className="flex gap-2 overflow-x-auto pb-1 hide-scrollbar">
+            {FEE_STATUS_TABS.map(tab => (
+              <button key={tab.key} onClick={() => setFeeStatusFilter(tab.key)}
+                className={`flex-shrink-0 flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-[10px] font-black uppercase tracking-widest transition-colors ${
+                  feeStatusFilter === tab.key ? tab.color : 'bg-white text-slate-500 border border-slate-200'
+                }`}>
+                {tab.label}
+                <span className={`px-1.5 py-0.5 rounded-full text-[9px] font-black ${
+                  feeStatusFilter === tab.key ? 'bg-white/20 text-white' : 'bg-slate-100 text-slate-500'
+                }`}>{tab.count}</span>
+              </button>
+            ))}
+          </div>
+
           <div className="relative">
             <Search size={16} className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-400" />
             <input value={search} onChange={e => setSearch(e.target.value)} placeholder="Search name…"
               className="w-full bg-white border border-slate-200 rounded-2xl pl-11 pr-4 py-3 font-bold text-sm outline-none focus:border-indigo-500 shadow-sm" />
           </div>
 
+          {/* Class filter */}
           <div className="flex gap-2 overflow-x-auto pb-1 hide-scrollbar">
             {['ALL', ...CLASS_OPTIONS.filter(c => students.some(s => s.className === c))].map(c => (
               <button key={c} onClick={() => setClassFilter(c)}
@@ -1105,26 +1223,46 @@ export const StudentsManager: React.FC<Props> = ({ onBack, initialView }) => {
           </div>
 
           <div className="space-y-2">
-            {filteredFees.slice(0, showCountFees).map(student => (
-              <button key={student.id}
-                onClick={() => { setSelected(student); loadStudentData(student); setActiveProfileTab('FEES'); setSubView('PROFILE'); }}
-                className="w-full bg-white rounded-2xl border border-slate-100 shadow-sm p-4 text-left active:bg-slate-50 transition-colors">
-                <div className="flex items-center gap-3">
-                  <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-indigo-100 to-violet-100 text-indigo-700 flex items-center justify-center font-black text-sm shrink-0">
-                    {student.name.split(' ').map(w => w[0]).join('').slice(0, 2)}
-                  </div>
-                  <div className="flex-1">
-                    <div className="font-extrabold text-slate-900 text-sm">{student.name}</div>
-                    <div className="text-[10px] font-bold text-slate-400 mt-0.5">
-                      {student.className ? `${student.className}-${student.section}` : 'Unassigned'} · ₹{((student.totalFee - student.paidFee) / 1000).toFixed(0)}K due
+            {filteredFees.length === 0 && (
+              <div className="flex flex-col items-center py-12 text-slate-400">
+                <IndianRupee size={28} className="mb-2 opacity-40" />
+                <p className="font-bold text-sm">No students in this filter</p>
+              </div>
+            )}
+            {filteredFees.slice(0, showCountFees).map(student => {
+              const due = student.totalFee - student.paidFee;
+              const pct = student.totalFee > 0 ? Math.round((student.paidFee / student.totalFee) * 100) : 0;
+              return (
+                <button key={student.id}
+                  onClick={() => { setSelected(student); loadStudentData(student); setActiveProfileTab('FEES'); setSubView('PROFILE'); }}
+                  className="w-full bg-white rounded-2xl border border-slate-100 shadow-sm p-4 text-left active:bg-slate-50 transition-colors">
+                  <div className="flex items-start gap-3">
+                    <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-indigo-100 to-violet-100 text-indigo-700 flex items-center justify-center font-black text-sm shrink-0 mt-0.5">
+                      {student.name.split(' ').map(w => w[0]).join('').slice(0, 2).toUpperCase()}
+                    </div>
+                    <div className="flex-1 min-w-0">
+                      <div className="flex items-start justify-between gap-2">
+                        <div className="font-extrabold text-slate-900 text-sm truncate">{student.name}</div>
+                        <span className={`text-[9px] font-black px-2 py-0.5 rounded-full uppercase shrink-0 ${PAYMENT_COLORS[student.feeStatus]}`}>
+                          {student.feeStatus}
+                        </span>
+                      </div>
+                      <div className="text-[10px] font-bold text-slate-400 mt-0.5">
+                        {student.className ? `${student.className}-${student.section}` : 'Unassigned'}
+                        {due > 0 && <span className="text-rose-500 ml-1">· ₹{(due / 1000).toFixed(0)}K due</span>}
+                      </div>
+                      {student.totalFee > 0 && (
+                        <div className="mt-2 bg-slate-100 rounded-full h-1.5">
+                          <div className={`h-1.5 rounded-full transition-all ${
+                            pct === 100 ? 'bg-emerald-500' : pct > 0 ? 'bg-amber-400' : 'bg-rose-400'
+                          }`} style={{ width: `${pct}%` }} />
+                        </div>
+                      )}
                     </div>
                   </div>
-                  <span className={`text-[9px] font-black px-2 py-0.5 rounded-full uppercase ${PAYMENT_COLORS[student.feeStatus]}`}>
-                    {student.feeStatus}
-                  </span>
-                </div>
-              </button>
-            ))}
+                </button>
+              );
+            })}
             {showCountFees < filteredFees.length && (
               <button onClick={() => setShowCountFees(c => c + PAGE_SIZE)}
                 className="w-full py-3 mt-2 bg-white border border-slate-200 rounded-2xl text-xs font-black text-slate-500 uppercase tracking-widest active:scale-95 transition-transform">
@@ -1980,7 +2118,7 @@ export const StudentsManager: React.FC<Props> = ({ onBack, initialView }) => {
                                         {inst.status}
                                       </span>
                                       {instDue > 0 && (
-                                        <button onClick={() => handleMarkFeePaid(inst)}
+                                        <button onClick={() => openFeePayModal(inst)}
                                           className="text-[9px] font-black text-emerald-700 bg-emerald-50 border border-emerald-200 px-2.5 py-1 rounded-xl active:scale-95 transition-transform">
                                           Collect ₹{instDue.toLocaleString('en-IN')}
                                         </button>
@@ -2307,6 +2445,103 @@ export const StudentsManager: React.FC<Props> = ({ onBack, initialView }) => {
 
           </div>
         </div>
+
+        {/* ── Fee Payment Modal ─────────────────────────────────────── */}
+        {feePayModal && (
+          <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-50 flex items-end sm:items-center justify-center p-4"
+               onClick={() => !feePayBusy && setFeePayModal(null)}>
+            <div className="bg-white rounded-2xl border border-slate-200 shadow-2xl w-full max-w-md"
+                 onClick={e => e.stopPropagation()}>
+              {/* Header */}
+              <div className="px-4 py-3 border-b border-slate-100 flex items-center gap-2">
+                <IndianRupee size={18} className="text-emerald-600" />
+                <div className="flex-1">
+                  <h3 className="font-black text-slate-900 text-sm uppercase tracking-tight">Collect Fee</h3>
+                  <p className="text-[10px] font-bold text-slate-400">
+                    {selected?.name} · {feePayModal.feeType.replace('_', ' ')} — {feePayModal.month}
+                  </p>
+                </div>
+                <button onClick={() => setFeePayModal(null)} disabled={feePayBusy}
+                  className="p-1.5 hover:bg-slate-100 rounded-lg text-slate-400 disabled:opacity-50 text-base leading-none">✕</button>
+              </div>
+
+              <div className="p-4 space-y-4">
+                {/* Due amount banner */}
+                <div className="bg-rose-50 border border-rose-100 rounded-xl px-4 py-3 flex items-center justify-between">
+                  <span className="text-[10px] font-black uppercase tracking-widest text-rose-500">Outstanding Due</span>
+                  <span className="text-lg font-black text-rose-600">
+                    ₹{(feePayModal.amount - feePayModal.paidAmount - feePayModal.writeOffAmount).toLocaleString('en-IN')}
+                  </span>
+                </div>
+
+                {/* Amount field */}
+                <div>
+                  <label className="text-[9px] font-black uppercase tracking-widest text-slate-500 block mb-1.5">
+                    Amount to Collect (₹)
+                  </label>
+                  <input
+                    type="number" min="1"
+                    value={feePayAmount}
+                    onChange={e => setFeePayAmount(e.target.value)}
+                    disabled={feePayBusy}
+                    className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3 py-2.5 font-black text-slate-900 text-base outline-none focus:border-emerald-500 focus:bg-white transition-colors disabled:opacity-50"
+                    placeholder="Enter amount"
+                  />
+                  <p className="text-[9px] font-bold text-slate-400 mt-1">Partial payment allowed — will adjust against oldest dues</p>
+                </div>
+
+                {/* Payment method */}
+                <div>
+                  <label className="text-[9px] font-black uppercase tracking-widest text-slate-500 block mb-1.5">Payment Method</label>
+                  <div className="grid grid-cols-5 gap-1.5">
+                    {(['CASH', 'UPI', 'ONLINE', 'CHEQUE', 'DD'] as const).map(m => (
+                      <button key={m} onClick={() => setFeePayMethod(m)} disabled={feePayBusy}
+                        className={`py-2 rounded-xl text-[10px] font-black uppercase tracking-wider transition-all ${
+                          feePayMethod === m
+                            ? 'bg-emerald-600 text-white shadow-sm'
+                            : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
+                        }`}>
+                        {m}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+
+                {/* Date */}
+                <div>
+                  <label className="text-[9px] font-black uppercase tracking-widest text-slate-500 block mb-1.5">Payment Date</label>
+                  <input
+                    type="date" value={feePayDate}
+                    onChange={e => setFeePayDate(e.target.value)}
+                    disabled={feePayBusy}
+                    className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3 py-2.5 font-bold text-slate-800 text-sm outline-none focus:border-emerald-500 focus:bg-white transition-colors disabled:opacity-50"
+                  />
+                </div>
+
+                {/* Remark */}
+                <div>
+                  <label className="text-[9px] font-black uppercase tracking-widest text-slate-500 block mb-1.5">Remark (Optional)</label>
+                  <input
+                    type="text" value={feePayNote}
+                    onChange={e => setFeePayNote(e.target.value)}
+                    disabled={feePayBusy}
+                    className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3 py-2.5 font-bold text-slate-800 text-sm outline-none focus:border-emerald-500 focus:bg-white transition-colors disabled:opacity-50"
+                    placeholder="e.g. Cheque no. 123456"
+                  />
+                </div>
+
+                {/* Submit */}
+                <button onClick={handleFeePaySubmit} disabled={feePayBusy || !feePayAmount}
+                  className="w-full py-3 bg-emerald-600 text-white font-black text-sm rounded-xl active:scale-95 transition-all disabled:opacity-50 disabled:scale-100 flex items-center justify-center gap-2">
+                  {feePayBusy
+                    ? <><div className="w-4 h-4 border-2 border-white/40 border-t-white rounded-full animate-spin" /> Processing…</>
+                    : <><IndianRupee size={15} /> Confirm Collection · ₹{parseFloat(feePayAmount || '0').toLocaleString('en-IN')}</>
+                  }
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
 
         {/* ── Change Transport modal ─────────────────────────────────── */}
         {changeModalOpen && (() => {

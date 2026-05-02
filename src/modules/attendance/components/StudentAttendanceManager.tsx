@@ -1,8 +1,8 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   ArrowLeft, ChevronRight, AlertCircle, ShieldCheck, Hourglass,
   CheckCircle2, XCircle, Edit3, Save, Users, Plus, Calendar,
-  ClipboardList,
+  ClipboardList, LayoutGrid, Download,
 } from 'lucide-react';
 import { studentService } from '@/modules/students/student.service';
 import { Student } from '@/shared/types/principal.types';
@@ -13,7 +13,7 @@ import { useEditGuard } from '@/shared/store/correctionStore';
 
 interface Props { onBack: () => void; }
 
-type View = 'OVERVIEW' | 'RECORDS' | 'MARK' | 'EDIT_RECORD';
+type View = 'OVERVIEW' | 'RECORDS' | 'MARK' | 'EDIT_RECORD' | 'GRID';
 type RecordFilter = 'ALL' | 'PENDING' | 'APPROVED' | 'REJECTED';
 
 const ATT_COLOR = (pct: number) => pct >= 90 ? 'bg-emerald-500' : pct >= 75 ? 'bg-amber-400' : 'bg-rose-500';
@@ -140,6 +140,85 @@ export const StudentAttendanceManager: React.FC<Props> = ({ onBack }) => {
     setMarkStudents(prev => prev.map(s => s.id === id ? { ...s, isPresent: !s.isPresent } : s));
 
   const [isSubmitting, setIsSubmitting] = useState(false);
+
+  // Grid view state
+  const [gridClass,   setGridClass]   = useState('');
+  const [gridSection, setGridSection] = useState('');
+  const [gridMonth,   setGridMonth]   = useState(() => {
+    const d = new Date();
+    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
+  });
+  // Map: date → { studentId → isPresent }
+  const [gridData, setGridData] = useState<Record<string, Record<string, boolean>>>({});
+  // Ordered student list for grid rows
+  const [gridStudents, setGridStudents] = useState<{ id: string; name: string; rollNo: string }[]>([]);
+  const [gridLoading,  setGridLoading]  = useState(false);
+  // Map: date → attendance record id (for status badge)
+  const [gridRecordMap, setGridRecordMap] = useState<Record<string, { id: string; status: string; isLocked: boolean }>>({});
+
+  const loadGridData = useCallback(async (cls: string, sec: string, month: string) => {
+    if (!cls || !sec || !month) return;
+    setGridLoading(true);
+    setGridData({});
+    setGridStudents([]);
+    setGridRecordMap({});
+    try {
+      // All records for this class/section
+      const allRecs = await sharedAttendance.getAll();
+      const monthRecs = allRecs.filter(r =>
+        r.className === cls && r.section === sec && r.date.startsWith(month),
+      );
+      // Build students list from local store
+      const sectionStudents = students
+        .filter(s => s.className === cls && s.section === sec)
+        .sort((a, b) => parseInt(a.rollNo || '0') - parseInt(b.rollNo || '0'))
+        .map(s => ({ id: s.id, name: s.name, rollNo: s.rollNo }));
+      setGridStudents(sectionStudents);
+
+      // Fetch per-student data for each record in parallel (max 31 calls)
+      const entries = await Promise.all(
+        monthRecs.map(async rec => {
+          const studs = await sharedAttendance.getStudents(rec.id);
+          return { date: rec.date, studs, rec };
+        }),
+      );
+      const data: Record<string, Record<string, boolean>> = {};
+      const recMap: Record<string, { id: string; status: string; isLocked: boolean }> = {};
+      for (const { date, studs, rec } of entries) {
+        data[date] = {};
+        for (const s of studs) data[date][s.id] = s.isPresent;
+        recMap[date] = { id: rec.id, status: rec.status, isLocked: rec.isLocked };
+      }
+      setGridData(data);
+      setGridRecordMap(recMap);
+    } catch (e) {
+      showToast((e as Error).message || 'Failed to load grid', 'error');
+    } finally {
+      setGridLoading(false);
+    }
+  }, [students, showToast]);
+
+  // CSV export for grid
+  const exportGridCSV = () => {
+    if (gridStudents.length === 0) return;
+    const dates = Object.keys(gridData).sort();
+    const header = ['Roll No', 'Name', ...dates.map(d => new Date(d).getDate().toString()), 'Total P', 'Total A', '%'];
+    const rows = gridStudents.map(s => {
+      const prArr = dates.map(d => (gridData[d]?.[s.id] === true ? 'P' : gridData[d]?.[s.id] === false ? 'A' : '-'));
+      const totalP = prArr.filter(x => x === 'P').length;
+      const totalA = prArr.filter(x => x === 'A').length;
+      const pct = totalP + totalA > 0 ? Math.round((totalP / (totalP + totalA)) * 100) : 0;
+      return [s.rollNo, s.name, ...prArr, totalP, totalA, `${pct}%`];
+    });
+    const csv = [header, ...rows].map(r => r.map(c => `"${c}"`).join(',')).join('\n');
+    const blob = new Blob([csv], { type: 'text/csv' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `Attendance_${gridClass}_${gridSection}_${gridMonth}.csv`;
+    a.click();
+    URL.revokeObjectURL(url);
+  };
 
   const submitMark = async () => {
     if (!markClass || !markSection || !markDate || markStudents.length === 0) return;
@@ -497,6 +576,186 @@ export const StudentAttendanceManager: React.FC<Props> = ({ onBack }) => {
     );
   }
 
+  /* ── GRID VIEW ────────────────────────────────────────────────── */
+  if (view === 'GRID') {
+    const sortedDates = Object.keys(gridData).sort();
+
+    // Per-student totals
+    const studentStats = gridStudents.map(s => {
+      let p = 0, a = 0;
+      for (const d of sortedDates) {
+        const v = gridData[d]?.[s.id];
+        if (v === true) p++;
+        else if (v === false) a++;
+      }
+      const pct = p + a > 0 ? Math.round((p / (p + a)) * 100) : null;
+      return { ...s, p, a, pct };
+    });
+
+    const gridSections = classOptions.find(c => c.name === gridClass)?.sections ?? [];
+
+    return (
+      <div className="w-full bg-slate-50 flex flex-col animate-in slide-in-from-right-8 duration-300">
+        {/* Header */}
+        <div className="bg-white border-b border-slate-100 px-4 pt-4 pb-3 sticky top-0 z-10 shadow-sm">
+          <div className="flex items-center gap-3 mb-3">
+            <button onClick={() => setView('OVERVIEW')} className="p-2 -ml-2 bg-slate-100 rounded-full text-slate-600">
+              <ArrowLeft size={20} />
+            </button>
+            <div className="flex-1">
+              <h2 className="text-xl font-black text-slate-900 uppercase tracking-tight">Attendance Grid</h2>
+              <p className="text-[10px] font-bold text-slate-400">Month-wise student view</p>
+            </div>
+            {gridStudents.length > 0 && Object.keys(gridData).length > 0 && (
+              <button onClick={exportGridCSV}
+                className="flex items-center gap-1.5 bg-emerald-50 border border-emerald-200 text-emerald-700 font-black text-[10px] uppercase px-3 py-2 rounded-xl active:scale-95 transition-transform">
+                <Download size={12}/> CSV
+              </button>
+            )}
+          </div>
+
+          {/* Selectors */}
+          <div className="flex gap-2">
+            <select value={gridClass}
+              onChange={e => { setGridClass(e.target.value); setGridSection(''); setGridData({}); setGridStudents([]); }}
+              className="flex-1 border border-slate-200 rounded-xl px-2.5 py-2 text-xs font-bold text-slate-800 focus:outline-none focus:border-indigo-400 bg-white">
+              <option value="">Class…</option>
+              {classOptions.map(c => <option key={c.name} value={c.name}>{c.name}</option>)}
+            </select>
+            <select value={gridSection}
+              onChange={e => { setGridSection(e.target.value); setGridData({}); setGridStudents([]); }}
+              disabled={!gridClass}
+              className="flex-1 border border-slate-200 rounded-xl px-2.5 py-2 text-xs font-bold text-slate-800 focus:outline-none focus:border-indigo-400 bg-white disabled:opacity-50">
+              <option value="">Sec…</option>
+              {gridSections.map(s => <option key={s} value={s}>{s}</option>)}
+            </select>
+            <input type="month" value={gridMonth}
+              onChange={e => { setGridMonth(e.target.value); setGridData({}); setGridStudents([]); }}
+              className="flex-1 border border-slate-200 rounded-xl px-2.5 py-2 text-xs font-bold text-slate-800 focus:outline-none focus:border-indigo-400 bg-white" />
+            <button
+              onClick={() => loadGridData(gridClass, gridSection, gridMonth)}
+              disabled={!gridClass || !gridSection || !gridMonth || gridLoading}
+              className="bg-indigo-600 text-white font-black text-xs uppercase px-3 py-2 rounded-xl active:scale-95 transition-transform disabled:opacity-50">
+              {gridLoading ? '…' : 'Go'}
+            </button>
+          </div>
+        </div>
+
+        <div className="flex-1 overflow-hidden">
+          {gridLoading && (
+            <div className="flex items-center justify-center h-40 text-slate-400">
+              <div className="w-8 h-8 border-4 border-slate-200 border-t-indigo-500 rounded-full animate-spin mr-3" />
+              <span className="font-bold text-sm">Loading grid…</span>
+            </div>
+          )}
+
+          {!gridLoading && !gridClass && (
+            <div className="flex flex-col items-center py-16 text-slate-400">
+              <LayoutGrid size={32} className="mb-3 opacity-30" />
+              <p className="font-bold text-sm">Select class, section &amp; month</p>
+            </div>
+          )}
+
+          {!gridLoading && gridClass && gridSection && Object.keys(gridData).length === 0 && gridStudents.length === 0 && (
+            <div className="flex flex-col items-center py-16 text-slate-400">
+              <Calendar size={28} className="mb-3 opacity-30" />
+              <p className="font-bold text-sm">No attendance data for this period</p>
+              <p className="text-xs mt-1">Tap <span className="font-black text-indigo-500">Go</span> to load</p>
+            </div>
+          )}
+
+          {!gridLoading && gridStudents.length > 0 && (
+            <div className="overflow-auto h-full">
+              {/* Sticky header row with date columns */}
+              <table className="border-collapse text-[10px] font-bold" style={{ minWidth: `${180 + sortedDates.length * 36}px` }}>
+                <thead className="sticky top-0 z-20">
+                  <tr className="bg-slate-900 text-white">
+                    <th className="sticky left-0 z-30 bg-slate-900 text-left pl-3 pr-2 py-2.5 font-black text-[9px] uppercase tracking-widest w-36 min-w-36">
+                      Student
+                    </th>
+                    {sortedDates.map(d => {
+                      const rec = gridRecordMap[d];
+                      const day = new Date(d).getDate();
+                      const dow = new Date(d).toLocaleDateString('en-IN', { weekday: 'short' });
+                      const isSun = new Date(d).getDay() === 0;
+                      return (
+                        <th key={d} className={`text-center py-2 px-0.5 w-9 min-w-9 font-black ${isSun ? 'text-rose-300' : 'text-white/80'}`}>
+                          <div className="text-[8px] font-black uppercase">{dow}</div>
+                          <div className="text-sm leading-tight">{day}</div>
+                          {rec && (
+                            <div className={`mt-0.5 mx-auto w-1.5 h-1.5 rounded-full ${
+                              rec.status === 'APPROVED' ? 'bg-emerald-400' :
+                              rec.status === 'PENDING'  ? 'bg-amber-400'   : 'bg-rose-400'
+                            }`} title={rec.status} />
+                          )}
+                        </th>
+                      );
+                    })}
+                    <th className="text-center py-2 px-1.5 min-w-16 text-white/70 font-black text-[9px]">P/A/%</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {studentStats.map((s, idx) => (
+                    <tr key={s.id} className={idx % 2 === 0 ? 'bg-white' : 'bg-slate-50/60'}>
+                      {/* Student name — sticky left */}
+                      <td className={`sticky left-0 z-10 pl-3 pr-2 py-2 border-r border-slate-200 ${idx % 2 === 0 ? 'bg-white' : 'bg-slate-50'}`}>
+                        <div className="font-black text-slate-900 truncate max-w-[130px] text-[10px]">{s.name}</div>
+                        <div className="text-[8px] font-bold text-slate-400">Roll {s.rollNo.padStart(2, '0')}</div>
+                      </td>
+                      {/* Date cells */}
+                      {sortedDates.map(d => {
+                        const val = gridData[d]?.[s.id];
+                        const isSun = new Date(d).getDay() === 0;
+                        return (
+                          <td key={d} className={`text-center py-1 px-0 ${isSun ? 'bg-rose-50/60' : ''}`}>
+                            {val === true  && <span className="inline-block w-7 h-5 leading-5 text-center rounded-md bg-emerald-100 text-emerald-700 font-black text-[9px]">P</span>}
+                            {val === false && <span className="inline-block w-7 h-5 leading-5 text-center rounded-md bg-rose-100 text-rose-700 font-black text-[9px]">A</span>}
+                            {val === undefined && <span className="inline-block w-7 h-5 leading-5 text-center text-slate-300 font-bold text-[9px]">—</span>}
+                          </td>
+                        );
+                      })}
+                      {/* Totals */}
+                      <td className="text-center px-1.5 py-2 border-l border-slate-200">
+                        <div className={`font-black text-[9px] ${s.pct !== null ? (s.pct >= 75 ? 'text-emerald-600' : 'text-rose-600') : 'text-slate-400'}`}>
+                          {s.p}P/{s.a}A
+                        </div>
+                        {s.pct !== null && (
+                          <div className={`text-[9px] font-black ${s.pct >= 75 ? 'text-emerald-500' : 'text-rose-500'}`}>
+                            {s.pct}%
+                          </div>
+                        )}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+
+              {/* Legend */}
+              <div className="flex items-center gap-4 px-4 py-3 border-t border-slate-100 bg-white sticky bottom-0">
+                <div className="flex items-center gap-1.5 text-[9px] font-bold text-slate-500">
+                  <span className="w-5 h-4 bg-emerald-100 text-emerald-700 rounded text-[8px] font-black flex items-center justify-center">P</span>
+                  Present
+                </div>
+                <div className="flex items-center gap-1.5 text-[9px] font-bold text-slate-500">
+                  <span className="w-5 h-4 bg-rose-100 text-rose-700 rounded text-[8px] font-black flex items-center justify-center">A</span>
+                  Absent
+                </div>
+                <div className="flex items-center gap-1.5 text-[9px] font-bold text-slate-500">
+                  <span className="w-5 h-4 rounded text-slate-300 font-bold flex items-center justify-center text-[8px]">—</span>
+                  Not Marked
+                </div>
+                <div className="flex items-center gap-1.5 ml-auto text-[9px] font-bold text-slate-400">
+                  <span className="w-2 h-2 rounded-full bg-emerald-400 inline-block" /> Approved
+                  <span className="w-2 h-2 rounded-full bg-amber-400 inline-block ml-1" /> Pending
+                </div>
+              </div>
+            </div>
+          )}
+        </div>
+      </div>
+    );
+  }
+
   /* ── RECORDS (All + Filter) ──────────────────────────────────── */
   if (view === 'RECORDS') {
     const FILTER_TABS: { key: RecordFilter; label: string; count: number }[] = [
@@ -678,6 +937,13 @@ export const StudentAttendanceManager: React.FC<Props> = ({ onBack }) => {
             <ClipboardList size={20} className="text-indigo-500 mb-2"/>
             <div className="font-black text-slate-800 text-sm">All Records</div>
             <div className="text-[10px] font-bold text-slate-400 mt-0.5">{records.length} total</div>
+          </button>
+          <button
+            onClick={() => setView('GRID')}
+            className="col-span-2 bg-gradient-to-r from-violet-600 to-indigo-600 rounded-2xl p-4 text-left shadow-sm active:scale-[0.98] transition-transform">
+            <LayoutGrid size={20} className="text-white mb-2"/>
+            <div className="font-black text-white text-sm">Monthly Grid View</div>
+            <div className="text-[10px] font-bold text-white/60 mt-0.5">Students × Dates — with CSV export</div>
           </button>
         </div>
 

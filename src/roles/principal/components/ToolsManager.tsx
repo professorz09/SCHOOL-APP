@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import {
   ArrowLeft, Sparkles, FileText, IdCard, Award, Ticket,
   FileCheck, Download, Printer, Eye, ChevronRight,
@@ -12,6 +12,7 @@ import { teacherService } from '@/roles/teacher/teacher.service';
 import type { GeneratedExamPaper } from '@/shared/types/teacher.types';
 import { isGeminiConfigured, GeminiUnavailableError } from '@/shared/lib/gemini';
 import { useUIStore } from '@/shared/store/uiStore';
+import { apiExams } from '@/shared/lib/apiClient';
 
 type ToolView = 'DASHBOARD' | 'PAPERS' | 'TC' | 'IDCARD' | 'MARKSHEET' | 'ADMIT' | 'BONAFIDE' | 'ADMISSION';
 
@@ -560,6 +561,212 @@ export const ToolsManager: React.FC<Props> = ({ onBack }) => {
     );
   };
 
+  // ── MARKSHEET TOOL ────────────────────────────────────────────────────────
+  const MarksheetTool = () => {
+    const { showToast } = useUIStore();
+    const [picked, setPicked]     = useState('');
+    const [examId, setExamId]     = useState('');
+    const [exams, setExams]       = useState<any[]>([]);
+    const [results, setResults]   = useState<any[]>([]);
+    const [loadingExams, setLoadingExams] = useState(false);
+    const [loadingRes,   setLoadingRes]   = useState(false);
+    const [showPrint,    setShowPrint]    = useState(false);
+
+    const student = students.find(s => s.id === picked) ?? null;
+
+    useEffect(() => {
+      if (!student) { setExams([]); setExamId(''); setResults([]); return; }
+      setLoadingExams(true);
+      apiExams.list({ className: student.className })
+        .then((list: any[]) => setExams(list.filter(e => e.results_uploaded)))
+        .catch(() => setExams([]))
+        .finally(() => setLoadingExams(false));
+    }, [student?.id]);
+
+    useEffect(() => {
+      if (!examId || !picked) { setResults([]); return; }
+      setLoadingRes(true);
+      apiExams.getResults(examId)
+        .then((res: any[]) => setResults(res.filter(r => r.student_id === picked)))
+        .catch(() => setResults([]))
+        .finally(() => setLoadingRes(false));
+    }, [examId, picked]);
+
+    const pickedExam = exams.find(e => e.id === examId);
+    const totalObtained = results.reduce((s, r) => s + (r.obtained_marks ?? 0), 0);
+    const totalMax = pickedExam ? (pickedExam.max_marks ?? 0) : 0;
+    const pct = totalMax > 0 ? Math.round((totalObtained / totalMax) * 100) : 0;
+    const passed = pct >= 35;
+
+    if (showPrint && student && pickedExam) {
+      return (
+        <div className="w-full flex flex-col">
+          <div className="sticky top-0 bg-white px-4 py-3 border-b border-slate-100 flex gap-2 z-10">
+            <button onClick={() => setShowPrint(false)} className="flex-1 py-2.5 bg-slate-100 text-slate-700 font-black text-xs uppercase rounded-xl">
+              ← Back
+            </button>
+            <button onClick={() => window.print()} className="flex-1 py-2.5 bg-slate-900 text-white font-black text-xs uppercase rounded-xl flex items-center justify-center gap-1.5">
+              <Printer size={13}/> Print
+            </button>
+          </div>
+          {/* Printable marksheet */}
+          <div id="marksheet-print" className="p-6 bg-white min-h-screen font-sans">
+            {/* School header */}
+            <div className="text-center border-b-2 border-slate-800 pb-4 mb-4">
+              <div className="text-xl font-black text-slate-900 uppercase tracking-wide">
+                {schoolInfo?.name ?? 'EduGrow School'}
+              </div>
+              {schoolInfo?.address && <div className="text-xs font-bold text-slate-500 mt-0.5">{schoolInfo.address}</div>}
+              <div className="text-sm font-black text-slate-700 mt-2 uppercase tracking-widest">Academic Marksheet</div>
+            </div>
+
+            {/* Student details */}
+            <div className="grid grid-cols-2 gap-2 text-xs font-bold text-slate-700 mb-4 border border-slate-200 rounded-xl p-3">
+              <div><span className="text-slate-400">Name:</span> {student.name}</div>
+              <div><span className="text-slate-400">Adm. No:</span> {student.admissionNo}</div>
+              <div><span className="text-slate-400">Class:</span> {student.className}-{student.section}</div>
+              <div><span className="text-slate-400">Father:</span> {student.fatherName ?? '—'}</div>
+              <div><span className="text-slate-400">Exam:</span> {pickedExam.title}</div>
+              <div><span className="text-slate-400">Date:</span> {pickedExam.scheduled_date}</div>
+            </div>
+
+            {/* Results table */}
+            <table className="w-full border-collapse text-xs mb-4">
+              <thead>
+                <tr className="bg-slate-800 text-white">
+                  <th className="text-left px-3 py-2 font-black">Subject</th>
+                  <th className="text-center px-3 py-2 font-black">Max Marks</th>
+                  <th className="text-center px-3 py-2 font-black">Obtained</th>
+                  <th className="text-center px-3 py-2 font-black">Grade</th>
+                </tr>
+              </thead>
+              <tbody>
+                {results.length > 0 ? results.map((r, i) => {
+                  const g = r.grade ?? (r.obtained_marks >= 0.9 * totalMax ? 'A+' : r.obtained_marks >= 0.75 * totalMax ? 'A' : r.obtained_marks >= 0.5 * totalMax ? 'B' : 'C');
+                  return (
+                    <tr key={i} className={i % 2 === 0 ? 'bg-slate-50' : 'bg-white'}>
+                      <td className="px-3 py-2 font-bold border-b border-slate-100">{pickedExam.subject ?? 'All Subjects'}</td>
+                      <td className="px-3 py-2 text-center border-b border-slate-100">{totalMax}</td>
+                      <td className="px-3 py-2 text-center font-black border-b border-slate-100">{r.obtained_marks}</td>
+                      <td className="px-3 py-2 text-center font-black border-b border-slate-100">{g}</td>
+                    </tr>
+                  );
+                }) : (
+                  <tr>
+                    <td className="px-3 py-2 text-center font-bold text-slate-400" colSpan={4}>
+                      {pickedExam.subject ?? 'All Subjects'} — {totalObtained} marks
+                    </td>
+                  </tr>
+                )}
+              </tbody>
+              <tfoot>
+                <tr className="bg-slate-100">
+                  <td className="px-3 py-2 font-black">Total</td>
+                  <td className="px-3 py-2 text-center font-black">{totalMax}</td>
+                  <td className="px-3 py-2 text-center font-black">{totalObtained}</td>
+                  <td className="px-3 py-2 text-center font-black">{pct >= 90 ? 'A+' : pct >= 75 ? 'A' : pct >= 50 ? 'B' : 'C'}</td>
+                </tr>
+              </tfoot>
+            </table>
+
+            {/* Result badge */}
+            <div className={`text-center py-3 rounded-xl font-black text-base uppercase tracking-widest border-2 ${passed ? 'bg-emerald-50 border-emerald-300 text-emerald-700' : 'bg-rose-50 border-rose-300 text-rose-700'}`}>
+              {passed ? '✓ PASS' : '✗ FAIL'} — {pct}%
+            </div>
+
+            {/* Signature area */}
+            <div className="grid grid-cols-3 gap-4 mt-8 pt-4 border-t border-slate-200">
+              <div className="text-center">
+                <div className="border-t-2 border-slate-300 pt-2 text-[10px] font-bold text-slate-500">Class Teacher</div>
+              </div>
+              <div className="text-center">
+                <div className="border-t-2 border-slate-300 pt-2 text-[10px] font-bold text-slate-500">Parent Signature</div>
+              </div>
+              <div className="text-center">
+                <div className="border-t-2 border-slate-300 pt-2 text-[10px] font-bold text-slate-500">Principal</div>
+              </div>
+            </div>
+          </div>
+        </div>
+      );
+    }
+
+    return (
+      <div className="w-full flex flex-col">
+        <ToolHeader title="Marksheet" onBackPress={() => setView('DASHBOARD')} />
+        <div className="p-5 space-y-4">
+          <div className="bg-amber-50 border border-amber-200 rounded-2xl p-4 flex items-start gap-3">
+            <Award size={20} className="text-amber-600 shrink-0 mt-0.5" />
+            <div>
+              <p className="font-black text-amber-900 text-sm">Academic Marksheet Generator</p>
+              <p className="text-xs font-bold text-amber-700 mt-0.5">Student chunein → Exam chunein → Marksheet ready</p>
+            </div>
+          </div>
+
+          <StudentPicker value={picked} onChange={v => { setPicked(v); setExamId(''); setResults([]); }} />
+
+          {student && (
+            <>
+              <SelectedCard student={student} />
+              <div>
+                <label className="text-xs font-black uppercase tracking-widest text-slate-400 mb-2 block">
+                  Select Exam {loadingExams && <span className="text-[9px] text-slate-300">Loading…</span>}
+                </label>
+                <select value={examId} onChange={e => setExamId(e.target.value)}
+                  className="w-full border border-slate-200 bg-white rounded-xl px-4 py-3 font-bold text-sm outline-none focus:border-amber-400">
+                  <option value="">Choose exam with results…</option>
+                  {exams.map(e => (
+                    <option key={e.id} value={e.id}>
+                      {e.title} · {e.test_type} · {e.scheduled_date} · {e.max_marks} marks
+                    </option>
+                  ))}
+                </select>
+                {!loadingExams && exams.length === 0 && (
+                  <p className="text-[9px] font-bold text-rose-500 mt-1">
+                    {student.className} ke liye koi completed exam nahi mila
+                  </p>
+                )}
+              </div>
+            </>
+          )}
+
+          {examId && !loadingRes && results.length > 0 && (
+            <div className="bg-white rounded-2xl border border-slate-100 shadow-sm p-4 space-y-3">
+              <p className="text-[9px] font-black uppercase tracking-widest text-slate-400">Preview</p>
+              <div className="flex items-center justify-between">
+                <span className="text-sm font-bold text-slate-700">{pickedExam?.title}</span>
+                <span className={`text-sm font-black ${pct >= 35 ? 'text-emerald-600' : 'text-rose-600'}`}>{pct}% · {passed ? 'PASS' : 'FAIL'}</span>
+              </div>
+              <div className="flex justify-between text-xs font-bold text-slate-500">
+                <span>Max Marks: {totalMax}</span>
+                <span>Obtained: {totalObtained}</span>
+              </div>
+              <div className="bg-slate-100 rounded-full h-2">
+                <div className={`h-2 rounded-full transition-all ${passed ? 'bg-emerald-500' : 'bg-rose-400'}`}
+                  style={{ width: `${pct}%` }} />
+              </div>
+            </div>
+          )}
+
+          {examId && !loadingRes && results.length === 0 && (
+            <p className="text-[10px] font-bold text-amber-600 text-center">
+              Is exam mein is student ke results nahi mile
+            </p>
+          )}
+
+          {student && examId && (
+            <button
+              onClick={() => setShowPrint(true)}
+              disabled={loadingRes}
+              className="w-full flex items-center justify-center gap-2 bg-amber-600 text-white font-black text-sm uppercase py-4 rounded-2xl active:scale-95 transition-transform shadow-md disabled:opacity-50">
+              <FileText size={16} /> Generate Marksheet
+            </button>
+          )}
+        </div>
+      </div>
+    );
+  };
+
   // ── GENERIC TOOL (Marksheet / Admit Card) ─────────────────────────────────
   const GenericDocTool = ({
     toolView, title, desc, accentClass, InfoIcon,
@@ -619,14 +826,8 @@ export const ToolsManager: React.FC<Props> = ({ onBack }) => {
   if (view === 'TC')        return <TCGenerator />;
   if (view === 'IDCARD')    return <IDCardGenerator />;
   if (view === 'BONAFIDE')  return <BonafideGenerator />;
-  if (view === 'MARKSHEET') return (
-    <GenericDocTool
-      toolView="MARKSHEET" title="Marksheet"
-      desc="Generate academic marksheet for a student"
-      accentClass="bg-amber-50 border border-amber-200 text-amber-800"
-      InfoIcon={Award}
-    />
-  );
+  if (view === 'MARKSHEET') return <MarksheetTool />;
+
   if (view === 'ADMIT') return (
     <GenericDocTool
       toolView="ADMIT" title="Admit Card"

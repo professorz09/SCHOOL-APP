@@ -893,6 +893,25 @@ forgot to clean up future TRANSPORT installments, and there was no
   continues to work unchanged — the new history endpoint will be wired
   into that view in a follow-up if requested.
 
+### Phase 7 — Exam Marksheet Generator (ToolsManager.tsx)
+
+- `MarksheetTool` component replaces the old `GenericDocTool` placeholder for the MARKSHEET view
+- Flow: Student picker → Exam picker (fetches exams with `results_uploaded=true` via `apiExams.list({className})`) → Results fetch (via `apiExams.getResults(examId)` filtered to selected student) → Printable marksheet
+- Printable marksheet includes: school header (name + address from `schoolInfoService`), student details grid (name, adm. no., class, father, exam, date), results table (subject / max marks / obtained / grade), total row, PASS/FAIL badge with percentage, three-way signature strip
+- Preview pane (before print) shows mini result card with progress bar + pass/fail colour
+- `window.print()` used for printing; print view has Back + Print buttons in sticky header
+- `apiExams` imported into `ToolsManager.tsx`
+
+### Phase 8 — Promotion Wizard (PromotionWizard.tsx + AcademicYearManager.tsx)
+
+- New file: `src/modules/academic-year/components/PromotionWizard.tsx`
+- Three-step flow:
+  1. **Select Years** — dropdown for source year (from) + destination year (to); warning if source year is not locked
+  2. **Per-student Decisions** — calls `apiPromotion.preview(fromYearId, toYearId)`; dark summary banner (Promote / Retain / TC / Already Done counts); quick "All → Promote / All → Retain" buttons; expandable per-student cards with decision toggle (PROMOTE/RETAIN/TC) + editable To Class + Section dropdowns when PROMOTE is selected; class auto-bumped via `bumpClass()` helper (Nursery → LKG → UKG → Class 1 … Class 10 → 11th Science etc.)
+  3. **Execute** — calls `apiPromotion.execute()` with only PROMOTE-decision pending students; DONE screen shows promoted / skipped counts
+- `AcademicYearManager.tsx` gains `showPromotion` state; when true renders `<PromotionWizard onBack={…} />`; "Add Year" + "Promote Students" dashed-border buttons shown side-by-side in the years-list view
+- TypeScript: 0 errors confirmed after both phases
+
 ### Migration 0026 — post-review hardening
 
 - `bulk_close_transport_assignments` redefined with a strict role gate:
