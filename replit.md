@@ -15,7 +15,7 @@ A school management application with React frontend and Supabase (Postgres + Aut
 - `GEMINI_API_KEY` — Google Gemini API key for AI features (optional)
 
 **Architecture notes:**
-- All database access goes through `@supabase/supabase-js` in `src/services/` — do not replace with Drizzle/pg
+- All database access goes through `@supabase/supabase-js` — do not replace with Drizzle/pg
 - `vite-plugins/admin-api.ts` is the server-side layer (runs inside the Vite dev/preview middleware) — it handles privileged admin operations using the service role key
 - `src/lib/supabase.ts` gracefully degrades if env vars are missing (logs a warning, uses placeholder values)
 - `server/db.ts` exposes a raw `pg.Pool` connected to the Replit-provisioned PostgreSQL — available for future use but not currently used by the app
@@ -183,47 +183,84 @@ place from migrations 0002 and 0017.
 
 ```
 /
-├── src/                      # React frontend
-│   ├── App.tsx               # Login gate + dashboard router
-│   ├── main.tsx              # Entry point
-│   ├── lib/
-│   │   ├── supabase.ts       # Browser Supabase client (anon key, RLS)
-│   │   ├── adminApi.ts       # Wrapper for /api/admin/* dev endpoints
-│   │   └── audit.ts          # Calls public.log_audit() RPC
-│   ├── components/
-│   │   ├── LoginPage.tsx
-│   │   ├── FirstLoginPasswordChange.tsx
-│   │   └── Navigation.tsx
-│   ├── services/
-│   │   ├── auth.service.ts             # Supabase Auth wrapper
-│   │   ├── school.service.ts           # Supabase-backed (Task #2)
-│   │   ├── billing.service.ts          # Supabase-backed (Task #2)
-│   │   ├── broadcast.service.ts        # Supabase-backed (Task #2)
-│   │   ├── admin.service.ts            # Supabase-backed (Task #2)
-│   │   ├── logs.service.ts             # Supabase-backed (Task #2)
-│   │   ├── yearClosing.service.ts      # Supabase-backed; uses atomic commit_year_closing RPC (migration 0007)
-│   │   ├── studentDashboard.service.ts # Supabase-backed (Task #4) — student/parent reads + complaint/fee-screenshot writes
-│   │   └── ...                         # Other services migrating in tasks #3 / #5
-│   ├── store/                # Zustand stores
-│   ├── features/             # Per-role UI (principal, super-admin, teacher, student, driver)
-│   ├── views/
-│   └── types/
+├── src/
+│   ├── App.tsx               # Login gate + role router
+│   ├── main.tsx              # Entry point (AcademicYearProvider wrapper)
+│   │
+│   ├── modules/              # Business-domain modules (feature logic, reusable across roles)
+│   │   ├── fees/
+│   │   │   ├── fee.service.ts
+│   │   │   └── components/   # FeeLedger, FeePaymentSubmissionsQueue, FeeStructureForm
+│   │   ├── students/
+│   │   │   ├── student.service.ts
+│   │   │   ├── studentDashboard.service.ts
+│   │   │   └── components/   # StudentsManager, StudentClassAssignmentModal
+│   │   ├── attendance/
+│   │   │   ├── attendance.service.ts
+│   │   │   └── components/   # AttendanceHub, StudentAttendanceManager, StaffAttendanceManager, TeacherAttendanceManager
+│   │   ├── academic-year/
+│   │   │   ├── academicYear.service.ts
+│   │   │   ├── yearClosing.service.ts
+│   │   │   └── components/   # AcademicYearManager, AcademicYearWizard, ClassManagementManager
+│   │   ├── transport/
+│   │   │   ├── transport.service.ts
+│   │   │   └── components/   # TransportManager
+│   │   ├── timetable/
+│   │   │   ├── timetable.service.ts
+│   │   │   └── components/   # TimetableManager, TeacherTimetableView
+│   │   ├── notices/
+│   │   │   └── components/   # NoticesManager, TeacherNoticesView, StudentNoticesView
+│   │   ├── staff/
+│   │   │   ├── staff.service.ts
+│   │   │   ├── staffStorage.service.ts
+│   │   │   └── components/   # StaffManager
+│   │   └── exams/
+│   │       └── components/   # TestsManager, ExamPaperGenerator, HomeworkManager
+│   │
+│   ├── roles/                # Role-specific UI shells and screens
+│   │   ├── principal/
+│   │   │   ├── pages/        # PrincipalLayout
+│   │   │   └── components/   # PrincipalDashboard, SettingsManager, ApprovalsManager,
+│   │   │                     # SalaryLedger, ExpensesManager, ToolsManager, ...
+│   │   ├── teacher/
+│   │   │   ├── pages/        # TeacherLayout
+│   │   │   ├── teacher.service.ts
+│   │   │   └── components/   # TeacherComplaints
+│   │   ├── student/
+│   │   │   ├── pages/        # StudentLayout
+│   │   │   └── components/   # FeesView, AttendanceView, HomeworkView, ResultsView, ...
+│   │   ├── super-admin/
+│   │   │   ├── pages/        # SuperAdminLayout
+│   │   │   ├── admin.service.ts, billing.service.ts, broadcast.service.ts, logs.service.ts
+│   │   │   └── components/   # SADashboard, SchoolsManager, BillingManager, ...
+│   │   └── driver/
+│   │       # DriverLayout, DriverRouteView, DriverStudentsView
+│   │
+│   └── shared/               # Cross-cutting concerns (used by all modules & roles)
+│       ├── components/       # LoginPage, Navigation, SharedUI, ErrorBoundary, ProfileView, Toast
+│       ├── context/          # AcademicYearContext
+│       ├── hooks/            # useRealtimeTable
+│       ├── lib/              # supabase.ts, gemini.ts, audit.ts, cacheBus.ts, adminApi.ts
+│       ├── services/         # auth, school, schoolInfo, storage, audit, principal services
+│       ├── store/            # Zustand stores (auth, ui, school, billing, ...)
+│       ├── types/            # All TypeScript types
+│       └── config/           # constants.ts
+│
 ├── vite-plugins/
-│   └── admin-api.ts          # Vite middleware exposing /api/admin/* (service-role key, dev+preview)
+│   └── admin-api.ts          # Vite middleware for /api/admin/* (service-role key)
 ├── supabase/
-│   ├── migrations/
-│   │   ├── 0001_init.sql                  # Full schema + RLS helpers + policies
-│   │   ├── 0002_super_admin.sql           # Audit, cascade, billing RPCs, broadcast cols
-│   │   ├── 0011_fee_payment_uploads.sql   # Parent/student fee-screenshot submissions (Task #4)
-│   │   └── 0014_fee_screenshots_cleanup.sql # Storage hygiene for fee screenshots (Task #12)
-│   └── _apply.sql            # Auto-generated combined file (run in Dashboard SQL Editor)
+│   ├── migrations/           # Ordered SQL migrations (0001_init.sql → latest)
+│   └── _apply.sql            # Auto-generated combined migration file
 └── scripts/
-    ├── supabase-admin.ts            # Service-role client for migrate/seed
-    ├── migrate.ts                   # Builds supabase/_apply.sql
-    ├── apply-sql.ts                 # Applies supabase/_apply.sql via the pooler
-    ├── seed-super-admin.ts          # Creates initial Super Admin
-    └── cleanup-fee-screenshots.ts   # Cron-style purge of stale fee screenshots
+    ├── migrate.ts             # Builds supabase/_apply.sql
+    ├── apply-sql.ts           # Applies migrations via pooler
+    ├── seed-super-admin.ts    # Creates initial SUPER_ADMIN user
+    └── cleanup-fee-screenshots.ts
 ```
+
+### Import alias
+All imports use `@/` which maps to `src/` (configured in `vite.config.ts` + `tsconfig.json`).
+Example: `import { feeService } from '@/modules/fees/fee.service'`
 
 ## Super Admin module (Task #2)
 
