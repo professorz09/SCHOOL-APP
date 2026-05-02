@@ -1,5 +1,5 @@
 import { Router } from 'express';
-import { adminDb } from '../lib/db';
+import { adminDb, userDb } from '../lib/db';
 import { ok, fail, ApiError, requireBody } from '../lib/helpers';
 import { requireAuth, requireRole } from '../middleware/auth';
 
@@ -20,11 +20,26 @@ academicYearRouter.get('/', requireAuth, PRINCIPAL, async (req, res) => {
   } catch (err) { fail(res, err); }
 });
 
+// GET /api/academic-year/active
+academicYearRouter.get('/active', requireAuth, requireRole('PRINCIPAL', 'TEACHER', 'STUDENT', 'PARENT', 'DRIVER'), async (req, res) => {
+  try {
+    const { data, error } = await adminDb
+      .from('academic_years')
+      .select('*')
+      .eq('school_id', req.user.school_id!)
+      .eq('is_active', true)
+      .maybeSingle();
+    if (error) throw new ApiError(500, error.message);
+    ok(res, data ?? null);
+  } catch (err) { fail(res, err); }
+});
+
 // POST /api/academic-year/create
 academicYearRouter.post('/create', requireAuth, PRINCIPAL, async (req, res) => {
   try {
     const body = requireBody<{
       label: string; startDate: string; endDate: string;
+      board?: string; medium?: string;
     }>(req, ['label', 'startDate', 'endDate']);
 
     const { data, error } = await adminDb
@@ -34,19 +49,18 @@ academicYearRouter.post('/create', requireAuth, PRINCIPAL, async (req, res) => {
         label:      body.label,
         start_date: body.startDate,
         end_date:   body.endDate,
+        board:      body.board ?? null,
+        medium:     body.medium ?? null,
         is_active:  false,
         is_closed:  false,
       })
       .select()
       .single();
-    if (error) throw new ApiError(500, error.message);
+    if (error) {
+      if (error.code === '23505') throw new ApiError(409, `Academic year "${body.label}" already exists`);
+      throw new ApiError(500, error.message);
+    }
 
-    await adminDb.rpc('log_audit', {
-      p_action: 'CREATE_ACADEMIC_YEAR',
-      p_entity_type: 'academic_year',
-      p_entity_id: data.id,
-      p_details: { label: body.label },
-    });
     ok(res, data, 201);
   } catch (err) { fail(res, err); }
 });
@@ -56,23 +70,21 @@ academicYearRouter.post('/set-active', requireAuth, PRINCIPAL, async (req, res) 
   try {
     const { yearId } = requireBody<{ yearId: string }>(req, ['yearId']);
 
+    // Verify year belongs to school
     const { data: year } = await adminDb
       .from('academic_years')
-      .select('id, school_id')
+      .select('id, is_closed')
       .eq('id', yearId)
       .eq('school_id', req.user.school_id!)
       .single();
     if (!year) throw new ApiError(404, 'Academic year not found');
+    if ((year as any).is_closed) throw new ApiError(400, 'Cannot activate a closed year');
 
-    const { error } = await adminDb.rpc('set_active_academic_year', { p_year_id: yearId });
+    // RPC needs auth.uid() — use user JWT
+    const db = userDb(req.jwt);
+    const { error } = await db.rpc('set_active_academic_year', { p_year_id: yearId });
     if (error) throw new ApiError(500, error.message);
 
-    await adminDb.rpc('log_audit', {
-      p_action: 'SET_ACTIVE_YEAR',
-      p_entity_type: 'academic_year',
-      p_entity_id: yearId,
-      p_details: {},
-    });
     ok(res, { yearId, active: true });
   } catch (err) { fail(res, err); }
 });
@@ -84,22 +96,66 @@ academicYearRouter.post('/close', requireAuth, PRINCIPAL, async (req, res) => {
 
     const { data: year } = await adminDb
       .from('academic_years')
-      .select('id, school_id, is_closed')
+      .select('id, is_closed')
       .eq('id', yearId)
       .eq('school_id', req.user.school_id!)
       .single();
     if (!year) throw new ApiError(404, 'Academic year not found');
-    if (year.is_closed) throw new ApiError(400, 'Academic year already closed');
+    if ((year as any).is_closed) throw new ApiError(400, 'Academic year is already closed');
 
-    const { error } = await adminDb.rpc('close_academic_year', { p_year_id: yearId });
+    // RPC needs auth.uid() — use user JWT
+    const db = userDb(req.jwt);
+    const { error } = await db.rpc('close_academic_year', { p_year_id: yearId });
     if (error) throw new ApiError(500, error.message);
 
-    await adminDb.rpc('log_audit', {
-      p_action: 'CLOSE_ACADEMIC_YEAR',
-      p_entity_type: 'academic_year',
-      p_entity_id: yearId,
-      p_details: {},
-    });
     ok(res, { yearId, closed: true });
+  } catch (err) { fail(res, err); }
+});
+
+// POST /api/academic-year/sections — create sections for a year
+academicYearRouter.post('/sections', requireAuth, PRINCIPAL, async (req, res) => {
+  try {
+    const body = requireBody<{
+      yearId: string;
+      sections: { className: string; section: string; classTeacher?: string }[];
+    }>(req, ['yearId', 'sections']);
+
+    if (!Array.isArray(body.sections) || body.sections.length === 0) {
+      throw new ApiError(400, 'sections array required');
+    }
+
+    const rows = body.sections.map(s => ({
+      school_id:        req.user.school_id,
+      academic_year_id: body.yearId,
+      class_name:       s.className,
+      section:          s.section,
+      class_teacher:    s.classTeacher ?? null,
+    }));
+
+    const { data, error } = await adminDb
+      .from('sections')
+      .insert(rows)
+      .select();
+    if (error) {
+      if (error.code === '23505') throw new ApiError(409, 'One or more sections already exist for this year');
+      throw new ApiError(500, error.message);
+    }
+
+    ok(res, data, 201);
+  } catch (err) { fail(res, err); }
+});
+
+// GET /api/academic-year/:yearId/sections
+academicYearRouter.get('/:yearId/sections', requireAuth, requireRole('PRINCIPAL', 'TEACHER'), async (req, res) => {
+  try {
+    const { data, error } = await adminDb
+      .from('sections')
+      .select('*')
+      .eq('academic_year_id', req.params.yearId)
+      .eq('school_id', req.user.school_id!)
+      .order('class_name')
+      .order('section');
+    if (error) throw new ApiError(500, error.message);
+    ok(res, data);
   } catch (err) { fail(res, err); }
 });

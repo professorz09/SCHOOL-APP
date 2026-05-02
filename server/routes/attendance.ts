@@ -1,9 +1,26 @@
 import { Router } from 'express';
-import { adminDb } from '../lib/db';
+import { adminDb, userDb } from '../lib/db';
 import { ok, fail, ApiError, requireBody } from '../lib/helpers';
 import { requireAuth, requireRole } from '../middleware/auth';
 
 export const attendanceRouter = Router();
+
+// GET /api/attendance?sectionId=&date=
+attendanceRouter.get('/', requireAuth, requireRole('TEACHER', 'PRINCIPAL'), async (req, res) => {
+  try {
+    const { sectionId, date } = req.query as Record<string, string>;
+    if (!sectionId || !date) throw new ApiError(400, 'sectionId and date required');
+
+    const { data: record } = await adminDb
+      .from('attendance_records')
+      .select('*, attendance_student_details(*)')
+      .eq('section_id', sectionId)
+      .eq('date', date)
+      .maybeSingle();
+
+    ok(res, record ?? null);
+  } catch (err) { fail(res, err); }
+});
 
 // POST /api/attendance/submit — teacher marks attendance
 attendanceRouter.post('/submit', requireAuth, requireRole('TEACHER', 'PRINCIPAL'), async (req, res) => {
@@ -17,30 +34,58 @@ attendanceRouter.post('/submit', requireAuth, requireRole('TEACHER', 'PRINCIPAL'
       throw new ApiError(400, 'records array required');
     }
 
-    // Check if already exists and locked
+    // Fetch section info for school_id, academic_year_id
+    const { data: section } = await adminDb
+      .from('sections')
+      .select('id, class_name, section, academic_year_id, school_id')
+      .eq('id', body.sectionId)
+      .single();
+    if (!section) throw new ApiError(404, 'Section not found');
+
+    // Block if locked
     const { data: existing } = await adminDb
       .from('attendance_records')
-      .select('id, is_locked')
+      .select('id, is_locked, approval_status')
       .eq('section_id', body.sectionId)
       .eq('date', body.date)
       .maybeSingle();
 
-    if (existing?.is_locked) throw new ApiError(403, 'Attendance is locked and cannot be modified');
+    if (existing?.is_locked) throw new ApiError(403, 'Attendance is locked — principal ne approve kar diya hai');
+
+    const present = body.records.filter(r => r.isPresent).length;
+    const absent  = body.records.length - present;
 
     let attendanceId: string;
     if (existing) {
       attendanceId = existing.id;
-      // Delete old student records — new submission replaces them (but record header is immutable)
-      await adminDb.from('attendance_students').delete().eq('attendance_id', attendanceId);
+      // Update header counts, reset to PENDING if re-submitted
+      await adminDb
+        .from('attendance_records')
+        .update({
+          total_present:   present,
+          total_absent:    absent,
+          total_students:  body.records.length,
+          marked_by:       req.user.id,
+          approval_status: 'PENDING',
+        })
+        .eq('id', attendanceId);
+      await adminDb.from('attendance_student_details').delete().eq('attendance_id', attendanceId);
     } else {
       const { data: record, error } = await adminDb
         .from('attendance_records')
         .insert({
-          section_id: body.sectionId,
-          date:       body.date,
-          status:     'SUBMITTED',
-          is_locked:  false,
-          submitted_by: req.user.id,
+          school_id:       section.school_id,
+          academic_year_id: section.academic_year_id,
+          section_id:      body.sectionId,
+          class_name:      section.class_name,
+          section:         section.section,
+          date:            body.date,
+          total_present:   present,
+          total_absent:    absent,
+          total_students:  body.records.length,
+          marked_by:       req.user.id,
+          approval_status: 'PENDING',
+          is_locked:       false,
         })
         .select()
         .single();
@@ -53,55 +98,33 @@ attendanceRouter.post('/submit', requireAuth, requireRole('TEACHER', 'PRINCIPAL'
       student_id:    r.studentId,
       is_present:    r.isPresent,
     }));
-    const { error: re } = await adminDb.from('attendance_students').insert(rows);
+    const { error: re } = await adminDb.from('attendance_student_details').insert(rows);
     if (re) throw new ApiError(500, re.message);
 
-    ok(res, { attendanceId, date: body.date, count: rows.length });
+    ok(res, { attendanceId, date: body.date, present, absent, total: body.records.length });
   } catch (err) { fail(res, err); }
 });
 
-// POST /api/attendance/approve — principal locks the record
+// POST /api/attendance/approve — principal approves & locks
 attendanceRouter.post('/approve', requireAuth, requireRole('PRINCIPAL'), async (req, res) => {
   try {
     const { attendanceId } = requireBody<{ attendanceId: string }>(req, ['attendanceId']);
 
     const { data: record } = await adminDb
       .from('attendance_records')
-      .select('id, is_locked, sections!inner(academic_years!inner(school_id))')
+      .select('id, is_locked, school_id')
       .eq('id', attendanceId)
       .single();
     if (!record) throw new ApiError(404, 'Attendance record not found');
-    if (record.is_locked) throw new ApiError(400, 'Already approved');
+    if (record.school_id !== req.user.school_id) throw new ApiError(403, 'Access denied');
+    if (record.is_locked) throw new ApiError(400, 'Already approved and locked');
 
     const { error } = await adminDb
       .from('attendance_records')
-      .update({ is_locked: true, status: 'APPROVED', approved_by: req.user.id })
+      .update({ is_locked: true, approval_status: 'APPROVED', approved_by: req.user.id })
       .eq('id', attendanceId);
     if (error) throw new ApiError(500, error.message);
 
-    await adminDb.rpc('log_audit', {
-      p_action: 'APPROVE_ATTENDANCE',
-      p_entity_type: 'attendance_record',
-      p_entity_id: attendanceId,
-      p_details: {},
-    });
     ok(res, { attendanceId, approved: true });
-  } catch (err) { fail(res, err); }
-});
-
-// GET /api/attendance?sectionId=&date=
-attendanceRouter.get('/', requireAuth, requireRole('TEACHER', 'PRINCIPAL'), async (req, res) => {
-  try {
-    const { sectionId, date } = req.query as Record<string, string>;
-    if (!sectionId || !date) throw new ApiError(400, 'sectionId and date required');
-
-    const { data: record } = await adminDb
-      .from('attendance_records')
-      .select('*, attendance_students(*)')
-      .eq('section_id', sectionId)
-      .eq('date', date)
-      .maybeSingle();
-
-    ok(res, record ?? null);
   } catch (err) { fail(res, err); }
 });

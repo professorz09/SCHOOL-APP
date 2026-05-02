@@ -23,21 +23,39 @@ A school management application with React frontend and Supabase (Postgres + Aut
   - `vite-plugins/api-server.ts` → `/api/*` (all other modules, mounts `server/app.ts`)
 - **Server structure** (`server/`):
   - `server/app.ts` — Express app, all routers mounted
-  - `server/lib/db.ts` — Supabase service-role client + anon client + per-user JWT client
+  - `server/lib/db.ts` — `adminDb` (service role), `anonDb`, `userDb(jwt)` (per-request JWT for RPCs that need `auth.uid()`)
   - `server/lib/helpers.ts` — `ok()`, `fail()`, `ApiError`, `requireBody()`
-  - `server/middleware/auth.ts` — `requireAuth` (JWT → `req.user`), `requireRole(...roles)`
+  - `server/middleware/auth.ts` — `requireAuth` (JWT → `req.user` + `req.jwt`), `requireRole(...roles)`
   - `server/routes/auth.ts` — POST /api/auth/login, logout, me, change-password
   - `server/routes/academic-year.ts` — GET/POST /api/academic-year/{create,set-active,close}
-  - `server/routes/students.ts` — GET/POST /api/students/{create,assign}
-  - `server/routes/fees.ts` — GET/POST /api/fees/{structure/create,assign,pay,student/:id}
+  - `server/routes/students.ts` — GET/POST /api/students/{create,assign,deactivate}
+  - `server/routes/fees.ts` — GET/POST /api/fees/{structure/create,schedule/generate,pay,govt-pay,writeoff,student/:id}
   - `server/routes/transport.ts` — POST /api/transport/{assign,remove}
   - `server/routes/attendance.ts` — GET/POST /api/attendance/{submit,approve}
   - `server/routes/exams.ts` — GET/POST /api/exam/{create,result/upload}
   - `server/routes/promotion.ts` — GET/POST /api/promotion/{preview,execute}
   - `server/routes/teacher.ts` — GET/POST /api/teacher/{check-in,check-out,attendance}
   - `server/routes/settings.ts` — GET/PUT /api/settings
+- **Frontend API client** (`src/shared/lib/apiClient.ts`):
+  - `apiAuth` — login (unauthenticated fetch → `supabase.auth.setSession()`), logout, me, changePassword
+  - `apiStudents` — list, getById, create, assign, deactivate
+  - `apiFees` — pay, govtPay, writeoff, createStructure, generateSchedule, getStudentFees, getStructures
+  - `apiTransport` — assign, remove, getVehicles, getStudentAssignments
+  - `apiAttendance` — get, submit, approve
+  - `apiExams` — list, create, uploadResults, getResults
+  - `apiPromotion` — preview, execute
+  - `apiTeacher` — checkIn, checkOut, attendance
+  - `apiSettings` — get, update
+  - `apiAcademicYear` — list, active, create, setActive, close, getSections, createSections
 - `src/lib/supabase.ts` gracefully degrades if env vars are missing (logs a warning, uses placeholder values)
-- Schema lives in Supabase (34 migrations in `supabase/migrations/`); apply with `npm run db:apply` after setting `SUPABASE_DB_PASSWORD`
+- Schema lives in Supabase (35 migrations in `supabase/migrations/`); apply with `npm run db:apply` after setting `SUPABASE_DB_PASSWORD`
+- Migration 0035 adds: `school_settings` table, `check_in_time`/`check_out_time` on `staff_attendance`, `end_reason` on `student_transport_assignments`
+
+**Key write flows through API:**
+- Login → `POST /api/auth/login` → tokens → `supabase.auth.setSession()` → profile fetch
+- Fee payment → `POST /api/fees/pay` → `record_fee_payment` RPC via `userDb(jwt)` (auth.uid() required)
+- Govt payment → `POST /api/fees/govt-pay` → `record_govt_payment` RPC via `userDb(jwt)`
+- Fee schedule generation → `POST /api/fees/schedule/generate` → `generate_student_fee_schedule` RPC
 
 **API Security Rules (enforced server-side):**
 - No token → 401 `Authorization token required`

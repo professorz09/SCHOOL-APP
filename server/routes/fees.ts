@@ -1,25 +1,42 @@
 import { Router } from 'express';
-import { adminDb } from '../lib/db';
+import { adminDb, userDb } from '../lib/db';
 import { ok, fail, ApiError, requireBody } from '../lib/helpers';
 import { requireAuth, requireRole } from '../middleware/auth';
 
 export const feesRouter = Router();
 
-const PRINCIPAL = requireRole('PRINCIPAL');
-
-// GET /api/fees/student/:studentId
-feesRouter.get('/student/:studentId', requireAuth, requireRole('PRINCIPAL', 'TEACHER', 'STUDENT'), async (req, res) => {
+// GET /api/fees/structures?yearId=
+feesRouter.get('/structures', requireAuth, requireRole('PRINCIPAL'), async (req, res) => {
   try {
-    const { data: installments, error } = await adminDb
+    const { yearId } = req.query as Record<string, string>;
+    let q = adminDb
+      .from('fee_structures')
+      .select('*')
+      .eq('school_id', req.user.school_id!);
+    if (yearId) q = q.eq('academic_year_id', yearId);
+    const { data, error } = await q.order('class_name');
+    if (error) throw new ApiError(500, error.message);
+    ok(res, data);
+  } catch (err) { fail(res, err); }
+});
+
+// GET /api/fees/student/:studentId?yearId=
+feesRouter.get('/student/:studentId', requireAuth, requireRole('PRINCIPAL', 'TEACHER', 'PARENT', 'STUDENT'), async (req, res) => {
+  try {
+    const { yearId } = req.query as Record<string, string>;
+
+    let q = adminDb
       .from('fee_installments')
       .select('*')
       .eq('student_id', req.params.studentId)
       .order('due_date');
-    if (error) throw new ApiError(500, error.message);
+    if (yearId) q = q.eq('academic_year_id', yearId);
+    const { data: installments, error: ie } = await q;
+    if (ie) throw new ApiError(500, ie.message);
 
     const { data: payments } = await adminDb
-      .from('payments')
-      .select('*, payment_links(installment_id, amount_applied)')
+      .from('payment_records')
+      .select('*, payment_installment_links(installment_id, amount_applied)')
       .eq('student_id', req.params.studentId)
       .order('date', { ascending: false });
 
@@ -27,161 +44,161 @@ feesRouter.get('/student/:studentId', requireAuth, requireRole('PRINCIPAL', 'TEA
   } catch (err) { fail(res, err); }
 });
 
-// GET /api/fees/structures
-feesRouter.get('/structures', requireAuth, PRINCIPAL, async (req, res) => {
-  try {
-    const { data, error } = await adminDb
-      .from('fee_structures')
-      .select('*, fee_components(*)')
-      .eq('school_id', req.user.school_id!);
-    if (error) throw new ApiError(500, error.message);
-    ok(res, data);
-  } catch (err) { fail(res, err); }
-});
-
 // POST /api/fees/structure/create
-feesRouter.post('/structure/create', requireAuth, PRINCIPAL, async (req, res) => {
+feesRouter.post('/structure/create', requireAuth, requireRole('PRINCIPAL'), async (req, res) => {
   try {
     const body = requireBody<{
-      name: string; description?: string;
-      installmentType: string;
-      components: { name: string; amount: number }[];
-    }>(req, ['name', 'installmentType', 'components']);
+      name: string; className: string; academicYearId: string;
+      feeHeads: { name: string; amount: number; frequency: string; description?: string }[];
+      monthlyDueDates: { month: string; date: string }[];
+      lateFee?: Record<string, unknown>;
+    }>(req, ['name', 'className', 'academicYearId', 'feeHeads', 'monthlyDueDates']);
 
-    if (!Array.isArray(body.components) || body.components.length === 0) {
-      throw new ApiError(400, 'At least one fee component required');
+    if (!Array.isArray(body.feeHeads) || body.feeHeads.length === 0) {
+      throw new ApiError(400, 'feeHeads array required');
     }
 
-    const { data: structure, error: se } = await adminDb
+    const { data, error } = await adminDb
       .from('fee_structures')
       .insert({
         school_id:        req.user.school_id,
+        academic_year_id: body.academicYearId,
         name:             body.name,
-        description:      body.description ?? null,
-        installment_type: body.installmentType,
-      })
-      .select()
-      .single();
-    if (se) throw new ApiError(500, se.message);
-
-    const components = body.components.map(c => ({
-      fee_structure_id: structure.id,
-      name:   c.name,
-      amount: c.amount,
-    }));
-    const { error: ce } = await adminDb.from('fee_components').insert(components);
-    if (ce) throw new ApiError(500, ce.message);
-
-    ok(res, { ...structure, components: body.components }, 201);
-  } catch (err) { fail(res, err); }
-});
-
-// POST /api/fees/assign
-feesRouter.post('/assign', requireAuth, PRINCIPAL, async (req, res) => {
-  try {
-    const body = requireBody<{
-      studentId: string; feeStructureId: string;
-      startDate: string; endDate?: string;
-    }>(req, ['studentId', 'feeStructureId', 'startDate']);
-
-    // Close any existing open assignment
-    await adminDb
-      .from('student_fee_assignments')
-      .update({ end_date: body.startDate })
-      .eq('student_id', body.studentId)
-      .is('end_date', null);
-
-    const { data, error } = await adminDb
-      .from('student_fee_assignments')
-      .insert({
-        student_id:       body.studentId,
-        fee_structure_id: body.feeStructureId,
-        start_date:       body.startDate,
-        end_date:         body.endDate ?? null,
+        class_name:       body.className,
+        fee_heads:        body.feeHeads,
+        monthly_due_dates: body.monthlyDueDates,
+        late_fee:         body.lateFee ?? {},
       })
       .select()
       .single();
     if (error) throw new ApiError(500, error.message);
 
-    await adminDb.rpc('log_audit', {
-      p_action: 'ASSIGN_FEE_STRUCTURE',
-      p_entity_type: 'student_fee_assignment',
-      p_entity_id: data.id,
-      p_details: { studentId: body.studentId, feeStructureId: body.feeStructureId },
-    });
     ok(res, data, 201);
   } catch (err) { fail(res, err); }
 });
 
-// POST /api/fees/pay  — ledger-safe, oldest-due-first
-feesRouter.post('/pay', requireAuth, PRINCIPAL, async (req, res) => {
+// POST /api/fees/schedule/generate — generate fee installments for a student
+feesRouter.post('/schedule/generate', requireAuth, requireRole('PRINCIPAL'), async (req, res) => {
+  try {
+    const body = requireBody<{
+      studentId: string; yearId: string;
+      heads: { name: string; amount: number; frequency: string; description?: string }[];
+      dueDates: { month: string; date: string }[];
+      isRte?: boolean; discountAmount?: number; discountPct?: number;
+    }>(req, ['studentId', 'yearId', 'heads', 'dueDates']);
+
+    // Use user JWT so auth.uid() is set for the SECURITY DEFINER RPC
+    const db = userDb(req.jwt);
+    const { data, error } = await db.rpc('generate_student_fee_schedule', {
+      p_student_id:      body.studentId,
+      p_year_id:         body.yearId,
+      p_heads:           body.heads,
+      p_due_dates:       body.dueDates,
+      p_is_rte:          body.isRte ?? false,
+      p_discount_amount: body.discountAmount ?? 0,
+      p_discount_pct:    body.discountPct ?? 0,
+    });
+    if (error) throw new ApiError(500, error.message);
+
+    ok(res, { installmentCount: data });
+  } catch (err) { fail(res, err); }
+});
+
+// POST /api/fees/pay — oldest-due-first via record_fee_payment RPC
+feesRouter.post('/pay', requireAuth, requireRole('PRINCIPAL'), async (req, res) => {
   try {
     const body = requireBody<{
       studentId: string; amount: number; method: string;
-      note?: string; referenceNo?: string;
+      date?: string; note?: string; useAdvance?: boolean; applyLateFee?: boolean;
     }>(req, ['studentId', 'amount', 'method']);
 
     if (body.amount <= 0) throw new ApiError(400, 'Amount must be positive');
 
-    // 1. Get all unpaid/partially-paid installments oldest-due-first
-    const { data: installments, error: ie } = await adminDb
-      .from('fee_installments')
-      .select('id, due_date, amount, paid_amount, status')
-      .eq('student_id', body.studentId)
-      .in('status', ['PENDING', 'PARTIAL'])
-      .order('due_date');
-    if (ie) throw new ApiError(500, ie.message);
+    // RPC requires auth.uid() — use user JWT
+    const db = userDb(req.jwt);
+    const { data: paymentId, error } = await db.rpc('record_fee_payment', {
+      p_student_id:    body.studentId,
+      p_amount:        Math.round(body.amount),
+      p_method:        body.method,
+      p_date:          body.date ?? new Date().toISOString().split('T')[0],
+      p_note:          body.note ?? null,
+      p_use_advance:   body.useAdvance ?? false,
+      p_apply_late_fee: body.applyLateFee ?? true,
+    });
+    if (error) throw new ApiError(500, error.message);
 
-    // 2. Create immutable payment record
-    const { data: payment, error: pe } = await adminDb
-      .from('payments')
-      .insert({
-        student_id:   body.studentId,
-        amount:       body.amount,
-        date:         new Date().toISOString().split('T')[0],
-        method:       body.method,
-        note:         body.note ?? null,
-        reference_no: body.referenceNo ?? null,
-        created_by:   req.user.id,
-      })
-      .select()
+    // Return the new payment record
+    const { data: payment } = await adminDb
+      .from('payment_records')
+      .select('*, payment_installment_links(installment_id, amount_applied)')
+      .eq('id', paymentId)
       .single();
-    if (pe) throw new ApiError(500, pe.message);
 
-    // 3. Allocate oldest-due-first — create payment_links + update installments
-    let remaining = body.amount;
-    const links: { payment_id: string; installment_id: string; amount_applied: number }[] = [];
-    const updates: { id: string; paid_amount: number; status: string }[] = [];
+    ok(res, { paymentId, payment });
+  } catch (err) { fail(res, err); }
+});
 
-    for (const inst of installments ?? []) {
-      if (remaining <= 0) break;
-      const outstanding = inst.amount - (inst.paid_amount ?? 0);
-      const apply = Math.min(remaining, outstanding);
-      const newPaid = (inst.paid_amount ?? 0) + apply;
-      const newStatus = newPaid >= inst.amount ? 'PAID' : 'PARTIAL';
+// POST /api/fees/govt-pay — bulk RTE / government payment
+feesRouter.post('/govt-pay', requireAuth, requireRole('PRINCIPAL'), async (req, res) => {
+  try {
+    const body = requireBody<{
+      studentIds: string[]; totalAmount: number; referenceNo: string; note: string;
+    }>(req, ['studentIds', 'totalAmount', 'referenceNo', 'note']);
 
-      links.push({ payment_id: payment.id, installment_id: inst.id, amount_applied: apply });
-      updates.push({ id: inst.id, paid_amount: newPaid, status: newStatus });
-      remaining -= apply;
-    }
+    if (!Array.isArray(body.studentIds) || body.studentIds.length === 0)
+      throw new ApiError(400, 'studentIds array required');
+    if (body.totalAmount <= 0) throw new ApiError(400, 'Amount must be positive');
 
-    if (links.length > 0) {
-      await adminDb.from('payment_links').insert(links);
-      for (const u of updates) {
-        await adminDb
-          .from('fee_installments')
-          .update({ paid_amount: u.paid_amount, status: u.status })
-          .eq('id', u.id);
-      }
-    }
+    const db = userDb(req.jwt);
+    const { error } = await db.rpc('record_govt_payment', {
+      p_amount:      Math.round(body.totalAmount),
+      p_date:        new Date().toISOString().split('T')[0],
+      p_reference:   body.referenceNo,
+      p_note:        body.note,
+      p_student_ids: body.studentIds,
+    });
+    if (error) throw new ApiError(500, error.message);
 
-    await adminDb.rpc('log_audit', {
-      p_action: 'RECORD_FEE_PAYMENT',
-      p_entity_type: 'payment',
-      p_entity_id: payment.id,
-      p_details: { studentId: body.studentId, amount: body.amount, method: body.method, installmentsAllocated: links.length },
+    ok(res, { success: true, studentCount: body.studentIds.length });
+  } catch (err) { fail(res, err); }
+});
+
+// POST /api/fees/writeoff
+feesRouter.post('/writeoff', requireAuth, requireRole('PRINCIPAL'), async (req, res) => {
+  try {
+    const body = requireBody<{
+      installmentId: string; amount: number; reason: string;
+    }>(req, ['installmentId', 'amount', 'reason']);
+
+    const { data: inst } = await adminDb
+      .from('fee_installments')
+      .select('id, student_id, amount, paid_amount, write_off_amount, school_id')
+      .eq('id', body.installmentId)
+      .single();
+    if (!inst) throw new ApiError(404, 'Installment not found');
+    if ((inst as any).school_id !== req.user.school_id) throw new ApiError(403, 'Access denied');
+
+    const r = inst as any;
+    const newWriteOff = Number(r.write_off_amount) + body.amount;
+    if (newWriteOff > Number(r.amount)) throw new ApiError(400, 'Write-off exceeds installment amount');
+
+    const remaining = Number(r.amount) - Number(r.paid_amount) - newWriteOff;
+    const newStatus = remaining <= 0 ? 'WRITTEN_OFF' : 'PARTIAL';
+
+    await adminDb.from('fee_installments').update({
+      write_off_amount: newWriteOff,
+      status: newStatus,
+    }).eq('id', body.installmentId);
+
+    await adminDb.from('fee_write_offs').insert({
+      installment_id: body.installmentId,
+      student_id:     r.student_id,
+      school_id:      req.user.school_id,
+      amount:         body.amount,
+      reason:         body.reason,
+      approved_by:    req.user.id,
     });
 
-    ok(res, { payment, links, amountAllocated: body.amount - remaining, surplus: remaining });
+    ok(res, { installmentId: body.installmentId, writeOffAmount: newWriteOff, status: newStatus });
   } catch (err) { fail(res, err); }
 });

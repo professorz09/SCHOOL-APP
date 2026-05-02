@@ -10,6 +10,7 @@ import { supabase } from '@/shared/lib/supabase';
 import { useAuthStore } from '@/shared/store/authStore';
 import { logAudit } from '@/shared/lib/audit';
 import { registerCacheResetter } from '@/shared/lib/cacheBus';
+import { apiFees } from '@/shared/lib/apiClient';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -412,47 +413,24 @@ export const feeService = {
     if (amount <= 0) return { applied: 0, advance: 0, paymentId: '' };
 
     const beforeAdv = this.getAdvanceBalance(studentId);
-    const beforeDue = this.getStudentInstallments(studentId)
-      .filter(i => i.payerType === 'PARENT')
-      .reduce((s, i) => s + Math.max(0, i.amount - i.paidAmount - i.writeOffAmount), 0);
 
-    const { data, error } = await supabase.rpc('record_fee_payment', {
-      p_student_id: studentId,
-      p_amount: amount,
-      p_method: method,
-      p_date: date ?? new Date().toISOString().slice(0, 10),
-      p_note: note ?? null,
-      p_use_advance: useAdvance,
-      p_apply_late_fee: applyLateFee,
+    // All fee writes go through the API server (uses auth.uid() context correctly).
+    const result = await apiFees.pay({
+      studentId, amount: Math.round(amount), method,
+      date, note, useAdvance, applyLateFee,
     });
-    if (error) throw new Error(error.message);
-    const paymentId = data as string;
 
-    // Authoritative `applied` total: sum of payment_installment_links rows
-    // for the just-inserted payment. We previously derived this from
-    // (beforeDue - afterDue) on the cache, but when applyLateFee=true the
-    // RPC inserts a Late Fee row which inflates afterDue and can make the
-    // delta come out <= 0 even on a fully-applied payment, breaking the
-    // FeeLedger guard and causing a false "Nothing applied" error.
-    let applied = 0;
-    if (paymentId) {
-      const { data: linkRows } = await supabase
-        .from('payment_installment_links')
-        .select('amount_applied')
-        .eq('payment_id', paymentId);
-      applied = (linkRows ?? []).reduce(
-        (s, r: { amount_applied: number | string }) => s + Number(r.amount_applied ?? 0),
-        0,
-      );
-    }
+    const paymentId = (result as any).paymentId as string;
+
+    // Authoritative applied total: sum payment_installment_links from API response.
+    const links = ((result as any).payment?.payment_installment_links ?? []) as {
+      amount_applied: number | string;
+    }[];
+    const applied = links.reduce((s, r) => s + Number(r.amount_applied ?? 0), 0);
 
     await this.refreshAll();
 
     const afterAdv = this.getAdvanceBalance(studentId);
-    // beforeDue retained for diagnostics; advance is still derived from
-    // cache delta because the RPC writes the residual advance to the
-    // student record, not to the links table.
-    void beforeDue;
     const advance = Math.max(0, afterAdv - (useAdvance ? 0 : beforeAdv));
     return { applied, advance, paymentId };
   },
@@ -462,14 +440,7 @@ export const feeService = {
     studentIds: string[], totalAmount: number, referenceNo: string, note: string,
   ): Promise<boolean> {
     if (totalAmount <= 0 || !studentIds.length) return false;
-    const { error } = await supabase.rpc('record_govt_payment', {
-      p_amount: totalAmount,
-      p_date: new Date().toISOString().slice(0, 10),
-      p_reference: referenceNo,
-      p_note: note,
-      p_student_ids: studentIds,
-    });
-    if (error) throw new Error(error.message);
+    await apiFees.govtPay({ studentIds, totalAmount: Math.round(totalAmount), referenceNo, note });
     await this.refreshAll();
     return true;
   },

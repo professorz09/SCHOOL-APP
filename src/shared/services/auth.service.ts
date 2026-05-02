@@ -86,11 +86,30 @@ class AuthService {
     const cleaned = mobileNumber.trim();
     if (!cleaned || !password) throw new Error('Mobile number and password required');
 
-    const email = mobileToEmail(cleaned);
-    const { data, error } = await supabase.auth.signInWithPassword({ email, password });
-    if (error || !data.user) throw new Error('Invalid mobile number or password');
+    // Step 1: Authenticate via API server (no Supabase client call needed here)
+    const res = await fetch('/api/auth/login', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ mobile: cleaned, password }),
+    });
+    const json = await res.json();
+    if (!res.ok) throw new Error(json?.error ?? 'Invalid mobile number or password');
 
-    const profile = await fetchProfile(data.user.id);
+    const { accessToken, refreshToken } = json.data as { accessToken: string; refreshToken: string };
+
+    // Step 2: Establish Supabase client session with returned tokens so RLS
+    // reads (profile fetch, etc.) use the authenticated user context.
+    const { error: sessErr } = await supabase.auth.setSession({
+      access_token: accessToken,
+      refresh_token: refreshToken,
+    });
+    if (sessErr) throw new Error(sessErr.message);
+
+    // Step 3: Fetch full profile (mobile_number, is_active, etc.) — read-only.
+    const { data: userSnap } = await supabase.auth.getUser();
+    if (!userSnap.user) throw new Error('Session not established');
+
+    const profile = await fetchProfile(userSnap.user.id);
     if (!profile) {
       await supabase.auth.signOut();
       throw new Error('Profile not found. Contact your administrator.');
@@ -100,9 +119,7 @@ class AuthService {
       throw new Error('Account is deactivated.');
     }
 
-    // Best-effort: record this login in the audit trail. The log_audit RPC
-    // is SECURITY DEFINER so any authenticated caller can write; failure
-    // here must not block sign-in, so we swallow errors.
+    // Best-effort: audit trail + last_login update. Failures must not block login.
     try {
       await supabase.rpc('log_audit', {
         p_action: 'login',
