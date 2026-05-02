@@ -393,6 +393,36 @@ export const apiPrincipal = {
     post<{ paymentId: string | null }>('/principal/fee-upload/review', body),
 };
 
+// ─── Admin — School Billing ────────────────────────────────────────────────────
+
+export interface SchoolFeePayment {
+  id: string;
+  school_id: string;
+  amount: number;
+  paid_on: string;
+  note: string | null;
+  created_by: string | null;
+  created_at: string;
+}
+
+export interface SchoolBillingInfo {
+  fixedAmount: number;
+  monthsElapsed: number;
+  totalExpected: number;
+  totalPaid: number;
+  outstanding: number;
+  payments: SchoolFeePayment[];
+}
+
+export const apiAdminSchools = {
+  setBillingAmount: (schoolId: string, fixedAmount: number) =>
+    put<{ schoolId: string; fixedAmount: number }>(`/admin/schools/${schoolId}/billing`, { fixedAmount }),
+  addPayment: (schoolId: string, body: { amount: number; paidOn: string; note?: string }) =>
+    post<SchoolFeePayment>(`/admin/schools/${schoolId}/payments`, body),
+  getPayments: (schoolId: string) =>
+    get<SchoolBillingInfo>(`/admin/schools/${schoolId}/payments`),
+};
+
 // ─── Health check ─────────────────────────────────────────────────────────────
 
 export const apiHealth = () =>

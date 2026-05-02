@@ -1,8 +1,9 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useState, useCallback } from 'react';
 import {
   ArrowLeft, Plus, Search, Building2, MapPin, Phone, Users,
   Edit2, CheckCircle2, XCircle, Save, UserCheck,
   IndianRupee, Copy, ChevronRight, BookOpen, TrendingUp, AlertCircle,
+  Wallet, CreditCard, RefreshCw,
 } from 'lucide-react';
 import { useSchoolStore } from '@/shared/store/schoolStore';
 import { useBillingStore } from '@/shared/store/billingStore';
@@ -12,8 +13,9 @@ import { SchoolStatus, BillingPlan, STATUS_COLORS, PLAN_COLORS } from '@/shared/
 import { schoolService } from '@/shared/services/school.service';
 import { billingService, ANNUAL_PLAN_PRICES } from '@/roles/super-admin/billing.service';
 import { BillingYear } from '@/shared/types/billing.types';
+import { apiAdminSchools, SchoolBillingInfo, SchoolFeePayment } from '@/shared/lib/apiClient';
 
-type View = 'LIST' | 'CREATE' | 'DETAIL' | 'EDIT' | 'SECTIONS' | 'STUDENTS' | 'STAFF';
+type View = 'LIST' | 'CREATE' | 'DETAIL' | 'EDIT' | 'SECTIONS' | 'STUDENTS' | 'STAFF' | 'BILLING';
 
 interface Props { onBack: () => void; }
 
@@ -47,13 +49,15 @@ const Field: React.FC<FieldProps> = ({ label, k, placeholder, type, locked, form
   </div>
 );
 
+const fmtDate = (d: string) => {
+  const dt = new Date(d + (d.includes('T') ? '' : 'T00:00:00'));
+  return dt.toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' });
+};
+
 type RealStaff = Awaited<ReturnType<typeof schoolService.getSchoolStaff>>[number];
 type RealStudent = Awaited<ReturnType<typeof schoolService.getSchoolStudents>>[number];
 
 export const SchoolsManager: React.FC<Props> = ({ onBack }) => {
-  // Hard-delete is intentionally omitted from this UI — Super Admins can only
-  // toggle a school's status (ACTIVE ↔ INACTIVE) via handleStatusToggle. The
-  // store still exposes deleteSchool for migration scripts / dev tooling.
   const { schools, fetchSchools, addSchool, updateSchool } = useSchoolStore();
   const { billingYears, fetchAll: fetchBilling } = useBillingStore();
   const { showToast } = useUIStore();
@@ -72,6 +76,16 @@ export const SchoolsManager: React.FC<Props> = ({ onBack }) => {
   const [studentsLoading, setStudentsLoading] = useState(false);
   const [staffSearch, setStaffSearch]       = useState('');
   const [studentsSearch, setStudentsSearch] = useState('');
+
+  // ── Billing state ─────────────────────────────────────────────────────────
+  const [billingInfo, setBillingInfo]       = useState<SchoolBillingInfo | null>(null);
+  const [billingLoading, setBillingLoading] = useState(false);
+  const [fixedAmtInput, setFixedAmtInput]   = useState('');
+  const [savingAmt, setSavingAmt]           = useState(false);
+  const [payAmt, setPayAmt]                 = useState('');
+  const [payDate, setPayDate]               = useState(() => new Date().toISOString().split('T')[0]);
+  const [payNote, setPayNote]               = useState('');
+  const [addingPay, setAddingPay]           = useState(false);
 
   const blankForm: Partial<CreateSchoolInput> = {
     name: '', code: '', location: '', address: '', phone: '',
@@ -98,6 +112,19 @@ export const SchoolsManager: React.FC<Props> = ({ onBack }) => {
     const prev = latestBillingMap[y.schoolId];
     if (!prev || y.startDate > prev.startDate) latestBillingMap[y.schoolId] = y;
   });
+
+  const loadBillingInfo = useCallback(async (schoolId: string) => {
+    setBillingLoading(true);
+    try {
+      const info = await apiAdminSchools.getPayments(schoolId);
+      setBillingInfo(info);
+      setFixedAmtInput(info.fixedAmount > 0 ? String(info.fixedAmount) : '');
+    } catch (e) {
+      showToast(e instanceof Error ? e.message : 'Failed to load billing info', 'error');
+    } finally {
+      setBillingLoading(false);
+    }
+  }, []);
 
   const handleCreate = async () => {
     if (!form.name || !form.code || !form.principalEmail || !form.paymentStartDate) {
@@ -192,6 +219,42 @@ export const SchoolsManager: React.FC<Props> = ({ onBack }) => {
     } catch (e) {
       showToast(e instanceof Error ? e.message : 'Failed to update status', 'error');
     }
+  };
+
+  const handleSaveFixedAmount = async () => {
+    if (!selected) return;
+    const amt = parseFloat(fixedAmtInput);
+    if (!Number.isFinite(amt) || amt < 0) {
+      showToast('Valid amount required', 'error'); return;
+    }
+    setSavingAmt(true);
+    try {
+      await apiAdminSchools.setBillingAmount(selected.id, Math.round(amt));
+      showToast('Monthly fee updated');
+      await loadBillingInfo(selected.id);
+    } catch (e) {
+      showToast(e instanceof Error ? e.message : 'Failed to save', 'error');
+    } finally { setSavingAmt(false); }
+  };
+
+  const handleAddPayment = async () => {
+    if (!selected) return;
+    const amt = parseFloat(payAmt);
+    if (!Number.isFinite(amt) || amt <= 0) {
+      showToast('Valid payment amount required', 'error'); return;
+    }
+    if (!payDate) { showToast('Payment date required', 'error'); return; }
+    setAddingPay(true);
+    try {
+      await apiAdminSchools.addPayment(selected.id, { amount: Math.round(amt), paidOn: payDate, note: payNote || undefined });
+      showToast('Payment recorded');
+      setPayAmt('');
+      setPayNote('');
+      setPayDate(new Date().toISOString().split('T')[0]);
+      await loadBillingInfo(selected.id);
+    } catch (e) {
+      showToast(e instanceof Error ? e.message : 'Failed to add payment', 'error');
+    } finally { setAddingPay(false); }
   };
 
   // ── Reusable header ───────────────────────────────────────────────────────────
@@ -540,15 +603,16 @@ export const SchoolsManager: React.FC<Props> = ({ onBack }) => {
           {/* Quick-nav tiles */}
           <div className="grid grid-cols-2 gap-3">
             {[
-              { icon: BookOpen,   label: 'Sections',    view: 'SECTIONS' as View, color: 'text-indigo-600 bg-indigo-50', count: ay?.sections.length ?? 0 },
-              { icon: Users,      label: 'Students',    view: 'STUDENTS' as View, color: 'text-blue-600 bg-blue-50',    count: ay?.totalStudents ?? 0 },
-              { icon: UserCheck,  label: 'Staff',       view: 'STAFF' as View,    color: 'text-emerald-600 bg-emerald-50', count: selected.teacherCount },
-              { icon: TrendingUp, label: 'Performance', view: 'DETAIL' as View,   color: 'text-amber-600 bg-amber-50',  count: 0 },
+              { icon: BookOpen,    label: 'Sections',    view: 'SECTIONS' as View, color: 'text-indigo-600 bg-indigo-50', count: ay?.sections.length ?? 0 },
+              { icon: Users,       label: 'Students',    view: 'STUDENTS' as View, color: 'text-blue-600 bg-blue-50',    count: ay?.totalStudents ?? 0 },
+              { icon: UserCheck,   label: 'Staff',       view: 'STAFF' as View,    color: 'text-emerald-600 bg-emerald-50', count: selected.teacherCount },
+              { icon: Wallet,      label: 'Billing',     view: 'BILLING' as View,  color: 'text-violet-600 bg-violet-50', count: 0 },
             ].map(({ icon: Icon, label, view: v, color, count }) => (
               <button key={label}
                 onClick={() => {
                   if (v === 'STAFF') { setStaffSearch(''); loadStaff(selected.id); setView(v); }
                   else if (v === 'STUDENTS') { setStudentsSearch(''); setSelectedSection(null); loadStudents(selected.id); setView(v); }
+                  else if (v === 'BILLING') { setBillingInfo(null); loadBillingInfo(selected.id); setView(v); }
                   else if (v !== 'DETAIL') setView(v);
                 }}
                 className="flex items-center gap-3 bg-white rounded-2xl border border-slate-100 shadow-sm p-4 text-left active:scale-95 transition-transform">
@@ -560,6 +624,152 @@ export const SchoolsManager: React.FC<Props> = ({ onBack }) => {
               </button>
             ))}
           </div>
+        </div>
+      </div>
+    );
+  }
+
+  // ── BILLING ───────────────────────────────────────────────────────────────────
+  if (view === 'BILLING' && selected) {
+    const outstanding = billingInfo?.outstanding ?? 0;
+    return (
+      <div className="w-full bg-slate-50 flex flex-col animate-in slide-in-from-right-8 duration-300">
+        {renderHeader(`Billing · ${selected.name}`, () => setView('DETAIL'),
+          <button onClick={() => loadBillingInfo(selected.id)} disabled={billingLoading}
+            className="p-2 bg-slate-100 rounded-full text-slate-600 hover:bg-slate-200 transition-colors disabled:opacity-50">
+            <RefreshCw size={16} className={billingLoading ? 'animate-spin' : ''} />
+          </button>
+        )}
+
+        <div className="flex-1 overflow-y-auto p-4 space-y-4">
+
+          {billingLoading && !billingInfo ? (
+            <div className="flex items-center justify-center py-16">
+              <div className="w-8 h-8 border-2 border-slate-200 border-t-violet-600 rounded-full animate-spin" />
+            </div>
+          ) : (
+            <>
+              {/* Outstanding balance card */}
+              <div className={`rounded-2xl p-5 ${outstanding > 0 ? 'bg-rose-600' : 'bg-emerald-600'}`}>
+                <p className="text-[10px] font-black uppercase tracking-widest text-white/70 mb-1">Outstanding Balance</p>
+                <div className="flex items-end gap-2">
+                  <span className="text-3xl font-black text-white">
+                    ₹{outstanding.toLocaleString('en-IN')}
+                  </span>
+                  {outstanding === 0 && <CheckCircle2 size={20} className="text-white mb-1" />}
+                </div>
+                {billingInfo && billingInfo.fixedAmount > 0 && (
+                  <div className="mt-3 flex gap-4 text-white/80 text-[10px] font-bold">
+                    <span>₹{billingInfo.fixedAmount.toLocaleString('en-IN')}/mo × {billingInfo.monthsElapsed} months</span>
+                    <span className="text-white/50">|</span>
+                    <span>Paid ₹{billingInfo.totalPaid.toLocaleString('en-IN')}</span>
+                  </div>
+                )}
+                {billingInfo && billingInfo.fixedAmount === 0 && (
+                  <p className="mt-2 text-white/70 text-xs font-bold">Set a monthly fee below to track balance</p>
+                )}
+              </div>
+
+              {/* Set fixed monthly fee */}
+              <div className="bg-white rounded-2xl border border-slate-100 shadow-sm p-4">
+                <p className="text-[10px] font-black uppercase tracking-widest text-slate-400 mb-3">Monthly Fee</p>
+                <div className="flex gap-2">
+                  <div className="relative flex-1">
+                    <span className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400 font-bold text-sm">₹</span>
+                    <input
+                      type="number"
+                      min="0"
+                      value={fixedAmtInput}
+                      onChange={e => setFixedAmtInput(e.target.value)}
+                      placeholder="e.g. 5000"
+                      className="w-full border border-slate-200 bg-slate-50 rounded-xl pl-7 pr-4 py-3 font-bold text-sm outline-none focus:border-violet-500 focus:bg-white transition-colors"
+                    />
+                  </div>
+                  <button onClick={handleSaveFixedAmount} disabled={savingAmt}
+                    className="flex items-center gap-1.5 bg-violet-600 text-white font-black text-xs uppercase tracking-widest px-4 py-3 rounded-xl disabled:opacity-60 active:scale-95 transition-transform">
+                    {savingAmt ? <RefreshCw size={14} className="animate-spin" /> : <Save size={14} />}
+                    Save
+                  </button>
+                </div>
+                <p className="text-[10px] font-bold text-slate-400 mt-2">
+                  Fixed amount charged to this school every month
+                </p>
+              </div>
+
+              {/* Add Payment */}
+              <div className="bg-white rounded-2xl border border-slate-100 shadow-sm p-4">
+                <p className="text-[10px] font-black uppercase tracking-widest text-slate-400 mb-3">Add Payment</p>
+                <div className="space-y-3">
+                  <div className="grid grid-cols-2 gap-3">
+                    <div className="relative">
+                      <span className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400 font-bold text-sm">₹</span>
+                      <input
+                        type="number"
+                        min="1"
+                        value={payAmt}
+                        onChange={e => setPayAmt(e.target.value)}
+                        placeholder="Amount"
+                        className="w-full border border-slate-200 bg-slate-50 rounded-xl pl-7 pr-3 py-3 font-bold text-sm outline-none focus:border-emerald-500 focus:bg-white transition-colors"
+                      />
+                    </div>
+                    <input
+                      type="date"
+                      value={payDate}
+                      onChange={e => setPayDate(e.target.value)}
+                      className="w-full border border-slate-200 bg-slate-50 rounded-xl px-3 py-3 font-bold text-sm outline-none focus:border-emerald-500 focus:bg-white transition-colors"
+                    />
+                  </div>
+                  <input
+                    type="text"
+                    value={payNote}
+                    onChange={e => setPayNote(e.target.value)}
+                    placeholder="Note (optional) — e.g. NEFT / cheque no."
+                    className="w-full border border-slate-200 bg-slate-50 rounded-xl px-4 py-3 font-bold text-sm outline-none focus:border-emerald-500 focus:bg-white transition-colors"
+                  />
+                  <button onClick={handleAddPayment} disabled={addingPay}
+                    className="w-full flex items-center justify-center gap-2 bg-emerald-600 text-white font-black text-xs uppercase tracking-widest py-3.5 rounded-xl active:scale-95 transition-transform disabled:opacity-60 shadow-sm">
+                    {addingPay ? <RefreshCw size={14} className="animate-spin" /> : <CreditCard size={14} />}
+                    Record Payment
+                  </button>
+                </div>
+              </div>
+
+              {/* Payment History */}
+              <div className="bg-white rounded-2xl border border-slate-100 shadow-sm overflow-hidden">
+                <div className="px-4 py-3 border-b border-slate-50">
+                  <p className="text-[10px] font-black uppercase tracking-widest text-slate-400">Payment History</p>
+                </div>
+                {!billingInfo || billingInfo.payments.length === 0 ? (
+                  <div className="flex flex-col items-center py-10 text-slate-400">
+                    <IndianRupee size={28} className="mb-2 opacity-30" />
+                    <p className="font-bold text-sm">No payments recorded yet</p>
+                  </div>
+                ) : (
+                  <div>
+                    {billingInfo.payments.map((p, idx) => (
+                      <div key={p.id}
+                        className={`flex items-center gap-3 px-4 py-3 ${idx < billingInfo.payments.length - 1 ? 'border-b border-slate-50' : ''}`}>
+                        <div className="w-9 h-9 rounded-xl bg-emerald-50 text-emerald-600 flex items-center justify-center shrink-0">
+                          <IndianRupee size={15} />
+                        </div>
+                        <div className="flex-1 min-w-0">
+                          <div className="font-extrabold text-slate-900 text-sm">
+                            ₹{Number(p.amount).toLocaleString('en-IN')}
+                          </div>
+                          {p.note && (
+                            <div className="text-[10px] font-bold text-slate-400 truncate mt-0.5">{p.note}</div>
+                          )}
+                        </div>
+                        <div className="text-right shrink-0">
+                          <div className="text-[11px] font-black text-slate-500">{fmtDate(p.paid_on)}</div>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            </>
+          )}
         </div>
       </div>
     );
