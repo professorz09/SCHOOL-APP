@@ -15,6 +15,26 @@ type View = 'LIST' | 'CREATE' | 'UPLOAD';
 interface Subject { subject: string; maxMarks: number; }
 interface StudentRow { studentId: string; name: string; rollNo: string; marks: string; subjectMarks: Record<string, string>; note: string; }
 
+// Parse per-subject {subject, maxMarks} from a multi-subject exam.
+// New exams store this as JSON in syllabus; legacy exams fall back to equal split.
+function parseSubjectsFromExam(exam: TestSchedule): Subject[] | null {
+  if (!exam.subject?.includes(',')) return null;
+  try {
+    const parsed = JSON.parse(exam.syllabus ?? '');
+    if (Array.isArray(parsed?.subjects)) return parsed.subjects as Subject[];
+  } catch { /* not JSON */ }
+  const names = exam.subject.split(', ').map((s: string) => s.trim()).filter(Boolean);
+  const per = names.length > 0 ? Math.round(exam.maxMarks / names.length) : exam.maxMarks;
+  return names.map((s: string) => ({ subject: s, maxMarks: per }));
+}
+
+// Get plain-text description from exam (strips JSON wrapper for multi-subject exams).
+function getExamDescription(exam: TestSchedule): string {
+  if (!exam.subject?.includes(',')) return exam.syllabus ?? '';
+  try { return (JSON.parse(exam.syllabus ?? '') as { desc?: string })?.desc ?? ''; }
+  catch { return exam.syllabus ?? ''; }
+}
+
 const EXAM_TYPES: TestType[] = ['UNIT_TEST', 'MID_TERM', 'QUIZ', 'PRACTICAL', 'FINAL'];
 
 const typeColor = (t: string): string => {
@@ -61,9 +81,10 @@ export const TestsManager: React.FC<Props> = ({ onBack }) => {
   const [subjects, setSubjects] = useState<Subject[]>([]);
 
   // Upload state
-  const [uploadExam, setUploadExam]  = useState<TestSchedule | null>(null);
-  const [stuRows, setStuRows]        = useState<StudentRow[]>([]);
-  const [expandedStu, setExpandedStu] = useState<string | null>(null);
+  const [uploadExam, setUploadExam]    = useState<TestSchedule | null>(null);
+  const [uploadSubjects, setUploadSubjects] = useState<Subject[]>([]);
+  const [stuRows, setStuRows]          = useState<StudentRow[]>([]);
+  const [expandedStu, setExpandedStu]  = useState<string | null>(null);
 
   useEffect(() => {
     teacherService.getTests().then(setExams);
@@ -122,7 +143,9 @@ export const TestsManager: React.FC<Props> = ({ onBack }) => {
           scheduledDate: cForm.scheduledDate,
           duration:     cForm.duration,
           maxMarks:     totalMarks,
-          syllabus:     cForm.description,
+          syllabus:     cForm.hasSubjects
+            ? JSON.stringify({ subjects, desc: cForm.description })
+            : cForm.description,
         }),
         { entityType: 'test_schedule', entityId: `${cForm.classId}/${cForm.title}` },
       );
@@ -154,6 +177,7 @@ export const TestsManager: React.FC<Props> = ({ onBack }) => {
     }));
     setStuRows(rows);
     setUploadExam(exam);
+    setUploadSubjects(parseSubjectsFromExam(exam) ?? []);
     setExpandedStu(rows[0]?.studentId ?? null);
     setView('UPLOAD');
   };
@@ -249,9 +273,11 @@ export const TestsManager: React.FC<Props> = ({ onBack }) => {
           <div className="space-y-3">
             {stuRows.map(row => {
               const isOpen = expandedStu === row.studentId;
-              const total = hasSubjects ? subjectList.reduce((a, s) => a + (+row.subjectMarks[s] || 0), 0) : +row.marks;
+              const total = hasSubjects ? uploadSubjects.reduce((a, s) => a + (+row.subjectMarks[s.subject] || 0), 0) : +row.marks;
               const pct = total > 0 ? Math.round((total / uploadExam.maxMarks) * 100) : null;
-              const allDone = hasSubjects ? subjectList.every(s => row.subjectMarks[s] !== '') : row.marks !== '';
+              const allDone = hasSubjects
+                ? uploadSubjects.every(s => (row.subjectMarks[s.subject] ?? '') !== '')
+                : row.marks !== '';
 
               return (
                 <div key={row.studentId} className="bg-white rounded-2xl border border-slate-100 shadow-sm overflow-hidden">
@@ -268,16 +294,16 @@ export const TestsManager: React.FC<Props> = ({ onBack }) => {
                   {isOpen && (
                     <div className="px-4 pb-4 space-y-2 border-t border-slate-50 pt-3">
                       {hasSubjects ? (
-                        subjectList.map(subj => {
+                        uploadSubjects.map(({ subject: subj, maxMarks: subjMax }) => {
                           const m = row.subjectMarks[subj] || '';
-                          const sp = m !== '' ? Math.round((+m / 25) * 100) : null; // Assuming 25 per subject
+                          const sp = m !== '' ? Math.round((+m / subjMax) * 100) : null;
                           return (
                             <div key={subj} className="flex items-center gap-3">
                               <div className="flex-1 text-xs font-bold text-slate-700">{subj}</div>
                               <div className="flex items-center gap-1.5 shrink-0">
-                                <input type="number" min={0} max={25} value={m} onChange={e => updateSubjectMark(row.studentId, subj, e.target.value)} placeholder="—"
+                                <input type="number" min={0} max={subjMax} value={m} onChange={e => updateSubjectMark(row.studentId, subj, e.target.value)} placeholder="—"
                                   className="w-14 border border-slate-200 bg-slate-50 rounded-xl px-2 py-1.5 text-center font-black text-sm outline-none focus:border-indigo-400"/>
-                                <span className="text-[10px] font-bold text-slate-400 w-8">/25</span>
+                                <span className="text-[10px] font-bold text-slate-400 w-8">/{subjMax}</span>
                                 {sp !== null && <span className={`text-[10px] font-black w-8 text-right ${sp >= 75 ? 'text-emerald-600' : sp >= 50 ? 'text-amber-600' : 'text-rose-500'}`}>{sp}%</span>}
                               </div>
                             </div>
@@ -476,7 +502,9 @@ export const TestsManager: React.FC<Props> = ({ onBack }) => {
                 <span className="text-[10px] font-bold text-slate-400">{exam.className}-{exam.section}</span>
               </div>
               <div className="font-extrabold text-slate-900 text-sm">{exam.title}</div>
-              <div className="text-[11px] font-bold text-slate-400 mt-1 line-clamp-1">{exam.syllabus}</div>
+              {getExamDescription(exam) && (
+                <div className="text-[11px] font-bold text-slate-400 mt-1 line-clamp-1">{getExamDescription(exam)}</div>
+              )}
               <div className="flex gap-4 mt-3 pt-3 border-t border-slate-50">
                 <span className="flex items-center gap-1 text-[10px] font-bold text-slate-600"><Calendar size={11} className="text-slate-400"/> {exam.scheduledDate}</span>
                 <span className="flex items-center gap-1 text-[10px] font-bold text-slate-600"><Clock size={11} className="text-slate-400"/> {exam.duration}m</span>

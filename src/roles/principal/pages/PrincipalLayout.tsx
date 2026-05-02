@@ -22,6 +22,7 @@ import { StaffAttendanceManager } from '@/modules/attendance/components/StaffAtt
 import { TransportManager } from '@/modules/transport/components/TransportManager';
 import { AttendanceHub } from '@/modules/attendance/components/AttendanceHub';
 import { ToolsManager } from '@/roles/principal/components/ToolsManager';
+import { PrincipalExamsManager } from '@/modules/exams/components/PrincipalExamsManager';
 
 export type PrincipalView =
   | 'DASHBOARD'
@@ -43,6 +44,7 @@ export type PrincipalView =
   | 'ATTENDANCE'
   | 'TRANSPORT_MGMT'
   | 'TOOLS'
+  | 'EXAMS'
   | 'SETTINGS_SCHOOL_INFO'
   | 'SETTINGS_FEE_STRUCT'
   | 'SETTINGS_CLASSES';
@@ -112,8 +114,9 @@ export const PrincipalLayout: React.FC = () => {
   if (view === 'SALARY_LEDGER') return <SalaryLedger           onBack={goBack} />;
   if (view === 'STAFF_ATTENDANCE') return <StaffAttendanceManager onBack={goBack} />;
   if (view === 'ATTENDANCE')       return <AttendanceHub          onBack={goBack} />;
-  if (view === 'TRANSPORT_MGMT')   return <TransportManager       onBack={goBack} />;
-  if (view === 'TOOLS')            return <ToolsManager           onBack={goBack} />;
+  if (view === 'TRANSPORT_MGMT')   return <TransportManager        onBack={goBack} />;
+  if (view === 'TOOLS')            return <ToolsManager            onBack={goBack} />;
+  if (view === 'EXAMS')            return <PrincipalExamsManager   onBack={goBack} />;
 
   return (
     <>
