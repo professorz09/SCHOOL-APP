@@ -521,7 +521,7 @@ export const SettingsManager: React.FC<Props> = ({ onBack, initialView }) => {
                         <span className="font-black">{h.name}</span>
                         <span className="text-slate-400">·</span>
                         <span className="text-emerald-600 font-black">₹{h.amount.toLocaleString('en-IN')}</span>
-                        <span className="text-slate-400 text-[9px]">{h.frequency === 'MONTHLY' ? '/mo' : h.frequency === 'ANNUAL' ? '/yr' : '×1'}</span>
+                        <span className="text-slate-400 text-[9px]">{h.frequency === 'MONTHLY' ? '/mo' : h.frequency === 'QUARTERLY' ? '/qtr' : h.frequency === 'HALF_YEARLY' ? '/6mo' : h.frequency === 'ANNUAL' ? '/yr' : '×1'}</span>
                       </span>
                     ))}
                     {fs.feeHeads.length > 4 && (

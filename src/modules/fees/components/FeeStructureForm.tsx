@@ -1,17 +1,19 @@
 import React, { useState, useMemo } from 'react';
 import { ArrowLeft, Plus, Trash2, Save, ChevronDown, AlertCircle, RotateCcw, Zap, Calendar } from 'lucide-react';
-import { STREAMS, STREAM_CLASSES } from '@/shared/types/principal.types';
 
 // ─── Data Types ────────────────────────────────────────────────────────────────
 
 export type BillingCycle = 'MONTHLY' | 'QUARTERLY' | 'HALF_YEARLY' | 'ANNUALLY' | 'CUSTOM';
 
+export type FeeHeadFrequency = 'MONTHLY' | 'QUARTERLY' | 'HALF_YEARLY' | 'ANNUAL' | 'ONE_TIME';
+
 export interface FeeHead {
   id: string;
   name: string;
   amount: number;
-  frequency: 'MONTHLY' | 'ANNUAL' | 'ONE_TIME';
+  frequency: FeeHeadFrequency;
   description: string;
+  transactionFee: number;
 }
 
 export interface MonthlyDueDate {
@@ -44,7 +46,13 @@ const ACADEMIC_MONTHS = ['Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec','
 const MONTH_INDEX: Record<string, number> = {
   Apr:4,May:5,Jun:6,Jul:7,Aug:8,Sep:9,Oct:10,Nov:11,Dec:12,Jan:1,Feb:2,Mar:3,
 };
-const CLASS_OPTIONS = ['Class 1','Class 2','Class 3','Class 4','Class 5','Class 6','Class 7','Class 8','Class 9','Class 10','Class 11','Class 12'];
+const CLASS_OPTIONS = [
+  'Nursery','LKG','UKG',
+  'Class 1','Class 2','Class 3','Class 4','Class 5',
+  'Class 6','Class 7','Class 8','Class 9','Class 10',
+  '11th Science','11th Commerce','11th Arts','11th Maths',
+  '12th Science','12th Commerce','12th Arts','12th Maths',
+];
 
 // Preset months per billing cycle. The first month of each "period" within the
 // academic year (Apr-start) is selected so installments are evenly spaced.
@@ -73,9 +81,18 @@ const COMMON_FEE_HEADS = [
   { name: 'Transport Fee', frequency: 'MONTHLY' as const },
 ];
 
-const FREQ_LABEL: Record<string, string> = {
-  MONTHLY: 'Monthly', ANNUAL: 'Annual', ONE_TIME: 'One-time',
+const FREQ_LABEL: Record<FeeHeadFrequency, string> = {
+  MONTHLY: 'Monthly', QUARTERLY: 'Quarterly', HALF_YEARLY: 'Half-Yearly',
+  ANNUAL: 'Annual', ONE_TIME: 'One-time',
 };
+
+// How many times a frequency-based head appears per year given billing cycle months count
+function freqMultiplier(freq: FeeHeadFrequency, installmentCount: number): number {
+  if (freq === 'MONTHLY') return installmentCount;
+  if (freq === 'QUARTERLY') return 4;
+  if (freq === 'HALF_YEARLY') return 2;
+  return 1; // ANNUAL, ONE_TIME
+}
 
 function pad(n: number) { return n < 10 ? `0${n}` : `${n}`; }
 
@@ -95,12 +112,12 @@ function monthsForCycle(cycle: BillingCycle, currentMonths: string[]): string[] 
   return CYCLE_MONTHS[cycle];
 }
 
-// Annual total: monthly heads bill once per selected month; annual / one-time
-// heads bill exactly once regardless of cycle.
+// Annual total across all fee heads (uses freqMultiplier per head frequency)
 function calcAnnual(heads: FeeHead[], installmentCount: number): number {
   return heads.reduce((sum, h) => {
-    if (h.frequency === 'MONTHLY') return sum + h.amount * installmentCount;
-    return sum + h.amount;
+    const times = freqMultiplier(h.frequency, installmentCount);
+    const txFee = (h.transactionFee ?? 0) * times;
+    return sum + h.amount * times + txFee;
   }, 0);
 }
 
@@ -127,14 +144,11 @@ export const FeeStructureForm: React.FC<Props> = ({
 
   const [name, setName] = useState(initialData?.name ?? '');
   const [structureType, setStructureType] = useState<'CLASS'|'VEHICLE'>(initialData?.structureType ?? 'CLASS');
-  const [className, setClassName] = useState(initialData?.className.split(' - ')[0] ?? 'Class 1');
+  const [className, setClassName] = useState(initialData?.className ?? 'Class 1');
   const [allClasses, setAllClasses] = useState((initialData?.className ?? '') === 'ALL_CLASSES');
-  const [stream, setStream] = useState(
-    initialData?.className.includes(' - ') ? initialData.className.split(' - ')[1] : ''
-  );
 
   const [feeHeads, setFeeHeads] = useState<FeeHead[]>(
-    initialData?.feeHeads ?? [{ id: 'h1', name: 'Tuition Fee', amount: 0, frequency: 'MONTHLY', description: 'Monthly tuition charges' }]
+    initialData?.feeHeads ?? [{ id: 'h1', name: 'Tuition Fee', amount: 0, frequency: 'MONTHLY', description: 'Monthly tuition charges', transactionFee: 0 }]
   );
 
   const [billingCycle, setBillingCycleState] = useState<BillingCycle>(
@@ -180,18 +194,15 @@ export const FeeStructureForm: React.FC<Props> = ({
   // New fee head form
   const [newHeadName, setNewHeadName] = useState('');
   const [newHeadAmount, setNewHeadAmount] = useState('');
-  const [newHeadFreq, setNewHeadFreq] = useState<FeeHead['frequency']>('MONTHLY');
+  const [newHeadFreq, setNewHeadFreq] = useState<FeeHeadFrequency>('MONTHLY');
   const [newHeadDesc, setNewHeadDesc] = useState('');
+  const [newHeadTxFee, setNewHeadTxFee] = useState('');
 
   const [selectedCommon, setSelectedCommon] = useState('');
   const [expandedHead, setExpandedHead] = useState<string | null>(null);
 
-  const fullClassName = STREAM_CLASSES.has(className) && stream
-    ? `${className} - ${stream}`
-    : className;
-
   const annualTotal = calcAnnual(feeHeads, dueDates.length);
-  const hasMonthly = feeHeads.some(h => h.frequency === 'MONTHLY');
+  const hasMonthly = feeHeads.some(h => ['MONTHLY','QUARTERLY','HALF_YEARLY'].includes(h.frequency));
   const installmentCount = dueDates.length;
 
   const handleAddHead = () => {
@@ -202,8 +213,9 @@ export const FeeStructureForm: React.FC<Props> = ({
       amount: Number(newHeadAmount) || 0,
       frequency: newHeadFreq,
       description: newHeadDesc.trim(),
+      transactionFee: Number(newHeadTxFee) || 0,
     }]);
-    setNewHeadName(''); setNewHeadAmount(''); setNewHeadDesc('');
+    setNewHeadName(''); setNewHeadAmount(''); setNewHeadDesc(''); setNewHeadTxFee('');
   };
 
   const handleAddCommon = (headName: string) => {
@@ -215,6 +227,7 @@ export const FeeStructureForm: React.FC<Props> = ({
       amount: 0,
       frequency: template.frequency,
       description: '',
+      transactionFee: 0,
     }]);
     setSelectedCommon('');
   };
@@ -226,8 +239,7 @@ export const FeeStructureForm: React.FC<Props> = ({
 
   const handleSave = () => {
     if (!name.trim()) { alert('Fee structure name is required'); return; }
-    if (structureType === 'CLASS' && !allClasses && !fullClassName) { alert('Class is required'); return; }
-    if (STREAM_CLASSES.has(className) && !stream) { alert('Stream is required for Class 11 and 12'); return; }
+    if (structureType === 'CLASS' && !allClasses && !className) { alert('Class is required'); return; }
     if (hasMonthly && dueDates.length === 0) {
       alert('Select at least one billing month for monthly fee heads');
       return;
@@ -235,7 +247,7 @@ export const FeeStructureForm: React.FC<Props> = ({
     onSave({
       id: initialData?.id ?? `fs${Date.now()}`,
       name: name.trim(),
-      className: structureType === 'VEHICLE' ? 'TRANSPORT' : (allClasses ? 'ALL_CLASSES' : fullClassName),
+      className: structureType === 'VEHICLE' ? 'TRANSPORT' : (allClasses ? 'ALL_CLASSES' : className),
       structureType,
       billingCycle,
       feeHeads,
@@ -284,34 +296,25 @@ export const FeeStructureForm: React.FC<Props> = ({
               <option value="CLASS">Class Fee Structure</option>
               <option value="VEHICLE">Vehicle/Transport Fee Structure</option>
             </select>
-            <label className="block text-[10px] font-black uppercase tracking-widest text-slate-500 mb-1.5">Class (Optional)</label>
-            <label className="flex items-center gap-2 text-[11px] font-bold text-slate-600 mb-2">
-              <input type="checkbox" checked={allClasses} onChange={e => setAllClasses(e.target.checked)} />
-              Apply this structure to all classes
-            </label>
-            {!allClasses && (<select
-              value={className}
-              onChange={e => { setClassName(e.target.value); setStream(''); }}
-              className="w-full border border-slate-200 bg-slate-50 rounded-xl px-3 py-3 font-bold text-sm outline-none focus:border-indigo-500"
-            >
-              {CLASS_OPTIONS.map(c => <option key={c}>{c}</option>)}
-            </select>)}
+            {structureType === 'CLASS' && (
+              <>
+                <label className="block text-[10px] font-black uppercase tracking-widest text-slate-500 mb-1.5">Class</label>
+                <label className="flex items-center gap-2 text-[11px] font-bold text-slate-600 mb-2">
+                  <input type="checkbox" checked={allClasses} onChange={e => setAllClasses(e.target.checked)} />
+                  Sabhi classes ke liye apply karein
+                </label>
+                {!allClasses && (
+                  <select
+                    value={className}
+                    onChange={e => setClassName(e.target.value)}
+                    className="w-full border border-slate-200 bg-slate-50 rounded-xl px-3 py-3 font-bold text-sm outline-none focus:border-indigo-500"
+                  >
+                    {CLASS_OPTIONS.map(c => <option key={c}>{c}</option>)}
+                  </select>
+                )}
+              </>
+            )}
           </div>
-
-          {!allClasses && STREAM_CLASSES.has(className) && (
-            <div>
-              <label className="block text-[10px] font-black uppercase tracking-widest text-slate-500 mb-1.5">Stream *</label>
-              <div className="grid grid-cols-3 gap-2">
-                {STREAMS.map(s => (
-                  <button key={s} type="button"
-                    onClick={() => setStream(s)}
-                    className={`py-2.5 rounded-xl text-xs font-black border transition-all ${stream === s ? 'bg-indigo-600 text-white border-indigo-600' : 'bg-slate-50 text-slate-600 border-slate-200'}`}>
-                    {s}
-                  </button>
-                ))}
-              </div>
-            </div>
-          )}
 
           {activeYearLabel && (
             <div className="flex items-center gap-2 bg-blue-50 rounded-xl px-3 py-2">
@@ -439,23 +442,38 @@ export const FeeStructureForm: React.FC<Props> = ({
                       <label className="block text-[9px] font-black uppercase tracking-widest text-slate-400 mb-1">Frequency</label>
                       <select
                         value={head.frequency}
-                        onChange={e => setFeeHeads(prev => prev.map(h => h.id === head.id ? { ...h, frequency: e.target.value as FeeHead['frequency'] } : h))}
+                        onChange={e => setFeeHeads(prev => prev.map(h => h.id === head.id ? { ...h, frequency: e.target.value as FeeHeadFrequency } : h))}
                         className="w-full border border-slate-200 bg-white rounded-xl px-2 py-2.5 font-bold text-xs outline-none focus:border-indigo-500"
                       >
                         <option value="MONTHLY">Monthly</option>
+                        <option value="QUARTERLY">Quarterly</option>
+                        <option value="HALF_YEARLY">Half-Yearly</option>
                         <option value="ANNUAL">Annual</option>
                         <option value="ONE_TIME">One-time</option>
                       </select>
                     </div>
                   </div>
-                  <div>
-                    <label className="block text-[9px] font-black uppercase tracking-widest text-slate-400 mb-1">Description (optional)</label>
-                    <input
-                      value={head.description}
-                      onChange={e => setFeeHeads(prev => prev.map(h => h.id === head.id ? { ...h, description: e.target.value } : h))}
-                      placeholder="e.g. Monthly tuition charges"
-                      className="w-full border border-slate-200 bg-white rounded-xl px-3 py-2.5 font-bold text-sm outline-none focus:border-indigo-500"
-                    />
+                  <div className="grid grid-cols-2 gap-2">
+                    <div>
+                      <label className="block text-[9px] font-black uppercase tracking-widest text-slate-400 mb-1">Transaction Fee (₹)</label>
+                      <input
+                        type="number"
+                        value={head.transactionFee || ''}
+                        onChange={e => setFeeHeads(prev => prev.map(h => h.id === head.id ? { ...h, transactionFee: Number(e.target.value) } : h))}
+                        placeholder="0"
+                        className="w-full border border-slate-200 bg-white rounded-xl px-3 py-2.5 font-bold text-sm outline-none focus:border-indigo-500"
+                      />
+                      <p className="text-[9px] font-bold text-slate-400 mt-0.5">Har payment pe flat charge</p>
+                    </div>
+                    <div>
+                      <label className="block text-[9px] font-black uppercase tracking-widest text-slate-400 mb-1">Description (optional)</label>
+                      <input
+                        value={head.description}
+                        onChange={e => setFeeHeads(prev => prev.map(h => h.id === head.id ? { ...h, description: e.target.value } : h))}
+                        placeholder="e.g. Monthly tuition charges"
+                        className="w-full border border-slate-200 bg-white rounded-xl px-3 py-2.5 font-bold text-sm outline-none focus:border-indigo-500"
+                      />
+                    </div>
                   </div>
                 </div>
               )}
@@ -481,20 +499,31 @@ export const FeeStructureForm: React.FC<Props> = ({
               />
               <select
                 value={newHeadFreq}
-                onChange={e => setNewHeadFreq(e.target.value as FeeHead['frequency'])}
+                onChange={e => setNewHeadFreq(e.target.value as FeeHeadFrequency)}
                 className="w-full border border-slate-200 bg-white rounded-xl px-2 py-2.5 font-bold text-xs outline-none focus:border-indigo-500"
               >
                 <option value="MONTHLY">Monthly</option>
+                <option value="QUARTERLY">Quarterly</option>
+                <option value="HALF_YEARLY">Half-Yearly</option>
                 <option value="ANNUAL">Annual</option>
                 <option value="ONE_TIME">One-time</option>
               </select>
             </div>
-            <input
-              value={newHeadDesc}
-              onChange={e => setNewHeadDesc(e.target.value)}
-              placeholder="Description (optional)"
-              className="w-full border border-slate-200 bg-white rounded-xl px-3 py-2.5 font-bold text-sm outline-none focus:border-indigo-500"
-            />
+            <div className="grid grid-cols-2 gap-2">
+              <input
+                type="number"
+                value={newHeadTxFee}
+                onChange={e => setNewHeadTxFee(e.target.value)}
+                placeholder="Transaction fee ₹ (optional)"
+                className="w-full border border-slate-200 bg-white rounded-xl px-3 py-2.5 font-bold text-sm outline-none focus:border-indigo-500"
+              />
+              <input
+                value={newHeadDesc}
+                onChange={e => setNewHeadDesc(e.target.value)}
+                placeholder="Description (optional)"
+                className="w-full border border-slate-200 bg-white rounded-xl px-3 py-2.5 font-bold text-sm outline-none focus:border-indigo-500"
+              />
+            </div>
             <button
               onClick={handleAddHead}
               disabled={!newHeadName.trim()}

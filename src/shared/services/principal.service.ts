@@ -1034,7 +1034,7 @@ export interface FeeStructureRecord {
   className: string;
   structureType: FeeStructureType;
   billingCycle: BillingCycle;
-  feeHeads: Array<{ id: string; name: string; amount: number; frequency: 'MONTHLY' | 'ANNUAL' | 'ONE_TIME'; description: string }>;
+  feeHeads: Array<{ id: string; name: string; amount: number; frequency: 'MONTHLY' | 'QUARTERLY' | 'HALF_YEARLY' | 'ANNUAL' | 'ONE_TIME'; description: string; transactionFee?: number }>;
   monthlyDueDates: Array<{ month: string; date: string }>;
   lateFee: { enabled: boolean; gracePeriodDays: number; type: 'FIXED' | 'PERCENTAGE'; amount: number; maxCap: number };
 }
