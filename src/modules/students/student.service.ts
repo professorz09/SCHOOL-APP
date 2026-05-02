@@ -15,6 +15,7 @@ import { useEditingYearStore } from '@/shared/store/editingYearStore';
 import { adminApi } from '@/shared/lib/adminApi';
 import { logAudit } from '@/shared/lib/audit';
 import { PaymentStatus } from '@/shared/config/constants';
+import { apiStudents, apiTransport } from '@/shared/lib/apiClient';
 import type {
   Student, StudentAcademicRecord, FeeRecord, CreateStudentInput,
   StudentDoc, ExamResult, AttendanceMonth,
@@ -886,114 +887,44 @@ export const studentService = {
       throw new Error(`Roll ${input.rollNo} is already taken in ${input.className}-${input.section}`);
     }
 
-    // Step 1: re-activate student row if it was inactive (e.g. readmit
-    // after TC). Stays a no-op for already-active students.
-    await supabase.from('students').update({
-      is_active: true,
-      status: 'ACTIVE',
-      updated_at: new Date().toISOString(),
-    }).eq('id', input.studentId).eq('school_id', schoolId);
-
-    // Resolve section_id (best-effort).
-    let sectionId: string | null = null;
-    const { data: sec } = await supabase
-      .from('sections').select('id')
-      .eq('school_id', schoolId).eq('academic_year_id', ayId)
-      .eq('class_name', input.className).eq('section', input.section).maybeSingle();
-    sectionId = (sec as { id: string } | null)?.id ?? null;
-
-    // Step 2: upsert the academic record for the active year.
-    const { data: existing } = await supabase
-      .from('student_academic_records')
-      .select('id')
-      .eq('student_id', input.studentId)
-      .eq('academic_year_id', ayId)
-      .maybeSingle();
-
-    const arPayload: Record<string, unknown> = {
-      student_id: input.studentId,
-      academic_year_id: ayId,
-      section_id: sectionId,
-      class_name: input.className,
-      section: input.section,
-      roll_no: input.rollNo,
-      status: 'STUDYING',
-    };
-    if (input.totalFee !== undefined) arPayload.total_fee = input.totalFee;
-
-    if (existing) {
-      const { error } = await supabase
-        .from('student_academic_records')
-        .update(arPayload)
-        .eq('id', (existing as { id: string }).id);
-      if (error) throw new Error(`Update academic record failed: ${error.message}`);
-    } else {
-      const { error } = await supabase
-        .from('student_academic_records')
-        .insert({
-          ...arPayload,
-          fee_status: 'PENDING',
-          total_fee: input.totalFee ?? 0,
-          paid_fee: 0,
-          attendance_percent: 0,
-        });
-      if (error) throw new Error(`Insert academic record failed: ${error.message}`);
+    // Transport hard-require fee structure on single-student path.
+    if (input.transport && !input.transport.feeStructureId) {
+      throw new Error('Transport assign karne ke liye Vehicle fee structure chunna zaroori hai.');
     }
 
-    // Step 3: generate fee schedule. Capture the inserted installment
-    // count + total amount so the caller can show a meaningful success
-    // toast ("12 installments totalling ₹61,000").
-    let scheduleSummary: { installmentCount: number; totalAmount: number } | null = null;
-    if (input.feeStructure) {
-      const { error: feeErr } = await supabase.rpc('generate_student_fee_schedule', {
-        p_student_id: input.studentId,
-        p_year_id: ayId,
-        p_heads: input.feeStructure.heads,
-        p_due_dates: input.feeStructure.monthlyDueDates,
-        p_is_rte: !!input.feeStructure.isRte,
-        p_discount_amount: input.feeStructure.discountAmount ?? 0,
-        p_discount_pct: input.feeStructure.discountPct ?? 0,
-      });
-      if (feeErr) throw new Error(`Fee schedule failed: ${feeErr.message}`);
-      // Read back the rows the RPC just (re)inserted for this (student,
-      // year) so we can report the actual count + amount, not an estimate.
-      // No payer_type filter: an RTE student's schedule may legitimately
-      // route part of the load to GOVT, and the toast should still reflect
-      // the full installment count + total written.
-      const { data: installments } = await supabase
-        .from('fee_installments')
-        .select('amount')
-        .eq('student_id', input.studentId)
-        .eq('academic_year_id', ayId);
-      const rows = (installments ?? []) as { amount: number }[];
-      scheduleSummary = {
-        installmentCount: rows.length,
-        totalAmount: rows.reduce((s, r) => s + Number(r.amount ?? 0), 0),
-      };
-    }
+    // Steps 1–3: reactivate student, upsert academic record, generate fee
+    // schedule — all handled server-side via /api/students/assign.
+    const { installmentCount, totalAmount } = await apiStudents.assign({
+      studentId:      input.studentId,
+      className:      input.className,
+      section:        input.section,
+      rollNo:         input.rollNo,
+      academicYearId: ayId,
+      totalFee:       input.totalFee,
+      feeHeads:       input.feeStructure?.heads,
+      dueDates:       input.feeStructure?.monthlyDueDates,
+      isRte:          input.feeStructure?.isRte,
+      discountAmount: input.feeStructure?.discountAmount,
+      discountPct:    input.feeStructure?.discountPct,
+    });
 
-    // Step 4: transport assignment (handled by transport service).
-    // Hard-require a VEHICLE-type fee structure on the single-student
-    // path (Task #29). Bulk reassignment paths still call
-    // transportService.assignStudent without a structure and remain
-    // intentionally unaffected per task spec.
+    const scheduleSummary = input.feeStructure
+      ? { installmentCount, totalAmount }
+      : null;
+
+    // Step 4: transport assignment via API (apiTransport.assign handles
+    // closing prior assignment, cancelling installments, generating schedule).
     if (input.transport) {
-      if (!input.transport.feeStructureId) {
-        throw new Error('Transport assign karne ke liye Vehicle fee structure chunna zaroori hai.');
-      }
-      // Lazy import to avoid a circular dep between student↔transport
-      // services (transportService imports from supabase + auth only,
-      // but keeping this lazy is the safer pattern).
-      const { transportService } = await import('@/modules/transport/transport.service');
-      await transportService.assignStudent(
-        input.studentId, '', '',
-        input.transport.vehicleId,
-        input.transport.stopId, '',
-        input.transport.monthlyAmount,
-        undefined, ayId,
-        null, null,
-        input.transport.feeStructureId,
-      );
+      const startIso = new Date().toISOString().slice(0, 10);
+      await apiTransport.assign({
+        studentId:      input.studentId,
+        vehicleId:      input.transport.vehicleId,
+        stopId:         input.transport.stopId,
+        monthlyAmount:  input.transport.monthlyAmount,
+        startDate:      startIso,
+        academicYearId: ayId,
+        feeStructureId: input.transport.feeStructureId,
+      });
     }
 
     await logAudit('student_assigned_to_class', 'student', input.studentId, {

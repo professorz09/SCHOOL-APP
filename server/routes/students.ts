@@ -1,5 +1,5 @@
 import { Router } from 'express';
-import { adminDb } from '../lib/db';
+import { adminDb, userDb } from '../lib/db';
 import { ok, fail, ApiError, requireBody } from '../lib/helpers';
 import { requireAuth, requireRole } from '../middleware/auth';
 
@@ -110,16 +110,23 @@ studentsRouter.post('/create', requireAuth, requireRole('PRINCIPAL'), async (req
   } catch (err) { fail(res, err); }
 });
 
-// POST /api/students/assign — assign/reassign to class section
+// POST /api/students/assign — full class assignment with optional fee schedule
 studentsRouter.post('/assign', requireAuth, requireRole('PRINCIPAL'), async (req, res) => {
   try {
     const body = requireBody<{
       studentId: string; sectionId?: string; className: string; section: string;
       rollNo?: string; academicYearId: string; totalFee?: number;
       feeHeads?: any[]; dueDates?: any[]; isRte?: boolean;
+      discountAmount?: number; discountPct?: number;
     }>(req, ['studentId', 'className', 'section', 'academicYearId']);
 
-    // Resolve section_id if provided class+section combo
+    // Reactivate student row if it was inactive (readmit after TC, etc.)
+    await adminDb.from('students')
+      .update({ is_active: true, status: 'ACTIVE', updated_at: new Date().toISOString() })
+      .eq('id', body.studentId)
+      .eq('school_id', req.user.school_id!);
+
+    // Resolve section_id
     let sectionId = body.sectionId ?? null;
     if (!sectionId) {
       const { data: sec } = await adminDb
@@ -133,7 +140,7 @@ studentsRouter.post('/assign', requireAuth, requireRole('PRINCIPAL'), async (req
       sectionId = (sec as any)?.id ?? null;
     }
 
-    // Check if record exists for this (student, year)
+    // Upsert academic record
     const { data: existing } = await adminDb
       .from('student_academic_records')
       .select('id')
@@ -172,7 +179,34 @@ studentsRouter.post('/assign', requireAuth, requireRole('PRINCIPAL'), async (req
       record = data;
     }
 
-    ok(res, record);
+    // Fee schedule generation (requires auth.uid() in the RPC)
+    let installmentCount = 0;
+    let totalAmount = 0;
+    if (body.feeHeads?.length && body.dueDates?.length) {
+      const db = userDb(req.jwt);
+      const { error: feeErr } = await db.rpc('generate_student_fee_schedule', {
+        p_student_id:      body.studentId,
+        p_year_id:         body.academicYearId,
+        p_heads:           body.feeHeads,
+        p_due_dates:       body.dueDates,
+        p_is_rte:          body.isRte ?? false,
+        p_discount_amount: body.discountAmount ?? 0,
+        p_discount_pct:    body.discountPct ?? 0,
+      });
+      if (feeErr) throw new ApiError(500, `Fee schedule failed: ${feeErr.message}`);
+
+      // Read back for count + total
+      const { data: installments } = await adminDb
+        .from('fee_installments')
+        .select('amount')
+        .eq('student_id', body.studentId)
+        .eq('academic_year_id', body.academicYearId);
+      const rows = (installments ?? []) as { amount: number }[];
+      installmentCount = rows.length;
+      totalAmount = rows.reduce((s, r) => s + Number(r.amount ?? 0), 0);
+    }
+
+    ok(res, { record, installmentCount, totalAmount });
   } catch (err) { fail(res, err); }
 });
 

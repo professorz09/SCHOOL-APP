@@ -10,6 +10,7 @@ import { supabase } from '@/shared/lib/supabase';
 import { useAuthStore } from '@/shared/store/authStore';
 import { logAudit } from '@/shared/lib/audit';
 import { registerCacheResetter } from '@/shared/lib/cacheBus';
+import { apiTransport } from '@/shared/lib/apiClient';
 
 const calculateDistance = (lat1: number, lng1: number, lat2: number, lng2: number): number => {
   const R = 6371000;
@@ -368,13 +369,8 @@ export const transportService = {
     reason?: string | null,
     /**
      * Optional VEHICLE-type fee structure id to drive bill generation.
-     * When provided, the id is persisted on the assignment row AND a
-     * structure-aware schedule (one TRANSPORT installment per monthly
-     * due-date) is generated via the `generate_transport_fee_schedule`
-     * RPC, which authoritatively reads heads + due-dates from the
-     * `fee_structures` row server-side (so a tampered client payload
-     * cannot bill the wrong amounts). When absent (legacy bulk paths)
-     * we fall back to the flat monthly schedule generator.
+     * When provided, the RPC generates a structure-aware schedule.
+     * When absent (legacy bulk paths), server falls back to flat monthly.
      */
     feeStructureId?: string,
   ): Promise<StudentTransportAssignment> {
@@ -389,119 +385,19 @@ export const transportService = {
 
     const startIso = startDate ?? new Date().toISOString().slice(0, 10);
 
-    // Snapshot the soon-to-be-closed row so we can re-activate it if the
-    // INSERT below fails — the close + insert pair is two round trips
-    // (no client-side transaction support), so a failure between them
-    // would otherwise leave the student with no active assignment.
-    const { data: priorRow } = await supabase.from('student_transport_assignments')
-      .select('id, end_date, end_reason')
-      .eq('student_id', studentId).eq('is_active', true)
-      .maybeSingle();
-    const prior = priorRow as { id: string; end_date: string | null; end_reason: string | null } | null;
+    await apiTransport.assign({
+      studentId,
+      vehicleId,
+      stopId,
+      monthlyAmount,
+      startDate: startIso,
+      academicYearId: ayId,
+      endDate:         endDate ?? undefined,
+      reason:          reason ?? undefined,
+      feeStructureId:  feeStructureId ?? undefined,
+    });
 
-    // Close any existing active assignment a day before the new one starts.
-    const startD = new Date(startIso);
-    const closeIso = new Date(startD.getTime() - 86400000).toISOString().slice(0, 10);
-    await supabase.from('student_transport_assignments')
-      .update({
-        is_active: false,
-        end_date: closeIso,
-        end_reason: reason ?? 'Replaced by new assignment',
-      })
-      .eq('student_id', studentId).eq('is_active', true);
-
-    // Cancel the prior assignment's future TRANSPORT installments from the
-    // effective date forward — otherwise the new schedule (added below)
-    // would double up on top of stale unpaid rows. Unpaid future rows are
-    // dropped; partially-paid ones are frozen with their amount locked at
-    // paid + writeoff and status flipped to CANCELLED so receipts stay
-    // intact. Runs only when there was a prior active assignment.
-    if (prior) {
-      try {
-        const { feeService } = await import('@/modules/fees/fee.service');
-        await feeService.cancelTransportInstallmentsAfter(prior.id, startIso);
-      } catch (e) {
-        // eslint-disable-next-line no-console
-        console.warn('[transport] cancel prior installments failed:', e);
-      }
-    }
-
-    const { data, error } = await supabase.from('student_transport_assignments').insert({
-      student_id: studentId,
-      academic_year_id: ayId,
-      vehicle_id: vehicleId,
-      stop_id: stopId,
-      monthly_amount: monthlyAmount,
-      start_date: startIso,
-      end_date: endDate ?? null,
-      reason: reason ?? null,
-      is_active: true,
-      fee_structure_id: feeStructureId ?? null,
-    }).select('id').single();
-    if (error) {
-      // Roll the prior row back so the student isn't stranded transport-less.
-      if (prior) {
-        await supabase.from('student_transport_assignments')
-          .update({
-            is_active: true,
-            end_date: prior.end_date,
-            end_reason: prior.end_reason,
-          })
-          .eq('id', prior.id);
-      }
-      throw new Error(error.message);
-    }
-    const newId = (data as { id: string }).id;
-
-    // Auto-generate monthly TRANSPORT installments for the new assignment.
-    // Two distinct error policies:
-    //   * Structure-driven (Task #29): mirrors the class-side
-    //     generate_student_fee_schedule contract — if the RPC rejects
-    //     (wrong year, wrong type, tampered id, etc.) we FAIL THE WHOLE
-    //     ASSIGNMENT so the principal sees the toast and can correct
-    //     instead of ending up with an active assignment that has no
-    //     bill schedule. We roll the new row back and restore the prior
-    //     active row so the student isn't stranded.
-    //   * Legacy flat-monthly (no structure id): bulk reassign and other
-    //     pre-Task-#29 callers tolerate a quiet failure so the bulk job
-    //     keeps moving — they can re-trigger schedule generation later.
-    if (feeStructureId) {
-      const { error: rpcErr } = await supabase.rpc('generate_transport_fee_schedule', {
-        p_student_id:       studentId,
-        p_year_id:          ayId,
-        p_assignment_id:    newId,
-        p_fee_structure_id: feeStructureId,
-      });
-      if (rpcErr) {
-        // Roll the new row + restore prior active state.
-        await supabase.from('student_transport_assignments').delete().eq('id', newId);
-        if (prior) {
-          await supabase.from('student_transport_assignments')
-            .update({
-              is_active: true,
-              end_date: prior.end_date,
-              end_reason: prior.end_reason,
-            })
-            .eq('id', prior.id);
-        }
-        throw new Error(`Transport fee schedule failed: ${rpcErr.message}`);
-      }
-      const { feeService } = await import('@/modules/fees/fee.service');
-      await feeService.refreshAll();
-    } else {
-      try {
-        const { feeService } = await import('@/modules/fees/fee.service');
-        await feeService.addTransportFeeSchedule(
-          studentId, monthlyAmount, startIso, endDate ?? null, newId,
-        );
-      } catch (e) {
-        // Bulk/legacy path — keep moving; principal can regenerate later.
-        // eslint-disable-next-line no-console
-        console.warn('[transport] legacy installment generation failed:', e);
-      }
-    }
-
-    await logAudit('transport_assigned', 'student_transport_assignment', newId, {
+    await logAudit('transport_assigned', 'student_transport_assignment', studentId, {
       studentId, vehicleId, stopId, monthlyAmount, startDate: startIso, endDate, reason,
     });
     await this.refreshAll();
@@ -509,39 +405,9 @@ export const transportService = {
   },
 
   async removeStudentAssignment(studentId: string, reason?: string): Promise<void> {
-    // Find the active row first so we can cancel its future installments.
-    const { data: row } = await supabase.from('student_transport_assignments')
-      .select('id, vehicle_id, stop_id, monthly_amount')
-      .eq('student_id', studentId).eq('is_active', true)
-      .maybeSingle();
-
     const todayIso = new Date().toISOString().slice(0, 10);
-    const { error } = await supabase.from('student_transport_assignments')
-      .update({
-        is_active: false,
-        end_date: todayIso,
-        end_reason: reason ?? 'Service cancelled',
-      })
-      .eq('student_id', studentId).eq('is_active', true);
-    if (error) throw new Error(error.message);
-
-    if (row) {
-      try {
-        const { feeService } = await import('@/modules/fees/fee.service');
-        await feeService.cancelTransportInstallmentsAfter(
-          (row as { id: string }).id, todayIso,
-        );
-      } catch (e) {
-        // eslint-disable-next-line no-console
-        console.warn('[transport] cancel installments failed:', e);
-      }
-      await logAudit(
-        'transport_removed',
-        'student_transport_assignment',
-        (row as { id: string }).id,
-        { studentId, reason },
-      );
-    }
+    await apiTransport.remove({ studentId, endDate: todayIso, reason });
+    await logAudit('transport_removed', 'student_transport_assignment', studentId, { studentId, reason });
     await this.refreshAll();
   },
 

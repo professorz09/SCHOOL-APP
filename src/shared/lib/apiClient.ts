@@ -85,7 +85,8 @@ export const apiStudents = {
     studentId: string; className: string; section: string; academicYearId: string;
     rollNo?: string; totalFee?: number; sectionId?: string;
     feeHeads?: any[]; dueDates?: any[]; isRte?: boolean;
-  }) => post<any>('/students/assign', body),
+    discountAmount?: number; discountPct?: number;
+  }) => post<{ record: any; installmentCount: number; totalAmount: number }>('/students/assign', body),
   deactivate: (studentId: string, reason?: string) =>
     post<any>('/students/deactivate', { studentId, reason }),
 };
@@ -126,9 +127,10 @@ export const apiTransport = {
   getStudentAssignments: (studentId: string) => get<any[]>(`/transport/student/${studentId}`),
   assign: (body: {
     studentId: string; vehicleId: string; stopId: string;
-    monthlyAmount: number; startDate: string; academicYearId: string; endDate?: string;
+    monthlyAmount: number; startDate: string; academicYearId: string;
+    endDate?: string; reason?: string; feeStructureId?: string;
   }) => post<any>('/transport/assign', body),
-  remove: (body: { studentId: string; academicYearId: string; endDate: string; reason?: string }) =>
+  remove: (body: { studentId: string; endDate: string; reason?: string }) =>
     post<any>('/transport/remove', body),
 };
 
