@@ -561,130 +561,166 @@ export const ToolsManager: React.FC<Props> = ({ onBack }) => {
     );
   };
 
-  // ── MARKSHEET TOOL ────────────────────────────────────────────────────────
+  // ── MARKSHEET TOOL (multi-subject) ───────────────────────────────────────
   const MarksheetTool = () => {
-    const { showToast } = useUIStore();
-    const [picked, setPicked]     = useState('');
-    const [examId, setExamId]     = useState('');
-    const [exams, setExams]       = useState<any[]>([]);
-    const [results, setResults]   = useState<any[]>([]);
+    const [picked,       setPicked]       = useState('');
+    const [examTitle,    setExamTitle]    = useState('');
+    const [allExams,     setAllExams]     = useState<any[]>([]);
+    // rows: { exam, result } per subject
+    const [subjectRows,  setSubjectRows]  = useState<{ exam: any; result: any | null }[]>([]);
     const [loadingExams, setLoadingExams] = useState(false);
     const [loadingRes,   setLoadingRes]   = useState(false);
     const [showPrint,    setShowPrint]    = useState(false);
 
     const student = students.find(s => s.id === picked) ?? null;
 
+    // Load all completed exams for student's class
     useEffect(() => {
-      if (!student) { setExams([]); setExamId(''); setResults([]); return; }
+      if (!student) { setAllExams([]); setExamTitle(''); setSubjectRows([]); return; }
       setLoadingExams(true);
       apiExams.list({ className: student.className })
-        .then((list: any[]) => setExams(list.filter(e => e.results_uploaded)))
-        .catch(() => setExams([]))
+        .then((list: any[]) => setAllExams(list.filter(e => e.results_uploaded)))
+        .catch(() => setAllExams([]))
         .finally(() => setLoadingExams(false));
     }, [student?.id]);
 
+    // Unique exam titles for the dropdown
+    const examTitleOptions = React.useMemo(() => {
+      const seen = new Set<string>();
+      return allExams.filter(e => { if (seen.has(e.title)) return false; seen.add(e.title); return true; });
+    }, [allExams]);
+
+    // Load per-subject results when title picked
     useEffect(() => {
-      if (!examId || !picked) { setResults([]); return; }
+      if (!examTitle || !picked) { setSubjectRows([]); return; }
+      const titleExams = allExams.filter(e => e.title === examTitle);
       setLoadingRes(true);
-      apiExams.getResults(examId)
-        .then((res: any[]) => setResults(res.filter(r => r.student_id === picked)))
-        .catch(() => setResults([]))
+      Promise.all(
+        titleExams.map(exam =>
+          apiExams.getResults(exam.id)
+            .then((res: any[]) => ({
+              exam,
+              result: res.find((r: any) => r.student_id === picked) ?? null,
+            }))
+            .catch(() => ({ exam, result: null }))
+        )
+      )
+        .then(rows => setSubjectRows(rows.sort((a, b) => (a.exam.subject ?? '').localeCompare(b.exam.subject ?? ''))))
         .finally(() => setLoadingRes(false));
-    }, [examId, picked]);
+    }, [examTitle, picked]);
 
-    const pickedExam = exams.find(e => e.id === examId);
-    const totalObtained = results.reduce((s, r) => s + (r.obtained_marks ?? 0), 0);
-    const totalMax = pickedExam ? (pickedExam.max_marks ?? 0) : 0;
-    const pct = totalMax > 0 ? Math.round((totalObtained / totalMax) * 100) : 0;
-    const passed = pct >= 35;
+    // Aggregate totals (only rows where result exists)
+    const filledRows  = subjectRows.filter(r => r.result !== null);
+    const totalMax    = subjectRows.reduce((s, r) => s + (r.exam.max_marks ?? 0), 0);
+    const totalObtained = filledRows.reduce((s, r) => s + (r.result?.obtained_marks ?? 0), 0);
+    const pct  = totalMax > 0 ? Math.round((totalObtained / totalMax) * 100) : 0;
+    const passed = pct >= 33;
 
-    if (showPrint && student && pickedExam) {
+    const gradeLabel = (obt: number, max: number) => {
+      const p = max > 0 ? (obt / max) * 100 : 0;
+      return p >= 90 ? 'A+' : p >= 75 ? 'A' : p >= 60 ? 'B+' : p >= 45 ? 'B' : p >= 33 ? 'C' : 'F';
+    };
+
+    if (showPrint && student && examTitle && subjectRows.length > 0) {
       return (
         <div className="w-full flex flex-col">
           <div className="sticky top-0 bg-white px-4 py-3 border-b border-slate-100 flex gap-2 z-10">
-            <button onClick={() => setShowPrint(false)} className="flex-1 py-2.5 bg-slate-100 text-slate-700 font-black text-xs uppercase rounded-xl">
+            <button onClick={() => setShowPrint(false)}
+              className="flex-1 py-2.5 bg-slate-100 text-slate-700 font-black text-xs uppercase rounded-xl">
               ← Back
             </button>
-            <button onClick={() => window.print()} className="flex-1 py-2.5 bg-slate-900 text-white font-black text-xs uppercase rounded-xl flex items-center justify-center gap-1.5">
-              <Printer size={13}/> Print
+            <button onClick={() => window.print()}
+              className="flex-1 py-2.5 bg-slate-900 text-white font-black text-xs uppercase rounded-xl flex items-center justify-center gap-1.5">
+              <Printer size={13} /> Print
             </button>
           </div>
-          {/* Printable marksheet */}
-          <div id="marksheet-print" className="p-6 bg-white min-h-screen font-sans">
+
+          {/* ── Printable marksheet ── */}
+          <div className="p-6 bg-white min-h-screen font-sans">
             {/* School header */}
             <div className="text-center border-b-2 border-slate-800 pb-4 mb-4">
               <div className="text-xl font-black text-slate-900 uppercase tracking-wide">
                 {schoolInfo?.name ?? 'EduGrow School'}
               </div>
-              {schoolInfo?.address && <div className="text-xs font-bold text-slate-500 mt-0.5">{schoolInfo.address}</div>}
-              <div className="text-sm font-black text-slate-700 mt-2 uppercase tracking-widest">Academic Marksheet</div>
+              {schoolInfo?.address && (
+                <div className="text-[10px] font-bold text-slate-500 mt-0.5">{schoolInfo.address}</div>
+              )}
+              <div className="text-sm font-black text-slate-700 mt-2 uppercase tracking-widest">
+                Academic Marksheet
+              </div>
             </div>
 
-            {/* Student details */}
-            <div className="grid grid-cols-2 gap-2 text-xs font-bold text-slate-700 mb-4 border border-slate-200 rounded-xl p-3">
-              <div><span className="text-slate-400">Name:</span> {student.name}</div>
-              <div><span className="text-slate-400">Adm. No:</span> {student.admissionNo}</div>
-              <div><span className="text-slate-400">Class:</span> {student.className}-{student.section}</div>
-              <div><span className="text-slate-400">Father:</span> {student.fatherName ?? '—'}</div>
-              <div><span className="text-slate-400">Exam:</span> {pickedExam.title}</div>
-              <div><span className="text-slate-400">Date:</span> {pickedExam.scheduled_date}</div>
+            {/* Student details grid */}
+            <div className="grid grid-cols-2 gap-1.5 text-xs font-bold text-slate-700 mb-4 border border-slate-200 rounded-xl p-3">
+              <div><span className="text-slate-400">Name: </span>{student.name}</div>
+              <div><span className="text-slate-400">Adm. No: </span>{student.admissionNo}</div>
+              <div><span className="text-slate-400">Class: </span>{student.className}-{student.section}</div>
+              <div><span className="text-slate-400">Roll No: </span>{student.rollNo || '—'}</div>
+              <div><span className="text-slate-400">Father: </span>{student.fatherName || '—'}</div>
+              <div><span className="text-slate-400">Exam: </span>{examTitle}</div>
             </div>
 
-            {/* Results table */}
+            {/* Subject-wise results table */}
             <table className="w-full border-collapse text-xs mb-4">
               <thead>
                 <tr className="bg-slate-800 text-white">
                   <th className="text-left px-3 py-2 font-black">Subject</th>
-                  <th className="text-center px-3 py-2 font-black">Max Marks</th>
+                  <th className="text-center px-3 py-2 font-black">Max</th>
                   <th className="text-center px-3 py-2 font-black">Obtained</th>
                   <th className="text-center px-3 py-2 font-black">Grade</th>
+                  <th className="text-center px-3 py-2 font-black">Result</th>
                 </tr>
               </thead>
               <tbody>
-                {results.length > 0 ? results.map((r, i) => {
-                  const g = r.grade ?? (r.obtained_marks >= 0.9 * totalMax ? 'A+' : r.obtained_marks >= 0.75 * totalMax ? 'A' : r.obtained_marks >= 0.5 * totalMax ? 'B' : 'C');
+                {subjectRows.map((row, i) => {
+                  const obt = row.result?.obtained_marks ?? null;
+                  const max = row.exam.max_marks ?? 0;
+                  const grade = obt !== null ? (row.result?.grade ?? gradeLabel(obt, max)) : '—';
+                  const subPass = obt !== null ? obt >= max * 0.33 : null;
                   return (
                     <tr key={i} className={i % 2 === 0 ? 'bg-slate-50' : 'bg-white'}>
-                      <td className="px-3 py-2 font-bold border-b border-slate-100">{pickedExam.subject ?? 'All Subjects'}</td>
-                      <td className="px-3 py-2 text-center border-b border-slate-100">{totalMax}</td>
-                      <td className="px-3 py-2 text-center font-black border-b border-slate-100">{r.obtained_marks}</td>
-                      <td className="px-3 py-2 text-center font-black border-b border-slate-100">{g}</td>
+                      <td className="px-3 py-2 font-bold border-b border-slate-100">{row.exam.subject}</td>
+                      <td className="px-3 py-2 text-center border-b border-slate-100">{max}</td>
+                      <td className="px-3 py-2 text-center font-black border-b border-slate-100">
+                        {obt !== null ? obt : 'AB'}
+                      </td>
+                      <td className="px-3 py-2 text-center font-black border-b border-slate-100">{grade}</td>
+                      <td className={`px-3 py-2 text-center font-black border-b border-slate-100 ${
+                        subPass === true ? 'text-emerald-600' : subPass === false ? 'text-rose-600' : 'text-slate-400'
+                      }`}>
+                        {subPass === true ? 'P' : subPass === false ? 'F' : '—'}
+                      </td>
                     </tr>
                   );
-                }) : (
-                  <tr>
-                    <td className="px-3 py-2 text-center font-bold text-slate-400" colSpan={4}>
-                      {pickedExam.subject ?? 'All Subjects'} — {totalObtained} marks
-                    </td>
-                  </tr>
-                )}
+                })}
               </tbody>
               <tfoot>
-                <tr className="bg-slate-100">
-                  <td className="px-3 py-2 font-black">Total</td>
-                  <td className="px-3 py-2 text-center font-black">{totalMax}</td>
-                  <td className="px-3 py-2 text-center font-black">{totalObtained}</td>
-                  <td className="px-3 py-2 text-center font-black">{pct >= 90 ? 'A+' : pct >= 75 ? 'A' : pct >= 50 ? 'B' : 'C'}</td>
+                <tr className="bg-slate-100 font-black">
+                  <td className="px-3 py-2">Total</td>
+                  <td className="px-3 py-2 text-center">{totalMax}</td>
+                  <td className="px-3 py-2 text-center">{totalObtained}</td>
+                  <td className="px-3 py-2 text-center">{gradeLabel(totalObtained, totalMax)}</td>
+                  <td className={`px-3 py-2 text-center ${passed ? 'text-emerald-600' : 'text-rose-600'}`}>
+                    {passed ? 'PASS' : 'FAIL'}
+                  </td>
                 </tr>
               </tfoot>
             </table>
 
-            {/* Result badge */}
-            <div className={`text-center py-3 rounded-xl font-black text-base uppercase tracking-widest border-2 ${passed ? 'bg-emerald-50 border-emerald-300 text-emerald-700' : 'bg-rose-50 border-rose-300 text-rose-700'}`}>
-              {passed ? '✓ PASS' : '✗ FAIL'} — {pct}%
+            {/* Percentage badge */}
+            <div className={`text-center py-3 rounded-xl font-black text-base uppercase tracking-widest border-2 ${
+              passed ? 'bg-emerald-50 border-emerald-300 text-emerald-700' : 'bg-rose-50 border-rose-300 text-rose-700'
+            }`}>
+              {passed ? '✓ PASS' : '✗ FAIL'} — {pct}% ({totalObtained}/{totalMax})
             </div>
 
-            {/* Signature area */}
+            {/* Signature strip */}
             <div className="grid grid-cols-3 gap-4 mt-8 pt-4 border-t border-slate-200">
-              <div className="text-center">
-                <div className="border-t-2 border-slate-300 pt-2 text-[10px] font-bold text-slate-500">Class Teacher</div>
-              </div>
-              <div className="text-center">
-                <div className="border-t-2 border-slate-300 pt-2 text-[10px] font-bold text-slate-500">Parent Signature</div>
-              </div>
-              <div className="text-center">
-                <div className="border-t-2 border-slate-300 pt-2 text-[10px] font-bold text-slate-500">Principal</div>
-              </div>
+              {['Class Teacher', 'Parent / Guardian', 'Principal'].map(label => (
+                <div key={label} className="text-center">
+                  <div className="border-t-2 border-slate-300 pt-2 text-[10px] font-bold text-slate-400">{label}</div>
+                </div>
+              ))}
             </div>
           </div>
         </div>
@@ -699,11 +735,232 @@ export const ToolsManager: React.FC<Props> = ({ onBack }) => {
             <Award size={20} className="text-amber-600 shrink-0 mt-0.5" />
             <div>
               <p className="font-black text-amber-900 text-sm">Academic Marksheet Generator</p>
-              <p className="text-xs font-bold text-amber-700 mt-0.5">Student chunein → Exam chunein → Marksheet ready</p>
+              <p className="text-xs font-bold text-amber-700 mt-0.5">
+                Student → Exam series → Subject-wise marksheet with grades
+              </p>
             </div>
           </div>
 
-          <StudentPicker value={picked} onChange={v => { setPicked(v); setExamId(''); setResults([]); }} />
+          <StudentPicker value={picked} onChange={v => { setPicked(v); setExamTitle(''); setSubjectRows([]); }} />
+
+          {student && (
+            <>
+              <SelectedCard student={student} />
+
+              <div>
+                <label className="text-xs font-black uppercase tracking-widest text-slate-400 mb-2 block">
+                  Exam Series {loadingExams && <span className="text-[9px] text-slate-300">Loading…</span>}
+                </label>
+                <select value={examTitle} onChange={e => setExamTitle(e.target.value)}
+                  className="w-full border border-slate-200 bg-white rounded-xl px-4 py-3 font-bold text-sm outline-none focus:border-amber-400">
+                  <option value="">Exam series chunein (e.g. Half Yearly, Annual)…</option>
+                  {examTitleOptions.map(e => (
+                    <option key={e.id} value={e.title}>
+                      {e.title} · {e.test_type}
+                    </option>
+                  ))}
+                </select>
+                {!loadingExams && examTitleOptions.length === 0 && (
+                  <p className="text-[9px] font-bold text-rose-500 mt-1">
+                    {student.className} ke liye koi completed exam nahi mila
+                  </p>
+                )}
+              </div>
+            </>
+          )}
+
+          {/* Preview rows */}
+          {examTitle && !loadingRes && subjectRows.length > 0 && (
+            <div className="bg-white rounded-2xl border border-slate-100 shadow-sm overflow-hidden">
+              <div className="px-4 py-2 border-b border-slate-50 flex items-center justify-between">
+                <p className="text-[9px] font-black uppercase tracking-widest text-slate-400">Preview</p>
+                <span className={`text-xs font-black ${pct >= 33 ? 'text-emerald-600' : 'text-rose-600'}`}>
+                  {pct}% · {passed ? 'PASS' : 'FAIL'}
+                </span>
+              </div>
+              {subjectRows.map((row, i) => (
+                <div key={i} className="flex items-center justify-between px-4 py-2 border-b border-slate-50 last:border-0">
+                  <span className="text-xs font-bold text-slate-700">{row.exam.subject}</span>
+                  <span className="text-xs font-black text-slate-900">
+                    {row.result !== null ? `${row.result.obtained_marks}/${row.exam.max_marks}` : 'AB'}
+                  </span>
+                </div>
+              ))}
+              <div className="flex items-center justify-between px-4 py-2 bg-slate-50">
+                <span className="text-xs font-black text-slate-700">Total</span>
+                <span className="text-xs font-black text-slate-900">{totalObtained}/{totalMax}</span>
+              </div>
+              <div className="px-4 py-2 bg-slate-50">
+                <div className="bg-slate-200 rounded-full h-1.5">
+                  <div className={`h-1.5 rounded-full ${passed ? 'bg-emerald-500' : 'bg-rose-400'}`}
+                    style={{ width: `${pct}%` }} />
+                </div>
+              </div>
+            </div>
+          )}
+
+          {examTitle && loadingRes && (
+            <div className="text-center text-xs font-bold text-slate-400 py-4">Results load ho rahe hain…</div>
+          )}
+
+          {examTitle && !loadingRes && subjectRows.length === 0 && (
+            <p className="text-[10px] font-bold text-amber-600 text-center">
+              Is exam series ke results nahi mile is student ke liye
+            </p>
+          )}
+
+          {student && examTitle && subjectRows.length > 0 && (
+            <button
+              onClick={() => setShowPrint(true)}
+              disabled={loadingRes}
+              className="w-full flex items-center justify-center gap-2 bg-amber-600 text-white font-black text-sm uppercase py-4 rounded-2xl active:scale-95 transition-transform shadow-md disabled:opacity-50">
+              <FileText size={16} /> Generate Marksheet ({subjectRows.length} subjects)
+            </button>
+          )}
+        </div>
+      </div>
+    );
+  };
+
+  // ── ADMIT CARD TOOL ───────────────────────────────────────────────────────
+  const AdmitCardTool = () => {
+    const [picked,      setPicked]      = useState('');
+    const [examId,      setExamId]      = useState('');
+    const [exams,       setExams]       = useState<any[]>([]);
+    const [loadingExams,setLoadingExams]= useState(false);
+    const [showPrint,   setShowPrint]   = useState(false);
+
+    const student = students.find(s => s.id === picked) ?? null;
+
+    useEffect(() => {
+      if (!student) { setExams([]); setExamId(''); return; }
+      setLoadingExams(true);
+      apiExams.list({ className: student.className })
+        .then((list: any[]) => setExams(list))
+        .catch(() => setExams([]))
+        .finally(() => setLoadingExams(false));
+    }, [student?.id]);
+
+    const pickedExam = exams.find(e => e.id === examId);
+
+    if (showPrint && student && pickedExam) {
+      return (
+        <div className="w-full flex flex-col">
+          <div className="sticky top-0 bg-white px-4 py-3 border-b border-slate-100 flex gap-2 z-10">
+            <button onClick={() => setShowPrint(false)}
+              className="flex-1 py-2.5 bg-slate-100 text-slate-700 font-black text-xs uppercase rounded-xl">
+              ← Back
+            </button>
+            <button onClick={() => window.print()}
+              className="flex-1 py-2.5 bg-rose-600 text-white font-black text-xs uppercase rounded-xl flex items-center justify-center gap-1.5">
+              <Printer size={13} /> Print
+            </button>
+          </div>
+
+          {/* Printable admit card */}
+          <div className="p-6 bg-white min-h-screen font-sans">
+            {/* Border frame */}
+            <div className="border-4 border-double border-slate-800 rounded-2xl p-5 max-w-md mx-auto space-y-4">
+              {/* School header */}
+              <div className="text-center border-b-2 border-slate-200 pb-3">
+                <div className="text-base font-black text-slate-900 uppercase tracking-wide">
+                  {schoolInfo?.name ?? 'EduGrow School'}
+                </div>
+                {schoolInfo?.address && (
+                  <div className="text-[10px] font-bold text-slate-500 mt-0.5">{schoolInfo.address}</div>
+                )}
+                <div className="text-sm font-black text-rose-700 mt-2 uppercase tracking-widest">
+                  Admit Card / प्रवेश पत्र
+                </div>
+              </div>
+
+              {/* Exam info */}
+              <div className="bg-rose-50 border border-rose-200 rounded-xl p-3 text-center">
+                <div className="text-sm font-black text-rose-900 uppercase">{pickedExam.title}</div>
+                <div className="text-[10px] font-bold text-rose-600 mt-0.5">
+                  {pickedExam.test_type} · {pickedExam.subject}
+                </div>
+              </div>
+
+              {/* Student info */}
+              <div className="space-y-1.5 text-xs font-bold text-slate-700">
+                {[
+                  ['Student Name', student.name],
+                  ['Admission No.', student.admissionNo],
+                  ['Class / Section', `${student.className}-${student.section}`],
+                  ['Roll No.', student.rollNo ?? '—'],
+                  ['Father\'s Name', student.fatherName ?? '—'],
+                ].map(([label, val]) => (
+                  <div key={label} className="flex items-center gap-2 border-b border-slate-100 pb-1.5">
+                    <span className="w-28 text-slate-400 shrink-0">{label}:</span>
+                    <span className="font-black text-slate-900">{val}</span>
+                  </div>
+                ))}
+              </div>
+
+              {/* Exam details */}
+              <div className="bg-slate-50 border border-slate-200 rounded-xl p-3 space-y-1.5 text-xs font-bold">
+                <div className="flex justify-between">
+                  <span className="text-slate-400">Date:</span>
+                  <span className="font-black text-slate-900">{pickedExam.scheduled_date ?? '—'}</span>
+                </div>
+                <div className="flex justify-between">
+                  <span className="text-slate-400">Duration:</span>
+                  <span className="font-black text-slate-900">
+                    {pickedExam.duration ? `${pickedExam.duration} min` : '—'}
+                  </span>
+                </div>
+                <div className="flex justify-between">
+                  <span className="text-slate-400">Max Marks:</span>
+                  <span className="font-black text-slate-900">{pickedExam.max_marks ?? '—'}</span>
+                </div>
+              </div>
+
+              {/* Instructions */}
+              <div className="text-[10px] font-bold text-slate-600 leading-relaxed border-t border-slate-100 pt-3">
+                <p className="font-black text-slate-800 mb-1">Instructions / निर्देश:</p>
+                <ul className="list-disc list-inside space-y-0.5">
+                  <li>Yeh admit card exam hall mein saath lana ZAROOR hai.</li>
+                  <li>Pehchan patra (school ID card) bhi saath layen.</li>
+                  <li>10 minute pehle aayein aur apni seat pe baith jayen.</li>
+                  <li>Mobile phone aur electronic device banned hain.</li>
+                </ul>
+              </div>
+
+              {/* Signature strip */}
+              <div className="grid grid-cols-2 gap-4 pt-3 border-t border-slate-200">
+                <div className="text-center">
+                  <div className="border-t-2 border-slate-300 pt-2 text-[9px] font-bold text-slate-400 uppercase">
+                    Student Signature
+                  </div>
+                </div>
+                <div className="text-center">
+                  <div className="border-t-2 border-slate-300 pt-2 text-[9px] font-bold text-slate-400 uppercase">
+                    Principal Seal &amp; Sign
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      );
+    }
+
+    return (
+      <div className="w-full flex flex-col">
+        <ToolHeader title="Admit Card" onBackPress={() => setView('DASHBOARD')} />
+        <div className="p-5 space-y-4">
+          <div className="bg-rose-50 border border-rose-200 rounded-2xl p-4 flex items-start gap-3">
+            <Ticket size={20} className="text-rose-600 shrink-0 mt-0.5" />
+            <div>
+              <p className="font-black text-rose-900 text-sm">Exam Admit Card Generator</p>
+              <p className="text-xs font-bold text-rose-700 mt-0.5">
+                Student chunein → Exam chunein → Admit card print karein
+              </p>
+            </div>
+          </div>
+
+          <StudentPicker value={picked} onChange={v => { setPicked(v); setExamId(''); }} />
 
           {student && (
             <>
@@ -713,53 +970,28 @@ export const ToolsManager: React.FC<Props> = ({ onBack }) => {
                   Select Exam {loadingExams && <span className="text-[9px] text-slate-300">Loading…</span>}
                 </label>
                 <select value={examId} onChange={e => setExamId(e.target.value)}
-                  className="w-full border border-slate-200 bg-white rounded-xl px-4 py-3 font-bold text-sm outline-none focus:border-amber-400">
-                  <option value="">Choose exam with results…</option>
+                  className="w-full border border-slate-200 bg-white rounded-xl px-4 py-3 font-bold text-sm outline-none focus:border-rose-400">
+                  <option value="">Exam chunein…</option>
                   {exams.map(e => (
                     <option key={e.id} value={e.id}>
-                      {e.title} · {e.test_type} · {e.scheduled_date} · {e.max_marks} marks
+                      {e.title} · {e.subject} · {e.scheduled_date}
                     </option>
                   ))}
                 </select>
                 {!loadingExams && exams.length === 0 && (
                   <p className="text-[9px] font-bold text-rose-500 mt-1">
-                    {student.className} ke liye koi completed exam nahi mila
+                    {student.className} ke liye koi exam nahi mila
                   </p>
                 )}
               </div>
             </>
           )}
 
-          {examId && !loadingRes && results.length > 0 && (
-            <div className="bg-white rounded-2xl border border-slate-100 shadow-sm p-4 space-y-3">
-              <p className="text-[9px] font-black uppercase tracking-widest text-slate-400">Preview</p>
-              <div className="flex items-center justify-between">
-                <span className="text-sm font-bold text-slate-700">{pickedExam?.title}</span>
-                <span className={`text-sm font-black ${pct >= 35 ? 'text-emerald-600' : 'text-rose-600'}`}>{pct}% · {passed ? 'PASS' : 'FAIL'}</span>
-              </div>
-              <div className="flex justify-between text-xs font-bold text-slate-500">
-                <span>Max Marks: {totalMax}</span>
-                <span>Obtained: {totalObtained}</span>
-              </div>
-              <div className="bg-slate-100 rounded-full h-2">
-                <div className={`h-2 rounded-full transition-all ${passed ? 'bg-emerald-500' : 'bg-rose-400'}`}
-                  style={{ width: `${pct}%` }} />
-              </div>
-            </div>
-          )}
-
-          {examId && !loadingRes && results.length === 0 && (
-            <p className="text-[10px] font-bold text-amber-600 text-center">
-              Is exam mein is student ke results nahi mile
-            </p>
-          )}
-
           {student && examId && (
             <button
               onClick={() => setShowPrint(true)}
-              disabled={loadingRes}
-              className="w-full flex items-center justify-center gap-2 bg-amber-600 text-white font-black text-sm uppercase py-4 rounded-2xl active:scale-95 transition-transform shadow-md disabled:opacity-50">
-              <FileText size={16} /> Generate Marksheet
+              className="w-full flex items-center justify-center gap-2 bg-rose-600 text-white font-black text-sm uppercase py-4 rounded-2xl active:scale-95 transition-transform shadow-md">
+              <Ticket size={16} /> Generate Admit Card
             </button>
           )}
         </div>
@@ -828,14 +1060,7 @@ export const ToolsManager: React.FC<Props> = ({ onBack }) => {
   if (view === 'BONAFIDE')  return <BonafideGenerator />;
   if (view === 'MARKSHEET') return <MarksheetTool />;
 
-  if (view === 'ADMIT') return (
-    <GenericDocTool
-      toolView="ADMIT" title="Admit Card"
-      desc="Generate exam admit card for a student"
-      accentClass="bg-rose-50 border border-rose-200 text-rose-800"
-      InfoIcon={Ticket}
-    />
-  );
+  if (view === 'ADMIT') return <AdmitCardTool />;
 
   // ── MAIN DASHBOARD ────────────────────────────────────────────────────────
   const TOOLS = [

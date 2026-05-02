@@ -893,14 +893,31 @@ forgot to clean up future TRANSPORT installments, and there was no
   continues to work unchanged — the new history endpoint will be wired
   into that view in a follow-up if requested.
 
+### Promotion Wizard v2 — Stream Selection + 12th Auto-TC
+
+- **Class 10 → 11th stream picker**: when `fromClass === 'Class 10'` and decision is PROMOTE, a 2×2 grid of stream radio buttons (Science / Commerce / Arts / Maths) replaces the plain class dropdown; sets `toClass = '11th {Stream}'`; validation error shown if no stream selected before execute
+- **12th passout auto-TC**: students whose `fromClass` starts with `12th` are auto-assigned `decision = 'TC'` on preview load; expanded panel shows info banner instead of decision buttons; "All → Promote" bulk button skips 12th students
+- **Badge labels**: Class 10 students show "Stream Chunein" violet pill in list row; 12th students show "12th Passout" blue pill
+- `bumpClass()` unchanged — Class 10 still defaults to `'11th Science'` as the pre-selected stream radio
+
+### Admit Card Tool (ToolsManager.tsx)
+
+- `AdmitCardTool` component replaces the old `GenericDocTool` placeholder for the ADMIT view
+- Flow: Student picker → Exam picker (all exams for student's class via `apiExams.list({className})`) → Print view
+- Printable admit card: double-border frame, school header (name + address), exam info banner (title / type / subject), student info table (name / adm.no. / class-section / roll no / father), exam details (date / duration / max marks), 4-point instructions (Hindi + English), signature strip (student + principal)
+- Print via `window.print()`; sticky top bar has Back + Print buttons
+- Accepts all exams (not just results_uploaded) so admit cards can be generated before exam day
+
 ### Phase 7 — Exam Marksheet Generator (ToolsManager.tsx)
 
-- `MarksheetTool` component replaces the old `GenericDocTool` placeholder for the MARKSHEET view
-- Flow: Student picker → Exam picker (fetches exams with `results_uploaded=true` via `apiExams.list({className})`) → Results fetch (via `apiExams.getResults(examId)` filtered to selected student) → Printable marksheet
-- Printable marksheet includes: school header (name + address from `schoolInfoService`), student details grid (name, adm. no., class, father, exam, date), results table (subject / max marks / obtained / grade), total row, PASS/FAIL badge with percentage, three-way signature strip
-- Preview pane (before print) shows mini result card with progress bar + pass/fail colour
-- `window.print()` used for printing; print view has Back + Print buttons in sticky header
-- `apiExams` imported into `ToolsManager.tsx`
+- `MarksheetTool` component (multi-subject) replaces the old `GenericDocTool` placeholder for the MARKSHEET view
+- **Multi-subject flow**: Student picker → Exam Series picker (groups all exams by `title` for student's class where `results_uploaded=true`) → parallel-fetch results for all subjects in the series → printable marksheet
+- **Subject-wise table**: Subject | Max | Obtained | Grade (A+/A/B+/B/C/F) | Result (P/F) per row; Total + Overall PASS/FAIL + percentage in footer; absent students shown as "AB"
+- **Grade formula**: ≥90=A+, ≥75=A, ≥60=B+, ≥45=B, ≥33=C, else F (per subject); pass threshold = 33%
+- Preview pane shows subject list with obtained/max per subject + progress bar before generating
+- Printable marksheet: school header, student details grid (name/adm.no./class/roll/father/exam), subject table, percentage PASS/FAIL badge, three-way signature strip (Class Teacher / Parent / Principal)
+- `window.print()` for printing; sticky header Back + Print buttons
+- `apiExams` imported; `React.useMemo` used for title deduplication
 
 ### Phase 8 — Promotion Wizard (PromotionWizard.tsx + AcademicYearManager.tsx)
 
