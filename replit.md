@@ -16,10 +16,37 @@ A school management application with React frontend and Supabase (Postgres + Aut
 
 **Architecture notes:**
 - All database access goes through `@supabase/supabase-js` — do not replace with Drizzle/pg
-- `vite-plugins/admin-api.ts` is the server-side layer (runs inside the Vite dev/preview middleware) — it handles privileged admin operations using the service role key
+- **API Server layer** (Express, mounted inside Vite middleware via `vite-plugins/api-server.ts`):
+  - All **writes** go through `/api/*` — no business logic in frontend
+  - All **reads** still use Supabase direct from frontend (RLS enforces access)
+  - `vite-plugins/admin-api.ts` → `/api/admin/*` (Super Admin only, unchanged)
+  - `vite-plugins/api-server.ts` → `/api/*` (all other modules, mounts `server/app.ts`)
+- **Server structure** (`server/`):
+  - `server/app.ts` — Express app, all routers mounted
+  - `server/lib/db.ts` — Supabase service-role client + anon client + per-user JWT client
+  - `server/lib/helpers.ts` — `ok()`, `fail()`, `ApiError`, `requireBody()`
+  - `server/middleware/auth.ts` — `requireAuth` (JWT → `req.user`), `requireRole(...roles)`
+  - `server/routes/auth.ts` — POST /api/auth/login, logout, me, change-password
+  - `server/routes/academic-year.ts` — GET/POST /api/academic-year/{create,set-active,close}
+  - `server/routes/students.ts` — GET/POST /api/students/{create,assign}
+  - `server/routes/fees.ts` — GET/POST /api/fees/{structure/create,assign,pay,student/:id}
+  - `server/routes/transport.ts` — POST /api/transport/{assign,remove}
+  - `server/routes/attendance.ts` — GET/POST /api/attendance/{submit,approve}
+  - `server/routes/exams.ts` — GET/POST /api/exam/{create,result/upload}
+  - `server/routes/promotion.ts` — GET/POST /api/promotion/{preview,execute}
+  - `server/routes/teacher.ts` — GET/POST /api/teacher/{check-in,check-out,attendance}
+  - `server/routes/settings.ts` — GET/PUT /api/settings
 - `src/lib/supabase.ts` gracefully degrades if env vars are missing (logs a warning, uses placeholder values)
-- `server/db.ts` exposes a raw `pg.Pool` connected to the Replit-provisioned PostgreSQL — available for future use but not currently used by the app
 - Schema lives in Supabase (34 migrations in `supabase/migrations/`); apply with `npm run db:apply` after setting `SUPABASE_DB_PASSWORD`
+
+**API Security Rules (enforced server-side):**
+- No token → 401 `Authorization token required`
+- Wrong role → 403 `Role 'X' not allowed`
+- Missing body field → 400 `Field 'X' is required`
+- Fee payments → immutable ledger, oldest-due-first allocation
+- Attendance → locked records cannot be modified
+- Promotion → always creates NEW record, marks old as PROMOTED (no overwrite)
+- Academic year close → irreversible, requires PRINCIPAL role
 
 ## Task #8 — Year closing without auto-promote + Correction Mode
 
