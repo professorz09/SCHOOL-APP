@@ -123,6 +123,100 @@ transportRouter.get('/vehicles', requireAuth, requireRole('PRINCIPAL', 'DRIVER')
   } catch (err) { fail(res, err); }
 });
 
+// ─── Vehicle CRUD ─────────────────────────────────────────────────────────────
+
+// POST /api/transport/vehicles/add
+transportRouter.post('/vehicles/add', requireAuth, requireRole('PRINCIPAL'), async (req, res) => {
+  try {
+    const body = requireBody<{
+      vehicleNo: string; type: string; capacity: number; routeName: string;
+    }>(req, ['vehicleNo', 'type', 'capacity', 'routeName']);
+    const { data, error } = await adminDb.from('transport_vehicles').insert({
+      school_id:  req.user.school_id!,
+      vehicle_no: body.vehicleNo,
+      type:       body.type,
+      capacity:   body.capacity,
+      route_name: body.routeName,
+    }).select('id, vehicle_no, type, capacity, route_name, driver_id, driver_name, driver_phone, is_active').single();
+    if (error) throw new ApiError(500, error.message);
+    ok(res, data, 201);
+  } catch (err) { fail(res, err); }
+});
+
+// POST /api/transport/vehicles/update
+transportRouter.post('/vehicles/update', requireAuth, requireRole('PRINCIPAL'), async (req, res) => {
+  try {
+    const body = requireBody<{ id: string; patch: Record<string, unknown> }>(req, ['id', 'patch']);
+    const allowed = ['vehicle_no','type','capacity','route_name','driver_id','driver_name','driver_phone'];
+    const safe: Record<string, unknown> = { updated_at: new Date().toISOString() };
+    for (const k of allowed) if (body.patch[k] !== undefined) safe[k] = body.patch[k];
+    const { error } = await adminDb.from('transport_vehicles').update(safe)
+      .eq('id', body.id).eq('school_id', req.user.school_id!);
+    if (error) throw new ApiError(500, error.message);
+    ok(res, { id: body.id });
+  } catch (err) { fail(res, err); }
+});
+
+// POST /api/transport/vehicles/deactivate
+transportRouter.post('/vehicles/deactivate', requireAuth, requireRole('PRINCIPAL'), async (req, res) => {
+  try {
+    const { id } = requireBody<{ id: string }>(req, ['id']);
+    const { error } = await adminDb.from('transport_vehicles')
+      .update({ is_active: false }).eq('id', id).eq('school_id', req.user.school_id!);
+    if (error) throw new ApiError(500, error.message);
+    ok(res, { id });
+  } catch (err) { fail(res, err); }
+});
+
+// ─── Stop CRUD ────────────────────────────────────────────────────────────────
+
+// POST /api/transport/stops/add
+transportRouter.post('/stops/add', requireAuth, requireRole('PRINCIPAL'), async (req, res) => {
+  try {
+    const body = requireBody<{
+      vehicleId: string; name: string; estimatedTime: string;
+      lat?: number; lng?: number; sortOrder?: number;
+    }>(req, ['vehicleId', 'name', 'estimatedTime']);
+    const { data, error } = await adminDb.from('route_stops').insert({
+      vehicle_id:     body.vehicleId,
+      name:           body.name,
+      estimated_time: body.estimatedTime,
+      lat:            body.lat ?? null,
+      lng:            body.lng ?? null,
+      sort_order:     body.sortOrder ?? 0,
+    }).select('id, name, estimated_time, lat, lng').single();
+    if (error) throw new ApiError(500, error.message);
+    ok(res, data, 201);
+  } catch (err) { fail(res, err); }
+});
+
+// POST /api/transport/stops/update
+transportRouter.post('/stops/update', requireAuth, requireRole('PRINCIPAL'), async (req, res) => {
+  try {
+    const body = requireBody<{
+      stopId: string; patch: Record<string, unknown>;
+    }>(req, ['stopId', 'patch']);
+    const safe: Record<string, unknown> = {};
+    if (body.patch.name !== undefined)          safe.name           = body.patch.name;
+    if (body.patch.estimatedTime !== undefined) safe.estimated_time = body.patch.estimatedTime;
+    if (body.patch.lat !== undefined)           safe.lat            = body.patch.lat;
+    if (body.patch.lng !== undefined)           safe.lng            = body.patch.lng;
+    const { error } = await adminDb.from('route_stops').update(safe).eq('id', body.stopId);
+    if (error) throw new ApiError(500, error.message);
+    ok(res, { stopId: body.stopId });
+  } catch (err) { fail(res, err); }
+});
+
+// POST /api/transport/stops/remove
+transportRouter.post('/stops/remove', requireAuth, requireRole('PRINCIPAL'), async (req, res) => {
+  try {
+    const { stopId } = requireBody<{ stopId: string }>(req, ['stopId']);
+    const { error } = await adminDb.from('route_stops').delete().eq('id', stopId);
+    if (error) throw new ApiError(500, error.message);
+    ok(res, { stopId });
+  } catch (err) { fail(res, err); }
+});
+
 // POST /api/transport/assign — full atomic transport assignment with fee schedule
 transportRouter.post('/assign', requireAuth, requireRole('PRINCIPAL'), async (req, res) => {
   try {

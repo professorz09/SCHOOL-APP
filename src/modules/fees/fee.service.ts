@@ -11,6 +11,7 @@ import { useAuthStore } from '@/shared/store/authStore';
 import { logAudit } from '@/shared/lib/audit';
 import { registerCacheResetter } from '@/shared/lib/cacheBus';
 import { apiFees } from '@/shared/lib/apiClient';
+// NOTE: All writes go through /api/fees/* — writeOffFee migrated to server
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -453,30 +454,7 @@ export const feeService = {
     const writeOff = Math.min(amount, maxWriteOff);
     if (writeOff <= 0) return false;
 
-    const schoolId = getSchoolId();
-
-    // Insert audit row first — abort the whole write-off if it fails so the
-    // installment row never drifts out of sync with the audit log.
-    const { error: woErr } = await supabase.from('fee_write_offs').insert({
-      installment_id: installmentId, school_id: schoolId,
-      amount: writeOff, reason,
-    });
-    if (woErr) throw new Error(woErr.message);
-
-    const newWriteOff = inst.writeOffAmount + writeOff;
-    const total = inst.amount - newWriteOff;
-    const newStatus: FeeStatus = inst.paidAmount >= total ? 'PAID' :
-                                 inst.paidAmount + newWriteOff >= inst.amount ? 'WAIVED' :
-                                 inst.paidAmount > 0 ? 'PARTIAL' : 'UNPAID';
-
-    const { error } = await supabase.from('fee_installments').update({
-      write_off_amount: newWriteOff,
-      write_off_reason: reason,
-      status: newStatus,
-      updated_at: new Date().toISOString(),
-    }).eq('id', installmentId);
-    if (error) throw new Error(error.message);
-
+    await apiFees.writeoff({ installmentId, amount: writeOff, reason });
     await logAudit('fee_writeoff', 'fee_installment', installmentId, { amount: writeOff, reason });
     await this.refreshAll();
     return true;

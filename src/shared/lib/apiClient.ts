@@ -151,6 +151,15 @@ export const apiStaff = {
   }) => post<any>('/staff/salary/update', body),
   relieve: (body: { staffId: string; date: string; reason: string }) =>
     post<any>('/staff/relieve', body),
+  create: (body: {
+    userId: string | null; name: string; role: string; salary: number;
+    subject?: string; phone?: string; email?: string; aadhaarNo?: string;
+    joiningDate?: string; status?: string; address?: string; photo?: string;
+    assignedClasses?: string[];
+  }) => post<any>('/staff/create', body),
+  update: (body: {
+    id: string; patch: Record<string, unknown>; assignedClasses?: string[];
+  }) => post<any>('/staff/update', body),
 };
 
 // ─── Transport ───────────────────────────────────────────────────────────────
@@ -165,6 +174,30 @@ export const apiTransport = {
   }) => post<any>('/transport/assign', body),
   remove: (body: { studentId: string; endDate: string; reason?: string }) =>
     post<any>('/transport/remove', body),
+  addVehicle: (body: { vehicleNo: string; type: string; capacity: number; routeName: string }) =>
+    post<any>('/transport/vehicles/add', body),
+  updateVehicle: (id: string, patch: Record<string, unknown>) =>
+    post<any>('/transport/vehicles/update', { id, patch }),
+  deactivateVehicle: (id: string) =>
+    post<any>('/transport/vehicles/deactivate', { id }),
+  addStop: (body: { vehicleId: string; name: string; estimatedTime: string; lat?: number; lng?: number; sortOrder?: number }) =>
+    post<any>('/transport/stops/add', body),
+  updateStop: (stopId: string, patch: Record<string, unknown>) =>
+    post<any>('/transport/stops/update', { stopId, patch }),
+  removeStop: (stopId: string) =>
+    post<any>('/transport/stops/remove', { stopId }),
+};
+
+// ─── Timetable ────────────────────────────────────────────────────────────────
+
+export const apiTimetable = {
+  save: (body: {
+    id?: string; academicYearId: string;
+    className: string; section: string; classId: string;
+    day: string; slotId: string; subject: string;
+    teacherId?: string | null; teacherName: string; room: string;
+  }) => post<any>('/timetable/save', body),
+  deleteEntry: (id: string) => post<any>('/timetable/delete', { id }),
 };
 
 // ─── Attendance ───────────────────────────────────────────────────────────────

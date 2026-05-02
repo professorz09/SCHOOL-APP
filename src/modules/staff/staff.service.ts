@@ -178,103 +178,47 @@ export const staffService = {
       if (!userId) throw new Error('Failed to provision auth account for staff');
     }
 
-    // Step 2: insert staff row.
-    const payload = {
-      school_id: schoolId,
-      user_id: userId,
-      name: input.name,
-      role: input.role,
-      subject: input.subject || null,
-      phone: input.phone || null,
-      email: input.email || null,
-      aadhaar_no: input.aadhaarNo || null,
-      salary: input.salary,
-      joining_date: input.joiningDate || null,
-      status: input.status,
-      address: input.address || null,
-      photo: input.photo || null,
-      is_active: true,
-    };
-    const { data, error } = await supabase
-      .from('staff').insert(payload).select(STAFF_FIELDS).single();
-    if (error) throw new Error(error.message);
-    const row = data as StaffRow;
-
-    // Step 3: seed the initial salary-history row so every staff record has
-    // at least one entry from day one. This is part of the create contract;
-    // if the seed fails we ROLL BACK the staff row so the caller doesn't
-    // end up with a salaried staff member that has no salary history.
-    if (input.salary > 0) {
-      const { error: seedErr } = await supabase.rpc('update_staff_salary', {
-        p_staff_id: row.id,
-        p_new_amount: input.salary,
-        p_effective_from: input.joiningDate || todayIso(),
-        p_reason: 'Initial',
-      });
-      if (seedErr) {
-        await supabase.from('staff').delete().eq('id', row.id);
-        throw new Error(`Failed to seed initial salary: ${seedErr.message}`);
-      }
-    }
-
-    // Step 4: insert class assignments (active year only).
-    if (input.assignedClasses?.length) {
-      const { data: ay } = await supabase
-        .from('academic_years').select('id')
-        .eq('school_id', schoolId).eq('is_active', true).maybeSingle();
-      const ayId = (ay as { id: string } | null)?.id;
-      const rows = input.assignedClasses.map(cls => ({
-        school_id: schoolId, staff_id: row.id, academic_year_id: ayId ?? null, class_name: cls,
-      }));
-      const { error: assignErr } = await supabase.from('staff_class_assignments').insert(rows);
-      if (assignErr) throw new Error(assignErr.message);
-    }
+    // Steps 2-4: insert staff row, seed salary history, and class assignments
+    // all handled atomically on the server (userId already provisioned above).
+    const row = await apiStaff.create({
+      userId,
+      name:           input.name,
+      role:           input.role,
+      salary:         input.salary,
+      subject:        input.subject || undefined,
+      phone:          input.phone   || undefined,
+      email:          input.email   || undefined,
+      aadhaarNo:      input.aadhaarNo || undefined,
+      joiningDate:    input.joiningDate || undefined,
+      status:         input.status,
+      address:        input.address || undefined,
+      photo:          input.photo   || undefined,
+      assignedClasses: input.assignedClasses ?? [],
+    });
 
     await logAudit('staff_created', 'staff', row.id, { role: input.role, name: input.name });
-    return rowToStaff(row, input.assignedClasses ?? []);
+    return rowToStaff(row as StaffRow, input.assignedClasses ?? []);
   },
 
   async update(id: string, input: Partial<StaffMember>): Promise<StaffMember> {
-    const schoolId = getSchoolId();
-    const patch: Record<string, unknown> = { updated_at: new Date().toISOString() };
-    if (input.name !== undefined) patch.name = input.name;
-    if (input.role !== undefined) patch.role = input.role;
-    if (input.subject !== undefined) patch.subject = input.subject;
-    if (input.phone !== undefined) patch.phone = input.phone;
-    if (input.email !== undefined) patch.email = input.email;
-    if (input.aadhaarNo !== undefined) patch.aadhaar_no = input.aadhaarNo;
-    if (input.salary !== undefined) patch.salary = input.salary;
+    const patch: Record<string, unknown> = {};
+    if (input.name !== undefined)      patch.name         = input.name;
+    if (input.role !== undefined)      patch.role         = input.role;
+    if (input.subject !== undefined)   patch.subject      = input.subject;
+    if (input.phone !== undefined)     patch.phone        = input.phone;
+    if (input.email !== undefined)     patch.email        = input.email;
+    if (input.aadhaarNo !== undefined) patch.aadhaar_no   = input.aadhaarNo;
+    if (input.salary !== undefined)    patch.salary       = input.salary;
     if (input.joiningDate !== undefined) patch.joining_date = input.joiningDate;
-    if (input.status !== undefined) patch.status = input.status;
-    if (input.address !== undefined) patch.address = input.address;
-    if (input.photo !== undefined) patch.photo = input.photo;
+    if (input.status !== undefined)    patch.status       = input.status;
+    if (input.address !== undefined)   patch.address      = input.address;
+    if (input.photo !== undefined)     patch.photo        = input.photo;
 
-    const { error } = await supabase.from('staff').update(patch).eq('id', id).eq('school_id', schoolId);
-    if (error) throw new Error(error.message);
-
-    if (input.assignedClasses) {
-      // Require an active academic year. Without one, we cannot deterministically
-      // scope the delete-and-replace (the previous dummy-UUID guard left stale
-      // NULL-year rows, causing duplicate/drifted assignments).
-      const { data: ay, error: ayErr } = await supabase
-        .from('academic_years').select('id')
-        .eq('school_id', schoolId).eq('is_active', true).limit(1);
-      if (ayErr) throw new Error(`Active-year lookup failed: ${ayErr.message}`);
-      const ayId = ((ay ?? [])[0] as { id: string } | undefined)?.id;
-      if (!ayId) throw new Error('No active academic year — open Settings → Academic Year and activate one before assigning classes.');
-
-      // Atomic-style replace within the active year: clear then insert.
-      const { error: delErr } = await supabase.from('staff_class_assignments')
-        .delete().eq('school_id', schoolId).eq('staff_id', id).eq('academic_year_id', ayId);
-      if (delErr) throw new Error(`Clearing old assignments failed: ${delErr.message}`);
-      if (input.assignedClasses.length) {
-        const rows = input.assignedClasses.map(cls => ({
-          school_id: schoolId, staff_id: id, academic_year_id: ayId, class_name: cls,
-        }));
-        const { error: insErr } = await supabase.from('staff_class_assignments').insert(rows);
-        if (insErr) throw new Error(`Assigning classes failed: ${insErr.message}`);
-      }
-    }
+    await apiStaff.update({
+      id,
+      patch,
+      assignedClasses: input.assignedClasses,
+    });
 
     await logAudit('staff_updated', 'staff', id, { fields: Object.keys(patch) });
     const fresh = await this.getById(id);

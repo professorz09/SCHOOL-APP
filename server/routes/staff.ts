@@ -87,3 +87,111 @@ staffRouter.post('/relieve', requireAuth, requireRole('PRINCIPAL'), async (req, 
     ok(res, { staffId: body.staffId, date: body.date });
   } catch (err) { fail(res, err); }
 });
+
+// POST /api/staff/create — insert staff row + seed salary + class assignments
+staffRouter.post('/create', requireAuth, requireRole('PRINCIPAL'), async (req, res) => {
+  try {
+    const body = requireBody<{
+      userId: string | null;
+      name: string; role: string; salary: number;
+      subject?: string; phone?: string; email?: string; aadhaarNo?: string;
+      joiningDate?: string; status?: string; address?: string; photo?: string;
+      assignedClasses?: string[];
+    }>(req, ['name', 'role', 'salary']);
+
+    const schoolId = req.user.school_id!;
+
+    // Insert staff row
+    const { data, error } = await adminDb.from('staff').insert({
+      school_id:    schoolId,
+      user_id:      body.userId ?? null,
+      name:         body.name,
+      role:         body.role,
+      subject:      body.subject ?? null,
+      phone:        body.phone ?? null,
+      email:        body.email ?? null,
+      aadhaar_no:   body.aadhaarNo ?? null,
+      salary:       body.salary,
+      joining_date: body.joiningDate ?? null,
+      status:       body.status ?? 'ACTIVE',
+      address:      body.address ?? null,
+      photo:        body.photo ?? null,
+      is_active:    true,
+    }).select().single();
+    if (error) throw new ApiError(500, error.message);
+    const row = data as any;
+
+    // Seed initial salary history
+    if (body.salary > 0) {
+      const db = userDb(req.jwt);
+      const { error: seedErr } = await db.rpc('update_staff_salary', {
+        p_staff_id:       row.id,
+        p_new_amount:     body.salary,
+        p_effective_from: body.joiningDate ?? new Date().toISOString().slice(0, 10),
+        p_reason:         'Initial',
+      });
+      if (seedErr) {
+        await adminDb.from('staff').delete().eq('id', row.id);
+        throw new ApiError(500, `Failed to seed initial salary: ${seedErr.message}`);
+      }
+    }
+
+    // Insert class assignments
+    if (body.assignedClasses?.length) {
+      const { data: ay } = await adminDb
+        .from('academic_years').select('id')
+        .eq('school_id', schoolId).eq('is_active', true).maybeSingle();
+      const ayId = (ay as any)?.id ?? null;
+      const rows = (body.assignedClasses).map((cls: string) => ({
+        school_id: schoolId, staff_id: row.id, academic_year_id: ayId, class_name: cls,
+      }));
+      const { error: assignErr } = await adminDb.from('staff_class_assignments').insert(rows);
+      if (assignErr) throw new ApiError(500, assignErr.message);
+    }
+
+    ok(res, row, 201);
+  } catch (err) { fail(res, err); }
+});
+
+// POST /api/staff/update — profile patch + class assignment replace
+staffRouter.post('/update', requireAuth, requireRole('PRINCIPAL'), async (req, res) => {
+  try {
+    const body = requireBody<{
+      id: string; patch: Record<string, unknown>; assignedClasses?: string[];
+    }>(req, ['id', 'patch']);
+
+    const schoolId = req.user.school_id!;
+
+    const safe: Record<string, unknown> = { updated_at: new Date().toISOString() };
+    const allowed = ['name','role','subject','phone','email','aadhaar_no','salary',
+                     'joining_date','status','address','photo'];
+    for (const k of allowed) if (body.patch[k] !== undefined) safe[k] = body.patch[k];
+
+    const { error } = await adminDb.from('staff').update(safe)
+      .eq('id', body.id).eq('school_id', schoolId);
+    if (error) throw new ApiError(500, error.message);
+
+    if (body.assignedClasses !== undefined) {
+      const { data: ay, error: ayErr } = await adminDb
+        .from('academic_years').select('id')
+        .eq('school_id', schoolId).eq('is_active', true).limit(1);
+      if (ayErr) throw new ApiError(500, `Active-year lookup failed: ${ayErr.message}`);
+      const ayId = ((ay ?? [])[0] as any)?.id;
+      if (!ayId) throw new ApiError(400, 'No active academic year — activate one before changing class assignments.');
+
+      const { error: delErr } = await adminDb.from('staff_class_assignments')
+        .delete().eq('school_id', schoolId).eq('staff_id', body.id).eq('academic_year_id', ayId);
+      if (delErr) throw new ApiError(500, `Clearing old assignments: ${delErr.message}`);
+
+      if (body.assignedClasses.length) {
+        const rows = body.assignedClasses.map((cls: string) => ({
+          school_id: schoolId, staff_id: body.id, academic_year_id: ayId, class_name: cls,
+        }));
+        const { error: insErr } = await adminDb.from('staff_class_assignments').insert(rows);
+        if (insErr) throw new ApiError(500, `Class assignments: ${insErr.message}`);
+      }
+    }
+
+    ok(res, { id: body.id });
+  } catch (err) { fail(res, err); }
+});

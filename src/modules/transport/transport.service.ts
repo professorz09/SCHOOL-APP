@@ -11,6 +11,7 @@ import { useAuthStore } from '@/shared/store/authStore';
 import { logAudit } from '@/shared/lib/audit';
 import { registerCacheResetter } from '@/shared/lib/cacheBus';
 import { apiTransport } from '@/shared/lib/apiClient';
+// NOTE: All writes go through /api/transport/* — no direct supabase writes below vehicle/stop CRUD
 
 const calculateDistance = (lat1: number, lng1: number, lat2: number, lng2: number): number => {
   const R = 6371000;
@@ -261,23 +262,16 @@ export const transportService = {
   },
 
   async addVehicle(data: { vehicleNo: string; type: VehicleType; capacity: number; routeName: string }): Promise<TransportVehicle> {
-    const schoolId = getSchoolId();
-    const { data: row, error } = await supabase.from('transport_vehicles').insert({
-      school_id: schoolId,
-      vehicle_no: data.vehicleNo,
-      type: data.type,
-      capacity: data.capacity,
-      route_name: data.routeName,
-    }).select('id, vehicle_no, type, capacity, route_name, driver_id, driver_name, driver_phone, is_active').single();
-    if (error) throw new Error(error.message);
+    const row = await apiTransport.addVehicle({
+      vehicleNo: data.vehicleNo, type: data.type, capacity: data.capacity, routeName: data.routeName,
+    });
     await this.refreshAll();
-    await logAudit('vehicle_added', 'transport_vehicle', (row as VehicleRow).id, { vehicleNo: data.vehicleNo });
-    return this.getVehicleById((row as VehicleRow).id)!;
+    await logAudit('vehicle_added', 'transport_vehicle', row.id, { vehicleNo: data.vehicleNo });
+    return this.getVehicleById(row.id)!;
   },
 
   async updateVehicle(id: string, data: Partial<TransportVehicle>): Promise<TransportVehicle> {
-    const schoolId = getSchoolId();
-    const patch: Record<string, unknown> = { updated_at: new Date().toISOString() };
+    const patch: Record<string, unknown> = {};
     if (data.vehicleNo !== undefined) patch.vehicle_no = data.vehicleNo;
     if (data.type !== undefined) patch.type = data.type;
     if (data.capacity !== undefined) patch.capacity = data.capacity;
@@ -285,18 +279,13 @@ export const transportService = {
     if (data.driverId !== undefined) patch.driver_id = data.driverId;
     if (data.driverName !== undefined) patch.driver_name = data.driverName;
     if (data.driverPhone !== undefined) patch.driver_phone = data.driverPhone;
-
-    const { error } = await supabase.from('transport_vehicles').update(patch).eq('id', id).eq('school_id', schoolId);
-    if (error) throw new Error(error.message);
+    await apiTransport.updateVehicle(id, patch);
     await this.refreshAll();
     return this.getVehicleById(id)!;
   },
 
   async deleteVehicle(id: string): Promise<void> {
-    const schoolId = getSchoolId();
-    const { error } = await supabase.from('transport_vehicles')
-      .update({ is_active: false }).eq('id', id).eq('school_id', schoolId);
-    if (error) throw new Error(error.message);
+    await apiTransport.deactivateVehicle(id);
     await this.refreshAll();
   },
 
@@ -317,33 +306,26 @@ export const transportService = {
   async addStop(vehicleId: string, stop: Omit<RouteStop, 'id'>): Promise<RouteStop> {
     const v = this.getVehicleById(vehicleId);
     const sortOrder = (v?.stops.length ?? 0);
-    const { data, error } = await supabase.from('route_stops').insert({
-      vehicle_id: vehicleId,
-      name: stop.name,
-      estimated_time: stop.estimatedTime,
-      lat: stop.lat, lng: stop.lng,
-      sort_order: sortOrder,
-    }).select('id, name, estimated_time, lat, lng').single();
-    if (error) throw new Error(error.message);
+    const r = await apiTransport.addStop({
+      vehicleId, name: stop.name, estimatedTime: stop.estimatedTime,
+      lat: stop.lat, lng: stop.lng, sortOrder,
+    });
     await this.refreshAll();
-    const r = data as { id: string; name: string; estimated_time: string; lat: number; lng: number };
     return { id: r.id, name: r.name, estimatedTime: r.estimated_time, lat: Number(r.lat), lng: Number(r.lng) };
   },
 
   async updateStop(_vehicleId: string, stopId: string, data: Partial<RouteStop>): Promise<void> {
     const patch: Record<string, unknown> = {};
-    if (data.name !== undefined) patch.name = data.name;
-    if (data.estimatedTime !== undefined) patch.estimated_time = data.estimatedTime;
-    if (data.lat !== undefined) patch.lat = data.lat;
-    if (data.lng !== undefined) patch.lng = data.lng;
-    const { error } = await supabase.from('route_stops').update(patch).eq('id', stopId);
-    if (error) throw new Error(error.message);
+    if (data.name !== undefined)          patch.name           = data.name;
+    if (data.estimatedTime !== undefined) patch.estimatedTime  = data.estimatedTime;
+    if (data.lat !== undefined)           patch.lat            = data.lat;
+    if (data.lng !== undefined)           patch.lng            = data.lng;
+    await apiTransport.updateStop(stopId, patch);
     await this.refreshAll();
   },
 
   async removeStop(_vehicleId: string, stopId: string): Promise<void> {
-    const { error } = await supabase.from('route_stops').delete().eq('id', stopId);
-    if (error) throw new Error(error.message);
+    await apiTransport.removeStop(stopId);
     await this.refreshAll();
   },
 

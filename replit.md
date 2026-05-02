@@ -30,8 +30,9 @@ A school management application with React frontend and Supabase (Postgres + Aut
   - `server/routes/academic-year.ts` — GET/POST /api/academic-year/{create,set-active,close}
   - `server/routes/students.ts` — GET/POST /api/students/{create,assign,deactivate,update,change-request,class-movement,fail,issue-tc,readmit}
   - `server/routes/fees.ts` — GET/POST /api/fees/{structure/create,schedule/generate,pay,govt-pay,writeoff,student/:id}
-  - `server/routes/transport.ts` — POST /api/transport/{assign,remove} (full atomic: close prior, cancel installments, insert, generate schedule with rollback)
-  - `server/routes/staff.ts` — POST /api/staff/{deactivate,salary/pay,salary/update,relieve}
+  - `server/routes/transport.ts` — POST /api/transport/{assign,remove,vehicles/add,vehicles/update,vehicles/deactivate,stops/add,stops/update,stops/remove}
+  - `server/routes/staff.ts` — POST /api/staff/{create,update,deactivate,salary/pay,salary/update,relieve}
+  - `server/routes/timetable.ts` — POST /api/timetable/{save,delete}
   - `server/routes/attendance.ts` — GET/POST /api/attendance/{submit,approve}
   - `server/routes/exams.ts` — GET/POST /api/exam/{create,result/upload}
   - `server/routes/promotion.ts` — GET/POST /api/promotion/{preview,execute}
@@ -41,8 +42,9 @@ A school management application with React frontend and Supabase (Postgres + Aut
   - `apiAuth` — login (unauthenticated fetch → `supabase.auth.setSession()`), logout, me, changePassword
   - `apiStudents` — list, getById, create, assign, deactivate, update, changeRequest, classMovement, fail, issueTC, readmit
   - `apiFees` — pay, govtPay, writeoff, createStructure, generateSchedule, getStudentFees, getStructures
-  - `apiTransport` — assign, remove, getVehicles, getStudentAssignments
-  - `apiStaff` — deactivate, paySalary, updateSalary, relieve
+  - `apiTransport` — assign, remove, getVehicles, getStudentAssignments, addVehicle, updateVehicle, deactivateVehicle, addStop, updateStop, removeStop
+  - `apiStaff` — create, update, deactivate, paySalary, updateSalary, relieve
+  - `apiTimetable` — save, deleteEntry
   - `apiAttendance` — get, submit, approve
   - `apiExams` — list, create, uploadResults, getResults
   - `apiPromotion` — preview, execute

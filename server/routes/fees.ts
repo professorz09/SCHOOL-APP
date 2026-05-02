@@ -179,22 +179,30 @@ feesRouter.post('/writeoff', requireAuth, requireRole('PRINCIPAL'), async (req, 
     if ((inst as any).school_id !== req.user.school_id) throw new ApiError(403, 'Access denied');
 
     const r = inst as any;
-    const newWriteOff = Number(r.write_off_amount) + body.amount;
-    if (newWriteOff > Number(r.amount)) throw new ApiError(400, 'Write-off exceeds installment amount');
+    const maxWriteOff = Math.max(0, Number(r.amount) - Number(r.paid_amount) - Number(r.write_off_amount));
+    const writeOff = Math.min(body.amount, maxWriteOff);
+    if (writeOff <= 0) throw new ApiError(400, 'Nothing left to write off on this installment');
 
-    const remaining = Number(r.amount) - Number(r.paid_amount) - newWriteOff;
-    const newStatus = remaining <= 0 ? 'WRITTEN_OFF' : 'PARTIAL';
+    const newWriteOff = Number(r.write_off_amount) + writeOff;
+    const paidAmount  = Number(r.paid_amount);
+    const totalAmount = Number(r.amount);
+    const newStatus: string =
+      paidAmount >= totalAmount - newWriteOff  ? 'PAID'    :
+      paidAmount + newWriteOff >= totalAmount  ? 'WAIVED'  :
+      paidAmount > 0                           ? 'PARTIAL' : 'UNPAID';
 
     await adminDb.from('fee_installments').update({
       write_off_amount: newWriteOff,
-      status: newStatus,
+      write_off_reason: body.reason,
+      status:           newStatus,
+      updated_at:       new Date().toISOString(),
     }).eq('id', body.installmentId);
 
     await adminDb.from('fee_write_offs').insert({
       installment_id: body.installmentId,
       student_id:     r.student_id,
       school_id:      req.user.school_id,
-      amount:         body.amount,
+      amount:         writeOff,
       reason:         body.reason,
       approved_by:    req.user.id,
     });

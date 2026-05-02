@@ -8,6 +8,7 @@
 //   - timetable for closed academic year (write blocked)
 
 import { supabase } from '@/shared/lib/supabase';
+import { apiTimetable } from '@/shared/lib/apiClient';
 import { useAuthStore } from '@/shared/store/authStore';
 import { useCorrectionStore } from '@/shared/store/correctionStore';
 import { useEditingYearStore } from '@/shared/store/editingYearStore';
@@ -251,12 +252,22 @@ export const timetableService = {
       room: entry.room,
     };
 
-    if (entry.id) {
-      const { error } = await supabase.from('timetable_entries').update(payload).eq('id', entry.id);
-      if (error) return { ok: false, reason: error.message };
-    } else {
-      const { error } = await supabase.from('timetable_entries').insert(payload);
-      if (error) return { ok: false, reason: error.message };
+    try {
+      await apiTimetable.save({
+        id:             entry.id,
+        academicYearId: _activeYearId!,
+        className:      entry.className,
+        section:        entry.section,
+        classId:        entry.classId,
+        day:            entry.day,
+        slotId:         entry.slotId,
+        subject:        entry.subject,
+        teacherId:      entry.teacherId || null,
+        teacherName:    entry.teacherName,
+        room:           entry.room,
+      });
+    } catch (e) {
+      return { ok: false, reason: (e as Error).message };
     }
     await logAudit('timetable_saved', 'timetable_entry', entry.id ?? 'new', {
       classId: entry.classId, day: entry.day, slot: entry.slotId,
@@ -275,8 +286,7 @@ export const timetableService = {
     if (_yearIsClosed && !(_activeYearId && useCorrectionStore.getState().isOn(_activeYearId))) {
       throw new Error('Academic year is closed');
     }
-    const { error } = await supabase.from('timetable_entries').delete().eq('id', id);
-    if (error) throw new Error(error.message);
+    await apiTimetable.deleteEntry(id);
     await this.refreshAll();
   },
 
