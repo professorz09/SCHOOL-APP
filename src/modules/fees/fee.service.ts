@@ -395,6 +395,42 @@ export const feeService = {
     return { totalGovtPending: govtPending, totalParentPending: parentPending, rteStudentCount: rte.size };
   },
 
+  /** Get unpaid/partial fees from previous academic years (not current active year). */
+  getPreviousYearDues(studentId: string, currentAcademicYearId?: string): Array<{
+    academicYearId: string;
+    yearLabel: string;
+    outstanding: number;
+    installments: FeeInstallment[];
+  }> {
+    const insts = this.getStudentInstallments(studentId);
+    const outstanding = insts.filter(i => {
+      if (currentAcademicYearId && i.academicYearId === currentAcademicYearId) return false;
+      return i.status === 'UNPAID' || i.status === 'PARTIAL' || i.status === 'OVERDUE';
+    });
+    if (outstanding.length === 0) return [];
+
+    const yearIds = Array.from(new Set(outstanding.map(i => i.academicYearId).filter((s): s is string => !!s)));
+    const yearMetaMap = new Map<string, string>();
+
+    yearIds.forEach(yearId => {
+      const sample = insts.find(i => i.academicYearId === yearId);
+      if (!sample) return;
+      const installedCount = insts.filter(i => i.academicYearId === yearId).length;
+      yearMetaMap.set(yearId, `Year (${installedCount} records)`);
+    });
+
+    return yearIds.map(yearId => {
+      const yearInsts = outstanding.filter(i => i.academicYearId === yearId);
+      const totalOutstanding = yearInsts.reduce((s, i) => s + Math.max(0, i.amount - i.paidAmount - i.writeOffAmount), 0);
+      return {
+        academicYearId: yearId,
+        yearLabel: yearMetaMap.get(yearId) ?? 'Unknown',
+        outstanding: totalOutstanding,
+        installments: yearInsts,
+      };
+    }).sort((a, b) => (b.yearLabel).localeCompare(a.yearLabel));
+  },
+
   // ── Async writes (RPC-backed) ───────────────────────────────────────────
 
   /**
@@ -406,10 +442,13 @@ export const feeService = {
    * aggregated 'Late Fee' installment dated yesterday so it sorts FIRST in
    * the oldest-due-first allocation walk. Pass FALSE if the principal has
    * explicitly waived the late fee for this collection.
+   *
+   * `discountAmount` (optional) is included in the note/receipt for tracking.
+   * Principal reduces amount by discount at UI level (pays less, records in note).
    */
   async recordPayment(
     studentId: string, amount: number, method = 'CASH',
-    date?: string, note?: string, useAdvance = false, applyLateFee = true,
+    date?: string, note?: string, useAdvance = false, applyLateFee = true, discountAmount = 0,
   ): Promise<{ applied: number; advance: number; paymentId: string }> {
     if (amount <= 0) return { applied: 0, advance: 0, paymentId: '' };
 
@@ -418,7 +457,7 @@ export const feeService = {
     // All fee writes go through the API server (uses auth.uid() context correctly).
     const result = await apiFees.pay({
       studentId, amount: Math.round(amount), method,
-      date, note, useAdvance, applyLateFee,
+      date, note, useAdvance, applyLateFee, discountAmount: Math.round(discountAmount),
     });
 
     const paymentId = (result as any).paymentId as string;

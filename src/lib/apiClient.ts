@@ -145,7 +145,7 @@ export const apiFees = {
   }) => post<any>('/fees/schedule/generate', body),
   pay: (body: {
     studentId: string; amount: number; method: string;
-    date?: string; note?: string; useAdvance?: boolean; applyLateFee?: boolean;
+    date?: string; note?: string; useAdvance?: boolean; applyLateFee?: boolean; discountAmount?: number;
   }) => post<any>('/fees/pay', body),
   getStudentFees: (studentId: string, yearId?: string) => {
     const q = yearId ? `?yearId=${yearId}` : '';
