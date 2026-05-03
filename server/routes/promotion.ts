@@ -1,5 +1,5 @@
 import { Router } from 'express';
-import { adminDb } from '../lib/db';
+import { adminDb, userDb } from '../lib/db';
 import { ok, fail, ApiError, requireBody } from '../lib/helpers';
 import { requireAuth, requireRole } from '../middleware/auth';
 
@@ -130,6 +130,7 @@ promotionRouter.post('/execute', requireAuth, PRINCIPAL, async (req, res) => {
         toClassName?: string; toSection?: string;
         rollNo?: string; toSectionId?: string;
         tcDate?: string; tcRemarks?: string;
+        feeStructureId?: string;
       }[];
     }>(req, ['fromYearId', 'toYearId', 'promotions']);
 
@@ -217,6 +218,27 @@ promotionRouter.post('/execute', requireAuth, PRINCIPAL, async (req, res) => {
             .update({ status: 'PROMOTED', promoted_to_record_id: newRecordId })
             .eq('student_id', p.studentId)
             .eq('academic_year_id', body.fromYearId);
+
+          // Generate fee schedule for new year if feeStructureId provided
+          if (p.feeStructureId) {
+            const { data: feeStruct } = await adminDb
+              .from('fee_structures')
+              .select('fee_heads, monthly_due_dates')
+              .eq('id', p.feeStructureId)
+              .maybeSingle();
+            if (feeStruct) {
+              const db = userDb(req.jwt);
+              await db.rpc('generate_student_fee_schedule', {
+                p_student_id:      p.studentId,
+                p_year_id:         body.toYearId,
+                p_heads:           (feeStruct as any).fee_heads ?? [],
+                p_due_dates:       (feeStruct as any).monthly_due_dates ?? [],
+                p_is_rte:          false,
+                p_discount_amount: 0,
+                p_discount_pct:    0,
+              });
+            }
+          }
 
           // Log
           await adminDb.from('promotion_log').insert({

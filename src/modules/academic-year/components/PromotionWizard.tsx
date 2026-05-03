@@ -1,12 +1,13 @@
-import React, { useMemo, useState } from 'react';
+import React, { useMemo, useState, useEffect } from 'react';
 import {
   ArrowLeft, ArrowRight, CheckCircle2,
   ChevronDown, ChevronUp, GraduationCap, AlertTriangle,
-  Users, FileText,
+  Users, FileText, IndianRupee,
 } from 'lucide-react';
 import { useAcademicYear } from '@/shared/context/AcademicYearContext';
 import { useUIStore } from '@/store/uiStore';
 import { apiPromotion } from '@/lib/apiClient';
+import { principalService, FeeStructureRecord } from '@/roles/principal/principal.service';
 
 interface StudentPromotion {
   studentId: string;
@@ -24,6 +25,7 @@ interface StudentPromotion {
   hasExamData: boolean;
   tcDate: string;
   tcRemarks: string;
+  feeStructureId: string;
 }
 
 interface Props {
@@ -72,6 +74,11 @@ export const PromotionWizard: React.FC<Props> = ({ onBack }) => {
   const [students, setStudents]     = useState<StudentPromotion[]>([]);
   const [expandedId, setExpandedId] = useState<string | null>(null);
   const [hasAnyExamData, setHasAnyExamData] = useState(false);
+  const [feeStructures, setFeeStructures] = useState<FeeStructureRecord[]>([]);
+
+  useEffect(() => {
+    principalService.getFeeStructures().then(setFeeStructures).catch(() => {});
+  }, []);
   const [result, setResult]         = useState<{
     promoted: number; retained: number; tcIssued: number; skipped: number;
   } | null>(null);
@@ -106,8 +113,9 @@ export const PromotionWizard: React.FC<Props> = ({ onBack }) => {
           status:      p.status,
           examPassed:  p.examPassed ?? null,
           hasExamData: p.hasExamData ?? false,
-          tcDate:      today,
-          tcRemarks:   '',
+          tcDate:          today,
+          tcRemarks:       '',
+          feeStructureId:  '',
         };
       });
       setStudents(list);
@@ -161,11 +169,12 @@ export const PromotionWizard: React.FC<Props> = ({ onBack }) => {
           studentId:  s.studentId,
           recordId:   s.recordId,
           decision:   s.decision,
-          toClassName: s.decision === 'PROMOTE' ? s.toClass : undefined,
-          toSection:   s.decision === 'PROMOTE' ? s.toSection : undefined,
-          rollNo:      s.rollNo || undefined,
-          tcDate:      s.decision === 'TC' ? s.tcDate : undefined,
-          tcRemarks:   s.decision === 'TC' ? s.tcRemarks : undefined,
+          toClassName:    s.decision === 'PROMOTE' ? s.toClass : undefined,
+          toSection:      s.decision === 'PROMOTE' ? s.toSection : undefined,
+          rollNo:         s.rollNo || undefined,
+          tcDate:         s.decision === 'TC' ? s.tcDate : undefined,
+          tcRemarks:      s.decision === 'TC' ? s.tcRemarks : undefined,
+          feeStructureId: s.decision === 'PROMOTE' && s.feeStructureId ? s.feeStructureId : undefined,
         })),
       });
       setResult({
@@ -515,6 +524,31 @@ export const PromotionWizard: React.FC<Props> = ({ onBack }) => {
                                         onChange={e => patch(s.studentId, { toSection: e.target.value })}
                                         placeholder="A"
                                         className="w-full border border-slate-200 rounded-lg px-2 py-1.5 text-xs font-bold text-slate-800 focus:outline-none focus:border-indigo-400" />
+                                    </div>
+                                  )}
+
+                                  {/* Fee Structure */}
+                                  {feeStructures.length > 0 && (
+                                    <div>
+                                      <label className="text-[9px] font-black uppercase text-slate-400 flex items-center gap-1 mb-1">
+                                        <IndianRupee size={9} /> Fee Structure (optional)
+                                      </label>
+                                      <select value={s.feeStructureId}
+                                        onChange={e => patch(s.studentId, { feeStructureId: e.target.value })}
+                                        className="w-full border border-slate-200 rounded-lg px-2 py-1.5 text-xs font-bold text-slate-800 focus:outline-none focus:border-indigo-400 bg-white">
+                                        <option value="">— Auto-generate later —</option>
+                                        {feeStructures
+                                          .filter(fs => !s.toClass || fs.className === s.toClass.split('-')[0]?.trim() || fs.className === s.toClass)
+                                          .map(fs => (
+                                            <option key={fs.id} value={fs.id}>{fs.name} ({fs.className})</option>
+                                          ))
+                                        }
+                                      </select>
+                                      {s.feeStructureId && (
+                                        <p className="text-[9px] font-bold text-emerald-600 mt-0.5">
+                                          ✓ Fee schedule will be auto-generated on promote
+                                        </p>
+                                      )}
                                     </div>
                                   )}
                                 </>
