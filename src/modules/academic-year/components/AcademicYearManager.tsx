@@ -12,9 +12,9 @@ import type { PreClosingChecklist } from '@/shared/types/yearClosing.types';
 import { AcademicYearWizard } from '@/modules/academic-year/components/AcademicYearWizard';
 import { PromotionWizard } from '@/modules/academic-year/components/PromotionWizard';
 
-interface Props { onBack: () => void; }
+interface Props { onBack: () => void; onNavigateToStaff?: () => void; }
 
-export const AcademicYearManager: React.FC<Props> = ({ onBack }) => {
+export const AcademicYearManager: React.FC<Props> = ({ onBack, onNavigateToStaff }) => {
   const {
     academicYears, activeYear, isYearLocked, refresh: refreshAY, setActiveYear,
     setCurrentEditingYear,
@@ -568,6 +568,7 @@ export const AcademicYearManager: React.FC<Props> = ({ onBack }) => {
           defaultEnd={wizardDefaults.end}
           defaultBoard={wizardDefaults.board}
           previousYearId={previousYearIdForWizard}
+          onNavigateToStaff={onNavigateToStaff ? () => { closeWizard(); onNavigateToStaff(); } : undefined}
         />
       )}
 

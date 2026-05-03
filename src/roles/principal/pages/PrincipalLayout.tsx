@@ -63,7 +63,7 @@ export const PrincipalLayout: React.FC = () => {
   useEffect(() => { if (!isSubView) setView('DASHBOARD'); }, [isSubView]);
 
   // Always allow the academic year manager so the principal can create the first year.
-  if (view === 'YEAR_CLOSING') return <AcademicYearManager onBack={goBack} />;
+  if (view === 'YEAR_CLOSING') return <AcademicYearManager onBack={goBack} onNavigateToStaff={() => goTo('STAFF')} />;
 
   // Lock every other feature until at least one academic year has been created.
   if (!isLoading && academicYears.length === 0) {
