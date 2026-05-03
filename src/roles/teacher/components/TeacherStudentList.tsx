@@ -1,0 +1,124 @@
+import React, { useEffect, useState } from 'react';
+import { ArrowLeft, Users, Search, User } from 'lucide-react';
+import { teacherService } from '@/roles/teacher/teacher.service';
+import { TeacherClass } from '@/roles/teacher/teacher.types';
+
+interface Props {
+  onBack: () => void;
+}
+
+export const TeacherStudentList: React.FC<Props> = ({ onBack }) => {
+  const [classes, setClasses] = useState<TeacherClass[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [search, setSearch] = useState('');
+  const [selectedClass, setSelectedClass] = useState<string>('ALL');
+
+  useEffect(() => {
+    teacherService.getClasses()
+      .then(setClasses)
+      .catch(() => setClasses([]))
+      .finally(() => setLoading(false));
+  }, []);
+
+  const allStudents = classes.flatMap(c =>
+    c.students.map(s => ({ ...s, className: c.className, section: c.section, classId: c.id })),
+  );
+
+  const classOptions = classes.map(c => ({ id: c.id, label: `${c.className}-${c.section}` }));
+
+  const q = search.trim().toLowerCase();
+  const filtered = allStudents.filter(s => {
+    const matchesClass = selectedClass === 'ALL' || s.classId === selectedClass;
+    const matchesSearch = !q || s.name.toLowerCase().includes(q) || s.rollNo.includes(q);
+    return matchesClass && matchesSearch;
+  });
+
+  return (
+    <div className="w-full bg-slate-50 flex flex-col animate-in slide-in-from-right-8 duration-300">
+      {/* Header */}
+      <div className="bg-white border-b border-slate-100 px-4 pt-4 pb-4 flex items-center justify-between sticky top-0 z-10 shadow-sm">
+        <div className="flex items-center gap-3">
+          <button onClick={onBack} className="p-2 -ml-2 bg-slate-100 rounded-full text-slate-600">
+            <ArrowLeft size={20} />
+          </button>
+          <h2 className="text-xl font-black text-slate-900 uppercase tracking-tight">My Students</h2>
+        </div>
+        <div className="flex items-center gap-1.5 bg-indigo-50 text-indigo-700 px-3 py-1.5 rounded-full text-[10px] font-black">
+          <Users size={12} />
+          {allStudents.length}
+        </div>
+      </div>
+
+      {/* Filters */}
+      <div className="bg-white border-b border-slate-100 px-4 py-3 space-y-2 sticky top-[73px] z-10">
+        <div className="relative">
+          <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
+          <input
+            value={search}
+            onChange={e => setSearch(e.target.value)}
+            placeholder="Search by name or roll no."
+            className="w-full pl-9 pr-4 py-2 bg-slate-50 border border-slate-200 rounded-xl text-sm font-bold outline-none focus:border-indigo-400 transition-colors"
+          />
+        </div>
+        {classOptions.length > 1 && (
+          <div className="flex gap-2 overflow-x-auto hide-scrollbar pb-0.5">
+            <button
+              onClick={() => setSelectedClass('ALL')}
+              className={`flex-shrink-0 px-3 py-1 rounded-full text-[11px] font-black uppercase tracking-widest transition-all ${
+                selectedClass === 'ALL' ? 'bg-indigo-600 text-white' : 'bg-slate-100 text-slate-500'
+              }`}>
+              All
+            </button>
+            {classOptions.map(c => (
+              <button
+                key={c.id}
+                onClick={() => setSelectedClass(c.id)}
+                className={`flex-shrink-0 px-3 py-1 rounded-full text-[11px] font-black uppercase tracking-widest transition-all ${
+                  selectedClass === c.id ? 'bg-indigo-600 text-white' : 'bg-slate-100 text-slate-500'
+                }`}>
+                {c.label}
+              </button>
+            ))}
+          </div>
+        )}
+      </div>
+
+      {/* List */}
+      <div className="flex-1 overflow-y-auto p-4">
+        {loading ? (
+          <div className="flex flex-col items-center py-16 text-slate-400">
+            <div className="w-8 h-8 border-4 border-slate-200 border-t-indigo-500 rounded-full animate-spin mb-3" />
+            <p className="text-sm font-bold">Loading students…</p>
+          </div>
+        ) : filtered.length === 0 ? (
+          <div className="flex flex-col items-center py-16 text-slate-400">
+            <Users size={32} className="mb-3 opacity-40" />
+            <p className="font-bold text-sm">No students found</p>
+            {q && <p className="text-xs font-bold mt-1 opacity-60">Try a different search</p>}
+          </div>
+        ) : (
+          <div className="space-y-2">
+            {filtered.map((student, idx) => (
+              <div key={student.id + idx}
+                className="flex items-center gap-3 bg-white rounded-2xl border border-slate-100 shadow-sm px-4 py-3">
+                <div className="w-9 h-9 rounded-xl bg-gradient-to-br from-indigo-400 to-violet-500 text-white flex items-center justify-center font-black text-sm shrink-0">
+                  {student.name.charAt(0).toUpperCase()}
+                </div>
+                <div className="flex-1 min-w-0">
+                  <div className="font-extrabold text-slate-900 text-sm truncate">{student.name}</div>
+                  <div className="text-[10px] font-bold text-slate-400 mt-0.5">
+                    {student.className}-{student.section}
+                    {student.rollNo && ` · Roll #${student.rollNo}`}
+                  </div>
+                </div>
+              </div>
+            ))}
+            <p className="text-center text-[10px] font-bold text-slate-300 pt-2">
+              {filtered.length} student{filtered.length !== 1 ? 's' : ''}
+            </p>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+};

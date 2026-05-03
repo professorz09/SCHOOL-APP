@@ -145,7 +145,7 @@ export const apiFees = {
   }) => post<any>('/fees/schedule/generate', body),
   pay: (body: {
     studentId: string; amount: number; method: string;
-    date?: string; note?: string; useAdvance?: boolean; applyLateFee?: boolean;
+    date?: string; note?: string; useAdvance?: boolean; applyLateFee?: boolean; discountAmount?: number;
   }) => post<any>('/fees/pay', body),
   getStudentFees: (studentId: string, yearId?: string) => {
     const q = yearId ? `?yearId=${yearId}` : '';
@@ -262,6 +262,7 @@ export const apiExams = {
   create: (body: {
     title: string; testType: string; className: string; subject: string;
     scheduledDate: string; maxMarks: number; academicYearId: string;
+    examType?: string; passMarks?: number; passMarksConfig?: Record<string, number>;
     sectionId?: string; duration?: number; syllabus?: string;
   }) => post<any>('/exam/create', body),
   uploadResults: (body: {
@@ -269,6 +270,14 @@ export const apiExams = {
     results: { studentId: string; marks: number; grade?: string; remarks?: string }[];
   }) => post<any>('/exam/result/upload', body),
   getResults: (testId: string) => get<any[]>(`/exam/${testId}/results`),
+  lockResults: (testId: string) => post<any>(`/exam/${testId}/lock-results`, {}),
+  unlockResults: (testId: string) => post<any>(`/exam/${testId}/unlock-results`, {}),
+  configurePassMarks: (testId: string, body: {
+    passMarks?: number;
+    passMarksConfig?: Record<string, number>;
+  }) => post<any>(`/exam/${testId}/configure-pass-marks`, body),
+  getMarksheet: (className: string, yearId: string) =>
+    get<{ exams: any[]; students: any[] }>(`/exam/marksheet?className=${encodeURIComponent(className)}&yearId=${encodeURIComponent(yearId)}`),
 };
 
 // ─── Promotion ───────────────────────────────────────────────────────────────
@@ -318,8 +327,16 @@ export const apiSettings = {
 
 // ─── Principal ────────────────────────────────────────────────────────────────
 
+export interface DashboardStats {
+  studentsWithDues: number;
+  pendingLeaves: number;
+  lowAttendanceStudents: number;
+  unsubmittedAttendanceDays: number;
+}
+
 export const apiPrincipal = {
   // Notices
+  noticeList: () => get<any[]>('/principal/notice/list'),
   noticeCreate: (body: { title: string; body: string; audience: string; pinned?: boolean; sentBy?: string }) =>
     post<any>('/principal/notice/create', body),
   noticeDelete: (noticeId: string) =>
@@ -408,6 +425,10 @@ export const apiPrincipal = {
   // Fee Upload Review
   feeUploadReview: (body: { uploadId: string; decision: 'APPROVED' | 'REJECTED'; note?: string }) =>
     post<{ paymentId: string | null }>('/principal/fee-upload/review', body),
+
+  // Dashboard Stats
+  getDashboardStats: (yearId: string) =>
+    get<DashboardStats>(`/principal/dashboard-stats?yearId=${yearId}`),
 };
 
 // ─── Admin — School Billing ────────────────────────────────────────────────────
@@ -438,6 +459,18 @@ export const apiAdminSchools = {
     post<SchoolFeePayment>(`/admin/schools/${schoolId}/payments`, body),
   getPayments: (schoolId: string) =>
     get<SchoolBillingInfo>(`/admin/schools/${schoolId}/payments`),
+};
+
+// ─── Homework ─────────────────────────────────────────────────────────────────
+
+export const apiHomework = {
+  list: (sectionId: string, yearId: string) =>
+    get<any[]>(`/homework?sectionId=${sectionId}&yearId=${yearId}`),
+  create: (body: {
+    sectionId: string; subject: string; title: string;
+    description?: string; dueDate?: string; academicYearId: string;
+  }) => post<any>('/homework/create', body),
+  delete: (id: string) => apiFetch<any>('DELETE', `/homework/${id}`),
 };
 
 // ─── Health check ─────────────────────────────────────────────────────────────

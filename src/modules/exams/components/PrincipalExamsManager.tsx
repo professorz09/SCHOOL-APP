@@ -1,14 +1,16 @@
 import React, { useEffect, useState } from 'react';
 import {
   ArrowLeft, BookOpen, CheckCircle, Clock, ChevronRight,
-  Users, Filter, Trophy, AlertCircle,
+  Users, Filter, Trophy, AlertCircle, Lock, Unlock, FileText,
 } from 'lucide-react';
-import { apiExams } from '@/lib/apiClient';
+import { examService } from '@/modules/exams/exam.service';
 import { useAcademicYear } from '@/shared/context/AcademicYearContext';
+import { useUIStore } from '@/store/uiStore';
+import { Marksheet } from '@/modules/exams/components/Marksheet';
 
 interface Props { onBack: () => void; }
 
-type View = 'LIST' | 'RESULTS';
+type View = 'LIST' | 'RESULTS' | 'MARKSHEET';
 
 const TYPE_COLOR: Record<string, string> = {
   UNIT_TEST: 'bg-blue-50 text-blue-700 border-blue-100',
@@ -35,6 +37,7 @@ function parseSubjectsDisplay(exam: any): string {
 
 export const PrincipalExamsManager: React.FC<Props> = ({ onBack }) => {
   const { activeYear } = useAcademicYear();
+  const { showToast } = useUIStore();
   const [view, setView]           = useState<View>('LIST');
   const [exams, setExams]         = useState<any[]>([]);
   const [loading, setLoading]     = useState(false);
@@ -43,11 +46,15 @@ export const PrincipalExamsManager: React.FC<Props> = ({ onBack }) => {
   const [picked, setPicked]       = useState<any | null>(null);
   const [results, setResults]     = useState<any[]>([]);
   const [loadingRes, setLoadingRes] = useState(false);
+  const [lockingExam, setLockingExam] = useState<string | null>(null);
+  const [passMarksModal, setPassMarksModal] = useState<any | null>(null);
+  const [passMarksValue, setPassMarksValue] = useState('');
+  const [passMarksConfig, setPassMarksConfig] = useState<Record<string, number>>({});
 
   useEffect(() => {
     if (!activeYear) return;
     setLoading(true);
-    apiExams.list({ yearId: activeYear.id })
+    examService.getExams(activeYear.id)
       .then((data: any[]) => setExams(data.sort((a, b) =>
         new Date(b.scheduled_date).getTime() - new Date(a.scheduled_date).getTime()
       )))
@@ -59,10 +66,38 @@ export const PrincipalExamsManager: React.FC<Props> = ({ onBack }) => {
     setPicked(exam);
     setView('RESULTS');
     setLoadingRes(true);
-    apiExams.getResults(exam.id)
-      .then((data: any[]) => setResults(data.sort((a, b) => b.obtained_marks - a.obtained_marks)))
+    examService.getResults(exam.id)
+      .then((data: any[]) => setResults(data.sort((a: any, b: any) => b.obtained_marks - a.obtained_marks)))
       .catch(() => setResults([]))
       .finally(() => setLoadingRes(false));
+  };
+
+  const handleLockResults = async (examId: string) => {
+    setLockingExam(examId);
+    try {
+      await examService.lockResults(examId);
+      setExams(exams.map(e => e.id === examId ? { ...e, result_status: 'LOCKED' } : e));
+      if (picked?.id === examId) setPicked({ ...picked, result_status: 'LOCKED' });
+      showToast('Exam results locked');
+    } catch (e) {
+      showToast(e instanceof Error ? e.message : 'Failed to lock results', 'error');
+    } finally {
+      setLockingExam(null);
+    }
+  };
+
+  const handleUnlockResults = async (examId: string) => {
+    setLockingExam(examId);
+    try {
+      await examService.unlockResults(examId);
+      setExams(exams.map(e => e.id === examId ? { ...e, result_status: 'SUBMITTED' } : e));
+      if (picked?.id === examId) setPicked({ ...picked, result_status: 'SUBMITTED' });
+      showToast('Exam results unlocked');
+    } catch (e) {
+      showToast(e instanceof Error ? e.message : 'Failed to unlock results', 'error');
+    } finally {
+      setLockingExam(null);
+    }
   };
 
   const classes = [...new Set(exams.map(e => e.class_name))].sort();
@@ -77,6 +112,11 @@ export const PrincipalExamsManager: React.FC<Props> = ({ onBack }) => {
   const totalExams   = exams.length;
   const doneExams    = exams.filter(e => e.results_uploaded).length;
   const pendingExams = totalExams - doneExams;
+
+  /* ── MARKSHEET VIEW ───────────────────────────────────────────────────── */
+  if (view === 'MARKSHEET') {
+    return <Marksheet onBack={() => setView('LIST')} />;
+  }
 
   /* ── RESULTS VIEW ─────────────────────────────────────────────────────── */
   if (view === 'RESULTS' && picked) {
@@ -186,6 +226,10 @@ export const PrincipalExamsManager: React.FC<Props> = ({ onBack }) => {
           </button>
           <h2 className="text-xl font-black text-slate-900 uppercase tracking-tight">Exams</h2>
         </div>
+        <button onClick={() => setView('MARKSHEET')}
+          className="flex items-center gap-1.5 px-3 py-2 bg-violet-50 border border-violet-200 text-violet-700 font-black text-[10px] uppercase tracking-widest rounded-xl active:scale-95 transition-transform">
+          <FileText size={13} /> Marksheet
+        </button>
       </div>
 
       <div className="p-4 space-y-4">
@@ -246,9 +290,19 @@ export const PrincipalExamsManager: React.FC<Props> = ({ onBack }) => {
             return (
               <div key={exam.id} className={`bg-white rounded-2xl border shadow-sm p-4 ${done ? 'border-slate-100' : 'border-amber-100'}`}>
                 <div className="flex items-start justify-between gap-2 mb-2">
-                  <span className={`text-[9px] font-black px-2 py-0.5 rounded-full uppercase border ${TYPE_COLOR[exam.test_type] ?? 'bg-slate-50 text-slate-600 border-slate-100'}`}>
-                    {TYPE_LABEL[exam.test_type] ?? exam.test_type}
-                  </span>
+                  <div className="flex items-center gap-1.5">
+                    <span className={`text-[9px] font-black px-2 py-0.5 rounded-full uppercase border ${TYPE_COLOR[exam.test_type] ?? 'bg-slate-50 text-slate-600 border-slate-100'}`}>
+                      {TYPE_LABEL[exam.test_type] ?? exam.test_type}
+                    </span>
+                    <span className={`text-[8px] font-black px-1.5 py-0.5 rounded-full uppercase border ${exam.exam_type === 'FINAL' ? 'bg-rose-100 text-rose-700 border-rose-200' : 'bg-blue-100 text-blue-700 border-blue-200'}`}>
+                      {exam.exam_type === 'FINAL' ? 'Final' : 'Regular'}
+                    </span>
+                    {exam.result_status === 'LOCKED' && (
+                      <span className="text-[8px] font-black px-1.5 py-0.5 rounded-full bg-slate-100 text-slate-700 border border-slate-200 flex items-center gap-0.5">
+                        <Lock size={8} /> Locked
+                      </span>
+                    )}
+                  </div>
                   <span className="text-[10px] font-bold text-slate-400 shrink-0">{exam.class_name}</span>
                 </div>
                 <p className="font-extrabold text-slate-900 text-sm">{exam.title}</p>
@@ -260,11 +314,25 @@ export const PrincipalExamsManager: React.FC<Props> = ({ onBack }) => {
                   <span className="ml-auto text-[10px] font-black text-slate-700">{exam.max_marks} marks</span>
                 </div>
                 {done ? (
-                  <button onClick={() => openResults(exam)}
-                    className="mt-2 w-full flex items-center justify-between bg-emerald-50 border border-emerald-100 text-emerald-700 font-black text-[11px] uppercase tracking-widest px-3 py-2 rounded-xl active:scale-95 transition-transform">
-                    <span className="flex items-center gap-1.5"><Users size={12} /> View Results</span>
-                    <span className="flex items-center gap-1"><CheckCircle size={12}/><ChevronRight size={12} /></span>
-                  </button>
+                  <div className="mt-2 space-y-2">
+                    <button onClick={() => openResults(exam)}
+                      className="w-full flex items-center justify-between bg-emerald-50 border border-emerald-100 text-emerald-700 font-black text-[11px] uppercase tracking-widest px-3 py-2 rounded-xl active:scale-95 transition-transform">
+                      <span className="flex items-center gap-1.5"><Users size={12} /> View Results</span>
+                      <span className="flex items-center gap-1"><CheckCircle size={12}/><ChevronRight size={12} /></span>
+                    </button>
+                    {exam.result_status !== 'LOCKED' && (
+                      <button onClick={() => handleLockResults(exam.id)} disabled={lockingExam === exam.id}
+                        className="w-full flex items-center justify-center gap-1.5 bg-slate-100 border border-slate-200 text-slate-700 font-black text-[10px] uppercase tracking-widest px-3 py-1.5 rounded-xl active:scale-95 transition-transform disabled:opacity-50">
+                        <Lock size={10} /> Lock Results
+                      </button>
+                    )}
+                    {exam.result_status === 'LOCKED' && (
+                      <button onClick={() => handleUnlockResults(exam.id)} disabled={lockingExam === exam.id}
+                        className="w-full flex items-center justify-center gap-1.5 bg-amber-50 border border-amber-200 text-amber-700 font-black text-[10px] uppercase tracking-widest px-3 py-1.5 rounded-xl active:scale-95 transition-transform disabled:opacity-50">
+                        <Unlock size={10} /> Unlock Results
+                      </button>
+                    )}
+                  </div>
                 ) : (
                   <div className="mt-2 flex items-center gap-1.5 text-[10px] font-black text-amber-600 bg-amber-50 px-2 py-1.5 rounded-lg">
                     <Clock size={10} /> Results upload nahi hue — Teacher se upload karwayein

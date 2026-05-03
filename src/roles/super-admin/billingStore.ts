@@ -2,7 +2,7 @@ import { create } from 'zustand';
 import {
   SchoolBilling, BillingYear, Payment,
   SchoolBillingBreakdown, PaymentAllocationPreview,
-} from '@/shared/types/billing.types';
+} from '@/roles/super-admin/billing.types';
 import { billingService } from '@/roles/super-admin/billing.service';
 import { BillingPlan } from '@/shared/config/constants';
 

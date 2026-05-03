@@ -14,7 +14,7 @@ import { FirstLoginPasswordChange } from '@/shared/components/FirstLoginPassword
 import { useAuthStore } from '@/store/authStore';
 import { useUIStore } from '@/store/uiStore';
 import { studentService } from '@/modules/students/student.service';
-import { Student } from '@/shared/types/principal.types';
+import { Student } from '@/modules/students/student.types';
 import { Bell, Loader, LogOut } from 'lucide-react';
 import { FeesView }            from '@/roles/student/components/FeesView';
 import { StudentNoticesView }  from '@/modules/notices/components/StudentNoticesView';

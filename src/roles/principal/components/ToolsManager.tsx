@@ -5,11 +5,11 @@ import {
   GraduationCap, ClipboardList, ScrollText, BadgeCheck,
 } from 'lucide-react';
 import { studentService } from '@/modules/students/student.service';
-import { Student } from '@/shared/types/principal.types';
-import { schoolInfoService, type SchoolInfo } from '@/shared/services/schoolInfo.service';
+import { Student } from '@/modules/students/student.types';
+import { schoolInfoService, type SchoolInfo } from '@/shared/utils/schoolInfo.service';
 import { AdmissionFormPrint } from '@/shared/components/AdmissionFormPrint';
 import { teacherService } from '@/roles/teacher/teacher.service';
-import type { GeneratedExamPaper } from '@/shared/types/teacher.types';
+import type { GeneratedExamPaper } from '@/roles/teacher/teacher.types';
 import { isGeminiConfigured, GeminiUnavailableError } from '@/lib/gemini';
 import { useUIStore } from '@/store/uiStore';
 import { apiExams } from '@/lib/apiClient';

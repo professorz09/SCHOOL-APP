@@ -1,7 +1,7 @@
 import React, { useCallback, useEffect, useState } from 'react';
 import { ArrowLeft, Plus, Bell, Trash2, Pin } from 'lucide-react';
-import { principalService } from '@/shared/services/principal.service';
-import { Notice, NoticeAudience } from '@/shared/types/principal.types';
+import { noticeService } from '@/modules/notices/notice.service';
+import type { Notice, NoticeAudience } from '@/modules/notices/notice.types';
 import { useUIStore } from '@/store/uiStore';
 import { useRealtimeTable } from '@/shared/hooks/useRealtimeTable';
 
@@ -33,7 +33,8 @@ export const NoticesManager: React.FC<Props> = ({ onBack }) => {
   const [confirmDelete, setConfirmDelete] = useState<Notice | null>(null);
 
   const loadNotices = useCallback(() => {
-    principalService.getNotices().then(setNotices);
+    noticeService.invalidate();
+    noticeService.getAll().then(setNotices).catch(() => {});
   }, []);
 
   useEffect(() => { loadNotices(); }, [loadNotices]);
@@ -43,7 +44,7 @@ export const NoticesManager: React.FC<Props> = ({ onBack }) => {
     if (!form.title || !form.body) { showToast('Title and body required', 'error'); return; }
     setIsSubmitting(true);
     try {
-      const notice = await principalService.sendNotice({ ...form, sentBy: 'Dr. Rajesh Kumar' });
+      const notice = await noticeService.create({ ...form, sentBy: '' });
       setNotices(prev => [notice, ...prev]);
       showToast(`Notice sent to ${form.audience}`);
       setForm({ title: '', body: '', audience: 'ALL', pinned: false });
@@ -52,7 +53,7 @@ export const NoticesManager: React.FC<Props> = ({ onBack }) => {
   };
 
   const handleDelete = async (notice: Notice) => {
-    await principalService.deleteNotice(notice.id);
+    await noticeService.delete(notice.id);
     setNotices(prev => prev.filter(n => n.id !== notice.id));
     showToast('Notice deleted', 'info');
     setConfirmDelete(null);

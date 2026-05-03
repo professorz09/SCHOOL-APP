@@ -1,7 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import { ArrowLeft, Plus, Wallet, IndianRupee } from 'lucide-react';
-import { principalService } from '@/shared/services/principal.service';
-import { Expense } from '@/shared/types/principal.types';
+import { principalService } from '@/roles/principal/principal.service';
+import { Expense } from '@/roles/principal/principal.types';
 import { useUIStore } from '@/store/uiStore';
 
 type View = 'LIST' | 'ADD';

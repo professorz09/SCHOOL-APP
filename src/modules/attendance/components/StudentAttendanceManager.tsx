@@ -5,7 +5,7 @@ import {
   XCircle, AlertCircle, LayoutGrid,
 } from 'lucide-react';
 import { studentService } from '@/modules/students/student.service';
-import { Student } from '@/shared/types/principal.types';
+import { Student } from '@/modules/students/student.types';
 import { sharedAttendance, SharedAttendanceRecord, AttendanceStudentRecord, GridDateRecord, GridStudentDetails, AttendanceCellStatus } from '@/modules/attendance/attendance.service';
 import { useUIStore } from '@/store/uiStore';
 import { useAcademicYear } from '@/shared/context/AcademicYearContext';

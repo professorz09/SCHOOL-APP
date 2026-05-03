@@ -9,7 +9,7 @@
 
 import { supabase } from '@/lib/supabase';
 import { useAuthStore } from '@/store/authStore';
-import type { StudentDoc } from '@/shared/types/principal.types';
+import type { StudentDoc } from '@/modules/students/student.types';
 
 export const STUDENT_DOCS_BUCKET = 'student-documents';
 

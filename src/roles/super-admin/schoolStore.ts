@@ -1,6 +1,6 @@
 import { create } from 'zustand';
-import { School, UpdateSchoolInput } from '@/shared/types/school.types';
-import { schoolService } from '@/shared/services/school.service';
+import { School, UpdateSchoolInput } from '@/roles/super-admin/school.types';
+import { schoolService } from '@/shared/utils/school.service';
 
 interface SchoolStore {
   schools: School[];

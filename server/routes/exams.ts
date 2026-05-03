@@ -5,7 +5,7 @@ import { requireAuth, requireRole } from '../middleware/auth';
 
 export const examsRouter = Router();
 
-// GET /api/exam?yearId=&sectionId=
+// GET /api/exam?yearId=&sectionId=&className=
 examsRouter.get('/', requireAuth, requireRole('PRINCIPAL', 'TEACHER'), async (req, res) => {
   try {
     const { yearId, sectionId, className } = req.query as Record<string, string>;
@@ -19,16 +19,76 @@ examsRouter.get('/', requireAuth, requireRole('PRINCIPAL', 'TEACHER'), async (re
   } catch (err) { fail(res, err); }
 });
 
+// GET /api/exam/marksheet?className=&yearId=
+// Returns all FINAL exam results for every student in the class, grouped by student.
+examsRouter.get('/marksheet', requireAuth, requireRole('PRINCIPAL', 'TEACHER', 'PARENT', 'STUDENT'), async (req, res) => {
+  try {
+    const { className, yearId } = req.query as Record<string, string>;
+    if (!className || !yearId) throw new ApiError(400, 'className and yearId required');
+
+    // Get all FINAL exams for this class / year
+    const { data: exams, error: eErr } = await adminDb
+      .from('test_schedules')
+      .select('id, title, subject, max_marks, pass_marks, pass_marks_config, scheduled_date, result_status')
+      .eq('school_id', req.user.school_id!)
+      .eq('academic_year_id', yearId)
+      .eq('class_name', className)
+      .eq('exam_type', 'FINAL')
+      .order('scheduled_date');
+    if (eErr) throw new ApiError(500, eErr.message);
+    if (!exams || exams.length === 0) { ok(res, { exams: [], students: [] }); return; }
+
+    const examIds = (exams as any[]).map(e => e.id);
+
+    // Get all results for these exams
+    const { data: results, error: rErr } = await adminDb
+      .from('exam_results')
+      .select('test_id, student_id, obtained_marks, grade, remarks, students(id, name, admission_no, roll_no, class_name, section)')
+      .in('test_id', examIds);
+    if (rErr) throw new ApiError(500, rErr.message);
+
+    // Group results by student
+    const studentMap = new Map<string, any>();
+    for (const r of ((results ?? []) as any[])) {
+      if (!r.students) continue;
+      const sid = r.student_id;
+      if (!studentMap.has(sid)) {
+        studentMap.set(sid, {
+          studentId: sid,
+          name: r.students.name,
+          admissionNo: r.students.admission_no,
+          rollNo: r.students.roll_no,
+          className: r.students.class_name,
+          section: r.students.section,
+          results: {},
+        });
+      }
+      studentMap.get(sid).results[r.test_id] = {
+        obtainedMarks: r.obtained_marks,
+        grade: r.grade,
+        remarks: r.remarks,
+      };
+    }
+
+    ok(res, {
+      exams,
+      students: Array.from(studentMap.values()).sort((a, b) =>
+        (parseInt(a.rollNo) || 9999) - (parseInt(b.rollNo) || 9999)
+      ),
+    });
+  } catch (err) { fail(res, err); }
+});
+
 // POST /api/exam/create
 examsRouter.post('/create', requireAuth, requireRole('PRINCIPAL', 'TEACHER'), async (req, res) => {
   try {
     const body = requireBody<{
       title: string; testType: string; className: string; subject: string;
       scheduledDate: string; maxMarks: number; academicYearId: string;
+      examType?: string; passMarks?: number; passMarksConfig?: Record<string, number>;
       sectionId?: string; duration?: number; syllabus?: string;
     }>(req, ['title', 'testType', 'className', 'subject', 'scheduledDate', 'maxMarks', 'academicYearId']);
 
-    // Resolve teacher staff_id if submitting as teacher
     let staffId: string | null = null;
     if (req.user.role === 'TEACHER') {
       const { data: staff } = await adminDb
@@ -43,19 +103,23 @@ examsRouter.post('/create', requireAuth, requireRole('PRINCIPAL', 'TEACHER'), as
     const { data, error } = await adminDb
       .from('test_schedules')
       .insert({
-        school_id:        req.user.school_id,
-        academic_year_id: body.academicYearId,
-        section_id:       body.sectionId ?? null,
-        teacher_id:       staffId,
-        class_name:       body.className,
-        subject:          body.subject,
-        test_type:        body.testType,
-        title:            body.title,
-        scheduled_date:   body.scheduledDate,
-        max_marks:        body.maxMarks,
-        duration:         body.duration ?? null,
-        syllabus:         body.syllabus ?? null,
-        results_uploaded: false,
+        school_id:          req.user.school_id,
+        academic_year_id:   body.academicYearId,
+        section_id:         body.sectionId ?? null,
+        teacher_id:         staffId,
+        class_name:         body.className,
+        subject:            body.subject,
+        test_type:          body.testType,
+        title:              body.title,
+        scheduled_date:     body.scheduledDate,
+        max_marks:          body.maxMarks,
+        duration:           body.duration ?? null,
+        syllabus:           body.syllabus ?? null,
+        results_uploaded:   false,
+        exam_type:          body.examType ?? 'REGULAR',
+        pass_marks:         body.passMarks ?? null,
+        pass_marks_config:  body.passMarksConfig ?? {},
+        result_status:      'DRAFT',
       })
       .select()
       .single();
@@ -85,7 +149,6 @@ examsRouter.post('/result/upload', requireAuth, requireRole('PRINCIPAL', 'TEACHE
     if (!test) throw new ApiError(404, 'Test not found');
     if ((test as any).school_id !== req.user.school_id) throw new ApiError(403, 'Access denied');
 
-    // Immutable rule: skip students who already have results
     const { data: existing } = await adminDb
       .from('exam_results')
       .select('student_id')
@@ -107,17 +170,10 @@ examsRouter.post('/result/upload', requireAuth, requireRole('PRINCIPAL', 'TEACHE
     if (toInsert.length > 0) {
       const { error } = await adminDb.from('exam_results').insert(toInsert);
       if (error) throw new ApiError(500, error.message);
-    }
-
-    // Mark test as results_uploaded
-    if (toInsert.length > 0) {
       await adminDb.from('test_schedules').update({ results_uploaded: true }).eq('id', body.testId);
     }
 
-    ok(res, {
-      uploaded: toInsert.length,
-      skipped:  body.results.length - toInsert.length,
-    });
+    ok(res, { uploaded: toInsert.length, skipped: body.results.length - toInsert.length });
   } catch (err) { fail(res, err); }
 });
 
@@ -131,5 +187,65 @@ examsRouter.get('/:testId/results', requireAuth, requireRole('PRINCIPAL', 'TEACH
       .order('obtained_marks', { ascending: false });
     if (error) throw new ApiError(500, error.message);
     ok(res, data);
+  } catch (err) { fail(res, err); }
+});
+
+// POST /api/exam/:testId/lock-results
+examsRouter.post('/:testId/lock-results', requireAuth, requireRole('PRINCIPAL'), async (req, res) => {
+  try {
+    const { data: test, error: getErr } = await adminDb
+      .from('test_schedules').select('id, school_id').eq('id', req.params.testId).single();
+    if (getErr) throw new ApiError(500, getErr.message);
+    if (!test) throw new ApiError(404, 'Exam not found');
+    if ((test as any).school_id !== req.user.school_id) throw new ApiError(403, 'Access denied');
+
+    const { data: staff } = await adminDb
+      .from('staff').select('id').eq('user_id', req.user.id).eq('school_id', req.user.school_id!).maybeSingle();
+
+    await adminDb.from('test_schedules').update({
+      result_status: 'LOCKED',
+      locked_at: new Date().toISOString(),
+      locked_by: (staff as any)?.id ?? null,
+    }).eq('id', req.params.testId);
+
+    ok(res, { testId: req.params.testId, resultStatus: 'LOCKED' });
+  } catch (err) { fail(res, err); }
+});
+
+// POST /api/exam/:testId/unlock-results
+examsRouter.post('/:testId/unlock-results', requireAuth, requireRole('PRINCIPAL'), async (req, res) => {
+  try {
+    const { data: test, error: getErr } = await adminDb
+      .from('test_schedules').select('id, school_id').eq('id', req.params.testId).single();
+    if (getErr) throw new ApiError(500, getErr.message);
+    if (!test) throw new ApiError(404, 'Exam not found');
+    if ((test as any).school_id !== req.user.school_id) throw new ApiError(403, 'Access denied');
+
+    await adminDb.from('test_schedules').update({
+      result_status: 'SUBMITTED', locked_at: null, locked_by: null,
+    }).eq('id', req.params.testId);
+
+    ok(res, { testId: req.params.testId, resultStatus: 'SUBMITTED' });
+  } catch (err) { fail(res, err); }
+});
+
+// POST /api/exam/:testId/configure-pass-marks
+examsRouter.post('/:testId/configure-pass-marks', requireAuth, requireRole('PRINCIPAL', 'TEACHER'), async (req, res) => {
+  try {
+    const body = requireBody<{ passMarks?: number; passMarksConfig?: Record<string, number> }>(req, []);
+
+    const { data: test, error: getErr } = await adminDb
+      .from('test_schedules').select('id, school_id, exam_type').eq('id', req.params.testId).single();
+    if (getErr) throw new ApiError(500, getErr.message);
+    if (!test) throw new ApiError(404, 'Exam not found');
+    if ((test as any).school_id !== req.user.school_id) throw new ApiError(403, 'Access denied');
+    if ((test as any).exam_type !== 'FINAL') throw new ApiError(400, 'Pass marks configuration only for FINAL exams');
+
+    const updateData: any = {};
+    if (body.passMarks !== undefined) updateData.pass_marks = body.passMarks;
+    if (body.passMarksConfig !== undefined) updateData.pass_marks_config = body.passMarksConfig;
+
+    await adminDb.from('test_schedules').update(updateData).eq('id', req.params.testId);
+    ok(res, { testId: req.params.testId, ...updateData });
   } catch (err) { fail(res, err); }
 });

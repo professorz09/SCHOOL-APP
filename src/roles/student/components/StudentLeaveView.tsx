@@ -2,8 +2,8 @@ import React, { useEffect, useState } from 'react';
 import {
   ArrowLeft, FileText, Plus, X, ChevronDown, ChevronUp, Calendar,
 } from 'lucide-react';
-import { principalService } from '@/shared/services/principal.service';
-import { Approval } from '@/shared/types/principal.types';
+import { principalService } from '@/roles/principal/principal.service';
+import { Approval } from '@/roles/principal/principal.types';
 import { useAuthStore } from '@/store/authStore';
 import { useUIStore } from '@/store/uiStore';
 

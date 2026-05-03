@@ -1,7 +1,7 @@
 import React, { useRef, useState } from 'react';
 import { X, Printer, Download } from 'lucide-react';
-import { Student, STREAM_CLASSES } from '@/shared/types/principal.types';
-import { SchoolInfo } from '@/shared/services/schoolInfo.service';
+import { Student, STREAM_CLASSES } from '@/modules/students/student.types';
+import { SchoolInfo } from '@/shared/utils/schoolInfo.service';
 
 interface Props {
   student: Student;

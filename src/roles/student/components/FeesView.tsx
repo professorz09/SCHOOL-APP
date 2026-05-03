@@ -8,11 +8,11 @@ import {
   FEE_SCREENSHOT_MAX_BYTES,
   FEE_SCREENSHOT_MIME_TYPES,
 } from '@/modules/students/studentDashboard.service';
-import { FeePaymentUpload } from '@/shared/types/student.types';
+import { FeePaymentUpload } from '@/roles/student/student-role.types';
 import { useUIStore } from '@/store/uiStore';
 import { feeService, FeeInstallment, FeeType, PaymentRecord } from '@/modules/fees/fee.service';
 import { studentService } from '@/modules/students/student.service';
-import { schoolInfoService } from '@/shared/services/schoolInfo.service';
+import { schoolInfoService } from '@/shared/utils/schoolInfo.service';
 
 type View = 'MAIN' | 'QR_PAY' | 'HISTORY';
 type YearGroup = { academicYearId: string; yearLabel: string; isActive: boolean; installments: FeeInstallment[] };

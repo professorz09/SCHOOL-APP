@@ -6,7 +6,7 @@ import {
 import {
   auditService, MODULE_LABEL, DEFAULT_MODULES,
   type AuditLogEntry, type AuditModule,
-} from '@/shared/services/audit.service';
+} from '@/shared/utils/audit.service';
 import { useUIStore } from '@/store/uiStore';
 
 interface Props { onBack: () => void; }

@@ -1,5 +1,5 @@
 import { create } from 'zustand';
-import { AdminUser } from '@/shared/types/admin.types';
+import { AdminUser } from '@/roles/super-admin/admin.types';
 import { adminService } from '@/roles/super-admin/admin.service';
 
 interface AdminStore {

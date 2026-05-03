@@ -21,7 +21,7 @@ import type {
   YearClosingPreview,
   YearClosingResult,
   AuditLogEntry,
-} from '@/shared/types/yearClosing.types';
+} from '@/modules/academic-year/yearClosing.types';
 
 // ─── In-memory wizard form draft (UI state) ──────────────────────────────────
 // Configs are NOT persisted — they hold the wizard form between steps.

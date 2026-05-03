@@ -1,7 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import { ArrowLeft, CheckSquare, CheckCircle2, XCircle, Clock, FileText } from 'lucide-react';
-import { principalService } from '@/shared/services/principal.service';
-import { Approval, ApprovalStatus } from '@/shared/types/principal.types';
+import { principalService } from '@/roles/principal/principal.service';
+import { Approval, ApprovalStatus } from '@/roles/principal/principal.types';
 import { useUIStore } from '@/store/uiStore';
 
 type Filter = 'ALL' | ApprovalStatus;

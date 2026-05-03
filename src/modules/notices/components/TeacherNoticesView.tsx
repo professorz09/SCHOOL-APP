@@ -2,7 +2,7 @@ import React, { useCallback, useEffect, useState } from 'react';
 import { ArrowLeft, Plus, Send, Bell } from 'lucide-react';
 import { useUIStore } from '@/store/uiStore';
 import { teacherService } from '@/roles/teacher/teacher.service';
-import { TeacherClass } from '@/shared/types/teacher.types';
+import { TeacherClass } from '@/roles/teacher/teacher.types';
 import { useRealtimeTable } from '@/shared/hooks/useRealtimeTable';
 
 interface TeacherNotice {

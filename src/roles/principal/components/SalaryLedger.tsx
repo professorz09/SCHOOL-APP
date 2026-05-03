@@ -1,7 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import { ArrowLeft, IndianRupee, CheckCircle2, Clock, AlertTriangle, Loader2 } from 'lucide-react';
 import { staffService } from '@/modules/staff/staff.service';
-import { StaffMember, SalaryPaymentMethod } from '@/shared/types/principal.types';
+import { StaffMember, SalaryPaymentMethod } from '@/modules/staff/staff.types';
 import { useUIStore } from '@/store/uiStore';
 
 const PAY_METHODS: SalaryPaymentMethod[] = ['CASH', 'BANK_TRANSFER', 'UPI', 'CHEQUE', 'OTHER'];

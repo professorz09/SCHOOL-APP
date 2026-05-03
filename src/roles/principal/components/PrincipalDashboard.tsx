@@ -7,8 +7,9 @@ import {
 } from 'lucide-react';
 import { studentService } from '@/modules/students/student.service';
 import { staffService } from '@/modules/staff/staff.service';
-import { principalService } from '@/shared/services/principal.service';
+import { principalService } from '@/roles/principal/principal.service';
 import { transportService } from '@/modules/transport/transport.service';
+import { apiPrincipal } from '@/lib/apiClient';
 import { supabase } from '@/lib/supabase';
 import { PrincipalView } from '@/roles/principal/pages/PrincipalLayout';
 import { useAuthStore } from '@/store/authStore';
@@ -49,6 +50,7 @@ export const PrincipalDashboard: React.FC<Props> = ({ onNavigate }) => {
   const [stats, setStats] = useState({
     totalStudents: 0, avgAttendance: 0, paidFees: 0, totalFees: 0,
     totalStaff: 0, openComplaints: 0, pendingApprovals: 0,
+    studentsWithDues: 0, pendingLeaves: 0, lowAttendanceStudents: 0, unsubmittedAttendanceDays: 0,
   });
   const [vehicles, setVehicles] = useState<{ id: string; vehicleNo: string; routeName: string; driverName: string; isActive: boolean; currentStop: string }[]>([]);
   const [liveClasses, setLiveClasses] = useState<LiveClassRow[]>([]);
@@ -60,7 +62,7 @@ export const PrincipalDashboard: React.FC<Props> = ({ onNavigate }) => {
       // mount that cache may be empty, so prime it before reading. All other
       // services here fetch fresh per call.
       await transportService.refreshAll();
-      const [students, staff, complaints, approvals, allVehicles, attRes] = await Promise.all([
+      const [students, staff, complaints, approvals, allVehicles, attRes, dashStats] = await Promise.all([
         studentService.getAll(),
         staffService.getAll(),
         principalService.getComplaints(),
@@ -73,6 +75,7 @@ export const PrincipalDashboard: React.FC<Props> = ({ onNavigate }) => {
           .eq('date', today)
           .order('created_at', { ascending: false })
           .limit(5),
+        activeYear ? apiPrincipal.getDashboardStats(activeYear.id) : Promise.resolve(null),
       ]);
       const liveRows = ((attRes.data ?? []) as Array<{
         id: string; class_name: string | null; section: string | null;
@@ -100,6 +103,10 @@ export const PrincipalDashboard: React.FC<Props> = ({ onNavigate }) => {
         totalStaff: staff.length,
         openComplaints: complaints.filter(c => c.status !== 'RESOLVED').length,
         pendingApprovals: approvals.filter(a => a.status === 'PENDING').length,
+        studentsWithDues: dashStats?.studentsWithDues ?? 0,
+        pendingLeaves: dashStats?.pendingLeaves ?? 0,
+        lowAttendanceStudents: dashStats?.lowAttendanceStudents ?? 0,
+        unsubmittedAttendanceDays: dashStats?.unsubmittedAttendanceDays ?? 0,
       });
       setVehicles(allVehicles.filter(v => v.isActive).map(v => ({
         id: v.id,

@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { Phone, Lock, Eye, EyeOff, AlertCircle, Loader } from 'lucide-react';
-import { authService } from '@/shared/services/auth.service';
+import { authService } from '@/modules/auth/auth.service';
 import { useAuthStore } from '@/store/authStore';
 
 export const LoginPage: React.FC = () => {

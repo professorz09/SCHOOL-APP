@@ -4,7 +4,8 @@ import {
   CheckCircle2, Hourglass, BookOpen, ChevronDown, ChevronUp,
 } from 'lucide-react';
 import { studentDashboardService, UpcomingExam } from '@/modules/students/studentDashboard.service';
-import { StudentExamResult } from '@/shared/types/student.types';
+import { StudentExamResult } from '@/roles/student/student-role.types';
+import { examService } from '@/modules/exams/exam.service';
 
 interface Props { onBack: () => void; }
 
@@ -346,18 +347,71 @@ const ResultGroupCard: React.FC<{
             <div className={`h-1.5 rounded-full transition-all duration-500 ${barColor(overall)}`} style={{ width: `${overall}%` }}/>
           </div>
 
-          {/* Expand toggle */}
-          <button
-            onClick={onToggle}
-            className="flex items-center gap-1 text-[10px] font-black text-blue-600 uppercase tracking-wide"
-          >
-            {expanded ? <ChevronUp size={12}/> : <ChevronDown size={12}/>}
-            {expanded ? 'Hide Subjects' : 'View Subjects'}
-          </button>
+          {/* Expand toggle — hidden for FINAL (always expanded as marksheet) */}
+          {!isFinal && (
+            <button
+              onClick={onToggle}
+              className="flex items-center gap-1 text-[10px] font-black text-blue-600 uppercase tracking-wide"
+            >
+              {expanded ? <ChevronUp size={12}/> : <ChevronDown size={12}/>}
+              {expanded ? 'Hide Subjects' : 'View Subjects'}
+            </button>
+          )}
         </div>
 
-        {/* Subject rows (expanded) */}
-        {expanded && (
+        {/* FINAL EXAM — Marksheet table */}
+        {isFinal && (() => {
+          const passed = total >= maxTot * 0.33;
+          return (
+            <div className="border-t border-rose-100">
+              {/* Subject table */}
+              <div className="px-4 pt-3 pb-2">
+                <div className="grid grid-cols-[1fr_auto_auto_auto_auto] gap-x-3 gap-y-1 text-[9px] font-black uppercase tracking-widest text-slate-400 mb-2 px-1">
+                  <span>Subject</span>
+                  <span className="text-right">Marks</span>
+                  <span className="text-right">Max</span>
+                  <span className="text-right">%</span>
+                  <span className="text-right">Grade</span>
+                </div>
+                <div className="space-y-1.5">
+                  {item.results.map(r => {
+                    const pct = r.maxMarks > 0 ? Math.round((r.obtainedMarks / r.maxMarks) * 100) : 0;
+                    const grade = examService.calculateGrade(pct);
+                    const subPassed = r.obtainedMarks >= r.maxMarks * 0.33;
+                    return (
+                      <div key={r.id} className={`grid grid-cols-[1fr_auto_auto_auto_auto] gap-x-3 items-center rounded-xl px-3 py-2 ${subPassed ? 'bg-slate-50' : 'bg-rose-50'}`}>
+                        <div className="min-w-0">
+                          <div className="font-extrabold text-slate-800 text-xs truncate">{r.subject}</div>
+                          {r.teacherNote && (
+                            <p className="text-[9px] font-medium text-slate-400 leading-tight mt-0.5 truncate">{r.teacherNote}</p>
+                          )}
+                        </div>
+                        <span className="font-black text-slate-800 text-xs tabular-nums text-right">{r.obtainedMarks}</span>
+                        <span className="font-bold text-slate-400 text-[10px] tabular-nums text-right">{r.maxMarks}</span>
+                        <span className={`font-black text-xs tabular-nums text-right ${pctColor(pct)}`}>{pct}%</span>
+                        <span className={`font-black text-xs text-right ${subPassed ? 'text-emerald-700' : 'text-rose-600'}`}>{grade}</span>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+              {/* Overall verdict */}
+              <div className={`mx-4 mb-4 mt-2 rounded-xl px-4 py-3 flex items-center justify-between ${passed ? 'bg-emerald-50 border border-emerald-100' : 'bg-rose-50 border border-rose-200'}`}>
+                <div>
+                  <div className={`text-[9px] font-black uppercase tracking-widest ${passed ? 'text-emerald-600' : 'text-rose-600'}`}>Overall Result</div>
+                  <div className={`text-lg font-black mt-0.5 ${passed ? 'text-emerald-700' : 'text-rose-700'}`}>{passed ? 'PASS' : 'FAIL'}</div>
+                </div>
+                <div className="text-right">
+                  <div className={`text-2xl font-black tabular-nums ${pctColor(overall)}`}>{overall}<span className="text-sm">%</span></div>
+                  <div className="text-[10px] font-bold text-slate-400">{total}/{maxTot}</div>
+                </div>
+              </div>
+            </div>
+          );
+        })()}
+
+        {/* Non-FINAL: Subject rows (expanded) */}
+        {!isFinal && expanded && (
           <div className="p-3 space-y-2 border-t border-slate-50">
             {item.results.map(r => {
               const pct = r.maxMarks > 0 ? Math.round((r.obtainedMarks / r.maxMarks) * 100) : 0;
@@ -404,8 +458,8 @@ const ResultGroupCard: React.FC<{
           </div>
         )}
 
-        {/* Summary row when collapsed and single subject */}
-        {!expanded && item.results.length === 1 && (
+        {/* Summary row when collapsed and single subject (non-FINAL only) */}
+        {!isFinal && !expanded && item.results.length === 1 && (
           <div className="px-4 pb-3 flex items-center gap-2 flex-wrap border-t border-slate-50 pt-2.5">
             <span className="font-bold text-slate-700 text-xs">{item.results[0].subject}</span>
             {item.results[0].rank && (

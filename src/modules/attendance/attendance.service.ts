@@ -6,7 +6,7 @@
 // instead of just is_present boolean.
 
 import { supabase } from '@/lib/supabase';
-import { apiAttendance } from '@/lib/apiClient';
+import { apiAttendance, apiPrincipal } from '@/lib/apiClient';
 import type { AttendanceCellStatus } from '@/lib/apiClient';
 import { useAuthStore } from '@/store/authStore';
 import { useEditingYearStore } from '@/store/editingYearStore';
@@ -310,3 +310,117 @@ export const sharedAttendance = {
     });
   },
 }
+
+// ─── Staff Attendance (moved from principalService) ───────────────────────────
+
+export type StaffAttendanceStatus = 'PRESENT' | 'ABSENT' | 'HALF_DAY' | 'LEAVE' | 'LATE' | 'HOLIDAY';
+
+export interface StaffAttendanceRow {
+  staffId: string;
+  name: string;
+  role: string;
+  status: StaffAttendanceStatus;
+}
+
+export const staffAttendanceService = {
+  async getForDate(date: string): Promise<{
+    rows: StaffAttendanceRow[];
+    isLocked: boolean;
+    savedAt: string | null;
+  }> {
+    const schoolId = useAuthStore.getState().session?.schoolId;
+    if (!schoolId) return { rows: [], isLocked: false, savedAt: null };
+
+    const { data: staff, error: sErr } = await supabase
+      .from('staff')
+      .select('id, name, role, status, is_active')
+      .eq('school_id', schoolId);
+    if (sErr) throw new Error(sErr.message);
+
+    const activeStaff = ((staff ?? []) as any[]).filter(
+      (s: any) => s.is_active && s.status !== 'SUSPENDED',
+    );
+
+    const { data: existing, error: aErr } = await supabase
+      .from('staff_attendance')
+      .select('staff_id, status, is_locked, created_at')
+      .eq('school_id', schoolId).eq('date', date);
+    if (aErr) throw new Error(aErr.message);
+
+    const existingMap = new Map<string, { status: string; is_locked: boolean; created_at: string }>();
+    for (const r of (existing ?? []) as any[]) {
+      existingMap.set(r.staff_id, r);
+    }
+
+    const isLocked = Array.from(existingMap.values()).some(r => r.is_locked);
+    const savedAtTs = Array.from(existingMap.values()).map(r => r.created_at).sort().pop() ?? null;
+
+    const rows: StaffAttendanceRow[] = activeStaff
+      .map((s: any) => ({
+        staffId: s.id,
+        name: s.name,
+        role: s.role,
+        status: (existingMap.get(s.id)?.status as StaffAttendanceStatus) ?? 'PRESENT',
+      }))
+      .sort((a: StaffAttendanceRow, b: StaffAttendanceRow) => a.name.localeCompare(b.name));
+
+    return { rows, isLocked, savedAt: savedAtTs };
+  },
+
+  async save(
+    date: string,
+    rows: StaffAttendanceRow[],
+    clearedStaffIds: string[] = [],
+  ): Promise<string | null> {
+    const result = await apiPrincipal.staffAttendanceSave({
+      date,
+      rows: rows.map(r => ({ staffId: r.staffId, status: r.status })),
+      clearedStaffIds,
+    });
+    await logAudit('staff_attendance_saved', 'staff_attendance', date, {
+      date, count: rows.length, cleared: clearedStaffIds.length,
+    });
+    return (result as any).savedAt ?? null;
+  },
+
+  async getMonth(yearMonth: string): Promise<Array<{
+    staffId: string; name: string; role: string;
+    days: Array<{ date: string; status: StaffAttendanceStatus }>;
+    counts: Record<StaffAttendanceStatus, number>;
+  }>> {
+    const schoolId = useAuthStore.getState().session?.schoolId;
+    if (!schoolId) return [];
+    const [year, month] = yearMonth.split('-').map(Number);
+    const firstDay = `${yearMonth}-01`;
+    const lastDay  = new Date(year, month, 0).toISOString().split('T')[0];
+
+    const { data: staff, error: sErr } = await supabase
+      .from('staff').select('id, name, role')
+      .eq('school_id', schoolId).eq('is_active', true);
+    if (sErr) throw new Error(sErr.message);
+
+    const activeStaff = ((staff ?? []) as any[]).sort((a: any, b: any) => a.name.localeCompare(b.name));
+
+    const { data: rows, error: aErr } = await supabase
+      .from('staff_attendance').select('staff_id, date, status')
+      .eq('school_id', schoolId).gte('date', firstDay).lte('date', lastDay);
+    if (aErr) throw new Error(aErr.message);
+
+    const byStaff = new Map<string, Array<{ date: string; status: StaffAttendanceStatus }>>();
+    for (const r of (rows ?? []) as any[]) {
+      const arr = byStaff.get(r.staff_id) ?? [];
+      arr.push({ date: r.date, status: r.status as StaffAttendanceStatus });
+      byStaff.set(r.staff_id, arr);
+    }
+
+    const ZERO: Record<StaffAttendanceStatus, number> = {
+      PRESENT: 0, ABSENT: 0, HALF_DAY: 0, LEAVE: 0, LATE: 0, HOLIDAY: 0,
+    };
+    return activeStaff.map((s: any) => {
+      const days = (byStaff.get(s.id) ?? []).sort((a, b) => a.date.localeCompare(b.date));
+      const counts = { ...ZERO };
+      for (const d of days) counts[d.status]++;
+      return { staffId: s.id, name: s.name, role: s.role, days, counts };
+    });
+  },
+};

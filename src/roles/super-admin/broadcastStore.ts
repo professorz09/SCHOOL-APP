@@ -1,5 +1,5 @@
 import { create } from 'zustand';
-import { Broadcast, CreateBroadcastInput } from '@/shared/types/broadcast.types';
+import { Broadcast, CreateBroadcastInput } from '@/roles/super-admin/broadcast.types';
 import { broadcastService } from '@/roles/super-admin/broadcast.service';
 
 interface BroadcastStore {

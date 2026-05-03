@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { Lock, Eye, EyeOff, AlertCircle, ShieldCheck, Loader } from 'lucide-react';
-import { authService } from '@/shared/services/auth.service';
+import { authService } from '@/modules/auth/auth.service';
 import { useAuthStore } from '@/store/authStore';
 import { useUIStore } from '@/store/uiStore';
 

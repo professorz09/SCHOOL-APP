@@ -1,10 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import { CheckCircle2, XCircle, Clock, IndianRupee, Image as ImageIcon, ChevronDown, ChevronUp, Eye, X } from 'lucide-react';
-import {
-  principalService,
-  type FeePaymentUploadRecord,
-  type FeeUploadStatus,
-} from '@/shared/services/principal.service';
+import { feeService } from '@/modules/fees/fee.service';
+import type { FeePaymentUploadRecord, FeeUploadStatus } from '@/modules/fees/fees.types';
 import { useUIStore } from '@/store/uiStore';
 
 const STATUS_BADGE: Record<FeeUploadStatus, string> = {
@@ -35,7 +32,7 @@ export const FeePaymentSubmissionsQueue: React.FC = () => {
 
   const reload = async () => {
     try {
-      const rows = await principalService.getFeePaymentUploads('ALL');
+      const rows = await feeService.getFeePaymentUploads('ALL');
       setItems(rows);
     } catch (err) {
       console.error('[fee-uploads] load failed', err);
@@ -54,7 +51,7 @@ export const FeePaymentSubmissionsQueue: React.FC = () => {
     }
     setPreviewLoadingId(item.id);
     try {
-      const url = await principalService.getFeePaymentScreenshotUrl(item.screenshotUrl);
+      const url = await feeService.getFeePaymentScreenshotUrl(item.screenshotUrl);
       if (!url) throw new Error('Could not load image');
       setPreviewUrl(url);
     } catch (err) {
@@ -71,7 +68,7 @@ export const FeePaymentSubmissionsQueue: React.FC = () => {
       const note = decision === 'REJECTED'
         ? (window.prompt('Reason for rejection (optional):') ?? undefined)
         : undefined;
-      await principalService.reviewFeePaymentUpload(id, decision, note);
+      await feeService.reviewFeePaymentUpload(id, decision, note);
       showToast(`Submission ${decision.toLowerCase()}`, 'success');
       await reload();
     } catch (err) {

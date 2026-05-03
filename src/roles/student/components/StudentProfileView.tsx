@@ -6,7 +6,7 @@ import {
 import { supabase } from '@/lib/supabase';
 import { useAuthStore } from '@/store/authStore';
 import { useUIStore } from '@/store/uiStore';
-import { authService } from '@/shared/services/auth.service';
+import { authService } from '@/modules/auth/auth.service';
 import {
   studentDashboardService, type ActiveStudentContext,
 } from '@/modules/students/studentDashboard.service';

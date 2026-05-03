@@ -6,7 +6,7 @@ import {
 } from 'lucide-react';
 import { useUIStore } from '@/store/uiStore';
 import { academicYearService, type WizardSection } from '@/modules/academic-year/academicYear.service';
-import { principalService } from '@/shared/services/principal.service';
+import { feeService } from '@/modules/fees/fee.service';
 import { apiPromotion } from '@/lib/apiClient';
 
 interface Props {
@@ -581,7 +581,7 @@ export const AcademicYearWizard: React.FC<Props> = ({
       if (feeStructures.length > 0) {
         const results = await Promise.allSettled(
           feeStructures.map(fs =>
-            principalService.saveFeeStructureForYear(yearId, {
+            feeService.saveFeeStructureForYear(yearId, {
               name:            fs.name,
               className:       fs.className,
               structureType:   fs.structureType,

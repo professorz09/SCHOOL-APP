@@ -15,11 +15,12 @@
 import { supabase } from '@/lib/supabase';
 import { useAuthStore } from '@/store/authStore';
 import { logAudit } from '@/lib/audit';
+import { apiHomework } from '@/lib/apiClient';
 import {
   TimetableDay, TimetablePeriod, PeriodType,
   StudentExamResult, FeePaymentUpload, TransportStop,
   StudentNotice, StudentComplaint,
-} from '@/shared/types/student.types';
+} from '@/roles/student/student-role.types';
 
 export interface HomeworkItem {
   id: string;
@@ -626,43 +627,16 @@ export const studentDashboardService = {
   async getHomework(): Promise<HomeworkItem[]> {
     const ctx = await getStudentContext();
     if (!ctx.sectionId) return [];
-    const { data, error } = await supabase
-      .from('homework_assignments')
-      .select('id, subject, title, description, assigned_date, due_date, teacher_id')
-      .eq('school_id', ctx.schoolId).eq('academic_year_id', ctx.yearId)
-      .eq('section_id', ctx.sectionId)
-      // Soonest-due homework first; rows with no due date sink to the bottom,
-      // and ties break on assigned_date so the most recently posted appears first.
-      .order('due_date', { ascending: true, nullsFirst: false })
-      .order('assigned_date', { ascending: false });
-    if (error) throw new Error(error.message);
-
-    const rows = (data ?? []) as Array<{
-      id: string; subject: string | null; title: string;
-      description: string | null; assigned_date: string;
-      due_date: string | null; teacher_id: string | null;
-    }>;
-
-    // Resolve teacher names in one batch.
-    const teacherIds = Array.from(new Set(rows.map(r => r.teacher_id).filter(Boolean))) as string[];
-    const teacherMap = new Map<string, string>();
-    if (teacherIds.length) {
-      const { data: staff } = await supabase
-        .from('staff').select('id, name').in('id', teacherIds);
-      for (const s of ((staff ?? []) as { id: string; name: string }[])) {
-        teacherMap.set(s.id, s.name);
-      }
-    }
-
-    return rows.map(r => ({
+    const rows = await apiHomework.list(ctx.sectionId, ctx.yearId);
+    return rows.map((r: any) => ({
       id: r.id,
       subject: r.subject ?? '',
       title: r.title,
       description: r.description ?? '',
-      assignedDate: r.assigned_date,
-      dueDate: r.due_date ?? r.assigned_date,
-      status: deriveHwStatus(r.due_date),
-      teacher: r.teacher_id ? (teacherMap.get(r.teacher_id) ?? '') : '',
+      assignedDate: r.assignedDate,
+      dueDate: r.dueDate,
+      status: deriveHwStatus(r.dueDate),
+      teacher: r.teacher ?? '',
     }));
   },
 
