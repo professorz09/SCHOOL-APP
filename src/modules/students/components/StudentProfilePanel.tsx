@@ -83,6 +83,9 @@ export const StudentProfilePanel: React.FC<Props> = ({ student, onBack, onStuden
   const [profileDocs, setProfileDocs] = useState<DocumentUpload[]>(BLANK_PROFILE_DOCS);
   const [profileDocsLive, setProfileDocsLive] = useState<StudentDoc[]>([]);
   const [profileDocUploading, setProfileDocUploading] = useState<DocumentUpload['type'] | null>(null);
+  const [docsLoading, setDocsLoading] = useState(false);
+  // Track which tabs have already fetched their data to avoid redundant requests
+  const loadedTabsRef = React.useRef<Set<string>>(new Set());
 
   // Fee payment modal
   const [feePayModal, setFeePayModal] = useState<FeeInstallment | null>(null);
@@ -115,32 +118,17 @@ export const StudentProfilePanel: React.FC<Props> = ({ student, onBack, onStuden
   const [showAdmissionForm, setShowAdmissionForm] = useState(false);
   const [schoolInfo, setSchoolInfo] = useState<SchoolInfo | null>(null);
 
-  const loadStudentData = async (s: Student) => {
+  // ── Core load: only what the hero card needs (runs on student open) ─────────
+  const loadCore = async (s: Student) => {
     const hasYear = !!s.academicYearId;
-    const [feesRes, recordRes, docsRes, structuresRes, payRes] = await Promise.allSettled([
+    const [feesRes, recordRes] = await Promise.allSettled([
       feeService.getStudentInstallmentsDirect(s.id, hasYear ? s.academicYearId : undefined),
-      hasYear
-        ? studentService.getAcademicRecord(s.id, s.academicYearId)
-        : Promise.resolve(null),
-      studentService.listDocuments(s.id),
-      feeService.getFeeStructures(),
-      (async () => {
-        await feeService.refreshAll();
-        return feeService.getPaymentHistory().filter(p => p.studentId === s.id);
-      })(),
+      hasYear ? studentService.getAcademicRecord(s.id, s.academicYearId) : Promise.resolve(null),
     ]);
-    const insts      = feesRes.status      === 'fulfilled' ? feesRes.value      : [];
-    const record     = recordRes.status    === 'fulfilled' ? recordRes.value    : null;
-    const docs       = docsRes.status      === 'fulfilled' ? docsRes.value      : [];
-    const structures = structuresRes.status === 'fulfilled' ? structuresRes.value : [];
-    const payments   = payRes.status       === 'fulfilled' ? payRes.value       : [];
+    setFeeInstallments(feesRes.status === 'fulfilled' ? feesRes.value : []);
+    setAcademicRecord(recordRes.status === 'fulfilled' ? recordRes.value : null);
 
-    setFeeInstallments(insts);
-    setStudentFeeStructure(structures.find(st => st.className === s.className) ?? null);
-    setAcademicRecord(record);
-    setFeePaymentHistory(payments);
-    setProfileDocsLive(docs);
-
+    // Current transport assignment: read from in-memory store (no network)
     try {
       const assignment = transportService.getAssignmentForStudent(s.id);
       if (assignment) {
@@ -150,41 +138,88 @@ export const StudentProfilePanel: React.FC<Props> = ({ student, onBack, onStuden
         setStudentTransport(null);
       }
     } catch { setStudentTransport(null); }
+  };
 
-    setTransportHistoryError(null);
-    try {
-      const history = await transportService.getTransportHistory(s.id);
-      setStudentTransportHistory(history);
-    } catch (e) {
-      setStudentTransportHistory([]);
-      setTransportHistoryError(e instanceof Error ? e.message : 'Could not load transport history');
+  // ── Lazy tab loader: called when a tab is first opened ────────────────────
+  const loadTabData = async (tab: string, s: Student) => {
+    if (loadedTabsRef.current.has(`${s.id}:${tab}`)) return;
+    loadedTabsRef.current.add(`${s.id}:${tab}`);
+
+    if (tab === 'FEES') {
+      const [structRes, payRes] = await Promise.allSettled([
+        feeService.getFeeStructures(),
+        (async () => {
+          await feeService.refreshAll();
+          return feeService.getPaymentHistory().filter(p => p.studentId === s.id);
+        })(),
+      ]);
+      if (structRes.status === 'fulfilled') {
+        setStudentFeeStructure(structRes.value.find(st => st.className === s.className) ?? null);
+      }
+      if (payRes.status === 'fulfilled') setFeePaymentHistory(payRes.value);
     }
 
-    setProfileDocs(prev => prev.map(d => ({ ...d, uploaded: docs.some(x => x.type === d.type) })));
+    if (tab === 'DOCS') {
+      setDocsLoading(true);
+      try {
+        const [docsRes, histRes] = await Promise.allSettled([
+          studentService.listDocuments(s.id),
+          transportService.getTransportHistory(s.id),
+        ]);
+        if (docsRes.status === 'fulfilled') {
+          const docs = docsRes.value;
+          setProfileDocsLive(docs);
+          setProfileDocs(prev => prev.map(d => ({ ...d, uploaded: docs.some(x => x.type === d.type) })));
+        }
+        if (histRes.status === 'fulfilled') {
+          setStudentTransportHistory(histRes.value);
+          setTransportHistoryError(null);
+        } else {
+          setTransportHistoryError(histRes.reason instanceof Error ? histRes.reason.message : 'Could not load transport history');
+        }
+      } finally {
+        setDocsLoading(false);
+      }
+    }
 
-    setClassHistoryLoading(true);
-    setTimelineLoading(true);
-    try {
-      const [hist, tl] = await Promise.allSettled([
-        apiStudents.getAcademicHistory(s.id),
-        apiStudents.getTimeline(s.id),
-      ]);
-      setClassHistory(hist.status === 'fulfilled' ? hist.value as AcademicHistoryEntry[] : []);
-      setTimeline(tl.status === 'fulfilled' ? tl.value : []);
-    } catch {
-      setClassHistory([]);
-      setTimeline([]);
-    } finally {
-      setClassHistoryLoading(false);
-      setTimelineLoading(false);
+    if (tab === 'CLASS_HISTORY') {
+      setClassHistoryLoading(true);
+      setTimelineLoading(true);
+      try {
+        const [hist, tl] = await Promise.allSettled([
+          apiStudents.getAcademicHistory(s.id),
+          apiStudents.getTimeline(s.id),
+        ]);
+        setClassHistory(hist.status === 'fulfilled' ? hist.value as AcademicHistoryEntry[] : []);
+        setTimeline(tl.status === 'fulfilled' ? tl.value : []);
+      } finally {
+        setClassHistoryLoading(false);
+        setTimelineLoading(false);
+      }
     }
   };
 
   useEffect(() => {
-    void loadStudentData(currentStudent);
-    schoolInfoService.get().then(setSchoolInfo).catch(() => setSchoolInfo(null));
+    loadedTabsRef.current = new Set(); // reset loaded tabs for new student
+    setActiveProfileTab('INFO');
+    setFeeInstallments([]);
+    setAcademicRecord(null);
+    setStudentTransport(null);
+    setStudentTransportHistory([]);
+    setProfileDocsLive([]);
+    setProfileDocs(BLANK_PROFILE_DOCS);
+    setClassHistory([]);
+    setTimeline([]);
+    setFeePaymentHistory([]);
+    setStudentFeeStructure(null);
+    void loadCore(currentStudent);
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [currentStudent.id]);
+
+  useEffect(() => {
+    void loadTabData(activeProfileTab, currentStudent);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeProfileTab, currentStudent.id]);
 
   // ── Fee payment ───────────────────────────────────────────────────────────
   const openFeePayModal = (installment: FeeInstallment) => {
@@ -428,7 +463,12 @@ export const StudentProfilePanel: React.FC<Props> = ({ student, onBack, onStuden
           </button>
           <div className="flex items-center gap-2">
             <button
-              onClick={() => setShowAdmissionForm(true)}
+              onClick={async () => {
+                if (!schoolInfo) {
+                  try { const info = await schoolInfoService.get(); setSchoolInfo(info); } catch { /* ignore */ }
+                }
+                setShowAdmissionForm(true);
+              }}
               className="flex items-center gap-1.5 px-3 py-2 bg-blue-50 text-blue-600 font-black text-[10px] uppercase tracking-widest rounded-xl active:scale-90 transition-transform">
               <FileCheck size={13} /> Form
             </button>
@@ -1157,7 +1197,13 @@ export const StudentProfilePanel: React.FC<Props> = ({ student, onBack, onStuden
           {/* ── DOCS TAB ─────────────────────────────── */}
           {activeProfileTab === 'DOCS' && (
             <>
-              <div className="bg-white rounded-2xl border border-slate-100 shadow-sm p-4">
+              {docsLoading && (
+                <div className="flex flex-col items-center py-10 text-slate-400">
+                  <div className="w-6 h-6 border-4 border-slate-200 border-t-indigo-500 rounded-full animate-spin" />
+                  <p className="font-bold text-xs mt-3">Loading documents…</p>
+                </div>
+              )}
+              {!docsLoading && <><div className="bg-white rounded-2xl border border-slate-100 shadow-sm p-4">
                 <div className="flex items-center justify-between mb-2">
                   <SectionTitle icon={Bus} title="Transport Assignment" />
                   <button onClick={openChangeTransportModal}
@@ -1321,7 +1367,7 @@ export const StudentProfilePanel: React.FC<Props> = ({ student, onBack, onStuden
                   })}
                 </div>
               </div>
-            </>
+            </>}</>
           )}
 
         </div>
