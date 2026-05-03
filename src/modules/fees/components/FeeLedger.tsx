@@ -9,6 +9,7 @@ import { feeService, FeeInstallment, FeeStatus, FeeType, PaymentRecord, Governme
 import { studentService } from '@/modules/students/student.service';
 import type { FeeStructureRecord } from '@/modules/fees/fees.types';
 import { useUIStore } from '@/store/uiStore';
+import { useEditorModeStore } from '@/store/editorModeStore';
 import { FeePaymentSubmissionsQueue } from '@/modules/fees/components/FeePaymentSubmissionsQueue';
 import { PreviousYearDues } from '@/modules/fees/components/PreviousYearDues';
 
@@ -89,6 +90,7 @@ const PAGE_SIZE = 50;
 
 export const FeeLedger: React.FC<Props> = ({ onBack }) => {
   const { showToast } = useUIStore();
+  const editorMode = useEditorModeStore();
   const [students, setStudents]       = useState<StudentFeeProfile[]>([]);
   const [loading, setLoading]         = useState(true);
   const [selected, setSelected]       = useState<StudentFeeProfile | null>(null);
@@ -109,6 +111,9 @@ export const FeeLedger: React.FC<Props> = ({ onBack }) => {
   const [paymentMethod, setPaymentMethod]   = useState<PaymentMethod>('CASH');
   const [paymentNote, setPaymentNote]       = useState('');
   const [paymentDiscount, setPaymentDiscount] = useState('');
+  const [applyDiscount, setApplyDiscount]   = useState(false);
+  const [useCustomDate, setUseCustomDate]   = useState(false);
+  const [paymentDate, setPaymentDate]       = useState('');
   const [writeOffAmount, setWriteOffAmount] = useState('');
   const [writeOffReason, setWriteOffReason] = useState('');
   const [govtPayAmount, setGovtPayAmount]   = useState('');
@@ -301,10 +306,17 @@ export const FeeLedger: React.FC<Props> = ({ onBack }) => {
     if (!selected || !payAmount) return;
     const amount = Number(payAmount);
     if (isNaN(amount) || amount <= 0) return;
+    const discount = applyDiscount ? (Number(paymentDiscount) || 0) : 0;
+    const today = new Date().toISOString().split('T')[0];
+    const chosenDate = useCustomDate && paymentDate ? paymentDate : today;
+    if (useCustomDate && paymentDate && paymentDate > today) {
+      showToast('Future date not allowed', 'error');
+      return;
+    }
     try {
       const result = await feeService.recordPayment(
         selected.studentId, amount, METHOD_LABEL[paymentMethod],
-        undefined, paymentNote || undefined, false, applyLateFee, Number(paymentDiscount) || 0,
+        chosenDate, paymentNote || undefined, false, applyLateFee, discount,
       );
       // Treat the RPC's persisted paymentId as the source of truth: if the
       // RPC committed a payment row, the collection succeeded — even if the
@@ -334,6 +346,9 @@ export const FeeLedger: React.FC<Props> = ({ onBack }) => {
       setPayAmount('');
       setPaymentNote('');
       setPaymentDiscount('');
+      setApplyDiscount(false);
+      setUseCustomDate(false);
+      setPaymentDate('');
       setPayModal(false);
     } catch (e) {
       showToast(e instanceof Error ? e.message : 'Payment failed', 'error');
@@ -542,10 +557,12 @@ export const FeeLedger: React.FC<Props> = ({ onBack }) => {
               {t === 'SCHEDULE' ? 'Fee Schedule' : 'Payment History'}
             </button>
           ))}
-          <button onClick={openRegenModal}
-            className={`${selected.isRte ? '' : 'ml-auto'} my-2 flex items-center gap-1 bg-amber-50 text-amber-700 text-[10px] font-black px-3 py-1.5 rounded-xl border border-amber-200 active:scale-95 transition-transform`}>
-            <RefreshCw size={11} /> Regenerate
-          </button>
+          {editorMode.isActive() && (
+            <button onClick={openRegenModal}
+              className={`${selected.isRte ? '' : 'ml-auto'} my-2 flex items-center gap-1 bg-amber-50 text-amber-700 text-[10px] font-black px-3 py-1.5 rounded-xl border border-amber-200 active:scale-95 transition-transform`}>
+              <RefreshCw size={11} /> Regenerate
+            </button>
+          )}
           {selected.isRte && (
             <button onClick={() => setGovtPayModal(true)}
               className="ml-auto my-2 flex items-center gap-1 bg-blue-50 text-blue-700 text-[10px] font-black px-3 py-1.5 rounded-xl border border-blue-200 active:scale-95 transition-transform">
@@ -637,13 +654,13 @@ export const FeeLedger: React.FC<Props> = ({ onBack }) => {
                           </div>
                           <div className="text-[10px] font-bold text-slate-400">Due: {inst.dueDate}</div>
                           {inst.writeOffReason && (
-                            <div className="text-[9px] font-bold text-slate-400 mt-0.5 italic">Waived: {inst.writeOffReason}</div>
+                            <div className="text-[9px] font-bold text-indigo-500 mt-0.5 italic">Discount: {inst.writeOffReason}</div>
                           )}
                         </div>
                         <div className="text-right shrink-0">
                           <div className="font-black text-slate-900">₹{inst.amount.toLocaleString('en-IN')}</div>
                           {inst.paidAmount > 0 && <div className="text-[10px] font-bold text-emerald-600">Paid ₹{inst.paidAmount.toLocaleString('en-IN')}</div>}
-                          {inst.writeOffAmount > 0 && <div className="text-[10px] font-bold text-slate-400">Waived ₹{inst.writeOffAmount.toLocaleString('en-IN')}</div>}
+                          {inst.writeOffAmount > 0 && <div className="text-[10px] font-bold text-indigo-500">Discount ₹{inst.writeOffAmount.toLocaleString('en-IN')}</div>}
                           {due > 0 && <div className="text-[10px] font-bold text-rose-500">Due ₹{due.toLocaleString('en-IN')}</div>}
                         </div>
                       </div>
@@ -660,8 +677,8 @@ export const FeeLedger: React.FC<Props> = ({ onBack }) => {
                         )}
                         {(inst.status === 'UNPAID' || inst.status === 'PARTIAL' || inst.status === 'OVERDUE') && due > 0 && (
                           <button onClick={() => setWriteOffModal(inst)}
-                            className="flex items-center gap-1 text-[9px] font-black text-slate-400 px-2 py-0.5 rounded-full border border-slate-200">
-                            <TrendingDown size={9} /> Write-off
+                            className="flex items-center gap-1 text-[9px] font-black text-indigo-500 px-2 py-0.5 rounded-full border border-indigo-200 bg-indigo-50">
+                            <TrendingDown size={9} /> Discount
                           </button>
                         )}
                       </div>
@@ -747,7 +764,7 @@ export const FeeLedger: React.FC<Props> = ({ onBack }) => {
                   <h3 className="text-lg font-black text-slate-900">Collect Payment</h3>
                   <p className="text-[10px] font-bold text-slate-400">{selected.name} · {selected.className}</p>
                 </div>
-                <button onClick={() => { setPayModal(false); setPayAmount(''); setPaymentNote(''); setPaymentDiscount(''); }}
+                <button onClick={() => { setPayModal(false); setPayAmount(''); setPaymentNote(''); setPaymentDiscount(''); setApplyDiscount(false); setUseCustomDate(false); setPaymentDate(''); }}
                   className="w-8 h-8 bg-slate-100 rounded-full flex items-center justify-center text-slate-500">
                   <X size={16} />
                 </button>
@@ -818,14 +835,41 @@ export const FeeLedger: React.FC<Props> = ({ onBack }) => {
 
               <textarea value={paymentNote} onChange={e => setPaymentNote(e.target.value)}
                 rows={2} placeholder="Note (optional)…"
-                className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-2.5 text-sm font-bold text-slate-900 outline-none focus:border-blue-500 resize-none mb-4" />
+                className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-2.5 text-sm font-bold text-slate-900 outline-none focus:border-blue-500 resize-none mb-3" />
 
-              <p className="text-[10px] font-black uppercase tracking-widest text-slate-400 mb-2">Discount (₹)</p>
-              <div className="bg-slate-50 border border-slate-200 rounded-xl p-3 flex items-center gap-2 mb-4">
-                <IndianRupee size={16} className="text-slate-400" />
-                <input type="number" value={paymentDiscount} onChange={e => setPaymentDiscount(e.target.value)}
-                  placeholder="0" className="flex-1 bg-transparent font-black text-slate-900 text-lg outline-none" />
-              </div>
+              {/* Discount — optional toggle */}
+              <label className="flex items-center gap-2 mb-2 cursor-pointer select-none">
+                <input type="checkbox" checked={applyDiscount} onChange={e => { setApplyDiscount(e.target.checked); if (!e.target.checked) setPaymentDiscount(''); }}
+                  className="accent-indigo-600 w-4 h-4" />
+                <span className="text-[11px] font-black text-slate-700">Apply Discount</span>
+              </label>
+              {applyDiscount && (
+                <div className="bg-indigo-50 border border-indigo-200 rounded-xl p-3 flex items-center gap-2 mb-3">
+                  <IndianRupee size={16} className="text-indigo-400 shrink-0" />
+                  <input type="number" min="0" value={paymentDiscount} onChange={e => setPaymentDiscount(e.target.value)}
+                    placeholder="Discount amount…" className="flex-1 bg-transparent font-black text-indigo-900 text-lg outline-none" />
+                </div>
+              )}
+              {applyDiscount && paymentDiscount && Number(paymentDiscount) > 0 && (
+                <div className="flex items-center justify-between bg-indigo-50 border border-indigo-100 rounded-xl px-3 py-2 mb-3">
+                  <span className="text-[10px] font-black text-indigo-600">Total Cleared</span>
+                  <span className="text-sm font-black text-indigo-700">₹{((Number(payAmount) || 0) + (Number(paymentDiscount) || 0)).toLocaleString('en-IN')}</span>
+                </div>
+              )}
+
+              {/* Custom date — optional toggle */}
+              <label className="flex items-center gap-2 mb-2 cursor-pointer select-none">
+                <input type="checkbox" checked={useCustomDate} onChange={e => { setUseCustomDate(e.target.checked); if (!e.target.checked) setPaymentDate(''); }}
+                  className="accent-slate-600 w-4 h-4" />
+                <span className="text-[11px] font-black text-slate-700">Use Custom Payment Date</span>
+              </label>
+              {useCustomDate && (
+                <div className="bg-slate-50 border border-slate-200 rounded-xl px-3 py-2.5 mb-3">
+                  <input type="date" value={paymentDate} max={new Date().toISOString().split('T')[0]}
+                    onChange={e => setPaymentDate(e.target.value)}
+                    className="w-full bg-transparent text-sm font-bold text-slate-900 outline-none" />
+                </div>
+              )}
 
               <button onClick={handlePayment} disabled={!payAmount}
                 className="w-full py-3.5 bg-emerald-600 text-white font-black rounded-xl disabled:opacity-40 flex items-center justify-center gap-2">
@@ -835,33 +879,37 @@ export const FeeLedger: React.FC<Props> = ({ onBack }) => {
           </div>
         )}
 
-        {/* ── WRITE-OFF MODAL ───────────────────────────────────────────────── */}
+        {/* ── DISCOUNT MODAL ────────────────────────────────────────────────── */}
         {writeOffModal && (
           <div className="absolute inset-0 bg-slate-900/60 backdrop-blur-sm z-50 flex items-end">
             <div className="w-full bg-white rounded-t-3xl p-6 pb-8 animate-in slide-in-from-bottom-8">
               <div className="flex justify-between items-center mb-4">
-                <h3 className="text-lg font-black text-slate-900">Fee Write-Off</h3>
+                <div>
+                  <h3 className="text-lg font-black text-slate-900">Apply Discount</h3>
+                  <p className="text-[10px] font-bold text-slate-400">{FEE_TYPE_LABEL[writeOffModal.feeType]} · {writeOffModal.month}</p>
+                </div>
                 <button onClick={() => setWriteOffModal(null)} className="w-8 h-8 bg-slate-100 rounded-full flex items-center justify-center">
                   <X size={16} className="text-slate-500" />
                 </button>
               </div>
-              <div className="bg-amber-50 border border-amber-200 rounded-xl p-3 mb-4">
-                <p className="text-xs font-bold text-amber-700">
-                  {FEE_TYPE_LABEL[writeOffModal.feeType]} · {writeOffModal.month} · Remaining: ₹{(writeOffModal.amount - writeOffModal.paidAmount).toLocaleString('en-IN')}
-                </p>
+              <div className="bg-indigo-50 border border-indigo-200 rounded-xl p-3 mb-4 flex items-center justify-between">
+                <span className="text-xs font-bold text-indigo-700">Outstanding</span>
+                <span className="text-sm font-black text-indigo-800">₹{(writeOffModal.amount - writeOffModal.paidAmount).toLocaleString('en-IN')}</span>
               </div>
+              <p className="text-[10px] font-black uppercase tracking-widest text-slate-400 mb-2">Discount Amount (₹)</p>
               <div className="bg-slate-50 border border-slate-200 rounded-xl p-3 flex items-center gap-2 mb-4">
                 <IndianRupee size={16} className="text-slate-400" />
-                <input type="number" value={writeOffAmount} onChange={e => setWriteOffAmount(e.target.value)}
-                  placeholder="Amount to waive (leave blank for full)"
+                <input type="number" min="0" value={writeOffAmount} onChange={e => setWriteOffAmount(e.target.value)}
+                  placeholder="Leave blank to discount full remaining"
                   className="flex-1 bg-transparent font-black text-slate-900 text-lg outline-none" />
               </div>
+              <p className="text-[10px] font-black uppercase tracking-widest text-slate-400 mb-2">Reason (required)</p>
               <textarea value={writeOffReason} onChange={e => setWriteOffReason(e.target.value)}
-                rows={3} placeholder="Reason for write-off (required)…"
-                className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-3 text-sm font-bold text-slate-900 outline-none focus:border-blue-500 resize-none mb-4" />
+                rows={2} placeholder="e.g. Sibling discount, scholarship, financial hardship…"
+                className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-3 text-sm font-bold text-slate-900 outline-none focus:border-indigo-500 resize-none mb-4" />
               <button onClick={handleWriteOff} disabled={!writeOffReason.trim()}
-                className="w-full py-3.5 bg-rose-600 text-white font-black rounded-xl disabled:opacity-40">
-                Confirm Write-Off
+                className="w-full py-3.5 bg-indigo-600 text-white font-black rounded-xl disabled:opacity-40 flex items-center justify-center gap-2">
+                <TrendingDown size={16} /> Confirm Discount
               </button>
             </div>
           </div>
@@ -951,8 +999,14 @@ export const FeeLedger: React.FC<Props> = ({ onBack }) => {
                   </div>
                 )}
 
+                {(receiptModal as any).discountAmount > 0 && (
+                  <div className="flex justify-between items-center bg-indigo-50 border border-indigo-200 rounded-xl px-4 py-2 mb-2">
+                    <span className="text-xs font-black text-indigo-700">Discount Applied</span>
+                    <span className="text-sm font-black text-indigo-700">₹{((receiptModal as any).discountAmount as number).toLocaleString('en-IN')}</span>
+                  </div>
+                )}
                 <div className="flex justify-between items-center bg-slate-900 rounded-xl px-4 py-3 mb-3">
-                  <span className="text-xs font-black text-white uppercase">Total Paid</span>
+                  <span className="text-xs font-black text-white uppercase">Amount Paid</span>
                   <span className="text-lg font-black text-white">₹{receiptModal.amount.toLocaleString('en-IN')}</span>
                 </div>
                 {receiptModal.note && (
