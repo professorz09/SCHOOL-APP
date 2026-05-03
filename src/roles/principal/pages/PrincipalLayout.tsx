@@ -23,6 +23,7 @@ import { TransportManager } from '@/modules/transport/components/TransportManage
 import { AttendanceHub } from '@/modules/attendance/components/AttendanceHub';
 import { ToolsManager } from '@/roles/principal/components/ToolsManager';
 import { PrincipalExamsManager } from '@/modules/exams/components/PrincipalExamsManager';
+import { PromotionWizard } from '@/modules/academic-year/components/PromotionWizard';
 
 export type PrincipalView =
   | 'DASHBOARD'
@@ -47,7 +48,8 @@ export type PrincipalView =
   | 'EXAMS'
   | 'SETTINGS_SCHOOL_INFO'
   | 'SETTINGS_FEE_STRUCT'
-  | 'SETTINGS_CLASSES';
+  | 'SETTINGS_CLASSES'
+  | 'PROMOTION';
 
 export const PrincipalLayout: React.FC = () => {
   const [view, setView] = useState<PrincipalView>('DASHBOARD');
@@ -63,7 +65,7 @@ export const PrincipalLayout: React.FC = () => {
   useEffect(() => { if (!isSubView) setView('DASHBOARD'); }, [isSubView]);
 
   // Always allow the academic year manager so the principal can create the first year.
-  if (view === 'YEAR_CLOSING') return <AcademicYearManager onBack={goBack} onNavigateToStaff={() => goTo('STAFF')} />;
+  if (view === 'YEAR_CLOSING') return <AcademicYearManager onBack={goBack} onNavigateToStaff={() => goTo('STAFF')} onNavigateToPromotion={() => goTo('PROMOTION')} />;
 
   // Lock every other feature until at least one academic year has been created.
   if (!isLoading && academicYears.length === 0) {
@@ -117,6 +119,7 @@ export const PrincipalLayout: React.FC = () => {
   if (view === 'TRANSPORT_MGMT')   return <TransportManager        onBack={goBack} />;
   if (view === 'TOOLS')            return <ToolsManager            onBack={goBack} />;
   if (view === 'EXAMS')            return <PrincipalExamsManager   onBack={goBack} />;
+  if (view === 'PROMOTION')        return <PromotionWizard         onBack={goBack} />;
 
   return (
     <>

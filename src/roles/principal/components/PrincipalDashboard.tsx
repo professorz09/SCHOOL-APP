@@ -4,6 +4,7 @@ import {
   Wallet, MoreHorizontal, CircleCheckBig, MapPin, ChevronRight,
   Bell, ClipboardCheck, Clock, BanknoteIcon, Settings, ChevronUp,
   UserCog, CalendarCheck, Sparkles, Calendar, GraduationCap,
+  ArrowRight, AlertTriangle,
 } from 'lucide-react';
 import { studentService } from '@/modules/students/student.service';
 import { staffService } from '@/modules/staff/staff.service';
@@ -227,6 +228,9 @@ export const PrincipalDashboard: React.FC<Props> = ({ onNavigate }) => {
         </button>
       </div>
 
+      {/* ── Promotion Widget ────────────────────────────────────────────── */}
+      <PromotionWidget activeYear={activeYear} academicYears={academicYears} onNavigate={onNavigate} />
+
       {/* ── Salary Reminder Widget ─────────────────────────────────────── */}
       <SalaryReminderCard onNavigate={onNavigate} />
 
@@ -322,6 +326,72 @@ export const PrincipalDashboard: React.FC<Props> = ({ onNavigate }) => {
         </div>
       </div>
 
+    </div>
+  );
+};
+
+// ─── Promotion Widget ─────────────────────────────────────────────────────────
+interface PromotionWidgetProps {
+  activeYear: { id: string; name: string; startDate: string } | null;
+  academicYears: { id: string; name: string; startDate: string; isActive: boolean }[];
+  onNavigate: (view: PrincipalView) => void;
+}
+
+const PromotionWidget: React.FC<PromotionWidgetProps> = ({ activeYear, academicYears, onNavigate }) => {
+  if (!activeYear) return null;
+
+  // Next year = most recently created year whose start_date is after the active year's start_date.
+  const nextYear = academicYears
+    .filter(y => !y.isActive && y.startDate > activeYear.startDate)
+    .sort((a, b) => a.startDate.localeCompare(b.startDate))[0] ?? null;
+
+  if (!nextYear) {
+    return (
+      <div className="bg-amber-50 border border-amber-200 rounded-2xl p-4">
+        <div className="flex items-start gap-3 mb-3">
+          <div className="w-10 h-10 bg-amber-100 rounded-xl flex items-center justify-center shrink-0">
+            <GraduationCap size={20} className="text-amber-600" />
+          </div>
+          <div className="flex-1 min-w-0">
+            <p className="text-sm font-black text-slate-900">Student Promotion</p>
+            <p className="text-[10px] font-bold text-amber-700 mt-0.5">
+              Promotion ke liye pehle agla academic year banayein
+            </p>
+          </div>
+          <AlertTriangle size={16} className="text-amber-500 shrink-0 mt-1" />
+        </div>
+        <button
+          onClick={() => onNavigate('YEAR_CLOSING')}
+          className="w-full py-2.5 bg-amber-600 text-white font-black text-sm rounded-xl flex items-center justify-center gap-2 active:scale-[0.98] transition-transform"
+        >
+          <Calendar size={15} /> Create Next Academic Year
+        </button>
+      </div>
+    );
+  }
+
+  return (
+    <div className="bg-gradient-to-br from-emerald-50 to-teal-50 border border-emerald-200 rounded-2xl p-4">
+      <div className="flex items-start gap-3 mb-3">
+        <div className="w-10 h-10 bg-emerald-100 rounded-xl flex items-center justify-center shrink-0">
+          <GraduationCap size={20} className="text-emerald-600" />
+        </div>
+        <div className="flex-1 min-w-0">
+          <p className="text-sm font-black text-slate-900">Student Promotion</p>
+          <div className="flex items-center gap-1.5 mt-0.5">
+            <span className="text-[10px] font-black text-slate-600 bg-white border border-slate-200 px-2 py-0.5 rounded-full">{activeYear.name}</span>
+            <ArrowRight size={10} className="text-emerald-500" />
+            <span className="text-[10px] font-black text-emerald-700 bg-emerald-100 border border-emerald-200 px-2 py-0.5 rounded-full">{nextYear.name}</span>
+          </div>
+        </div>
+      </div>
+      <button
+        onClick={() => onNavigate('PROMOTION')}
+        className="w-full py-2.5 bg-emerald-600 text-white font-black text-sm rounded-xl flex items-center justify-center gap-2 active:scale-[0.98] transition-transform"
+      >
+        <Sparkles size={15} /> Start Promotion Process
+        <ChevronRight size={14} className="ml-auto" />
+      </button>
     </div>
   );
 };
