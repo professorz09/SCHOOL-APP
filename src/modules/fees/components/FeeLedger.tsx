@@ -10,6 +10,7 @@ import { studentService } from '@/modules/students/student.service';
 import { principalService, FeeStructureRecord } from '@/roles/principal/principal.service';
 import { useUIStore } from '@/store/uiStore';
 import { FeePaymentSubmissionsQueue } from '@/modules/fees/components/FeePaymentSubmissionsQueue';
+import { PreviousYearDues } from '@/modules/fees/components/PreviousYearDues';
 
 type YearGroup = { academicYearId: string; yearLabel: string; isActive: boolean; installments: FeeInstallment[] };
 
@@ -107,6 +108,7 @@ export const FeeLedger: React.FC<Props> = ({ onBack }) => {
   const [payAmount, setPayAmount]           = useState('');
   const [paymentMethod, setPaymentMethod]   = useState<PaymentMethod>('CASH');
   const [paymentNote, setPaymentNote]       = useState('');
+  const [paymentDiscount, setPaymentDiscount] = useState('');
   const [writeOffAmount, setWriteOffAmount] = useState('');
   const [writeOffReason, setWriteOffReason] = useState('');
   const [govtPayAmount, setGovtPayAmount]   = useState('');
@@ -302,7 +304,7 @@ export const FeeLedger: React.FC<Props> = ({ onBack }) => {
     try {
       const result = await feeService.recordPayment(
         selected.studentId, amount, METHOD_LABEL[paymentMethod],
-        undefined, paymentNote || undefined, false, applyLateFee,
+        undefined, paymentNote || undefined, false, applyLateFee, Number(paymentDiscount) || 0,
       );
       // Treat the RPC's persisted paymentId as the source of truth: if the
       // RPC committed a payment row, the collection succeeded — even if the
@@ -331,6 +333,7 @@ export const FeeLedger: React.FC<Props> = ({ onBack }) => {
       await reloadYearGroups(selected.studentId);
       setPayAmount('');
       setPaymentNote('');
+      setPaymentDiscount('');
       setPayModal(false);
     } catch (e) {
       showToast(e instanceof Error ? e.message : 'Payment failed', 'error');
@@ -561,6 +564,18 @@ export const FeeLedger: React.FC<Props> = ({ onBack }) => {
             </button>
           )}
 
+          {/* ── PREVIOUS YEAR DUES ────────────────────────────────────────── */}
+          {detailTab === 'SCHEDULE' && selected && (
+            <PreviousYearDues
+              studentId={selected.studentId}
+              currentAcademicYearId={yearGroups.find(g => g.isActive)?.academicYearId ?? ''}
+              onPayClick={inst => {
+                setPayModal(true);
+                setPayAmount(String(Math.max(0, inst.amount - inst.paidAmount - inst.writeOffAmount)));
+              }}
+            />
+          )}
+
           {/* ── FEE SCHEDULE — grouped by academic year ───────────────────── */}
           {detailTab === 'SCHEDULE' && (yearGroups.length > 0
             ? yearGroups
@@ -732,7 +747,7 @@ export const FeeLedger: React.FC<Props> = ({ onBack }) => {
                   <h3 className="text-lg font-black text-slate-900">Collect Payment</h3>
                   <p className="text-[10px] font-bold text-slate-400">{selected.name} · {selected.className}</p>
                 </div>
-                <button onClick={() => { setPayModal(false); setPayAmount(''); }}
+                <button onClick={() => { setPayModal(false); setPayAmount(''); setPaymentNote(''); setPaymentDiscount(''); }}
                   className="w-8 h-8 bg-slate-100 rounded-full flex items-center justify-center text-slate-500">
                   <X size={16} />
                 </button>
@@ -804,6 +819,14 @@ export const FeeLedger: React.FC<Props> = ({ onBack }) => {
               <textarea value={paymentNote} onChange={e => setPaymentNote(e.target.value)}
                 rows={2} placeholder="Note (optional)…"
                 className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-2.5 text-sm font-bold text-slate-900 outline-none focus:border-blue-500 resize-none mb-4" />
+
+              <p className="text-[10px] font-black uppercase tracking-widest text-slate-400 mb-2">Discount (₹)</p>
+              <div className="bg-slate-50 border border-slate-200 rounded-xl p-3 flex items-center gap-2 mb-4">
+                <IndianRupee size={16} className="text-slate-400" />
+                <input type="number" value={paymentDiscount} onChange={e => setPaymentDiscount(e.target.value)}
+                  placeholder="0" className="flex-1 bg-transparent font-black text-slate-900 text-lg outline-none" />
+              </div>
+
               <button onClick={handlePayment} disabled={!payAmount}
                 className="w-full py-3.5 bg-emerald-600 text-white font-black rounded-xl disabled:opacity-40 flex items-center justify-center gap-2">
                 <CheckCircle2 size={16} /> Collect & Generate Receipt
