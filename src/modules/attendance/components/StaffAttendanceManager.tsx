@@ -76,16 +76,16 @@ const addMonths = (ym: string, n: number): string => {
 // ─── Component ────────────────────────────────────────────────────────────────
 type TabType = 'ATTENDANCE' | 'HISTORY';
 
-interface Props { onBack: () => void; }
+interface Props { onBack: () => void; startTab?: TabType; }
 
-export const StaffAttendanceManager: React.FC<Props> = ({ onBack }) => {
+export const StaffAttendanceManager: React.FC<Props> = ({ onBack, startTab = 'ATTENDANCE' }) => {
   const { showToast } = useUIStore();
   const { currentYear } = useAcademicYear();
   const isYearClosed = !!currentYear && currentYear.status === 'LOCKED';
   const editGuard = useEditGuard(currentYear?.id, isYearClosed);
   const editorModeActive = useEditorModeStore(s => s.isActive());
   const stripRef = useRef<HTMLDivElement | null>(null);
-  const [tab, setTab] = useState<TabType>('ATTENDANCE');
+  const [tab, setTab] = useState<TabType>(startTab);
   const [selectedDate, setSelectedDate] = useState<string>(today());
   const [record, setRecord] = useState<DayRecord | null>(null);
   const [isSaving, setIsSaving] = useState(false);
@@ -250,8 +250,7 @@ export const StaffAttendanceManager: React.FC<Props> = ({ onBack }) => {
       <div className="w-full bg-slate-50 flex flex-col animate-in slide-in-from-right-8 duration-300">
         {/* Header */}
         <div className="bg-white border-b border-slate-100 px-4 pt-4 pb-0 sticky top-0 z-10 shadow-sm">
-          <div className="flex items-center justify-between gap-3 pb-3">
-            <div className="flex items-center gap-3">
+          <div className="flex items-center gap-3 pb-3">
             <button onClick={onBack} className="p-2 -ml-2 bg-slate-100 rounded-full text-slate-600">
               <ArrowLeft size={20} />
             </button>
@@ -259,13 +258,6 @@ export const StaffAttendanceManager: React.FC<Props> = ({ onBack }) => {
               <h2 className="text-xl font-black text-slate-900 uppercase tracking-tight">Staff Attendance</h2>
               <p className="text-[10px] font-bold text-slate-400">Mark & Save attendance</p>
             </div>
-            </div>
-            <button
-              onClick={() => { setTab('HISTORY'); loadHistory(getCurrentMonthYM()); }}
-              className="text-[10px] font-black uppercase tracking-widest bg-slate-100 text-slate-700 px-3 py-2 rounded-lg shrink-0"
-            >
-              History
-            </button>
           </div>
 
           {/* Date strip */}
@@ -399,34 +391,17 @@ export const StaffAttendanceManager: React.FC<Props> = ({ onBack }) => {
                       ) : isCleared ? (
                         <button
                           onClick={() => setActiveStatus(prev => prev === row.staffId ? null : row.staffId)}
-                          className="relative flex items-center gap-1.5 text-[10px] font-black px-3 py-1.5 rounded-full border bg-slate-50 text-slate-500 border-slate-200 border-dashed active:scale-95 transition-transform">
+                          className="flex items-center gap-1.5 text-[10px] font-black px-3 py-1.5 rounded-full border bg-slate-50 text-slate-500 border-slate-200 border-dashed active:scale-95 transition-transform">
                           Unmarked
                           <span className="text-[8px] opacity-60">▾</span>
                         </button>
                       ) : (
-                        <div className="relative shrink-0">
-                          <button
-                            onClick={() => setActiveStatus(prev => prev === row.staffId ? null : row.staffId)}
-                            className={`flex items-center gap-1.5 text-[10px] font-black px-3 py-1.5 rounded-full border active:scale-95 transition-transform ${cfg.color}`}>
-                            {cfg.label}
-                            <span className="text-[8px] opacity-60">▾</span>
-                          </button>
-
-                          {activeStatus === row.staffId && (
-                            <div className="absolute right-0 top-full mt-1 bg-white rounded-2xl border border-slate-200 shadow-lg z-30 overflow-hidden min-w-[130px]">
-                              {ROW_STATUSES.map(s => (
-                                <button key={s} onClick={() => setRowStatus(row.staffId, s)}
-                                  className={`w-full flex items-center gap-2.5 px-4 py-2.5 text-[11px] font-black text-left hover:bg-slate-50 transition-colors ${
-                                    row.status === s ? 'bg-slate-50' : ''
-                                  }`}>
-                                  <div className={`w-2 h-2 rounded-full ${STATUS_CONFIG[s].dot}`} />
-                                  {STATUS_CONFIG[s].label}
-                                  {row.status === s && <CheckCircle2 size={11} className="ml-auto text-emerald-500" />}
-                                </button>
-                              ))}
-                            </div>
-                          )}
-                        </div>
+                        <button
+                          onClick={() => setActiveStatus(prev => prev === row.staffId ? null : row.staffId)}
+                          className={`flex items-center gap-1.5 text-[10px] font-black px-3 py-1.5 rounded-full border active:scale-95 transition-transform ${cfg.color}`}>
+                          {cfg.label}
+                          <span className="text-[8px] opacity-60">▾</span>
+                        </button>
                       )}
                     </div>
                   );
@@ -507,9 +482,34 @@ export const StaffAttendanceManager: React.FC<Props> = ({ onBack }) => {
           )}
         </div>
 
-        {activeStatus && (
-          <div className="absolute inset-0 z-20" onClick={() => setActiveStatus(null)} />
-        )}
+        {/* Fixed bottom sheet for status picker */}
+        {activeStatus && (() => {
+          const activeRow = record.rows.find(r => r.staffId === activeStatus);
+          if (!activeRow) return null;
+          return (
+            <>
+              <div className="fixed inset-0 z-40 bg-slate-900/40" onClick={() => setActiveStatus(null)} />
+              <div className="fixed bottom-0 left-0 right-0 z-50 bg-white rounded-t-3xl p-5 pb-8 animate-in slide-in-from-bottom-4">
+                <div className="mb-3">
+                  <p className="font-black text-slate-900 text-base">{activeRow.name}</p>
+                  <p className="text-[10px] font-bold text-slate-400">{ROLE_LABEL[activeRow.role] ?? activeRow.role}</p>
+                </div>
+                <div className="space-y-1">
+                  {ROW_STATUSES.map(s => (
+                    <button key={s} onClick={() => setRowStatus(activeRow.staffId, s)}
+                      className={`w-full flex items-center gap-3 px-4 py-3 rounded-2xl text-sm font-black text-left transition-colors ${
+                        activeRow.status === s ? 'bg-slate-100' : 'hover:bg-slate-50'
+                      }`}>
+                      <div className={`w-3 h-3 rounded-full shrink-0 ${STATUS_CONFIG[s].dot}`} />
+                      {STATUS_CONFIG[s].label}
+                      {activeRow.status === s && <CheckCircle2 size={14} className="ml-auto text-emerald-500" />}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            </>
+          );
+        })()}
       </div>
     );
   }
@@ -541,17 +541,6 @@ export const StaffAttendanceManager: React.FC<Props> = ({ onBack }) => {
           </button>
         </div>
 
-        {/* Tabs */}
-        <div className="flex gap-2 border-t border-slate-100 px-0 pt-1">
-          <button onClick={() => { setTab('ATTENDANCE'); loadDate(today()); }}
-            className="px-4 py-2 text-xs font-black uppercase tracking-widest rounded-lg transition-all bg-slate-100 text-slate-600 hover:bg-slate-200">
-            Mark Attendance
-          </button>
-          <button onClick={() => setTab('HISTORY')}
-            className="px-4 py-2 text-xs font-black uppercase tracking-widest rounded-lg transition-all bg-indigo-600 text-white">
-            History
-          </button>
-        </div>
       </div>
 
       {/* Content */}

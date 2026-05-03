@@ -66,7 +66,7 @@ principalRouter.post('/complaint/resolve', requireAuth, PRINCIPAL, async (req, r
   try {
     const body = requireBody<{ complaintId: string; response: string }>(req, ['complaintId', 'response']);
 
-    const COMPLAINT_FIELDS = 'id, school_id, student_id, title, description, status, response, resolved_at, created_at';
+    const COMPLAINT_FIELDS = 'id, from_role, from_name, from_class, subject, description, status, response, created_at, resolved_at';
     const { data, error } = await adminDb.from('complaints')
       .update({ status: 'RESOLVED', response: body.response, resolved_at: new Date().toISOString() })
       .eq('id', body.complaintId).eq('school_id', req.user.school_id!)
@@ -81,7 +81,7 @@ principalRouter.post('/complaint/reject', requireAuth, PRINCIPAL, async (req, re
   try {
     const body = requireBody<{ complaintId: string; reason: string }>(req, ['complaintId', 'reason']);
 
-    const COMPLAINT_FIELDS = 'id, school_id, student_id, title, description, status, response, resolved_at, created_at';
+    const COMPLAINT_FIELDS = 'id, from_role, from_name, from_class, subject, description, status, response, created_at, resolved_at';
     const { data, error } = await adminDb.from('complaints')
       .update({ status: 'REJECTED', response: body.reason, resolved_at: new Date().toISOString() })
       .eq('id', body.complaintId).eq('school_id', req.user.school_id!)
