@@ -262,6 +262,7 @@ export const apiExams = {
   create: (body: {
     title: string; testType: string; className: string; subject: string;
     scheduledDate: string; maxMarks: number; academicYearId: string;
+    examType?: string; passMarks?: number; passMarksConfig?: Record<string, number>;
     sectionId?: string; duration?: number; syllabus?: string;
   }) => post<any>('/exam/create', body),
   uploadResults: (body: {
@@ -269,6 +270,12 @@ export const apiExams = {
     results: { studentId: string; marks: number; grade?: string; remarks?: string }[];
   }) => post<any>('/exam/result/upload', body),
   getResults: (testId: string) => get<any[]>(`/exam/${testId}/results`),
+  lockResults: (testId: string) => post<any>(`/exam/${testId}/lock-results`, {}),
+  unlockResults: (testId: string) => post<any>(`/exam/${testId}/unlock-results`, {}),
+  configurePassMarks: (testId: string, body: {
+    passMarks?: number;
+    passMarksConfig?: Record<string, number>;
+  }) => post<any>(`/exam/${testId}/configure-pass-marks`, body),
 };
 
 // ─── Promotion ───────────────────────────────────────────────────────────────
