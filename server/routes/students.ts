@@ -81,57 +81,6 @@ studentsRouter.get('/:id', requireAuth, requireRole('PRINCIPAL', 'TEACHER', 'PAR
   } catch (err) { fail(res, err); }
 });
 
-// POST /api/students/create
-studentsRouter.post('/create', requireAuth, requireRole('PRINCIPAL'), async (req, res) => {
-  try {
-    const body = requireBody<{
-      name: string; admissionNo: string; dob?: string;
-      fatherName?: string; phone?: string; motherName?: string;
-      address?: string; gender?: string; isRte?: boolean;
-      admissionDate?: string; rollNo?: string; bloodGroup?: string;
-      aadhaarNo?: string; fatherPhone?: string; religion?: string;
-      caste?: string;
-    }>(req, ['name', 'admissionNo']);
-
-    // Duplicate admission_no check
-    const { data: dup } = await adminDb
-      .from('students')
-      .select('id, name')
-      .eq('admission_no', body.admissionNo)
-      .maybeSingle();
-    if (dup) throw new ApiError(409, `Admission no already exists: ${(dup as any).name}`);
-
-    const { data: student, error: se } = await adminDb
-      .from('students')
-      .insert({
-        school_id:    req.user.school_id,
-        name:         body.name,
-        admission_no: body.admissionNo,
-        dob:          body.dob ?? null,
-        father_name:  body.fatherName ?? null,
-        phone:        body.phone ?? null,
-        mother_name:  body.motherName ?? null,
-        address:      body.address ?? null,
-        gender:       body.gender ?? null,
-        is_rte:       body.isRte ?? false,
-        admission_date: body.admissionDate ?? new Date().toISOString().slice(0, 10),
-        roll_no:      body.rollNo ?? null,
-        blood_group:  body.bloodGroup ?? null,
-        aadhaar_no:   body.aadhaarNo ?? null,
-        father_phone: body.fatherPhone ?? null,
-        religion:     body.religion ?? null,
-        caste:        body.caste ?? null,
-        is_active:    true,
-        status:       'ACTIVE',
-      })
-      .select()
-      .single();
-    if (se) throw new ApiError(500, se.message);
-
-    ok(res, student, 201);
-  } catch (err) { fail(res, err); }
-});
-
 // POST /api/students/assign — full class assignment with optional fee schedule
 studentsRouter.post('/assign', requireAuth, requireRole('PRINCIPAL'), async (req, res) => {
   try {
@@ -467,18 +416,10 @@ studentsRouter.post('/create', requireAuth, requireRole('PRINCIPAL'), async (req
         let authUserId: string;
         let createdNew = false;
         if (created.error) {
-          // Auth user might already exist — walk pages to find it
-          let found: string | null = null;
-          for (let page = 1; page <= 10; page++) {
-            const { data: pg } = await adminDb.auth.admin.listUsers({ page, perPage: 200 });
-            const u = pg.users.find((u: any) =>
-              (u.email ?? '').toLowerCase() === parentEmail.toLowerCase(),
-            );
-            if (u) { found = u.id; break; }
-            if (pg.users.length < 200) break;
-          }
+          // Auth user might already exist — look up directly via indexed query
+          const { data: found } = await adminDb.rpc('get_auth_user_id_by_email', { p_email: parentEmail });
           if (!found) throw new ApiError(500, created.error.message);
-          authUserId = found;
+          authUserId = found as string;
         } else {
           authUserId = created.data.user.id;
           createdNew = true;

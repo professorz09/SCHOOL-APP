@@ -234,14 +234,19 @@ const [mainView, setMainView] = useState<MainView>(initialView ?? 'CLASSES');
         showToast(`${student.name} admitted successfully`);
       }
 
-      // Upload any documents collected during form fill
-      for (const [docType, file] of documentFiles.entries()) {
-        try {
+      // Upload all selected documents in parallel
+      if (documentFiles.size > 0) {
+        const uploads = Array.from(documentFiles.entries()).map(async ([docType, file]) => {
           const { path } = await storageService.uploadStudentDocument(student.id, docType, file);
           await studentService.addDocumentRecord(student.id, docType, path);
-        } catch {
-          showToast(`Document upload failed: ${file.name}`, 'error');
-        }
+        });
+        const results = await Promise.allSettled(uploads);
+        results.forEach((r, i) => {
+          if (r.status === 'rejected') {
+            const file = Array.from(documentFiles.values())[i];
+            showToast(`Document upload failed: ${file?.name ?? 'unknown'}`, 'error');
+          }
+        });
       }
 
       setStudents(prev => [...prev, student]);
