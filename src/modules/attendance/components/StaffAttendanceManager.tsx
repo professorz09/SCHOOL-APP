@@ -17,6 +17,7 @@ interface DayRecord {
   rows: StaffAttendanceRow[];
   isLocked: boolean;
   savedAt: string | null;
+  modifiedAt: string | null;
 }
 
 interface HistoryData {
@@ -88,8 +89,7 @@ export const StaffAttendanceManager: React.FC<Props> = ({ onBack }) => {
   const [selectedDate, setSelectedDate] = useState<string>(today());
   const [record, setRecord] = useState<DayRecord | null>(null);
   const [isSaving, setIsSaving] = useState(false);
-  const [isDirty, setIsDirty] = useState(false);
-  const [modifiedAt, setModifiedAt] = useState<string | null>(null);
+  const [snapshot, setSnapshot] = useState<Map<string, AttendanceStatus>>(new Map());
   const [activeStatus, setActiveStatus] = useState<string | null>(null);
   const [search, setSearch] = useState('');
   // staffIds whose status the principal has cleared this session. These rows
@@ -105,13 +105,13 @@ export const StaffAttendanceManager: React.FC<Props> = ({ onBack }) => {
   const loadDate = async (date: string) => {
     setSelectedDate(date);
     setRecord(null);
-    setIsDirty(false);
-    setModifiedAt(null);
+    setSnapshot(new Map());
     setActiveStatus(null);
     setClearedIds(new Set());
     try {
       const data = await staffAttendanceService.getForDate(date);
-      setRecord({ date, rows: data.rows, isLocked: data.isLocked, savedAt: data.savedAt });
+      setRecord({ date, rows: data.rows, isLocked: data.isLocked, savedAt: data.savedAt, modifiedAt: data.modifiedAt });
+      setSnapshot(new Map(data.rows.map(r => [r.staffId, r.status])));
     } catch (e) {
       showToast((e as Error).message || 'Failed to load staff attendance', 'error');
     }
@@ -133,6 +133,12 @@ export const StaffAttendanceManager: React.FC<Props> = ({ onBack }) => {
 
   useEffect(() => { void loadDate(today()); /* eslint-disable-next-line react-hooks/exhaustive-deps */ }, []);
   useEffect(() => { void loadHistory(getCurrentMonthYM()); /* eslint-disable-next-line react-hooks/exhaustive-deps */ }, []);
+
+  const isDirty = useMemo(() => {
+    if (!record) return false;
+    if (clearedIds.size > 0) return true;
+    return record.rows.some(r => snapshot.get(r.staffId) !== r.status);
+  }, [record, clearedIds, snapshot]);
 
   const counts = useMemo(() => {
     const c: Record<AttendanceStatus, number> = { PRESENT: 0, ABSENT: 0, HALF_DAY: 0, LEAVE: 0, LATE: 0, HOLIDAY: 0 };
@@ -171,13 +177,11 @@ export const StaffAttendanceManager: React.FC<Props> = ({ onBack }) => {
     if (isLocked) return;
     setRecord(r => r ? ({ ...r, rows: r.rows.map(row => ({ ...row, status })) }) : r);
     setClearedIds(new Set());
-    setIsDirty(true);
   };
 
   const clearAll = () => {
     if (isLocked || !record) return;
     setClearedIds(new Set(record.rows.map(r => r.staffId)));
-    setIsDirty(true);
     setActiveStatus(null);
   };
 
@@ -192,7 +196,6 @@ export const StaffAttendanceManager: React.FC<Props> = ({ onBack }) => {
       const next = new Set(prev); next.delete(staffId); return next;
     });
     setActiveStatus(null);
-    setIsDirty(true);
   };
 
   const handleSave = async () => {
@@ -207,14 +210,14 @@ export const StaffAttendanceManager: React.FC<Props> = ({ onBack }) => {
       const toUpsert = record.rows.filter(r => !clearedIds.has(r.staffId));
       const toClear: string[] = Array.from(clearedIds.values());
       const result = await editGuard.gate(
-        () => staffAttendanceService.save(record.date, toUpsert, toClear),
+        () => staffAttendanceService.save(record.date, toUpsert, toClear, editorModeActive),
         { entityType: 'staff_attendance', entityId: record.date },
       );
       if (result === undefined) return;
-      setRecord(r => r ? { ...r, savedAt: result } : r);
+      setRecord(r => r ? { ...r, savedAt: result.savedAt, modifiedAt: result.modifiedAt } : r);
+      // Reset snapshot to current rows so isDirty returns false immediately
+      setSnapshot(new Map(record.rows.filter(r => !clearedIds.has(r.staffId)).map(r => [r.staffId, r.status])));
       setClearedIds(new Set());
-      setIsDirty(false);
-      if (wasAlreadySaved) setModifiedAt(result);
       showToast(wasAlreadySaved ? 'Attendance updated (Editor Mode)' : 'Attendance saved');
     } catch (e) {
       showToast((e as Error).message || 'Failed to save', 'error');
@@ -299,7 +302,7 @@ export const StaffAttendanceManager: React.FC<Props> = ({ onBack }) => {
               <div className="text-[10px] font-bold text-slate-400 mt-0.5">
                 {hardLocked ? 'Salary generated — record locked'
                   : softLocked ? 'Saved · Editor Mode required to edit'
-                  : editorModeActive && savedOnce ? 'Editor Mode ON — editing saved record'
+                  : editorModeActive && savedOnce ? 'Editor Mode ON — changes will overwrite saved attendance'
                   : 'Mark and save'}
               </div>
             </div>
@@ -432,20 +435,20 @@ export const StaffAttendanceManager: React.FC<Props> = ({ onBack }) => {
             </div>
           )}
 
-          {(record.savedAt || modifiedAt) && (
+          {(record.savedAt || record.modifiedAt) && (
             <div className="text-center mt-4 space-y-1">
-              {record.savedAt && !modifiedAt && (
+              {record.savedAt && !record.modifiedAt && (
                 <p className="text-[9px] font-bold text-slate-400">
                   Last saved: {new Date(record.savedAt).toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit' })}
                 </p>
               )}
-              {modifiedAt && (
+              {record.modifiedAt && (
                 <>
                   <p className="text-[9px] font-bold text-slate-400">
                     First saved: {record.savedAt ? new Date(record.savedAt).toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit' }) : '—'}
                   </p>
                   <p className="flex items-center justify-center gap-1 text-[9px] font-black text-indigo-500">
-                    <Pencil size={9} /> Modified: {new Date(modifiedAt).toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit' })} (Editor Mode)
+                    <Pencil size={9} /> Modified: {new Date(record.modifiedAt).toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit' })} (Editor Mode)
                   </p>
                 </>
               )}
@@ -482,7 +485,7 @@ export const StaffAttendanceManager: React.FC<Props> = ({ onBack }) => {
           {!hardLocked && editorModeActive && savedOnce && !isDirty && (
             <div className="w-full py-3 bg-indigo-50 border border-indigo-200 rounded-2xl flex items-center justify-center gap-2">
               <Unlock size={15} className="text-indigo-500" />
-              <span className="font-black text-indigo-700 text-sm">Editor Mode ON — changes karo phir save</span>
+              <span className="font-black text-indigo-700 text-sm">Editor Mode ON — changes will overwrite saved attendance</span>
             </div>
           )}
 

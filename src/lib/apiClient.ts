@@ -394,7 +394,8 @@ export const apiPrincipal = {
     date: string;
     rows: { staffId: string; status: string }[];
     clearedStaffIds?: string[];
-  }) => post<{ savedAt: string }>('/principal/staff-attendance/save', body),
+    editorMode?: boolean;
+  }) => post<{ savedAt: string; modifiedAt: string | null }>('/principal/staff-attendance/save', body),
 
   // Permissions
   permissionsSet: (body: {
