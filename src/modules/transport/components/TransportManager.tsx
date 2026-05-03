@@ -1,8 +1,8 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import {
   ArrowLeft, Bus, Users, MapPin, Phone, Plus, Trash2, ChevronDown,
   Edit2, Check, X, Navigation, AlertTriangle, Shuffle,
-  CheckCircle2, Circle, Clock, UserCheck, RefreshCw, ChevronRight,
+  CheckCircle2, Circle, Clock, UserCheck, RefreshCw, ChevronRight, History,
 } from 'lucide-react';
 import {
   transportService, TransportVehicle, StudentTransportAssignment, TransportStudent,
@@ -10,6 +10,7 @@ import {
 } from '@/modules/transport/transport.service';
 import { staffService } from '@/modules/staff/staff.service';
 import { StaffMember } from '@/modules/staff/staff.types';
+import { useRealtimeTable } from '@/shared/hooks/useRealtimeTable';
 
 type Tab = 'VEHICLES' | 'TRACKING' | 'STUDENTS';
 
@@ -36,6 +37,14 @@ export const TransportManager: React.FC<Props> = ({ onBack }) => {
   const [students, setStudents]         = useState<TransportStudent[]>([]);
   const [staff, setStaff]               = useState<StaffMember[]>([]);
   const [loading, setLoading]           = useState(true);
+  const studentsLoadedRef               = useRef(false);
+  const staffLoadedRef                  = useRef(false);
+
+  // ── Driver history state ────────────────────────────────────────────────────
+  const [driverHistoryId,      setDriverHistoryId]      = useState<string | null>(null);
+  const [driverHistoryVehicle, setDriverHistoryVehicle] = useState<string>('');
+  const [driverHistoryItems,   setDriverHistoryItems]   = useState<{ id: string; action: string; details: Record<string, unknown>; createdAt: string }[]>([]);
+  const [driverHistoryLoading, setDriverHistoryLoading] = useState(false);
 
   // ── Vehicles tab state ──────────────────────────────────────────────────────
   const [newVehicleNo,       setNewVehicleNo]       = useState('');
@@ -73,23 +82,48 @@ export const TransportManager: React.FC<Props> = ({ onBack }) => {
   const [bulkBusy,         setBulkBusy]         = useState(false);
   const [bulkErr,          setBulkErr]          = useState<string | null>(null);
 
-  // ─── Data loading ───────────────────────────────────────────────────────────
-  const reloadAll = useCallback(async () => {
+  // ─── Data loading (lazy) ────────────────────────────────────────────────────
+  // Core: vehicles + assignments — always needed
+  const reloadCore = useCallback(async () => {
     await transportService.refreshAll();
-    const [studs, staffList] = await Promise.all([
-      transportService.getStudents(),
-      (staffService.getAll?.() ?? Promise.resolve([])) as Promise<StaffMember[]>,
-    ]);
     setVehicles(transportService.getVehicles());
     setAssignments(transportService.getAssignments());
+  }, []);
+
+  // Students: only needed for STUDENTS tab
+  const loadStudents = useCallback(async () => {
+    if (studentsLoadedRef.current) return;
+    studentsLoadedRef.current = true;
+    const studs = await transportService.getStudents();
     setStudents(studs);
+  }, []);
+
+  // Drivers (staff): only needed when driver picker is opened
+  const loadDrivers = useCallback(async () => {
+    if (staffLoadedRef.current) return;
+    staffLoadedRef.current = true;
+    const staffList = (await (staffService.getAll?.() ?? Promise.resolve([]))) as StaffMember[];
     setStaff(staffList);
   }, []);
 
+  // Full refresh (manual refresh button or realtime trigger)
+  const reloadAll = useCallback(async () => {
+    studentsLoadedRef.current = false;
+    staffLoadedRef.current = false;
+    await reloadCore();
+    if (tab === 'STUDENTS') await loadStudents();
+  }, [reloadCore, loadStudents, tab]);
+
   useEffect(() => {
     setLoading(true);
-    reloadAll().finally(() => setLoading(false));
-  }, [reloadAll]);
+    reloadCore().finally(() => setLoading(false));
+  }, [reloadCore]);
+
+  // Realtime subscriptions: refresh core on any transport table change
+  useRealtimeTable('transport_vehicles',           reloadCore);
+  useRealtimeTable('route_stops',                  reloadCore);
+  useRealtimeTable('student_transport_assignments', reloadCore);
+  useRealtimeTable('driver_locations',             reloadCore);
 
   // Auto-select first vehicle for tracking when vehicles load
   useEffect(() => {
@@ -97,6 +131,11 @@ export const TransportManager: React.FC<Props> = ({ onBack }) => {
       setTrackingVehicleId(vehicles[0].id);
     }
   }, [vehicles, trackingVehicleId]);
+
+  // Lazy: load students when STUDENTS tab is opened
+  useEffect(() => {
+    if (tab === 'STUDENTS') void loadStudents();
+  }, [tab, loadStudents]);
 
   // ─── Helpers ────────────────────────────────────────────────────────────────
   const drivers = staff.filter(s => s.role === 'DRIVER');
@@ -117,20 +156,24 @@ export const TransportManager: React.FC<Props> = ({ onBack }) => {
         capacity: Number(newVehicleCapacity) || 50,
         routeName: '',
       });
-      await reloadAll();
+      await reloadCore();
       const fresh = transportService.getVehicles();
       const created = fresh.find(v => v.vehicleNo === newVehicleNo.trim());
       setNewVehicleNo('');
       setNewVehicleType('BUS');
       setNewVehicleCapacity('50');
-      // Auto-open routes screen after vehicle creation
       if (created) { setRouteVehicleId(created.id); setNewRouteName(''); }
     } finally { setAddingVehicle(false); }
   };
 
   const handleDeleteVehicle = async (id: string) => {
     await transportService.deleteVehicle(id);
-    await reloadAll();
+    await reloadCore();
+  };
+
+  const openDriverPicker = (vehicleId: string) => {
+    setDriverPickerId(vehicleId);
+    void loadDrivers();
   };
 
   const handleAssignDriver = async (vehicleId: string, staffId: string) => {
@@ -139,19 +182,19 @@ export const TransportManager: React.FC<Props> = ({ onBack }) => {
     if (!s) return;
     await transportService.assignDriver(vehicleId, staffId, s.name, s.phone);
     setDriverPickerId(null);
-    await reloadAll();
+    await reloadCore();
   };
 
   const handleRemoveDriver = async (vehicleId: string) => {
     await transportService.removeDriver(vehicleId);
-    await reloadAll();
+    await reloadCore();
   };
 
   const handleSaveRouteName = async () => {
     if (!routeVehicleId) return;
     await transportService.setRouteName(routeVehicleId, newRouteName);
     setEditingRoute(false);
-    await reloadAll();
+    await reloadCore();
   };
 
   const handleAddStop = async () => {
@@ -164,7 +207,7 @@ export const TransportManager: React.FC<Props> = ({ onBack }) => {
         lat: 0,
         lng: 0,
       });
-      await reloadAll();
+      await reloadCore();
       setNewStopName('');
       setNewStopTime('08:00');
     } finally { setSavingStop(false); }
@@ -173,7 +216,7 @@ export const TransportManager: React.FC<Props> = ({ onBack }) => {
   const handleRemoveStop = async (stopId: string) => {
     if (!routeVehicleId) return;
     await transportService.removeStop(routeVehicleId, stopId);
-    await reloadAll();
+    await reloadCore();
   };
 
   const handleAssignStudent = async () => {
@@ -188,14 +231,31 @@ export const TransportManager: React.FC<Props> = ({ onBack }) => {
         student.id, student.name, student.className,
         vehicle.id, stop.id, stop.name,
       );
-      await reloadAll();
+      studentsLoadedRef.current = false;
+      await reloadCore();
+      await loadStudents();
       setSelStudentId(null); setSelVehicleId(null); setSelStopId(null);
     } finally { setAssigning(false); }
   };
 
   const handleRemoveAssignment = async (studentId: string) => {
     await transportService.removeStudentAssignment(studentId);
-    await reloadAll();
+    studentsLoadedRef.current = false;
+    await reloadCore();
+    await loadStudents();
+  };
+
+  const openDriverHistory = async (driverId: string, vehicleNo: string) => {
+    setDriverHistoryId(driverId);
+    setDriverHistoryVehicle(vehicleNo);
+    setDriverHistoryItems([]);
+    setDriverHistoryLoading(true);
+    try {
+      const items = await transportService.getDriverHistory(driverId);
+      setDriverHistoryItems(items);
+    } finally {
+      setDriverHistoryLoading(false);
+    }
   };
 
   const handleBulkReassign = async () => {
@@ -210,7 +270,8 @@ export const TransportManager: React.FC<Props> = ({ onBack }) => {
         fromVehicleId: bulkFromId, toVehicleId: bulkToVehicleId,
         toStopId: bulkToStopId, effectiveDate: bulkDate, reason: finalReason,
       });
-      await reloadAll();
+      studentsLoadedRef.current = false;
+      await reloadCore();
       setBulkFromId(null);
       alert(`Moved ${moved} student${moved === 1 ? '' : 's'} to new vehicle.`);
     } catch (e) {
@@ -468,6 +529,11 @@ export const TransportManager: React.FC<Props> = ({ onBack }) => {
                           <Phone size={9} /> {v.driverPhone}
                         </a>
                       </div>
+                      <button onClick={() => openDriverHistory(v.driverId!, v.vehicleNo)}
+                        title="View driver history"
+                        className="p-1.5 bg-white border border-emerald-100 text-emerald-600 rounded-lg">
+                        <History size={12} />
+                      </button>
                       <button onClick={() => handleRemoveDriver(v.id)}
                         className="text-[9px] font-black text-rose-500 bg-rose-50 border border-rose-100 px-2.5 py-1 rounded-full">
                         Remove
@@ -491,7 +557,7 @@ export const TransportManager: React.FC<Props> = ({ onBack }) => {
                       </button>
                     </div>
                   ) : (
-                    <button onClick={() => setDriverPickerId(v.id)}
+                    <button onClick={() => openDriverPicker(v.id)}
                       className="w-full flex items-center justify-center gap-1.5 py-2 border border-dashed border-slate-200 rounded-xl text-[10px] font-black text-slate-400 hover:bg-slate-50">
                       <UserCheck size={12} /> Assign Driver
                     </button>
@@ -777,6 +843,72 @@ export const TransportManager: React.FC<Props> = ({ onBack }) => {
           </>
         )}
       </div>
+
+      {/* ── Driver History modal ─────────────────────────────────────────────── */}
+      {driverHistoryId && (
+        <div className="fixed inset-0 bg-slate-900/60 z-50 flex items-end justify-center"
+             onClick={() => setDriverHistoryId(null)}>
+          <div className="bg-white rounded-t-3xl w-full max-h-[80vh] overflow-y-auto"
+               onClick={e => e.stopPropagation()}>
+            <div className="px-4 py-4 border-b border-slate-100 flex items-center gap-2">
+              <History size={18} className="text-violet-500" />
+              <div className="flex-1">
+                <h3 className="font-black text-slate-900 text-sm">Driver History</h3>
+                <p className="text-[10px] font-bold text-slate-400">{driverHistoryVehicle}</p>
+              </div>
+              <button onClick={() => setDriverHistoryId(null)} className="p-1 hover:bg-slate-100 rounded-lg">
+                <X size={16} className="text-slate-500" />
+              </button>
+            </div>
+            <div className="p-4">
+              {driverHistoryLoading ? (
+                <div className="flex justify-center py-8">
+                  <div className="w-5 h-5 border-2 border-slate-200 border-t-violet-600 rounded-full animate-spin" />
+                </div>
+              ) : driverHistoryItems.length === 0 ? (
+                <div className="text-center py-8">
+                  <History size={28} className="text-slate-200 mx-auto mb-2" />
+                  <p className="text-xs font-bold text-slate-400">No history yet</p>
+                </div>
+              ) : (
+                <div className="space-y-1">
+                  {driverHistoryItems.map(item => {
+                    const d = item.details as { vehicleNo?: string; vehicleId?: string; previousDriverName?: string };
+                    const isAssigned  = item.action === 'driver_vehicle_assigned';
+                    const isRemoved   = item.action === 'driver_vehicle_removed';
+                    const isSuspended = item.action === 'staff_suspended';
+                    const isReinstate = item.action === 'staff_reinstated';
+                    const dot = isAssigned  ? 'bg-emerald-500' :
+                                isRemoved   ? 'bg-rose-400'    :
+                                isSuspended ? 'bg-amber-500'   :
+                                isReinstate ? 'bg-blue-500'    : 'bg-slate-400';
+                    const label = isAssigned  ? `Assigned to ${d.vehicleNo ?? 'vehicle'}` :
+                                  isRemoved   ? `Removed from ${d.vehicleNo ?? 'vehicle'}` :
+                                  isSuspended ? 'Driver suspended'   :
+                                  isReinstate ? 'Driver reinstated'  : item.action;
+                    const sub = isAssigned && d.previousDriverName
+                      ? `Previous: ${d.previousDriverName}`
+                      : undefined;
+                    const when = new Date(item.createdAt).toLocaleDateString('en-IN', {
+                      day: 'numeric', month: 'short', year: 'numeric',
+                    });
+                    return (
+                      <div key={item.id} className="flex gap-3 items-start py-2.5 border-b border-slate-50 last:border-0">
+                        <div className={`w-2.5 h-2.5 rounded-full shrink-0 mt-1 ${dot}`} />
+                        <div className="flex-1 min-w-0">
+                          <div className="font-bold text-slate-900 text-sm">{label}</div>
+                          {sub && <div className="text-[10px] font-bold text-slate-400">{sub}</div>}
+                        </div>
+                        <div className="text-[10px] font-bold text-slate-400 shrink-0">{when}</div>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* ── Bulk Reassign modal ───────────────────────────────────────────────── */}
       {bulkFromId && (() => {
