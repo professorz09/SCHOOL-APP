@@ -26,6 +26,7 @@ import { useAcademicYear } from '@/shared/context/AcademicYearContext';
 import { principalService, FeeStructureRecord } from '@/roles/principal/principal.service';
 import { useEditorModeStore } from '@/store/editorModeStore';
 import { feeService, FeeInstallment } from '@/modules/fees/fee.service';
+import { StudentAttendanceTab } from '@/modules/attendance/components/StudentAttendanceTab';
 
 const PAGE_SIZE = 50;
 
@@ -104,7 +105,7 @@ export const StudentsManager: React.FC<Props> = ({ onBack, initialView }) => {
   const [studentFeeStructure, setStudentFeeStructure] = useState<FeeStructureRecord | null>(null);
   const [feePaymentHistory, setFeePaymentHistory] = useState<import('@/modules/fees/fee.service').PaymentRecord[]>([]);
   const [academicRecord, setAcademicRecord] = useState<StudentAcademicRecord | null>(null);
-  const [activeProfileTab, setActiveProfileTab] = useState<'INFO' | 'ALLOTMENT' | 'FAMILY' | 'RESULTS' | 'FEES' | 'DOCS' | 'CLASS_HISTORY'>('INFO');
+  const [activeProfileTab, setActiveProfileTab] = useState<'INFO' | 'ALLOTMENT' | 'FAMILY' | 'RESULTS' | 'FEES' | 'ATTENDANCE' | 'DOCS' | 'CLASS_HISTORY'>('INFO');
   const [studentTransport, setStudentTransport] = useState<{ vehicle: TransportVehicle; assignment: StudentTransportAssignment } | null>(null);
   const [studentTransportHistory, setStudentTransportHistory] = useState<StudentTransportAssignment[]>([]);
   const [transportHistoryError, setTransportHistoryError] = useState<string | null>(null);
@@ -1524,6 +1525,7 @@ export const StudentsManager: React.FC<Props> = ({ onBack, initialView }) => {
       { key: 'FAMILY' as const,        label: 'Family' },
       { key: 'RESULTS' as const,       label: 'Results' },
       { key: 'FEES' as const,          label: 'Fees' },
+      { key: 'ATTENDANCE' as const,    label: 'Attendance' },
       { key: 'CLASS_HISTORY' as const, label: 'History' },
       { key: 'DOCS' as const,          label: 'Docs' },
     ];
@@ -2141,6 +2143,13 @@ export const StudentsManager: React.FC<Props> = ({ onBack, initialView }) => {
                 </>
               );
             })()}
+
+            {/* ── ATTENDANCE TAB ────────────────────────── */}
+            {activeProfileTab === 'ATTENDANCE' && (
+              <div className="bg-white rounded-2xl border border-slate-100 shadow-sm p-4">
+                <StudentAttendanceTab studentId={selected.studentId} />
+              </div>
+            )}
 
             {/* ── CLASS HISTORY TAB ─────────────────────── */}
             {activeProfileTab === 'CLASS_HISTORY' && (
