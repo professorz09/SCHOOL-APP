@@ -6,7 +6,7 @@ import {
   Bus, Briefcase, Droplets, GraduationCap, Shield,
   CreditCard, TrendingUp, Home as HomeIcon,
   UserCheck, AlertTriangle, Trash2,
-  Lock, Edit2, History,
+  Lock, Edit2, History, Download,
 } from 'lucide-react';
 import { studentService } from '@/modules/students/student.service';
 import { apiStudents, apiFees } from '@/lib/apiClient';
@@ -251,6 +251,21 @@ export const StudentProfilePanel: React.FC<Props> = ({ student, onBack, onStuden
       else showToast('Could not open document', 'error');
     } catch {
       showToast('Could not open document', 'error');
+    }
+  };
+
+  const downloadProfileDoc = async (doc: StudentDoc) => {
+    try {
+      const url = await storageService.getStudentDocumentSignedUrl(doc.storagePath, 60);
+      if (!url) { showToast('Could not download document', 'error'); return; }
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = doc.name;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+    } catch {
+      showToast('Could not download document', 'error');
     }
   };
 
@@ -1221,6 +1236,10 @@ export const StudentProfilePanel: React.FC<Props> = ({ student, onBack, onStuden
                         <button onClick={() => openProfileDoc(doc)}
                           className="text-[9px] font-black text-emerald-700 bg-emerald-100 hover:bg-emerald-200 px-2 py-1 rounded-full shrink-0">
                           VIEW
+                        </button>
+                        <button onClick={() => downloadProfileDoc(doc)} title="Download"
+                          className="flex items-center gap-0.5 text-[9px] font-black text-indigo-700 bg-indigo-100 hover:bg-indigo-200 px-2 py-1 rounded-full shrink-0">
+                          <Download size={10} /> DL
                         </button>
                         <button onClick={() => handleProfileDocRemove(doc.id)}
                           className="p-1 text-rose-500 hover:bg-rose-50 rounded shrink-0" title="Remove">
