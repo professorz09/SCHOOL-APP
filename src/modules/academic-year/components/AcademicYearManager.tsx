@@ -27,6 +27,15 @@ export const AcademicYearManager: React.FC<Props> = ({ onBack }) => {
   // ─── Wizard state ───────────────────────────────────────────────────────
   const [showWizard, setShowWizard] = useState(false);
   const [wizardKey, setWizardKey] = useState(0);
+
+  // Compute the previous (most recent) year id for pre-filling the wizard
+  // when there is already at least one existing year. academicYears is sorted
+  // DESC by start_date so [0] is the latest.
+  const previousYearIdForWizard = useMemo(
+    () => (academicYears.length > 0 ? academicYears[0].id : undefined),
+    [academicYears],
+  );
+
   const wizardDefaults = useMemo(() => {
     // Default to the year AFTER the latest existing year so the auto-filled
     // label cannot collide with the UNIQUE(school_id, label) constraint on
@@ -558,6 +567,7 @@ export const AcademicYearManager: React.FC<Props> = ({ onBack }) => {
           defaultStart={wizardDefaults.start}
           defaultEnd={wizardDefaults.end}
           defaultBoard={wizardDefaults.board}
+          previousYearId={previousYearIdForWizard}
         />
       )}
 

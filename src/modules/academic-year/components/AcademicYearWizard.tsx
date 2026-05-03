@@ -1,8 +1,9 @@
 import React, { useEffect, useMemo, useState } from 'react';
-import { X, ChevronRight, ChevronLeft, Plus, Trash2, CheckCircle2, AlertTriangle, Sparkles } from 'lucide-react';
-import { useUIStore } from '@/store/uiStore';
+import { X, ChevronRight, ChevronLeft, Plus, Trash2, CheckCircle2, AlertTriangle, Sparkles, RefreshCw } from 'lucide-react';
+import { useUIStore } from '@/shared/store/uiStore';
 import { academicYearService, type WizardSection } from '@/modules/academic-year/academicYear.service';
 import { principalService } from '@/shared/services/principal.service';
+import { apiPromotion } from '@/shared/lib/apiClient';
 
 interface Props {
   onClose: () => void;
@@ -11,26 +12,26 @@ interface Props {
   defaultStart?: string;
   defaultEnd?: string;
   defaultBoard?: string;
+  previousYearId?: string;
 }
 
-// ─── Class catalogue ─────────────────────────────────────────────────────────
-// stream: null → regular class, string → higher-secondary stream class
+// ─── Class catalogue ──────────────────────────────────────────────────────────
 interface ClassMeta { label: string; className: string; stream: string | null; group: string }
 
 const CLASS_CATALOGUE: ClassMeta[] = [
-  { label: 'Nursery',      className: 'Nursery',          stream: null,       group: 'Pre-Primary' },
-  { label: 'LKG',          className: 'LKG',              stream: null,       group: 'Pre-Primary' },
-  { label: 'UKG',          className: 'UKG',              stream: null,       group: 'Pre-Primary' },
-  { label: 'Class 1',      className: 'Class 1',          stream: null,       group: 'Primary' },
-  { label: 'Class 2',      className: 'Class 2',          stream: null,       group: 'Primary' },
-  { label: 'Class 3',      className: 'Class 3',          stream: null,       group: 'Primary' },
-  { label: 'Class 4',      className: 'Class 4',          stream: null,       group: 'Primary' },
-  { label: 'Class 5',      className: 'Class 5',          stream: null,       group: 'Primary' },
-  { label: 'Class 6',      className: 'Class 6',          stream: null,       group: 'Middle' },
-  { label: 'Class 7',      className: 'Class 7',          stream: null,       group: 'Middle' },
-  { label: 'Class 8',      className: 'Class 8',          stream: null,       group: 'Middle' },
-  { label: 'Class 9',      className: 'Class 9',          stream: null,       group: 'Secondary' },
-  { label: 'Class 10',     className: 'Class 10',         stream: null,       group: 'Secondary' },
+  { label: 'Nursery',       className: 'Nursery',          stream: null,       group: 'Pre-Primary' },
+  { label: 'LKG',           className: 'LKG',              stream: null,       group: 'Pre-Primary' },
+  { label: 'UKG',           className: 'UKG',              stream: null,       group: 'Pre-Primary' },
+  { label: 'Class 1',       className: 'Class 1',          stream: null,       group: 'Primary' },
+  { label: 'Class 2',       className: 'Class 2',          stream: null,       group: 'Primary' },
+  { label: 'Class 3',       className: 'Class 3',          stream: null,       group: 'Primary' },
+  { label: 'Class 4',       className: 'Class 4',          stream: null,       group: 'Primary' },
+  { label: 'Class 5',       className: 'Class 5',          stream: null,       group: 'Primary' },
+  { label: 'Class 6',       className: 'Class 6',          stream: null,       group: 'Middle' },
+  { label: 'Class 7',       className: 'Class 7',          stream: null,       group: 'Middle' },
+  { label: 'Class 8',       className: 'Class 8',          stream: null,       group: 'Middle' },
+  { label: 'Class 9',       className: 'Class 9',          stream: null,       group: 'Secondary' },
+  { label: 'Class 10',      className: 'Class 10',         stream: null,       group: 'Secondary' },
   { label: '11th Science',  className: '11th Science',     stream: 'Science',  group: 'Sr Secondary' },
   { label: '11th Commerce', className: '11th Commerce',    stream: 'Commerce', group: 'Sr Secondary' },
   { label: '11th Arts',     className: '11th Arts',        stream: 'Arts',     group: 'Sr Secondary' },
@@ -43,7 +44,7 @@ const CLASS_CATALOGUE: ClassMeta[] = [
 
 const CLASS_GROUPS = ['Pre-Primary', 'Primary', 'Middle', 'Secondary', 'Sr Secondary'];
 
-// ─── Local types ─────────────────────────────────────────────────────────────
+// ─── Local types ──────────────────────────────────────────────────────────────
 interface SectionDraft { name: string; capacity: number }
 interface ClassPlan { meta: ClassMeta; enabled: boolean; sections: SectionDraft[] }
 
@@ -55,29 +56,56 @@ function defaultPlan(): ClassPlan[] {
   }));
 }
 
-// ─── Component ───────────────────────────────────────────────────────────────
+function planFromPrevious(
+  sections: { class_name: string; section: string; stream?: string | null; capacity?: number }[],
+): ClassPlan[] {
+  // Build a map: class_name → sections[]
+  const secMap = new Map<string, SectionDraft[]>();
+  for (const s of sections) {
+    const cls = s.class_name;
+    if (!secMap.has(cls)) secMap.set(cls, []);
+    secMap.get(cls)!.push({ name: s.section, capacity: s.capacity ?? 45 });
+  }
+
+  return CLASS_CATALOGUE.map(meta => {
+    const prevSections = secMap.get(meta.className);
+    if (prevSections && prevSections.length > 0) {
+      return { meta, enabled: true, sections: prevSections };
+    }
+    return { meta, enabled: false, sections: [{ name: 'A', capacity: 45 }] };
+  });
+}
+
+// ─── Component ────────────────────────────────────────────────────────────────
 export const AcademicYearWizard: React.FC<Props> = ({
-  onClose, onCreated, defaultLabel = '', defaultStart = '', defaultEnd = '', defaultBoard = 'CBSE',
+  onClose, onCreated,
+  defaultLabel = '', defaultStart = '', defaultEnd = '', defaultBoard = 'CBSE',
+  previousYearId,
 }) => {
   const { showToast } = useUIStore();
   const [step, setStep] = useState<1 | 2 | 3 | 4>(1);
 
   // Step 1
-  const [label, setLabel] = useState(defaultLabel);
+  const [label, setLabel]       = useState(defaultLabel);
   const [startDate, setStartDate] = useState(defaultStart);
-  const [endDate, setEndDate] = useState(defaultEnd);
-  const [board, setBoard] = useState(defaultBoard);
-  const [medium, setMedium] = useState('English');
+  const [endDate, setEndDate]   = useState(defaultEnd);
+  const [board, setBoard]       = useState(defaultBoard);
+  const [medium, setMedium]     = useState('English');
 
   // Step 2/3
-  const [plan, setPlan] = useState<ClassPlan[]>(defaultPlan);
-  const [saving, setSaving] = useState(false);
-  const [error, setError] = useState('');
+  const [plan, setPlan]         = useState<ClassPlan[]>(defaultPlan);
+  const [saving, setSaving]     = useState(false);
+  const [error, setError]       = useState('');
+
+  // Previous year pre-fill
+  const [prefillLoading, setPrefillLoading] = useState(false);
+  const [prefillApplied, setPrefillApplied] = useState(false);
+  const [prevYearLabel, setPrevYearLabel]   = useState<string>('');
 
   // Step 4 — fee quick-setup (after year is created)
-  const [createdYearId, setCreatedYearId] = useState<string | null>(null);
-  const [tuitionFee, setTuitionFee] = useState('');
-  const [feesSaving, setFeesSaving] = useState(false);
+  const [createdYearId, setCreatedYearId]   = useState<string | null>(null);
+  const [tuitionFee, setTuitionFee]         = useState('');
+  const [feesSaving, setFeesSaving]         = useState(false);
 
   // Prevent tap-through: disable step 4 buttons briefly after transition
   const [step4Ready, setStep4Ready] = useState(false);
@@ -87,9 +115,35 @@ export const AcademicYearWizard: React.FC<Props> = ({
     return () => clearTimeout(t);
   }, [step]);
 
+  // Auto-load previous year data when wizard mounts with previousYearId
+  useEffect(() => {
+    if (!previousYearId || prefillApplied) return;
+    loadPreviousYearData();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [previousYearId]);
+
+  const loadPreviousYearData = async () => {
+    if (!previousYearId) return;
+    setPrefillLoading(true);
+    try {
+      const data = await apiPromotion.previousYearData(previousYearId);
+      if (data && Array.isArray(data.sections) && data.sections.length > 0) {
+        const newPlan = planFromPrevious(data.sections);
+        setPlan(newPlan);
+        setPrefillApplied(true);
+        setPrevYearLabel(data.yearLabel ?? '');
+        showToast(`Previous year (${data.yearLabel}) ki classes pre-filled ho gayi`);
+      }
+    } catch {
+      // Non-fatal — user can still set up manually
+    } finally {
+      setPrefillLoading(false);
+    }
+  };
+
   const enabledClasses = useMemo(() => plan.filter(c => c.enabled), [plan]);
 
-  // ─── Validation ────────────────────────────────────────────────────────────
+  // ─── Validation ─────────────────────────────────────────────────────────────
   const step1Valid = useMemo(() =>
     !!label.trim() && !!startDate && !!endDate && endDate > startDate,
   [label, startDate, endDate]);
@@ -120,7 +174,7 @@ export const AcademicYearWizard: React.FC<Props> = ({
     return issues;
   }, [enabledClasses]);
 
-  // ─── Mutations ─────────────────────────────────────────────────────────────
+  // ─── Mutations ──────────────────────────────────────────────────────────────
   const toggleClass = (className: string) =>
     setPlan(prev => prev.map(c =>
       c.meta.className === className ? { ...c, enabled: !c.enabled } : c,
@@ -146,7 +200,7 @@ export const AcademicYearWizard: React.FC<Props> = ({
       return { ...c, sections: c.sections.filter((_, i) => i !== idx) };
     }));
 
-  // ─── Submit ────────────────────────────────────────────────────────────────
+  // ─── Submit ─────────────────────────────────────────────────────────────────
   const handleSubmit = async () => {
     if (step3Issues.length > 0) { setError(step3Issues[0]); return; }
     setSaving(true); setError('');
@@ -154,12 +208,11 @@ export const AcademicYearWizard: React.FC<Props> = ({
       const sectionsPayload: WizardSection[] = enabledClasses.flatMap(c =>
         c.sections.map(s => ({
           className: c.meta.className,
-          section: s.name.trim(),
-          stream: c.meta.stream,
-          capacity: s.capacity,
+          section:   s.name.trim(),
+          stream:    c.meta.stream,
+          capacity:  s.capacity,
         })),
       );
-      // streams passed to RPC = distinct non-null stream values actually used
       const streamsUsed = [...new Set(
         enabledClasses.map(c => c.meta.stream).filter(Boolean) as string[],
       )];
@@ -180,7 +233,7 @@ export const AcademicYearWizard: React.FC<Props> = ({
     }
   };
 
-  // ─── Step 4: finish wizard ─────────────────────────────────────────────────
+  // ─── Step 4: finish wizard ───────────────────────────────────────────────────
   const handleFinishWizard = async (saveFees: boolean) => {
     if (saveFees && createdYearId && Number(tuitionFee) > 0) {
       setFeesSaving(true);
@@ -188,18 +241,18 @@ export const AcademicYearWizard: React.FC<Props> = ({
         await Promise.all(
           enabledClasses.map((c, i) =>
             principalService.saveFeeStructureForYear(createdYearId, {
-              name: `Tuition - ${c.meta.label}`,
-              className: c.meta.className,
+              name:         `Tuition - ${c.meta.label}`,
+              className:    c.meta.className,
               billingCycle: 'MONTHLY',
               feeHeads: [{
-                id: `h${Date.now()}-${i}`,
-                name: 'Tuition Fee',
-                amount: Number(tuitionFee),
-                frequency: 'MONTHLY',
+                id:          `h${Date.now()}-${i}`,
+                name:        'Tuition Fee',
+                amount:      Number(tuitionFee),
+                frequency:   'MONTHLY',
                 description: 'Monthly tuition charges',
               }],
               monthlyDueDates: [],
-              structureType: 'CLASS' as const,
+              structureType:   'CLASS' as const,
               lateFee: { enabled: false, gracePeriodDays: 5, type: 'FIXED', amount: 100, maxCap: 1000 },
             }),
           ),
@@ -214,7 +267,7 @@ export const AcademicYearWizard: React.FC<Props> = ({
     onCreated(createdYearId ?? '');
   };
 
-  // ─── Render ────────────────────────────────────────────────────────────────
+  // ─── Render ─────────────────────────────────────────────────────────────────
   return (
     <div
       className="fixed inset-0 bg-black/50 z-50 flex items-end sm:items-center justify-center p-0 sm:p-4 animate-in fade-in duration-200"
@@ -310,6 +363,36 @@ export const AcademicYearWizard: React.FC<Props> = ({
               <p className="text-[11px] font-bold text-slate-500 leading-relaxed">
                 Is saal kaunsi classes chalani hain? Class 11/12 ke liye stream alag-alag select kar sakte hain.
               </p>
+
+              {/* Pre-fill banner */}
+              {previousYearId && (
+                <div className={`rounded-xl p-3 flex items-center gap-2 text-[10px] font-bold ${
+                  prefillApplied
+                    ? 'bg-emerald-50 border border-emerald-200 text-emerald-800'
+                    : 'bg-indigo-50 border border-indigo-200 text-indigo-800'
+                }`}>
+                  {prefillLoading ? (
+                    <div className="w-3.5 h-3.5 border-2 border-indigo-300 border-t-indigo-700 rounded-full animate-spin shrink-0" />
+                  ) : prefillApplied ? (
+                    <CheckCircle2 size={13} className="text-emerald-600 shrink-0" />
+                  ) : (
+                    <RefreshCw size={13} className="text-indigo-600 shrink-0" />
+                  )}
+                  <span className="flex-1">
+                    {prefillLoading ? 'Previous year ki classes load ho rahi hain…' :
+                     prefillApplied ? `${prevYearLabel} ki classes pre-filled — aap edit kar sakte hain` :
+                     'Previous year data load nahi hua — manually select karein'}
+                  </span>
+                  {!prefillApplied && !prefillLoading && previousYearId && (
+                    <button
+                      onClick={loadPreviousYearData}
+                      className="px-2 py-1 bg-indigo-600 text-white rounded-lg text-[9px] font-black shrink-0">
+                      Retry
+                    </button>
+                  )}
+                </div>
+              )}
+
               {CLASS_GROUPS.map(group => {
                 const groupClasses = plan.filter(c => c.meta.group === group);
                 if (!groupClasses.length) return null;
@@ -351,6 +434,16 @@ export const AcademicYearWizard: React.FC<Props> = ({
                 Har class ke sections define karein. Section ka naam kuch bhi ho sakta hai — A, B, C ya{' '}
                 <span className="text-slate-700">"Bio-Chem-Physics"</span>, <span className="text-slate-700">"History-Geo"</span>.
               </p>
+
+              {prefillApplied && (
+                <div className="bg-indigo-50 border border-indigo-200 rounded-xl p-2.5 flex items-center gap-2">
+                  <CheckCircle2 size={13} className="text-indigo-600 shrink-0" />
+                  <p className="text-[10px] font-bold text-indigo-800">
+                    Previous year ({prevYearLabel}) ke sections pre-filled hain — edit kar sakte hain
+                  </p>
+                </div>
+              )}
+
               <div className="space-y-3">
                 {enabledClasses.map(c => (
                   <div key={c.meta.className} className="border border-slate-200 rounded-2xl p-3 bg-slate-50">

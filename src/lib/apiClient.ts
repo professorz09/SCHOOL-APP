@@ -271,8 +271,16 @@ export const apiPromotion = {
     get<any>(`/promotion/preview?fromYearId=${fromYearId}&toYearId=${toYearId}`),
   execute: (body: {
     fromYearId: string; toYearId: string;
-    promotions: { studentId: string; toClassName: string; toSection: string; rollNo?: string; toSectionId?: string }[];
+    promotions: {
+      studentId: string; recordId?: string;
+      decision: 'PROMOTE' | 'RETAIN' | 'TC';
+      toClassName?: string; toSection?: string;
+      rollNo?: string; toSectionId?: string;
+      tcDate?: string; tcRemarks?: string;
+    }[];
   }) => post<any>('/promotion/execute', body),
+  previousYearData: (yearId: string) =>
+    get<any>(`/promotion/previous-year-data?yearId=${yearId}`),
 };
 
 // ─── Teacher check-in ─────────────────────────────────────────────────────────
