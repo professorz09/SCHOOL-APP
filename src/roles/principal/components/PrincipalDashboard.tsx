@@ -123,7 +123,7 @@ export const PrincipalDashboard: React.FC<Props> = ({ onNavigate }) => {
     { icon: <Users size={22} />,          label: 'Students',   view: 'STUDENTS',       color: 'text-violet-600 bg-violet-50' },
     { icon: <UserCheck size={22} />,      label: 'Staff',      view: 'STAFF',          color: 'text-blue-600 bg-blue-50' },
     { icon: <CalendarCheck size={22} />,  label: 'Attendance', view: 'ATTENDANCE',     color: 'text-teal-600 bg-teal-50' },
-    { icon: <BookOpen size={22} />,       label: 'Class Ko Shi Kar',    view: 'CLASS_MGMT',     color: 'text-purple-600 bg-purple-50' },
+    { icon: <BookOpen size={22} />,       label: 'Classes',    view: 'CLASS_MGMT',     color: 'text-purple-600 bg-purple-50' },
     { icon: <IndianRupee size={22} />,    label: 'Fees Col.',  view: 'FEE_LEDGER',     color: 'text-emerald-600 bg-emerald-50' },
     { icon: <Bus size={22} />,            label: 'Transport',  view: 'TRANSPORT_MGMT', color: 'text-orange-500 bg-orange-50' },
     { icon: <CircleAlert size={22} />,    label: 'Complaints', view: 'COMPLAINTS',     color: 'text-rose-600 bg-rose-50' },
