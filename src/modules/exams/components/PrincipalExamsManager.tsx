@@ -1,15 +1,16 @@
 import React, { useEffect, useState } from 'react';
 import {
   ArrowLeft, BookOpen, CheckCircle, Clock, ChevronRight,
-  Users, Filter, Trophy, AlertCircle, Lock, Unlock, IndianRupee, X,
+  Users, Filter, Trophy, AlertCircle, Lock, Unlock, FileText,
 } from 'lucide-react';
 import { apiExams } from '@/lib/apiClient';
 import { useAcademicYear } from '@/shared/context/AcademicYearContext';
 import { useUIStore } from '@/store/uiStore';
+import { Marksheet } from '@/modules/exams/components/Marksheet';
 
 interface Props { onBack: () => void; }
 
-type View = 'LIST' | 'RESULTS';
+type View = 'LIST' | 'RESULTS' | 'MARKSHEET';
 
 const TYPE_COLOR: Record<string, string> = {
   UNIT_TEST: 'bg-blue-50 text-blue-700 border-blue-100',
@@ -111,6 +112,11 @@ export const PrincipalExamsManager: React.FC<Props> = ({ onBack }) => {
   const totalExams   = exams.length;
   const doneExams    = exams.filter(e => e.results_uploaded).length;
   const pendingExams = totalExams - doneExams;
+
+  /* ── MARKSHEET VIEW ───────────────────────────────────────────────────── */
+  if (view === 'MARKSHEET') {
+    return <Marksheet onBack={() => setView('LIST')} />;
+  }
 
   /* ── RESULTS VIEW ─────────────────────────────────────────────────────── */
   if (view === 'RESULTS' && picked) {
@@ -220,6 +226,10 @@ export const PrincipalExamsManager: React.FC<Props> = ({ onBack }) => {
           </button>
           <h2 className="text-xl font-black text-slate-900 uppercase tracking-tight">Exams</h2>
         </div>
+        <button onClick={() => setView('MARKSHEET')}
+          className="flex items-center gap-1.5 px-3 py-2 bg-violet-50 border border-violet-200 text-violet-700 font-black text-[10px] uppercase tracking-widest rounded-xl active:scale-95 transition-transform">
+          <FileText size={13} /> Marksheet
+        </button>
       </div>
 
       <div className="p-4 space-y-4">

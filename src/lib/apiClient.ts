@@ -276,6 +276,8 @@ export const apiExams = {
     passMarks?: number;
     passMarksConfig?: Record<string, number>;
   }) => post<any>(`/exam/${testId}/configure-pass-marks`, body),
+  getMarksheet: (className: string, yearId: string) =>
+    get<{ exams: any[]; students: any[] }>(`/exam/marksheet?className=${encodeURIComponent(className)}&yearId=${encodeURIComponent(yearId)}`),
 };
 
 // ─── Promotion ───────────────────────────────────────────────────────────────
