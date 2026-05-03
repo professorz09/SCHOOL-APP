@@ -47,6 +47,14 @@ const CLASS_OPTIONS = [
 ];
 const BLOOD_GROUPS = ['A+','A-','B+','B-','O+','O-','AB+','AB-'];
 
+const GENDER_OPTIONS: { value: string; label: string }[] = [
+  { value: 'MALE',   label: 'Male'   },
+  { value: 'FEMALE', label: 'Female' },
+  { value: 'OTHER',  label: 'Other'  },
+];
+const RELIGION_OPTIONS = ['Hindu', 'Muslim', 'Christian', 'Sikh', 'Buddhist', 'Jain', 'Parsi', 'Other'];
+const CASTE_OPTIONS    = ['General', 'OBC', 'SC', 'ST', 'EWS', 'Other'];
+
 // Class/section/stream/totalFee deliberately blank — the new admission
 // flow creates the student in the UNASSIGNED bucket and a separate
 // "Assign to Class" modal handles class placement, fee schedule and
@@ -93,6 +101,8 @@ const [mainView, setMainView] = useState<MainView>(initialView ?? 'CLASSES');
   const [search, setSearch] = useState('');
   const [classFilter, setClassFilter] = useState<string>('ALL');
   const [form, setForm] = useState<FormWithParent>(BLANK_FORM_WITH_PARENT);
+  const [religionIsOther, setReligionIsOther] = useState(false);
+  const [casteIsOther, setCasteIsOther] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
 
 
@@ -224,6 +234,8 @@ const [mainView, setMainView] = useState<MainView>(initialView ?? 'CLASSES');
       setStudents(prev => [...prev, student]);
       setSelected(student);
       setForm(BLANK_FORM_WITH_PARENT);
+      setReligionIsOther(false);
+      setCasteIsOther(false);
       setShowAdmissionForm(true);
     } catch (e) {
       const msg = e instanceof Error ? e.message : 'Admission failed';
@@ -380,12 +392,82 @@ const [mainView, setMainView] = useState<MainView>(initialView ?? 'CLASSES');
         <div className="flex-1 overflow-y-auto p-4 space-y-4">
           <div className="bg-white rounded-2xl border border-slate-100 shadow-sm p-4 space-y-4">
             <p className="text-[10px] font-black uppercase tracking-widest text-slate-400">Student Info</p>
+
+            {/* Basic text fields */}
             {[
               { label: 'Full Name *', key: 'name', placeholder: 'Student full name' },
               { label: 'Admission No. *', key: 'admissionNo', placeholder: 'ADM-2024-XXX' },
               { label: 'Aadhaar No.', key: 'aadhaarNo', placeholder: 'XXXX XXXX XXXX' },
-              { label: 'Religion', key: 'religion', placeholder: 'e.g. Hindu, Muslim, Christian' },
-              { label: 'Caste', key: 'caste', placeholder: 'e.g. General, OBC, SC, ST' },
+            ].map(({ label, key, placeholder }) => (
+              <div key={key}>
+                <label className="block text-[10px] font-black uppercase tracking-widest text-slate-500 mb-1.5">{label}</label>
+                <input value={(form as any)[key] ?? ''} onChange={e => setForm(f => ({ ...f, [key]: e.target.value }))}
+                  placeholder={placeholder}
+                  className="w-full border border-slate-200 bg-slate-50 rounded-xl px-4 py-3 font-bold text-sm outline-none focus:border-indigo-500 focus:bg-white transition-colors" />
+              </div>
+            ))}
+
+            {/* Gender dropdown */}
+            <div>
+              <label className="block text-[10px] font-black uppercase tracking-widest text-slate-500 mb-1.5">Gender</label>
+              <select value={form.gender} onChange={e => setForm(f => ({ ...f, gender: e.target.value as any }))}
+                className="w-full border border-slate-200 bg-slate-50 rounded-xl px-4 py-3 font-bold text-sm outline-none focus:border-indigo-500 focus:bg-white transition-colors">
+                {GENDER_OPTIONS.map(g => <option key={g.value} value={g.value}>{g.label}</option>)}
+              </select>
+            </div>
+
+            {/* Religion dropdown + Other text */}
+            <div>
+              <label className="block text-[10px] font-black uppercase tracking-widest text-slate-500 mb-1.5">Religion</label>
+              <select
+                value={religionIsOther ? 'Other' : (RELIGION_OPTIONS.includes(form.religion ?? '') ? form.religion : '')}
+                onChange={e => {
+                  if (e.target.value === 'Other') {
+                    setReligionIsOther(true);
+                    setForm(f => ({ ...f, religion: '' }));
+                  } else {
+                    setReligionIsOther(false);
+                    setForm(f => ({ ...f, religion: e.target.value }));
+                  }
+                }}
+                className="w-full border border-slate-200 bg-slate-50 rounded-xl px-4 py-3 font-bold text-sm outline-none focus:border-indigo-500 focus:bg-white transition-colors">
+                <option value="">Select religion</option>
+                {RELIGION_OPTIONS.map(r => <option key={r} value={r}>{r}</option>)}
+              </select>
+              {religionIsOther && (
+                <input value={form.religion ?? ''} onChange={e => setForm(f => ({ ...f, religion: e.target.value }))}
+                  placeholder="Enter religion"
+                  className="w-full mt-2 border border-indigo-300 bg-indigo-50 rounded-xl px-4 py-3 font-bold text-sm outline-none focus:border-indigo-500 focus:bg-white transition-colors" />
+              )}
+            </div>
+
+            {/* Caste dropdown + Other text */}
+            <div>
+              <label className="block text-[10px] font-black uppercase tracking-widest text-slate-500 mb-1.5">Caste / Category</label>
+              <select
+                value={casteIsOther ? 'Other' : (CASTE_OPTIONS.includes(form.caste ?? '') ? form.caste : '')}
+                onChange={e => {
+                  if (e.target.value === 'Other') {
+                    setCasteIsOther(true);
+                    setForm(f => ({ ...f, caste: '' }));
+                  } else {
+                    setCasteIsOther(false);
+                    setForm(f => ({ ...f, caste: e.target.value }));
+                  }
+                }}
+                className="w-full border border-slate-200 bg-slate-50 rounded-xl px-4 py-3 font-bold text-sm outline-none focus:border-indigo-500 focus:bg-white transition-colors">
+                <option value="">Select category</option>
+                {CASTE_OPTIONS.map(c => <option key={c} value={c}>{c}</option>)}
+              </select>
+              {casteIsOther && (
+                <input value={form.caste ?? ''} onChange={e => setForm(f => ({ ...f, caste: e.target.value }))}
+                  placeholder="Enter caste / category"
+                  className="w-full mt-2 border border-indigo-300 bg-indigo-50 rounded-xl px-4 py-3 font-bold text-sm outline-none focus:border-indigo-500 focus:bg-white transition-colors" />
+              )}
+            </div>
+
+            {/* PEN & Birth Cert */}
+            {[
               { label: 'PEN Number', key: 'penNumber', placeholder: 'Optional' },
               { label: 'Birth Certificate No.', key: 'birthCertNo', placeholder: 'Optional' },
             ].map(({ label, key, placeholder }) => (
@@ -396,6 +478,7 @@ const [mainView, setMainView] = useState<MainView>(initialView ?? 'CLASSES');
                   className="w-full border border-slate-200 bg-slate-50 rounded-xl px-4 py-3 font-bold text-sm outline-none focus:border-indigo-500 focus:bg-white transition-colors" />
               </div>
             ))}
+
             <div className="bg-amber-50 border border-amber-200 rounded-xl p-3">
               <p className="text-[10px] font-black uppercase tracking-widest text-amber-700">Class assignment</p>
               <p className="text-[10px] font-bold text-amber-700 mt-1 leading-relaxed">
