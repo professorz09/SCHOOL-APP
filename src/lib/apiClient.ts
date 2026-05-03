@@ -327,6 +327,13 @@ export const apiSettings = {
 
 // ─── Principal ────────────────────────────────────────────────────────────────
 
+export interface DashboardStats {
+  studentsWithDues: number;
+  pendingLeaves: number;
+  lowAttendanceStudents: number;
+  unsubmittedAttendanceDays: number;
+}
+
 export const apiPrincipal = {
   // Notices
   noticeList: () => get<any[]>('/principal/notice/list'),
@@ -418,6 +425,10 @@ export const apiPrincipal = {
   // Fee Upload Review
   feeUploadReview: (body: { uploadId: string; decision: 'APPROVED' | 'REJECTED'; note?: string }) =>
     post<{ paymentId: string | null }>('/principal/fee-upload/review', body),
+
+  // Dashboard Stats
+  getDashboardStats: (yearId: string) =>
+    get<DashboardStats>(`/principal/dashboard-stats?yearId=${yearId}`),
 };
 
 // ─── Admin — School Billing ────────────────────────────────────────────────────

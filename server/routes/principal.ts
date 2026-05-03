@@ -644,3 +644,60 @@ principalRouter.post('/fee-upload/review', requireAuth, PRINCIPAL, async (req, r
     ok(res, { paymentId: (data as string | null) ?? null });
   } catch (err) { fail(res, err); }
 });
+
+// ─── Dashboard Stats ──────────────────────────────────────────────────────────
+
+// GET /api/principal/dashboard-stats?yearId=
+principalRouter.get('/dashboard-stats', requireAuth, PRINCIPAL, async (req, res) => {
+  try {
+    const { yearId } = req.query as { yearId: string };
+    if (!yearId) throw new ApiError(400, 'yearId is required');
+
+    // Students with outstanding fees
+    const { data: feesData } = await adminDb
+      .from('fee_installments')
+      .select('student_id', { count: 'exact' })
+      .eq('school_id', req.user.school_id!)
+      .eq('academic_year_id', yearId)
+      .gt('balance', 0)
+      .is('cancelled_on', null);
+    const studentsWithDues = feesData?.length ?? 0;
+
+    // Pending leaves
+    const { data: leavesData } = await adminDb
+      .from('approvals')
+      .select('id', { count: 'exact' })
+      .eq('school_id', req.user.school_id!)
+      .eq('academic_year_id', yearId)
+      .eq('type', 'LEAVE')
+      .eq('status', 'PENDING');
+    const pendingLeaves = leavesData?.length ?? 0;
+
+    // Low attendance students
+    const { data: attendData } = await adminDb
+      .from('student_academic_records')
+      .select('id', { count: 'exact' })
+      .eq('school_id', req.user.school_id!)
+      .eq('academic_year_id', yearId)
+      .lt('attendance_percentage', 75);
+    const lowAttendanceStudents = attendData?.length ?? 0;
+
+    // Unsubmitted attendance (last 7 days)
+    const sevenDaysAgo = new Date(Date.now() - 7 * 86400000).toISOString().split('T')[0];
+    const { data: draftData } = await adminDb
+      .from('attendance_records')
+      .select('id', { count: 'exact' })
+      .eq('school_id', req.user.school_id!)
+      .eq('academic_year_id', yearId)
+      .eq('status', 'DRAFT')
+      .gte('date', sevenDaysAgo);
+    const unsubmittedAttendanceDays = draftData?.length ?? 0;
+
+    ok(res, {
+      studentsWithDues,
+      pendingLeaves,
+      lowAttendanceStudents,
+      unsubmittedAttendanceDays,
+    });
+  } catch (err) { fail(res, err); }
+});
