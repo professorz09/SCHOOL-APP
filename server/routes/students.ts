@@ -38,6 +38,105 @@ studentsRouter.get('/', requireAuth, requireRole('PRINCIPAL', 'TEACHER'), async 
   } catch (err) { fail(res, err); }
 });
 
+// GET /api/students/:id/timeline — chronological lifecycle events for a student
+studentsRouter.get('/:id/timeline', requireAuth, requireRole('PRINCIPAL', 'TEACHER'), async (req, res) => {
+  try {
+    const studentId = req.params.id;
+    const schoolId = req.user.school_id!;
+
+    const [stuRes, recRes, trRes] = await Promise.all([
+      adminDb.from('students')
+        .select('id, name, admission_date, created_at, status, updated_at, tc_number')
+        .eq('id', studentId).eq('school_id', schoolId).maybeSingle(),
+      adminDb.from('student_academic_records')
+        .select('id, class_name, section, roll_no, total_fee, status, created_at, academic_year_id, academic_years!inner(name, start_date, school_id)')
+        .eq('student_id', studentId)
+        .eq('academic_years.school_id', schoolId)
+        .order('created_at', { ascending: true }),
+      adminDb.from('student_transport_assignments')
+        .select('id, start_date, end_date, is_active, end_reason, transport_vehicles(vehicle_no)')
+        .eq('student_id', studentId)
+        .order('start_date', { ascending: true }),
+    ]);
+
+    if (!stuRes.data) throw new ApiError(404, 'Student not found');
+    const stu = stuRes.data as any;
+    const records = (recRes.data ?? []) as any[];
+    const transport = (trRes.data ?? []) as any[];
+
+    type Event = { type: string; date: string; label: string; sub?: string };
+    const events: Event[] = [];
+
+    // Admission
+    events.push({
+      type: 'ADMISSION',
+      date: stu.admission_date || stu.created_at,
+      label: 'Student Admitted',
+      sub: stu.name,
+    });
+
+    // Class assignments + fee structure
+    for (const rec of records) {
+      const yearName = rec.academic_years?.name ?? '';
+      events.push({
+        type: 'CLASS_ASSIGNED',
+        date: rec.created_at,
+        label: `Assigned to ${rec.class_name}${rec.section ? `-${rec.section}` : ''}`,
+        sub: yearName,
+      });
+      if ((rec.total_fee ?? 0) > 0) {
+        events.push({
+          type: 'FEE_STRUCTURE',
+          date: rec.created_at,
+          label: 'Fee Structure Assigned',
+          sub: `₹${Math.round((rec.total_fee ?? 0) / 100) / 10}K / year · ${yearName}`,
+        });
+      }
+      if (rec.status === 'PASSED') {
+        events.push({
+          type: 'PROMOTED',
+          date: rec.created_at,
+          label: `Promoted from ${rec.class_name}`,
+          sub: yearName,
+        });
+      }
+    }
+
+    // Transport history
+    for (const t of transport) {
+      if (t.start_date) {
+        events.push({
+          type: 'TRANSPORT_ADDED',
+          date: t.start_date,
+          label: 'Transport Assigned',
+          sub: t.transport_vehicles?.vehicle_no ? `Vehicle ${t.transport_vehicles.vehicle_no}` : undefined,
+        });
+      }
+      if (t.end_date) {
+        events.push({
+          type: 'TRANSPORT_REMOVED',
+          date: t.end_date,
+          label: 'Transport Removed',
+          sub: t.end_reason || undefined,
+        });
+      }
+    }
+
+    // TC and re-admit (best-effort from current status + updated_at)
+    if (stu.status === 'TC_ISSUED' && stu.updated_at) {
+      events.push({
+        type: 'TC_ISSUED',
+        date: stu.updated_at,
+        label: 'TC Issued',
+        sub: stu.tc_number ? `TC No: ${stu.tc_number}` : undefined,
+      });
+    }
+
+    events.sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime());
+    ok(res, events);
+  } catch (err) { fail(res, err); }
+});
+
 // GET /api/students/:id/academic-history — all yearly records for a student across all years
 studentsRouter.get('/:id/academic-history', requireAuth, requireRole('PRINCIPAL', 'TEACHER'), async (req, res) => {
   try {
@@ -78,57 +177,6 @@ studentsRouter.get('/:id', requireAuth, requireRole('PRINCIPAL', 'TEACHER', 'PAR
       .single();
     if (error || !data) throw new ApiError(404, 'Student not found');
     ok(res, data);
-  } catch (err) { fail(res, err); }
-});
-
-// POST /api/students/create
-studentsRouter.post('/create', requireAuth, requireRole('PRINCIPAL'), async (req, res) => {
-  try {
-    const body = requireBody<{
-      name: string; admissionNo: string; dob?: string;
-      fatherName?: string; phone?: string; motherName?: string;
-      address?: string; gender?: string; isRte?: boolean;
-      admissionDate?: string; rollNo?: string; bloodGroup?: string;
-      aadhaarNo?: string; fatherPhone?: string; religion?: string;
-      caste?: string;
-    }>(req, ['name', 'admissionNo']);
-
-    // Duplicate admission_no check
-    const { data: dup } = await adminDb
-      .from('students')
-      .select('id, name')
-      .eq('admission_no', body.admissionNo)
-      .maybeSingle();
-    if (dup) throw new ApiError(409, `Admission no already exists: ${(dup as any).name}`);
-
-    const { data: student, error: se } = await adminDb
-      .from('students')
-      .insert({
-        school_id:    req.user.school_id,
-        name:         body.name,
-        admission_no: body.admissionNo,
-        dob:          body.dob ?? null,
-        father_name:  body.fatherName ?? null,
-        phone:        body.phone ?? null,
-        mother_name:  body.motherName ?? null,
-        address:      body.address ?? null,
-        gender:       body.gender ?? null,
-        is_rte:       body.isRte ?? false,
-        admission_date: body.admissionDate ?? new Date().toISOString().slice(0, 10),
-        roll_no:      body.rollNo ?? null,
-        blood_group:  body.bloodGroup ?? null,
-        aadhaar_no:   body.aadhaarNo ?? null,
-        father_phone: body.fatherPhone ?? null,
-        religion:     body.religion ?? null,
-        caste:        body.caste ?? null,
-        is_active:    true,
-        status:       'ACTIVE',
-      })
-      .select()
-      .single();
-    if (se) throw new ApiError(500, se.message);
-
-    ok(res, student, 201);
   } catch (err) { fail(res, err); }
 });
 
@@ -467,18 +515,10 @@ studentsRouter.post('/create', requireAuth, requireRole('PRINCIPAL'), async (req
         let authUserId: string;
         let createdNew = false;
         if (created.error) {
-          // Auth user might already exist — walk pages to find it
-          let found: string | null = null;
-          for (let page = 1; page <= 10; page++) {
-            const { data: pg } = await adminDb.auth.admin.listUsers({ page, perPage: 200 });
-            const u = pg.users.find((u: any) =>
-              (u.email ?? '').toLowerCase() === parentEmail.toLowerCase(),
-            );
-            if (u) { found = u.id; break; }
-            if (pg.users.length < 200) break;
-          }
+          // Auth user might already exist — look up directly via indexed query
+          const { data: found } = await adminDb.rpc('get_auth_user_id_by_email', { p_email: parentEmail });
           if (!found) throw new ApiError(500, created.error.message);
-          authUserId = found;
+          authUserId = found as string;
         } else {
           authUserId = created.data.user.id;
           createdNew = true;

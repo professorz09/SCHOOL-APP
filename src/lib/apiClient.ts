@@ -126,6 +126,8 @@ export const apiStudents = {
     post<{ documentId: string; docUrl: string }>('/students/document/remove', { documentId }),
   getAcademicHistory: (studentId: string) =>
     get<any[]>(`/students/${studentId}/academic-history`),
+  getTimeline: (studentId: string) =>
+    get<Array<{ type: string; date: string; label: string; sub?: string }>>(`/students/${studentId}/timeline`),
 };
 
 // ─── Fees ────────────────────────────────────────────────────────────────────
@@ -394,7 +396,8 @@ export const apiPrincipal = {
     date: string;
     rows: { staffId: string; status: string }[];
     clearedStaffIds?: string[];
-  }) => post<{ savedAt: string }>('/principal/staff-attendance/save', body),
+    editorMode?: boolean;
+  }) => post<{ savedAt: string; modifiedAt: string | null }>('/principal/staff-attendance/save', body),
 
   // Permissions
   permissionsSet: (body: {

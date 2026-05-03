@@ -4,6 +4,7 @@ import {
   Wallet, MoreHorizontal, CircleCheckBig, MapPin, ChevronRight,
   Bell, ClipboardCheck, Clock, BanknoteIcon, Settings, ChevronUp,
   UserCog, CalendarCheck, Sparkles, Calendar, GraduationCap,
+  ArrowRight,
 } from 'lucide-react';
 import { studentService } from '@/modules/students/student.service';
 import { staffService } from '@/modules/staff/staff.service';
@@ -146,6 +147,7 @@ export const PrincipalDashboard: React.FC<Props> = ({ onNavigate }) => {
     { icon: <Wallet size={22} />,         label: 'Expenses',      view: 'EXPENSES',         color: 'text-red-500 bg-red-50' },
     { icon: <Sparkles size={22} />,       label: 'Tools',         view: 'TOOLS',            color: 'text-purple-600 bg-purple-50' },
     { icon: <Calendar size={22} />,       label: 'Academic Year', view: 'YEAR_CLOSING',     color: 'text-amber-600 bg-amber-50' },
+    { icon: <ArrowRight size={22} />,     label: 'Promotion',     view: 'PROMOTION',        color: 'text-emerald-600 bg-emerald-50' },
     { icon: <Settings size={22} />,       label: 'Settings',      view: 'SETTINGS',         color: 'text-slate-600 bg-slate-100' },
   ];
 
@@ -325,3 +327,4 @@ export const PrincipalDashboard: React.FC<Props> = ({ onNavigate }) => {
     </div>
   );
 };
+

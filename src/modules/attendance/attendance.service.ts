@@ -327,9 +327,10 @@ export const staffAttendanceService = {
     rows: StaffAttendanceRow[];
     isLocked: boolean;
     savedAt: string | null;
+    modifiedAt: string | null;
   }> {
     const schoolId = useAuthStore.getState().session?.schoolId;
-    if (!schoolId) return { rows: [], isLocked: false, savedAt: null };
+    if (!schoolId) return { rows: [], isLocked: false, savedAt: null, modifiedAt: null };
 
     const { data: staff, error: sErr } = await supabase
       .from('staff')
@@ -343,17 +344,24 @@ export const staffAttendanceService = {
 
     const { data: existing, error: aErr } = await supabase
       .from('staff_attendance')
-      .select('staff_id, status, is_locked, created_at')
+      .select('staff_id, status, is_locked, created_at, updated_at')
       .eq('school_id', schoolId).eq('date', date);
     if (aErr) throw new Error(aErr.message);
 
-    const existingMap = new Map<string, { status: string; is_locked: boolean; created_at: string }>();
+    const existingMap = new Map<string, { status: string; is_locked: boolean; created_at: string; updated_at: string | null }>();
     for (const r of (existing ?? []) as any[]) {
       existingMap.set(r.staff_id, r);
     }
 
     const isLocked = Array.from(existingMap.values()).some(r => r.is_locked);
-    const savedAtTs = Array.from(existingMap.values()).map(r => r.created_at).sort().pop() ?? null;
+    const allRows = Array.from(existingMap.values());
+    const savedAtTs = allRows.map(r => r.created_at).sort().pop() ?? null;
+    // modifiedAt = latest updated_at where it genuinely differs from created_at
+    const modifiedAtTs = allRows
+      .filter(r => r.updated_at && r.updated_at !== r.created_at)
+      .map(r => r.updated_at as string)
+      .sort()
+      .pop() ?? null;
 
     const rows: StaffAttendanceRow[] = activeStaff
       .map((s: any) => ({
@@ -364,23 +372,22 @@ export const staffAttendanceService = {
       }))
       .sort((a: StaffAttendanceRow, b: StaffAttendanceRow) => a.name.localeCompare(b.name));
 
-    return { rows, isLocked, savedAt: savedAtTs };
+    return { rows, isLocked, savedAt: savedAtTs, modifiedAt: modifiedAtTs };
   },
 
   async save(
     date: string,
     rows: StaffAttendanceRow[],
     clearedStaffIds: string[] = [],
-  ): Promise<string | null> {
+    editorMode = false,
+  ): Promise<{ savedAt: string | null; modifiedAt: string | null }> {
     const result = await apiPrincipal.staffAttendanceSave({
       date,
       rows: rows.map(r => ({ staffId: r.staffId, status: r.status })),
       clearedStaffIds,
+      editorMode,
     });
-    await logAudit('staff_attendance_saved', 'staff_attendance', date, {
-      date, count: rows.length, cleared: clearedStaffIds.length,
-    });
-    return (result as any).savedAt ?? null;
+    return { savedAt: result.savedAt ?? null, modifiedAt: result.modifiedAt ?? null };
   },
 
   async getMonth(yearMonth: string): Promise<Array<{

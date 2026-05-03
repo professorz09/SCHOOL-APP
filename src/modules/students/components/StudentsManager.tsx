@@ -6,9 +6,10 @@ import {
   Bus, Briefcase, Droplets, GraduationCap, Shield, Heart,
   CreditCard, Building2, TrendingUp, Home as HomeIcon,
   Archive, UserCheck, UserX, Award, Trash2, AlertTriangle, RefreshCw,
-  Lock, Edit2, History,
+  Lock, Edit2, History, Eye, Upload,
 } from 'lucide-react';
 import { studentService } from '@/modules/students/student.service';
+import { storageService } from '@/shared/utils/storage.service';
 import { Student, CreateStudentInput, STREAMS, STREAM_CLASSES, StudentStream } from '@/modules/students/student.types';
 import { PaymentStatus, PAYMENT_COLORS } from '@/shared/config/constants';
 import { useUIStore } from '@/store/uiStore';
@@ -46,6 +47,14 @@ const CLASS_OPTIONS = [
   '12th Science','12th Commerce','12th Arts','12th Maths',
 ];
 const BLOOD_GROUPS = ['A+','A-','B+','B-','O+','O-','AB+','AB-'];
+
+const GENDER_OPTIONS: { value: string; label: string }[] = [
+  { value: 'MALE',   label: 'Male'   },
+  { value: 'FEMALE', label: 'Female' },
+  { value: 'OTHER',  label: 'Other'  },
+];
+const RELIGION_OPTIONS = ['Hindu', 'Muslim', 'Christian', 'Sikh', 'Buddhist', 'Jain', 'Parsi', 'Other'];
+const CASTE_OPTIONS    = ['General', 'OBC', 'SC', 'ST', 'EWS', 'Other'];
 
 // Class/section/stream/totalFee deliberately blank — the new admission
 // flow creates the student in the UNASSIGNED bucket and a separate
@@ -93,6 +102,8 @@ const [mainView, setMainView] = useState<MainView>(initialView ?? 'CLASSES');
   const [search, setSearch] = useState('');
   const [classFilter, setClassFilter] = useState<string>('ALL');
   const [form, setForm] = useState<FormWithParent>(BLANK_FORM_WITH_PARENT);
+  const [religionIsOther, setReligionIsOther] = useState(false);
+  const [casteIsOther, setCasteIsOther] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
 
 
@@ -117,6 +128,8 @@ const [mainView, setMainView] = useState<MainView>(initialView ?? 'CLASSES');
     { type: 'PHOTO', name: 'Student Photo', uploaded: false },
     { type: 'OTHER', name: 'Other Documents', uploaded: false },
   ]);
+  // Actual File objects collected during form fill — uploaded after student is created
+  const [documentFiles, setDocumentFiles] = useState<Map<DocumentUpload['type'], File>>(new Map());
 
   // Archive state ─────────────────────────────────────────────────────────
   const [archiveTab, setArchiveTab] = useState<ArchiveTab>('ACTIVE');
@@ -221,9 +234,28 @@ const [mainView, setMainView] = useState<MainView>(initialView ?? 'CLASSES');
         showToast(`${student.name} admitted successfully`);
       }
 
+      // Upload all selected documents in parallel
+      if (documentFiles.size > 0) {
+        const uploads = Array.from(documentFiles.entries()).map(async ([docType, file]) => {
+          const { path } = await storageService.uploadStudentDocument(student.id, docType, file);
+          await studentService.addDocumentRecord(student.id, docType, path);
+        });
+        const results = await Promise.allSettled(uploads);
+        results.forEach((r, i) => {
+          if (r.status === 'rejected') {
+            const file = Array.from(documentFiles.values())[i];
+            showToast(`Document upload failed: ${file?.name ?? 'unknown'}`, 'error');
+          }
+        });
+      }
+
       setStudents(prev => [...prev, student]);
       setSelected(student);
       setForm(BLANK_FORM_WITH_PARENT);
+      setReligionIsOther(false);
+      setCasteIsOther(false);
+      setDocumentFiles(new Map());
+      setDocuments(prev => prev.map(d => ({ ...d, uploaded: false })));
       setShowAdmissionForm(true);
     } catch (e) {
       const msg = e instanceof Error ? e.message : 'Admission failed';
@@ -236,13 +268,14 @@ const [mainView, setMainView] = useState<MainView>(initialView ?? 'CLASSES');
   const handleDocumentUpload = (e: React.ChangeEvent<HTMLInputElement>, docType: DocumentUpload['type']) => {
     const file = e.target.files?.[0];
     if (!file) return;
-    const maxSizeBytes = 2 * 1024 * 1024;
-    if (file.size > maxSizeBytes) {
-      showToast(`File must be less than 2MB. Current: ${(file.size / 1024 / 1024).toFixed(1)}MB`, 'error');
+    if (file.size > 5 * 1024 * 1024) {
+      showToast(`File too large — max 5MB (${(file.size / 1024 / 1024).toFixed(1)}MB)`, 'error');
       return;
     }
+    setDocumentFiles(prev => { const n = new Map(prev); n.set(docType, file); return n; });
     setDocuments(prev => prev.map(d => d.type === docType ? { ...d, uploaded: true } : d));
-    showToast(`${file.name} uploaded (${(file.size / 1024).toFixed(0)}KB)`);
+    showToast(`${file.name} selected — will upload on admission`);
+    e.target.value = '';
   };
 
 
@@ -380,12 +413,84 @@ const [mainView, setMainView] = useState<MainView>(initialView ?? 'CLASSES');
         <div className="flex-1 overflow-y-auto p-4 space-y-4">
           <div className="bg-white rounded-2xl border border-slate-100 shadow-sm p-4 space-y-4">
             <p className="text-[10px] font-black uppercase tracking-widest text-slate-400">Student Info</p>
+
+            {/* Basic text fields */}
             {[
-              { label: 'Full Name *', key: 'name', placeholder: 'Student full name' },
-              { label: 'Admission No. *', key: 'admissionNo', placeholder: 'ADM-2024-XXX' },
+              { label: 'Full Name', key: 'name', placeholder: 'Student full name', req: true },
+              { label: 'Admission No.', key: 'admissionNo', placeholder: 'ADM-2024-XXX', req: true },
               { label: 'Aadhaar No.', key: 'aadhaarNo', placeholder: 'XXXX XXXX XXXX' },
-              { label: 'Religion', key: 'religion', placeholder: 'e.g. Hindu, Muslim, Christian' },
-              { label: 'Caste', key: 'caste', placeholder: 'e.g. General, OBC, SC, ST' },
+            ].map(({ label, key, placeholder, req }) => (
+              <div key={key}>
+                <label className="block text-[10px] font-black uppercase tracking-widest text-slate-500 mb-1.5">
+                  {label}{req && <sup className="text-rose-500 font-black ml-0.5">*</sup>}
+                </label>
+                <input value={(form as any)[key] ?? ''} onChange={e => setForm(f => ({ ...f, [key]: e.target.value }))}
+                  placeholder={placeholder}
+                  className="w-full border border-slate-200 bg-slate-50 rounded-xl px-4 py-3 font-bold text-sm outline-none focus:border-indigo-500 focus:bg-white transition-colors" />
+              </div>
+            ))}
+
+            {/* Gender dropdown */}
+            <div>
+              <label className="block text-[10px] font-black uppercase tracking-widest text-slate-500 mb-1.5">Gender <span className="text-slate-400 normal-case font-bold text-[9px]">(optional)</span></label>
+              <select value={form.gender} onChange={e => setForm(f => ({ ...f, gender: e.target.value as any }))}
+                className="w-full border border-slate-200 bg-slate-50 rounded-xl px-4 py-3 font-bold text-sm outline-none focus:border-indigo-500 focus:bg-white transition-colors">
+                {GENDER_OPTIONS.map(g => <option key={g.value} value={g.value}>{g.label}</option>)}
+              </select>
+            </div>
+
+            {/* Religion dropdown + Other text */}
+            <div>
+              <label className="block text-[10px] font-black uppercase tracking-widest text-slate-500 mb-1.5">Religion <span className="text-slate-400 normal-case font-bold text-[9px]">(optional)</span></label>
+              <select
+                value={religionIsOther ? 'Other' : (RELIGION_OPTIONS.includes(form.religion ?? '') ? form.religion : '')}
+                onChange={e => {
+                  if (e.target.value === 'Other') {
+                    setReligionIsOther(true);
+                    setForm(f => ({ ...f, religion: '' }));
+                  } else {
+                    setReligionIsOther(false);
+                    setForm(f => ({ ...f, religion: e.target.value }));
+                  }
+                }}
+                className="w-full border border-slate-200 bg-slate-50 rounded-xl px-4 py-3 font-bold text-sm outline-none focus:border-indigo-500 focus:bg-white transition-colors">
+                <option value="">Select religion</option>
+                {RELIGION_OPTIONS.map(r => <option key={r} value={r}>{r}</option>)}
+              </select>
+              {religionIsOther && (
+                <input value={form.religion ?? ''} onChange={e => setForm(f => ({ ...f, religion: e.target.value }))}
+                  placeholder="Enter religion"
+                  className="w-full mt-2 border border-indigo-300 bg-indigo-50 rounded-xl px-4 py-3 font-bold text-sm outline-none focus:border-indigo-500 focus:bg-white transition-colors" />
+              )}
+            </div>
+
+            {/* Caste dropdown + Other text */}
+            <div>
+              <label className="block text-[10px] font-black uppercase tracking-widest text-slate-500 mb-1.5">Caste / Category <span className="text-slate-400 normal-case font-bold text-[9px]">(optional)</span></label>
+              <select
+                value={casteIsOther ? 'Other' : (CASTE_OPTIONS.includes(form.caste ?? '') ? form.caste : '')}
+                onChange={e => {
+                  if (e.target.value === 'Other') {
+                    setCasteIsOther(true);
+                    setForm(f => ({ ...f, caste: '' }));
+                  } else {
+                    setCasteIsOther(false);
+                    setForm(f => ({ ...f, caste: e.target.value }));
+                  }
+                }}
+                className="w-full border border-slate-200 bg-slate-50 rounded-xl px-4 py-3 font-bold text-sm outline-none focus:border-indigo-500 focus:bg-white transition-colors">
+                <option value="">Select category</option>
+                {CASTE_OPTIONS.map(c => <option key={c} value={c}>{c}</option>)}
+              </select>
+              {casteIsOther && (
+                <input value={form.caste ?? ''} onChange={e => setForm(f => ({ ...f, caste: e.target.value }))}
+                  placeholder="Enter caste / category"
+                  className="w-full mt-2 border border-indigo-300 bg-indigo-50 rounded-xl px-4 py-3 font-bold text-sm outline-none focus:border-indigo-500 focus:bg-white transition-colors" />
+              )}
+            </div>
+
+            {/* PEN & Birth Cert */}
+            {[
               { label: 'PEN Number', key: 'penNumber', placeholder: 'Optional' },
               { label: 'Birth Certificate No.', key: 'birthCertNo', placeholder: 'Optional' },
             ].map(({ label, key, placeholder }) => (
@@ -396,6 +501,7 @@ const [mainView, setMainView] = useState<MainView>(initialView ?? 'CLASSES');
                   className="w-full border border-slate-200 bg-slate-50 rounded-xl px-4 py-3 font-bold text-sm outline-none focus:border-indigo-500 focus:bg-white transition-colors" />
               </div>
             ))}
+
             <div className="bg-amber-50 border border-amber-200 rounded-xl p-3">
               <p className="text-[10px] font-black uppercase tracking-widest text-amber-700">Class assignment</p>
               <p className="text-[10px] font-bold text-amber-700 mt-1 leading-relaxed">
@@ -423,7 +529,9 @@ const [mainView, setMainView] = useState<MainView>(initialView ?? 'CLASSES');
               { label: 'Address', key: 'address', placeholder: 'Full residential address' },
             ].map(({ label, key, placeholder }) => (
               <div key={key}>
-                <label className="block text-[10px] font-black uppercase tracking-widest text-slate-500 mb-1.5">{label}</label>
+                <label className="block text-[10px] font-black uppercase tracking-widest text-slate-500 mb-1.5">
+                  {label} <span className="text-slate-400 normal-case font-bold text-[9px]">(optional)</span>
+                </label>
                 <input value={(form as any)[key]} onChange={e => setForm(f => ({ ...f, [key]: e.target.value }))}
                   placeholder={placeholder}
                   className="w-full border border-slate-200 bg-slate-50 rounded-xl px-4 py-3 font-bold text-sm outline-none focus:border-indigo-500" />
@@ -439,12 +547,15 @@ const [mainView, setMainView] = useState<MainView>(initialView ?? 'CLASSES');
               </p>
             </div>
             {[
-              { label: 'Parent Mobile Number *', key: 'parentMobileNumber', placeholder: '10-digit mobile' },
-              { label: 'Parent Name *', key: 'parentName', placeholder: 'Mother or Father name' },
+              { label: 'Parent Mobile Number', key: 'parentMobileNumber', placeholder: '10-digit mobile', req: true },
+              { label: 'Parent Name', key: 'parentName', placeholder: 'Mother or Father name', req: true },
               { label: 'Parent Email', key: 'parentEmail', placeholder: 'parent@email.com' },
-            ].map(({ label, key, placeholder }) => (
+            ].map(({ label, key, placeholder, req }) => (
               <div key={key}>
-                <label className="block text-[10px] font-black uppercase tracking-widest text-slate-500 mb-1.5">{label}</label>
+                <label className="block text-[10px] font-black uppercase tracking-widest text-slate-500 mb-1.5">
+                  {label}{req && <sup className="text-rose-500 font-black ml-0.5">*</sup>}
+                  {!req && <span className="text-slate-400 normal-case font-bold text-[9px] ml-1">(optional)</span>}
+                </label>
                 <input value={(form as any)[key]} onChange={e => setForm(f => ({ ...f, [key]: e.target.value }))}
                   placeholder={placeholder}
                   className="w-full border border-slate-200 bg-slate-50 rounded-xl px-4 py-3 font-bold text-sm outline-none focus:border-indigo-500" />
@@ -478,25 +589,49 @@ const [mainView, setMainView] = useState<MainView>(initialView ?? 'CLASSES');
             </div>
           </div>
 
-          <div className="bg-white rounded-2xl border border-slate-100 shadow-sm p-4 space-y-4">
-            <p className="text-[10px] font-black uppercase tracking-widest text-slate-400">Documents Checklist</p>
-            <p className="text-[10px] font-bold text-slate-500 mb-3">Upload required documents. Max 2MB per file.</p>
-            <div className="space-y-2">
-              {documents.map(doc => (
-                <div key={doc.type} className="flex items-center justify-between bg-slate-50 rounded-xl p-3 border border-slate-200">
-                  <label className="flex items-center gap-3 flex-1 cursor-pointer">
-                    <input type="checkbox" checked={doc.uploaded} readOnly className="w-4 h-4 rounded" />
-                    <span className="text-sm font-bold text-slate-700">{doc.name}</span>
-                  </label>
-                  <label className="cursor-pointer">
-                    <input type="file" onChange={(e) => handleDocumentUpload(e, doc.type)} className="hidden" accept="image/*,.pdf,.doc,.docx" />
-                    <span className={`text-[10px] font-black px-3 py-1.5 rounded-full ${doc.uploaded ? 'bg-emerald-100 text-emerald-700' : 'bg-slate-100 text-slate-600 hover:bg-slate-200'} transition-colors`}>
-                      {doc.uploaded ? '✓ Done' : 'Upload'}
-                    </span>
-                  </label>
-                </div>
-              ))}
+          <div className="bg-white rounded-2xl border border-slate-100 shadow-sm p-4 space-y-3">
+            <div>
+              <p className="text-[10px] font-black uppercase tracking-widest text-slate-400">Documents</p>
+              <p className="text-[10px] font-bold text-slate-400 mt-0.5">Max 5MB · JPG / PNG / PDF — uploaded when you tap Admit</p>
             </div>
+            {documents.map(doc => {
+              const file = documentFiles.get(doc.type);
+              return (
+                <div key={doc.type} className={`rounded-xl border p-3 transition-colors ${file ? 'bg-emerald-50 border-emerald-200' : 'bg-slate-50 border-slate-200'}`}>
+                  <div className="flex items-center justify-between gap-2">
+                    <div className="flex items-center gap-2.5 flex-1 min-w-0">
+                      {file
+                        ? <CheckCircle2 size={15} className="text-emerald-600 shrink-0" />
+                        : <div className="w-3.5 h-3.5 rounded border-2 border-slate-300 shrink-0" />}
+                      <div className="flex-1 min-w-0">
+                        <span className={`text-sm font-bold ${file ? 'text-emerald-800' : 'text-slate-700'}`}>{doc.name}</span>
+                        {file && (
+                          <p className="text-[9px] font-bold text-emerald-600 truncate mt-0.5">{file.name} · {(file.size / 1024).toFixed(0)}KB</p>
+                        )}
+                      </div>
+                    </div>
+                    <div className="flex items-center gap-1.5 shrink-0">
+                      {file && (
+                        <button type="button"
+                          onClick={() => window.open(URL.createObjectURL(file), '_blank', 'noopener')}
+                          className="flex items-center gap-1 text-[9px] font-black px-2 py-1.5 bg-emerald-100 text-emerald-700 hover:bg-emerald-200 rounded-full transition-colors">
+                          <Eye size={10} /> View
+                        </button>
+                      )}
+                      <label className="cursor-pointer">
+                        <input type="file" onChange={e => handleDocumentUpload(e, doc.type)} className="hidden"
+                          accept="image/jpeg,image/png,image/webp,image/heic,image/heif,application/pdf" />
+                        <span className={`flex items-center gap-1 text-[9px] font-black px-2 py-1.5 rounded-full transition-colors ${
+                          file ? 'bg-slate-100 text-slate-600 hover:bg-slate-200' : 'bg-indigo-100 text-indigo-700 hover:bg-indigo-200'
+                        }`}>
+                          <Upload size={10} /> {file ? 'Replace' : 'Select'}
+                        </span>
+                      </label>
+                    </div>
+                  </div>
+                </div>
+              );
+            })}
           </div>
 
           <button onClick={handleCreate} disabled={isSubmitting}

@@ -114,22 +114,20 @@ feesRouter.post('/pay', requireAuth, requireRole('PRINCIPAL'), async (req, res) 
 
     if (body.amount <= 0) throw new ApiError(400, 'Amount must be positive');
 
-    // Discount is applied at UI level: principal enters amount - discount
-    // and includes discount reason in note. This avoids DB-level RPC changes.
-    const discountNote = body.discountAmount && body.discountAmount > 0
-      ? ` (with ₹${Math.round(body.discountAmount)} discount)`
-      : '';
+    const discount = Math.max(0, Math.round(body.discountAmount ?? 0));
+    const discountNote = discount > 0 ? ` (with ₹${discount} discount)` : '';
 
     // RPC requires auth.uid() — use user JWT
     const db = userDb(req.jwt);
     const { data: paymentId, error } = await db.rpc('record_fee_payment', {
-      p_student_id:    body.studentId,
-      p_amount:        Math.round(body.amount),
-      p_method:        body.method,
-      p_date:          body.date ?? new Date().toISOString().split('T')[0],
-      p_note:          (body.note ?? '') + discountNote || null,
-      p_use_advance:   body.useAdvance ?? false,
-      p_apply_late_fee: body.applyLateFee ?? true,
+      p_student_id:      body.studentId,
+      p_amount:          Math.round(body.amount),
+      p_method:          body.method,
+      p_date:            body.date ?? new Date().toISOString().split('T')[0],
+      p_note:            (body.note ?? '') + discountNote || null,
+      p_use_advance:     body.useAdvance ?? false,
+      p_apply_late_fee:  body.applyLateFee ?? true,
+      p_discount_amount: discount,
     });
     if (error) throw new ApiError(500, error.message);
 

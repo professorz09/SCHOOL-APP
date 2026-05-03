@@ -1,12 +1,14 @@
 import React, { useState, useMemo, useEffect, useRef } from 'react';
 import {
   ArrowLeft, CheckCircle2, Lock, Save, Search, ChevronLeft, ChevronRight,
+  Unlock, AlertTriangle, Pencil,
 } from 'lucide-react';
 import { staffAttendanceService, StaffAttendanceRow, StaffAttendanceStatus }
   from '@/modules/attendance/attendance.service';
 import { useUIStore } from '@/store/uiStore';
 import { useAcademicYear } from '@/shared/context/AcademicYearContext';
 import { useEditGuard } from '@/store/correctionStore';
+import { useEditorModeStore } from '@/store/editorModeStore';
 
 export type AttendanceStatus = StaffAttendanceStatus;
 
@@ -15,6 +17,7 @@ interface DayRecord {
   rows: StaffAttendanceRow[];
   isLocked: boolean;
   savedAt: string | null;
+  modifiedAt: string | null;
 }
 
 interface HistoryData {
@@ -80,12 +83,13 @@ export const StaffAttendanceManager: React.FC<Props> = ({ onBack }) => {
   const { currentYear } = useAcademicYear();
   const isYearClosed = !!currentYear && currentYear.status === 'LOCKED';
   const editGuard = useEditGuard(currentYear?.id, isYearClosed);
+  const editorModeActive = useEditorModeStore(s => s.isActive());
   const stripRef = useRef<HTMLDivElement | null>(null);
   const [tab, setTab] = useState<TabType>('ATTENDANCE');
   const [selectedDate, setSelectedDate] = useState<string>(today());
   const [record, setRecord] = useState<DayRecord | null>(null);
-  const [saved, setSaved] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
+  const [snapshot, setSnapshot] = useState<Map<string, AttendanceStatus>>(new Map());
   const [activeStatus, setActiveStatus] = useState<string | null>(null);
   const [search, setSearch] = useState('');
   // staffIds whose status the principal has cleared this session. These rows
@@ -101,12 +105,13 @@ export const StaffAttendanceManager: React.FC<Props> = ({ onBack }) => {
   const loadDate = async (date: string) => {
     setSelectedDate(date);
     setRecord(null);
-    setSaved(false);
+    setSnapshot(new Map());
     setActiveStatus(null);
     setClearedIds(new Set());
     try {
       const data = await staffAttendanceService.getForDate(date);
-      setRecord({ date, rows: data.rows, isLocked: data.isLocked, savedAt: data.savedAt });
+      setRecord({ date, rows: data.rows, isLocked: data.isLocked, savedAt: data.savedAt, modifiedAt: data.modifiedAt });
+      setSnapshot(new Map(data.rows.map(r => [r.staffId, r.status])));
     } catch (e) {
       showToast((e as Error).message || 'Failed to load staff attendance', 'error');
     }
@@ -128,6 +133,12 @@ export const StaffAttendanceManager: React.FC<Props> = ({ onBack }) => {
 
   useEffect(() => { void loadDate(today()); /* eslint-disable-next-line react-hooks/exhaustive-deps */ }, []);
   useEffect(() => { void loadHistory(getCurrentMonthYM()); /* eslint-disable-next-line react-hooks/exhaustive-deps */ }, []);
+
+  const isDirty = useMemo(() => {
+    if (!record) return false;
+    if (clearedIds.size > 0) return true;
+    return record.rows.some(r => snapshot.get(r.staffId) !== r.status);
+  }, [record, clearedIds, snapshot]);
 
   const counts = useMemo(() => {
     const c: Record<AttendanceStatus, number> = { PRESENT: 0, ABSENT: 0, HALF_DAY: 0, LEAVE: 0, LATE: 0, HOLIDAY: 0 };
@@ -155,24 +166,22 @@ export const StaffAttendanceManager: React.FC<Props> = ({ onBack }) => {
     }
   }, [dateStrip]);
 
-  const isLocked = (record?.isLocked ?? false) || !editGuard.canEdit;
+  // hardLocked = salary generated OR year closed without correction mode
+  const hardLocked = (record?.isLocked ?? false) || !editGuard.canEdit;
+  // softLocked = attendance saved at least once, editor mode not active
+  const savedOnce  = !!record?.savedAt;
+  const softLocked = savedOnce && !editorModeActive;
+  const isLocked   = hardLocked || softLocked;
 
   const bulkSet = (status: AttendanceStatus) => {
     if (isLocked) return;
     setRecord(r => r ? ({ ...r, rows: r.rows.map(row => ({ ...row, status })) }) : r);
-    // Any prior "cleared" marks are overridden by an explicit bulk action.
     setClearedIds(new Set());
-    setSaved(false);
   };
 
-  // "Clear" wipes every row's mark for the current view. Cleared rows render
-  // as "Unmarked" and, when saved, their server-side staff_attendance row is
-  // DELETED — making Clear semantically distinct from All Present. The
-  // principal must still tap Save to persist the change.
   const clearAll = () => {
     if (isLocked || !record) return;
     setClearedIds(new Set(record.rows.map(r => r.staffId)));
-    setSaved(false);
     setActiveStatus(null);
   };
 
@@ -182,16 +191,11 @@ export const StaffAttendanceManager: React.FC<Props> = ({ onBack }) => {
       ...r,
       rows: r.rows.map(row => row.staffId === staffId ? { ...row, status } : row),
     }) : r);
-    // Marking a cleared row removes it from the cleared set so it gets
-    // upserted again on the next save.
     setClearedIds(prev => {
       if (!prev.has(staffId)) return prev;
-      const next = new Set(prev);
-      next.delete(staffId);
-      return next;
+      const next = new Set(prev); next.delete(staffId); return next;
     });
     setActiveStatus(null);
-    setSaved(false);
   };
 
   const handleSave = async () => {
@@ -200,23 +204,21 @@ export const StaffAttendanceManager: React.FC<Props> = ({ onBack }) => {
       showToast('Year closed — pehle Correction Mode enable karein', 'error');
       return;
     }
+    const wasAlreadySaved = !!record.savedAt;
     setIsSaving(true);
     try {
-      // Partition rows into "to-upsert" and "to-delete" before sending.
       const toUpsert = record.rows.filter(r => !clearedIds.has(r.staffId));
       const toClear: string[] = Array.from(clearedIds.values());
       const result = await editGuard.gate(
-        () => staffAttendanceService.save(record.date, toUpsert, toClear),
+        () => staffAttendanceService.save(record.date, toUpsert, toClear, editorModeActive),
         { entityType: 'staff_attendance', entityId: record.date },
       );
       if (result === undefined) return;
-      setRecord(r => r ? { ...r, savedAt: result } : r);
-      // Cleared rows have been persisted (deleted on the server). The next
-      // load will show them as default PRESENT again, so locally we reset
-      // both flags to keep the UI consistent without a round-trip.
+      setRecord(r => r ? { ...r, savedAt: result.savedAt, modifiedAt: result.modifiedAt } : r);
+      // Reset snapshot to current rows so isDirty returns false immediately
+      setSnapshot(new Map(record.rows.filter(r => !clearedIds.has(r.staffId)).map(r => [r.staffId, r.status])));
       setClearedIds(new Set());
-      setSaved(true);
-      showToast(toClear.length ? 'Attendance saved (cleared rows reset)' : 'Attendance saved');
+      showToast(wasAlreadySaved ? 'Attendance updated (Editor Mode)' : 'Attendance saved');
     } catch (e) {
       showToast((e as Error).message || 'Failed to save', 'error');
     } finally {
@@ -298,15 +300,38 @@ export const StaffAttendanceManager: React.FC<Props> = ({ onBack }) => {
                 {new Date(selectedDate).toLocaleDateString('en-IN', { weekday: 'long', day: 'numeric', month: 'long' })}
               </div>
               <div className="text-[10px] font-bold text-slate-400 mt-0.5">
-                {isLocked ? 'Salary generated — record locked' : 'Edit and save'}
+                {hardLocked ? 'Salary generated — record locked'
+                  : softLocked ? 'Saved · Editor Mode required to edit'
+                  : editorModeActive && savedOnce ? 'Editor Mode ON — changes will overwrite saved attendance'
+                  : 'Mark and save'}
               </div>
             </div>
-            {isLocked && (
-              <div className="flex items-center gap-1 bg-amber-50 border border-amber-200 px-2.5 py-1 rounded-full">
-                <Lock size={11} className="text-amber-500" />
-                <span className="text-[9px] font-black text-amber-700">LOCKED</span>
-              </div>
-            )}
+            <div className="flex items-center gap-1.5">
+              {isDirty && !hardLocked && (
+                <div className="flex items-center gap-1 bg-amber-50 border border-amber-200 px-2 py-1 rounded-full">
+                  <AlertTriangle size={10} className="text-amber-500" />
+                  <span className="text-[8px] font-black text-amber-700">UNSAVED</span>
+                </div>
+              )}
+              {hardLocked && (
+                <div className="flex items-center gap-1 bg-rose-50 border border-rose-200 px-2.5 py-1 rounded-full">
+                  <Lock size={11} className="text-rose-500" />
+                  <span className="text-[9px] font-black text-rose-700">LOCKED</span>
+                </div>
+              )}
+              {softLocked && !hardLocked && (
+                <div className="flex items-center gap-1 bg-slate-100 border border-slate-200 px-2.5 py-1 rounded-full">
+                  <Lock size={11} className="text-slate-500" />
+                  <span className="text-[9px] font-black text-slate-600">SAVED</span>
+                </div>
+              )}
+              {editorModeActive && savedOnce && !hardLocked && (
+                <div className="flex items-center gap-1 bg-indigo-50 border border-indigo-200 px-2.5 py-1 rounded-full">
+                  <Unlock size={11} className="text-indigo-500" />
+                  <span className="text-[9px] font-black text-indigo-700">EDITOR</span>
+                </div>
+              )}
+            </div>
           </div>
 
           <div className="grid grid-cols-3 gap-2">
@@ -410,41 +435,77 @@ export const StaffAttendanceManager: React.FC<Props> = ({ onBack }) => {
             </div>
           )}
 
-          {record.savedAt && (
-            <p className="text-center text-[9px] font-bold text-slate-400 mt-4">
-              Last saved: {new Date(record.savedAt).toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit' })}
-            </p>
+          {(record.savedAt || record.modifiedAt) && (
+            <div className="text-center mt-4 space-y-1">
+              {record.savedAt && !record.modifiedAt && (
+                <p className="text-[9px] font-bold text-slate-400">
+                  Last saved: {new Date(record.savedAt).toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit' })}
+                </p>
+              )}
+              {record.modifiedAt && (
+                <>
+                  <p className="text-[9px] font-bold text-slate-400">
+                    First saved: {record.savedAt ? new Date(record.savedAt).toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit' }) : '—'}
+                  </p>
+                  <p className="flex items-center justify-center gap-1 text-[9px] font-black text-indigo-500">
+                    <Pencil size={9} /> Modified: {new Date(record.modifiedAt).toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit' })} (Editor Mode)
+                  </p>
+                </>
+              )}
+            </div>
           )}
         </div>
 
-        {/* Floating Save button */}
-        {!isLocked && (
-          <div className="fixed bottom-0 left-0 right-0 p-4 bg-white border-t border-slate-100 z-30">
-            <button onClick={handleSave} disabled={isSaving}
-              className={`w-full py-4 font-black text-base rounded-2xl flex items-center justify-center gap-2 transition-all disabled:opacity-60 ${
-                saved
-                  ? 'bg-emerald-500 text-white'
-                  : 'bg-slate-900 text-white active:scale-95'
-              }`}>
-              {isSaving ? (
-                <><Save size={20} /> Saving…</>
-              ) : saved ? (
-                <><CheckCircle2 size={20} /> Attendance Saved!</>
-              ) : (
-                <><Save size={20} /> Save Attendance</>
-              )}
-            </button>
-          </div>
-        )}
+        {/* Footer */}
+        <div className="fixed bottom-0 left-0 right-0 p-4 bg-white border-t border-slate-100 z-30">
 
-        {isLocked && (
-          <div className="fixed bottom-0 left-0 right-0 p-4 bg-white border-t border-slate-100 z-30">
-            <div className="w-full py-3 bg-amber-50 border border-amber-200 rounded-2xl flex items-center justify-center gap-2">
-              <Lock size={16} className="text-amber-500" />
-              <span className="font-black text-amber-700 text-sm">Salary generated — record locked</span>
+          {/* Hard locked (salary generated) */}
+          {hardLocked && (
+            <div className="w-full py-3 bg-rose-50 border border-rose-200 rounded-2xl flex items-center justify-center gap-2">
+              <Lock size={16} className="text-rose-500" />
+              <span className="font-black text-rose-700 text-sm">Salary generated — record locked</span>
             </div>
-          </div>
-        )}
+          )}
+
+          {/* Soft locked — saved, editor mode OFF */}
+          {!hardLocked && softLocked && !editorModeActive && (
+            <div className="w-full py-3 bg-slate-50 border border-slate-200 rounded-2xl flex flex-col items-center justify-center gap-1">
+              <div className="flex items-center gap-2">
+                <Lock size={15} className="text-slate-500" />
+                <span className="font-black text-slate-700 text-sm">
+                  Attendance Saved
+                  {record?.savedAt ? ` · ${new Date(record.savedAt).toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit' })}` : ''}
+                </span>
+              </div>
+              <span className="text-[9px] font-bold text-slate-400">Edit karne ke liye Settings → Editor Mode ON karein</span>
+            </div>
+          )}
+
+          {/* Editor Mode active, no unsaved changes yet */}
+          {!hardLocked && editorModeActive && savedOnce && !isDirty && (
+            <div className="w-full py-3 bg-indigo-50 border border-indigo-200 rounded-2xl flex items-center justify-center gap-2">
+              <Unlock size={15} className="text-indigo-500" />
+              <span className="font-black text-indigo-700 text-sm">Editor Mode ON — changes will overwrite saved attendance</span>
+            </div>
+          )}
+
+          {/* Save button — first save OR editor mode with dirty changes */}
+          {!hardLocked && (!softLocked || (editorModeActive && isDirty)) && (
+            <button onClick={handleSave} disabled={isSaving}
+              className={`w-full py-4 font-black text-base rounded-2xl flex items-center justify-center gap-2 transition-all active:scale-[0.98] disabled:opacity-60 ${
+                editorModeActive && savedOnce
+                  ? 'bg-indigo-600 text-white'
+                  : 'bg-slate-900 text-white'
+              }`}>
+              {isSaving
+                ? <><div className="w-5 h-5 border-2 border-white/30 border-t-white rounded-full animate-spin" /> Saving…</>
+                : editorModeActive && savedOnce
+                  ? <><Save size={20} /> Save Changes (Editor Mode)</>
+                  : <><Save size={20} /> Save Attendance</>
+              }
+            </button>
+          )}
+        </div>
 
         {activeStatus && (
           <div className="absolute inset-0 z-20" onClick={() => setActiveStatus(null)} />

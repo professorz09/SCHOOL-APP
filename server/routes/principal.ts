@@ -378,10 +378,22 @@ principalRouter.post('/staff-attendance/save', requireAuth, PRINCIPAL, async (re
       date: string;
       rows: { staffId: string; status: string }[];
       clearedStaffIds?: string[];
+      editorMode?: boolean;
     }>(req, ['date', 'rows']);
 
     const clearedStaffIds: string[] = body.clearedStaffIds ?? [];
     if (!body.rows.length && !clearedStaffIds.length) throw new ApiError(400, 'No staff to record');
+
+    // Hard-lock guard: salary-generated records cannot be modified by anyone.
+    const { data: hardLocked } = await adminDb
+      .from('staff_attendance')
+      .select('id')
+      .eq('school_id', req.user.school_id!)
+      .eq('date', body.date)
+      .eq('is_locked', true)
+      .limit(1)
+      .maybeSingle();
+    if (hardLocked) throw new ApiError(403, 'Attendance is hard-locked (salary generated) — cannot modify');
 
     const nowIso = new Date().toISOString();
 
@@ -394,24 +406,51 @@ principalRouter.post('/staff-attendance/save', requireAuth, PRINCIPAL, async (re
 
     if (body.rows.length) {
       const payload = body.rows.map(r => ({
-        school_id:  req.user.school_id,
-        staff_id:   r.staffId,
-        date:       body.date,
-        status:     r.status,
-        marked_by:  req.user.id,
-        created_at: nowIso,
+        school_id:   req.user.school_id,
+        staff_id:    r.staffId,
+        date:        body.date,
+        status:      r.status,
+        marked_by:   req.user.id,
+        modified_by: req.user.id,
+        created_at:  nowIso,
+        // updated_at is intentionally omitted on INSERT so it matches
+        // created_at (first-save signal). The trigger bumps it on UPDATE.
       }));
       const { error } = await adminDb.from('staff_attendance')
-        .upsert(payload, { onConflict: 'staff_id,date' });
+        .upsert(payload, { onConflict: 'staff_id,date', ignoreDuplicates: false });
       if (error) throw new ApiError(500, error.message);
     }
 
-    const { data: ts } = await adminDb.from('staff_attendance').select('created_at')
-      .eq('school_id', req.user.school_id!).eq('date', body.date)
-      .order('created_at', { ascending: false }).limit(1).maybeSingle();
-    const savedAt = (ts as { created_at: string } | null)?.created_at ?? nowIso;
+    // Re-query to get accurate timestamps after upsert (trigger may have fired).
+    const { data: ts } = await adminDb
+      .from('staff_attendance')
+      .select('created_at, updated_at')
+      .eq('school_id', req.user.school_id!)
+      .eq('date', body.date)
+      .order('created_at', { ascending: false })
+      .limit(1)
+      .maybeSingle();
 
-    ok(res, { savedAt });
+    const row = ts as { created_at: string; updated_at: string | null } | null;
+    const savedAt    = row?.created_at ?? nowIso;
+    const modifiedAt = (row?.updated_at && row.updated_at !== row.created_at)
+      ? row.updated_at : null;
+
+    // Audit log — uses existing audit_logs table (migration 0001).
+    await adminDb.from('audit_logs').insert({
+      user_id:     req.user.id,
+      school_id:   req.user.school_id,
+      action:      modifiedAt ? 'staff_attendance_modified' : 'staff_attendance_saved',
+      entity_type: 'staff_attendance',
+      details: {
+        date:          body.date,
+        editor_mode:   !!body.editorMode,
+        row_count:     body.rows?.length ?? 0,
+        cleared_count: clearedStaffIds.length,
+      },
+    }).throwOnError();
+
+    ok(res, { savedAt, modifiedAt });
   } catch (err) { fail(res, err); }
 });
 

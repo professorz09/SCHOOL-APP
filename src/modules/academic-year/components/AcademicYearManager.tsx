@@ -1,7 +1,7 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   ArrowLeft, Calendar, Lock, CheckCircle2, AlertTriangle,
-  Sparkles, Plus, Power, Edit3, FileWarning, History,
+  Sparkles, Plus, Power, Edit3, FileWarning, History, GraduationCap,
 } from 'lucide-react';
 import { useAcademicYear } from '@/shared/context/AcademicYearContext';
 import { useUIStore } from '@/store/uiStore';
@@ -10,19 +10,15 @@ import { useCorrectionStore } from '@/store/correctionStore';
 import { useEditingYearStore } from '@/store/editingYearStore';
 import type { PreClosingChecklist } from '@/modules/academic-year/yearClosing.types';
 import { AcademicYearWizard } from '@/modules/academic-year/components/AcademicYearWizard';
-import { PromotionWizard } from '@/modules/academic-year/components/PromotionWizard';
 
-interface Props { onBack: () => void; onNavigateToStaff?: () => void; }
+interface Props { onBack: () => void; onNavigateToStaff?: () => void; onNavigateToPromotion?: () => void; }
 
-export const AcademicYearManager: React.FC<Props> = ({ onBack, onNavigateToStaff }) => {
+export const AcademicYearManager: React.FC<Props> = ({ onBack, onNavigateToStaff, onNavigateToPromotion }) => {
   const {
     academicYears, activeYear, isYearLocked, refresh: refreshAY, setActiveYear,
     setCurrentEditingYear,
   } = useAcademicYear();
   const { showToast } = useUIStore();
-
-  // ─── Promotion wizard state ─────────────────────────────────────────────
-  const [showPromotion, setShowPromotion] = useState(false);
 
   // ─── Wizard state ───────────────────────────────────────────────────────
   const [showWizard, setShowWizard] = useState(false);
@@ -331,8 +327,6 @@ export const AcademicYearManager: React.FC<Props> = ({ onBack, onNavigateToStaff
   ), [academicYears, isYearLocked, enabledByYear, countsByYear, handleToggleCorrection]);
 
   // ─── MAIN page ───────────────────────────────────────────────────────────
-  if (showPromotion) return <PromotionWizard onBack={() => setShowPromotion(false)} />;
-
   return (
     <div className="w-full bg-slate-50 flex flex-col animate-in slide-in-from-right-8 duration-300 min-h-screen">
       <div className="bg-white border-b border-slate-100 px-4 pt-4 pb-4 sticky top-0 z-10 shadow-sm flex items-center gap-3">
@@ -401,21 +395,27 @@ export const AcademicYearManager: React.FC<Props> = ({ onBack, onNavigateToStaff
               </div>
             )}
 
-            {/* ─── Add new year + Promote Students buttons ─────────────── */}
-            <div className="flex gap-2">
-              <button
-                onClick={() => openWizard()}
-                className="flex-1 bg-white border-2 border-dashed border-indigo-300 hover:border-indigo-500 text-indigo-600 font-black text-sm rounded-2xl py-3 flex items-center justify-center gap-2"
-              >
-                <Plus size={16} /> Add Year
-              </button>
-              <button
-                onClick={() => setShowPromotion(true)}
-                className="flex-1 bg-white border-2 border-dashed border-emerald-300 hover:border-emerald-500 text-emerald-700 font-black text-sm rounded-2xl py-3 flex items-center justify-center gap-2"
-              >
-                <Sparkles size={16} /> Promote Students
-              </button>
-            </div>
+            {/* ─── Add new year button ──────────────────────────────── */}
+            <button
+              onClick={() => openWizard()}
+              className="w-full bg-white border-2 border-dashed border-indigo-300 hover:border-indigo-500 text-indigo-600 font-black text-sm rounded-2xl py-3 flex items-center justify-center gap-2"
+            >
+              <Plus size={16} /> Add Academic Year
+            </button>
+
+            {/* ─── Promotion info note ──────────────────────────────── */}
+            <button
+              onClick={onNavigateToPromotion}
+              disabled={!onNavigateToPromotion}
+              className="w-full bg-emerald-50 border border-emerald-200 rounded-2xl py-3 px-4 flex items-center gap-3 active:scale-[0.98] transition-transform disabled:opacity-50 disabled:cursor-default"
+            >
+              <GraduationCap size={18} className="text-emerald-600 shrink-0" />
+              <div className="flex-1 text-left min-w-0">
+                <p className="text-sm font-black text-emerald-800">Promote Students</p>
+                <p className="text-[10px] font-bold text-emerald-600">Dashboard se start karein</p>
+              </div>
+              <Sparkles size={14} className="text-emerald-500 shrink-0" />
+            </button>
 
             {/* ─── Year list ───────────────────────────────────────────── */}
             <div>
