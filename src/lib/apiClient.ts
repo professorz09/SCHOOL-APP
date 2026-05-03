@@ -450,6 +450,18 @@ export const apiAdminSchools = {
     get<SchoolBillingInfo>(`/admin/schools/${schoolId}/payments`),
 };
 
+// ─── Homework ─────────────────────────────────────────────────────────────────
+
+export const apiHomework = {
+  list: (sectionId: string, yearId: string) =>
+    get<any[]>(`/homework?sectionId=${sectionId}&yearId=${yearId}`),
+  create: (body: {
+    sectionId: string; subject: string; title: string;
+    description?: string; dueDate?: string; academicYearId: string;
+  }) => post<any>('/homework/create', body),
+  delete: (id: string) => apiFetch<any>('DELETE', `/homework/${id}`),
+};
+
 // ─── Health check ─────────────────────────────────────────────────────────────
 
 export const apiHealth = () =>
