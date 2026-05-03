@@ -1,48 +1,54 @@
-import React, { useEffect, useMemo, useRef, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState, useCallback } from 'react';
 import {
   ArrowLeft, Save, ChevronRight, Search, Lock,
-  ShieldCheck, Hourglass, AlertCircle,
+  ShieldCheck, Hourglass, AlertCircle, ChevronLeft, RefreshCw,
 } from 'lucide-react';
 import { teacherService } from '@/roles/teacher/teacher.service';
 import { TeacherClass } from '@/shared/types/teacher.types';
 import { useUIStore } from '@/store/uiStore';
-import type { DateAttendanceStatus } from '@/modules/attendance/attendance.service';
+import type { DateAttendanceStatus, AttendanceCellStatus, GridDateRecord, GridStudentDetails } from '@/modules/attendance/attendance.service';
+import { useAcademicYear } from '@/shared/context/AcademicYearContext';
 
-type View = 'CLASSES' | 'CLASS_DETAIL';
+type View = 'CLASSES' | 'GRID';
 
 interface Props { onBack: () => void; }
 
-interface AttendanceStudentRow {
-  id: string; name: string; rollNo: string; isPresent: boolean;
-}
-
-interface ClassRecord {
-  id: string;
-  status: 'PENDING' | 'APPROVED' | 'REJECTED';
-  isLocked: boolean;
-  students: AttendanceStudentRow[];
-  totalPresent: number;
-  totalAbsent: number;
-  totalStudents: number;
-}
+const CELL_CYCLE: AttendanceCellStatus[] = ['present', 'absent', 'holiday', 'half'];
+const NEXT_STATUS = (s: AttendanceCellStatus): AttendanceCellStatus => {
+  const idx = CELL_CYCLE.indexOf(s);
+  return CELL_CYCLE[(idx + 1) % CELL_CYCLE.length];
+};
+const CELL_LABEL: Record<AttendanceCellStatus, string> = {
+  present: 'P', absent: 'A', holiday: 'H', half: 'HD',
+};
+const CELL_BG: Record<AttendanceCellStatus, string> = {
+  present: 'bg-emerald-500 text-white',
+  absent:  'bg-rose-500 text-white',
+  holiday: 'bg-slate-200 text-slate-600',
+  half:    'bg-amber-400 text-white',
+};
 
 const todayStr = () => new Date().toISOString().split('T')[0];
-
-const buildDateStrip = (count = 14): string[] => {
+const currentYearMonth = () => {
+  const d = new Date(); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
+};
+const buildMonthDates = (ym: string, yearStart?: string, yearEnd?: string): string[] => {
+  const [y, m] = ym.split('-').map(Number);
+  const today = todayStr();
+  const ceiling = yearEnd && yearEnd < today ? yearEnd : today;
+  const floor   = yearStart ?? '0000-01-01';
   const out: string[] = [];
-  for (let i = count - 1; i >= 0; i--) {
-    const d = new Date();
-    d.setDate(d.getDate() - i);
-    out.push(d.toISOString().split('T')[0]);
+  const dim = new Date(y, m, 0).getDate();
+  for (let d = 1; d <= dim; d++) {
+    const ds = `${y}-${String(m).padStart(2,'0')}-${String(d).padStart(2,'0')}`;
+    if (ds >= floor && ds <= ceiling) out.push(ds);
   }
   return out;
 };
-
-const dayShort = (d: string) => new Date(d).toLocaleDateString('en-IN', { weekday: 'short' });
-const dayNum   = (d: string) => new Date(d).getDate();
-const monthShort = (d: string) => new Date(d).toLocaleDateString('en-IN', { month: 'short' });
-const isToday  = (d: string) => d === todayStr();
-const isPast   = (d: string) => d < todayStr();
+const fmtDay      = (d: string) => String(new Date(d).getDate());
+const fmtDayShort = (d: string) => new Date(d).toLocaleDateString('en-IN', { weekday: 'narrow' });
+const fmtMonthLabel = (ym: string) =>
+  new Date(ym + '-01').toLocaleDateString('en-IN', { month: 'long', year: 'numeric' });
 
 const STATUS_DOT: Record<DateAttendanceStatus, string> = {
   NOT_MARKED: 'bg-slate-300',
@@ -52,27 +58,27 @@ const STATUS_DOT: Record<DateAttendanceStatus, string> = {
 
 export const AttendanceManager: React.FC<Props> = ({ onBack }) => {
   const { showToast } = useUIStore();
+  const { currentYear } = useAcademicYear();
 
   const [view, setView]               = useState<View>('CLASSES');
   const [classes, setClasses]         = useState<TeacherClass[]>([]);
   const [todayStatuses, setTodayStatuses] = useState<Record<string, DateAttendanceStatus>>({});
   const [selectedClass, setSelectedClass] = useState<TeacherClass | null>(null);
-  const [selectedDate, setSelectedDate] = useState<string>(todayStr());
-  const [search, setSearch]           = useState('');
-  const [editStudents, setEditStudents] = useState<AttendanceStudentRow[]>([]);
-  const [isSubmitting, setIsSubmitting] = useState(false);
 
-  const [dateStatuses, setDateStatuses] = useState<Record<string, DateAttendanceStatus>>({});
-  const [selectedRecord, setSelectedRecord] = useState<ClassRecord | null>(null);
-  const [isLoadingDate, setIsLoadingDate] = useState(false);
+  // Grid state
+  const [gridYM,        setGridYM]       = useState(currentYearMonth());
+  const [gridDates,     setGridDates]    = useState<string[]>([]);
+  const [gridRecords,   setGridRecords]  = useState<GridDateRecord[]>([]);
+  const [gridDetails,   setGridDetails]  = useState<GridStudentDetails>({});
+  const [gridLoading,   setGridLoading]  = useState(false);
+  const [gridSearch,    setGridSearch]   = useState('');
+  const [editBuffer,    setEditBuffer]   = useState<Record<string, Record<string, AttendanceCellStatus>>>({});
+  const [isSubmitting,  setIsSubmitting] = useState(false);
 
-  const dateStrip = useMemo(() => buildDateStrip(14), []);
-
-  // Initial class list + today's status badge per class
+  // Load class list once
   useEffect(() => {
     teacherService.getClasses().then(async cs => {
       setClasses(cs);
-      // Fetch today's status for all classes in one batch (per class).
       const today = todayStr();
       const entries = await Promise.all(cs.map(async c => {
         const map = await teacherService.getStatusForClass(c.id, [today]);
@@ -84,114 +90,133 @@ export const AttendanceManager: React.FC<Props> = ({ onBack }) => {
     }).catch(() => setClasses([]));
   }, []);
 
-  // Load date strip statuses + selected-date record whenever class/date changes.
-  useEffect(() => {
-    if (!selectedClass) return;
-    let cancelled = false;
-    setIsLoadingDate(true);
-    teacherService.getStatusForClass(selectedClass.id, dateStrip)
-      .then(map => { if (!cancelled) setDateStatuses(map); })
-      .catch(() => { if (!cancelled) setDateStatuses({}); });
-
-    teacherService.getRecordByClassAndDate(selectedClass.id, selectedDate, {
-      className: selectedClass.className, section: selectedClass.section, subject: selectedClass.subject,
-    })
-      .then(rec => {
-        if (cancelled) return;
-        if (rec) {
-          setSelectedRecord({
-            id: rec.id, status: rec.status, isLocked: rec.isLocked,
-            students: rec.students,
-            totalPresent: rec.totalPresent, totalAbsent: rec.totalAbsent, totalStudents: rec.totalStudents,
-          });
-          setEditStudents([]);
-        } else {
-          setSelectedRecord(null);
-          if (isToday(selectedDate)) {
-            setEditStudents(selectedClass.students.map(s => ({
-              id: s.id, name: s.name, rollNo: s.rollNo, isPresent: false,
-            })));
-          } else {
-            setEditStudents([]);
-          }
-        }
-      })
-      .catch(() => { if (!cancelled) { setSelectedRecord(null); setEditStudents([]); } })
-      .finally(() => { if (!cancelled) setIsLoadingDate(false); });
-
-    return () => { cancelled = true; };
-  }, [selectedClass, selectedDate, dateStrip]);
-
-  // Auto-scroll date strip to today on enter
-  const stripRef = useRef<HTMLDivElement | null>(null);
-  useEffect(() => {
-    if (view !== 'CLASS_DETAIL' || !stripRef.current) return;
-    const todayEl = stripRef.current.querySelector('[data-today="true"]');
-    if (todayEl && 'scrollIntoView' in todayEl) {
-      (todayEl as HTMLElement).scrollIntoView({ behavior: 'auto', inline: 'end', block: 'nearest' });
+  const loadGrid = useCallback(async (cls: TeacherClass, ym: string) => {
+    const dates = buildMonthDates(ym, currentYear?.startDate, currentYear?.endDate);
+    setGridDates(dates);
+    setGridRecords([]);
+    setGridDetails({});
+    setEditBuffer({});
+    if (dates.length === 0) return;
+    setGridLoading(true);
+    try {
+      const { records, studentDetails } = await teacherService.getGridForClass(cls.id, dates[0], dates[dates.length - 1]);
+      setGridRecords(records);
+      setGridDetails(studentDetails);
+    } catch (e) {
+      showToast((e as Error).message || 'Failed to load grid', 'error');
+    } finally {
+      setGridLoading(false);
     }
-  }, [view]);
+  }, [showToast]);
 
-  /* ── Toggle editing buffer ──────────────────────────────────────── */
-  const toggleEditStudent = (id: string) => {
-    setEditStudents(prev => prev.map(s => s.id === id ? { ...s, isPresent: !s.isPresent } : s));
-  };
-  const setAll = (present: boolean) => {
-    setEditStudents(prev => prev.map(s => ({ ...s, isPresent: present })));
+  useEffect(() => {
+    if (view === 'GRID' && selectedClass) loadGrid(selectedClass, gridYM);
+  }, [view, selectedClass, gridYM, loadGrid]);
+
+  const recordMap = useMemo(() => {
+    const m: Record<string, GridDateRecord> = {};
+    for (const r of gridRecords) m[r.date] = r;
+    return m;
+  }, [gridRecords]);
+
+  const todayDateStr = todayStr();
+  const canMarkToday = useMemo(() => {
+    const rec = recordMap[todayDateStr];
+    return !rec || rec.approvalStatus === 'REJECTED';
+  }, [recordMap, todayDateStr]);
+
+  const cellStatus = (date: string, stuId: string): AttendanceCellStatus | null => {
+    if (editBuffer[date]?.[stuId] !== undefined) return editBuffer[date][stuId];
+    return gridDetails[date]?.[stuId] ?? null;
   };
 
-  /* ── Submit (only for today, no record yet) ───────────────────── */
-  const handleSubmit = async () => {
-    if (!selectedClass) return;
+  const toggleCell = (date: string, stuId: string) => {
+    // Teacher can only edit today if no approved/pending record exists
+    if (date !== todayDateStr) return;
+    const rec = recordMap[date];
+    if (rec && rec.approvalStatus !== 'REJECTED') return;
+    setEditBuffer(prev => {
+      const cur = prev[date]?.[stuId] ?? gridDetails[date]?.[stuId] ?? 'absent';
+      return { ...prev, [date]: { ...(prev[date] ?? {}), [stuId]: NEXT_STATUS(cur) } };
+    });
+  };
+
+  const bulkSetToday = (status: AttendanceCellStatus) => {
+    if (!selectedClass || !canMarkToday) return;
+    const entries: Record<string, AttendanceCellStatus> = {};
+    for (const s of selectedClass.students) entries[s.id] = status;
+    setEditBuffer(prev => ({ ...prev, [todayDateStr]: entries }));
+  };
+
+  const handleSubmitToday = async () => {
+    if (!selectedClass || !canMarkToday) return;
+    const edits = editBuffer[todayDateStr];
+    if (!edits || Object.keys(edits).length === 0) {
+      showToast('No changes to submit', 'error'); return;
+    }
     setIsSubmitting(true);
     try {
-      await teacherService.submitAttendance(
-        selectedClass.id,
-        selectedDate,
-        editStudents.map(s => ({ id: s.id, isPresent: s.isPresent })),
-      );
-      // Re-fetch the just-submitted record so the view becomes read-only.
-      const rec = await teacherService.getRecordByClassAndDate(selectedClass.id, selectedDate, {
-        className: selectedClass.className, section: selectedClass.section, subject: selectedClass.subject,
-      });
-      if (rec) {
-        setSelectedRecord({
-          id: rec.id, status: rec.status, isLocked: rec.isLocked,
-          students: rec.students, totalPresent: rec.totalPresent,
-          totalAbsent: rec.totalAbsent, totalStudents: rec.totalStudents,
-        });
-        setEditStudents([]);
-      }
-      const map = await teacherService.getStatusForClass(selectedClass.id, dateStrip);
-      setDateStatuses(map);
-      setTodayStatuses(t => ({ ...t, [selectedClass.id]: map[selectedDate] ?? 'PENDING' }));
+      const students = selectedClass.students.map(s => ({
+        id: s.id,
+        status: edits[s.id] ?? 'absent' as AttendanceCellStatus,
+      }));
+      await teacherService.submitAttendance(selectedClass.id, todayDateStr, students);
       showToast('Attendance submitted — Pending Principal Approval');
-    } catch (err) {
-      showToast(err instanceof Error ? err.message : 'Submit failed', 'error');
+      setEditBuffer(prev => { const n = { ...prev }; delete n[todayDateStr]; return n; });
+      await loadGrid(selectedClass, gridYM);
+      // Refresh today status badge
+      const map = await teacherService.getStatusForClass(selectedClass.id, [todayDateStr]);
+      setTodayStatuses(t => ({ ...t, [selectedClass.id]: map[todayDateStr] ?? 'PENDING' }));
+    } catch (e) {
+      showToast((e as Error).message || 'Submit failed', 'error');
     } finally { setIsSubmitting(false); }
   };
 
-  /* ── Helpers ──────────────────────────────────────────────────── */
-  const renderHeader = (title: string, back: () => void, sub?: string) => (
-    <div className="bg-white border-b border-slate-100 px-4 pt-4 pb-3 sticky top-0 z-10 shadow-sm">
-      <div className="flex items-center gap-3">
-        <button onClick={back} className="p-2 -ml-2 bg-slate-100 rounded-full text-slate-600">
-          <ArrowLeft size={20} />
-        </button>
-        <div>
-          <h2 className="text-xl font-black text-slate-900 uppercase tracking-tight">{title}</h2>
-          {sub && <p className="text-[10px] font-bold text-slate-400">{sub}</p>}
-        </div>
-      </div>
-    </div>
-  );
+  const initTodayBuffer = () => {
+    if (!selectedClass) return;
+    // Pre-fill today with all absent if no buffer yet
+    if (!editBuffer[todayDateStr] || Object.keys(editBuffer[todayDateStr]).length === 0) {
+      const entries: Record<string, AttendanceCellStatus> = {};
+      for (const s of selectedClass.students) entries[s.id] = 'absent';
+      setEditBuffer(prev => ({ ...prev, [todayDateStr]: entries }));
+    }
+  };
+
+  const filteredStudents = useMemo(() =>
+    (selectedClass?.students ?? []).filter(s =>
+      s.name.toLowerCase().includes(gridSearch.toLowerCase()),
+    ), [selectedClass, gridSearch]);
+
+  const changeMonth = (delta: number) => {
+    const [y, m] = gridYM.split('-').map(Number);
+    const nd = new Date(y, m - 1 + delta, 1);
+    const nm = `${nd.getFullYear()}-${String(nd.getMonth() + 1).padStart(2,'0')}`;
+    if (nm > currentYearMonth()) return;
+    if (currentYear?.startDate) {
+      const yearStartYM = currentYear.startDate.slice(0, 7);
+      if (nm < yearStartYM) return;
+    }
+    setGridYM(nm);
+  };
+
+  const hasEditToday = !!(editBuffer[todayDateStr] && Object.keys(editBuffer[todayDateStr]).length > 0);
 
   /* ════════════════ CLASSES VIEW ══════════════════════════════════ */
   if (view === 'CLASSES') return (
     <div className="w-full bg-slate-50 flex flex-col animate-in slide-in-from-right-8 duration-300">
-      {renderHeader('Attendance', onBack, 'Select a class to view or mark attendance')}
+      <div className="bg-white border-b border-slate-100 px-4 pt-4 pb-3 sticky top-0 z-10 shadow-sm">
+        <div className="flex items-center gap-3">
+          <button onClick={onBack} className="p-2 -ml-2 bg-slate-100 rounded-full text-slate-600">
+            <ArrowLeft size={20} />
+          </button>
+          <div>
+            <h2 className="text-xl font-black text-slate-900 uppercase tracking-tight">Attendance</h2>
+            <p className="text-[10px] font-bold text-slate-400">Select a class to open the grid</p>
+          </div>
+        </div>
+      </div>
 
-      <div className="flex-1 overflow-y-auto p-4  space-y-3">
+      <div className="flex-1 overflow-y-auto p-4 space-y-3">
         {classes.length === 0 && (
           <div className="bg-white rounded-2xl border border-slate-100 shadow-sm p-8 text-center">
             <p className="text-xs font-bold text-slate-400">No classes assigned to you yet.</p>
@@ -203,7 +228,7 @@ export const AttendanceManager: React.FC<Props> = ({ onBack }) => {
             const status = todayStatuses[cls.id] ?? 'NOT_MARKED';
             return (
               <button key={cls.id}
-                onClick={() => { setSelectedClass(cls); setSelectedDate(todayStr()); setView('CLASS_DETAIL'); }}
+                onClick={() => { setSelectedClass(cls); setGridYM(currentYearMonth()); setView('GRID'); }}
                 className={`w-full flex items-center gap-3 px-4 py-4 text-left active:bg-slate-50 transition-colors ${idx < classes.length - 1 ? 'border-b border-slate-100' : ''}`}>
                 <div className="w-10 h-10 rounded-full bg-indigo-100 text-indigo-700 flex items-center justify-center font-black text-sm shrink-0">
                   {cls.className.replace('Class ', '')}
@@ -213,9 +238,7 @@ export const AttendanceManager: React.FC<Props> = ({ onBack }) => {
                   <div className="text-[10px] font-bold text-slate-400 mt-0.5">{cls.subject} · {cls.studentCount} students</div>
                 </div>
                 {status === 'NOT_MARKED' && (
-                  <span className="text-[9px] font-black text-blue-700 bg-blue-50 border border-blue-100 px-2 py-1 rounded-full uppercase">
-                    Mark Today
-                  </span>
+                  <span className="text-[9px] font-black text-blue-700 bg-blue-50 border border-blue-100 px-2 py-1 rounded-full uppercase">Mark Today</span>
                 )}
                 {status === 'PENDING' && (
                   <span className="flex items-center gap-1 text-[9px] font-black text-amber-700 bg-amber-50 border border-amber-200 px-2 py-1 rounded-full uppercase">
@@ -236,208 +259,191 @@ export const AttendanceManager: React.FC<Props> = ({ onBack }) => {
     </div>
   );
 
-  /* ════════════════ CLASS DETAIL ══════════════════════════════════ */
-  if (view === 'CLASS_DETAIL' && selectedClass) {
-    const isTodayDate = isToday(selectedDate);
-    const isPastDate  = isPast(selectedDate);
-    const isFutureDate = !isTodayDate && !isPastDate;
-
-    // Decide what to render in the body
-    const displayStudents = selectedRecord ? selectedRecord.students : editStudents;
-    const filtered = displayStudents.filter(s =>
-      s.name.toLowerCase().includes(search.toLowerCase()) || s.rollNo.includes(search),
-    );
-    const present = displayStudents.filter(s => s.isPresent).length;
-    const absent  = displayStudents.length - present;
-    const pct     = displayStudents.length > 0 ? Math.round((present / displayStudents.length) * 100) : 0;
-
-    // Teacher can only mark today if no record exists yet. Once submitted, the
-    // record is read-only — only the principal can approve/reject/edit.
-    const canEdit = isTodayDate && !selectedRecord;
+  /* ════════════════ GRID VIEW ══════════════════════════════════════ */
+  if (view === 'GRID' && selectedClass) {
+    const todayRec = recordMap[todayDateStr];
+    const todayEditable = canMarkToday;
 
     return (
-      <div className="w-full bg-slate-50 flex flex-col animate-in slide-in-from-right-8 duration-300">
+      <div className="w-full bg-slate-50 flex flex-col h-full animate-in slide-in-from-right-8 duration-300">
         {/* Header */}
-        <div className="bg-white border-b border-slate-100 px-4 pt-4 pb-0 sticky top-0 z-10 shadow-sm">
-          <div className="flex items-center gap-3 pb-3">
-            <button onClick={() => { setView('CLASSES'); setEditStudents([]); setSelectedRecord(null); }} className="p-2 -ml-2 bg-slate-100 rounded-full text-slate-600">
+        <div className="bg-white border-b border-slate-100 px-4 pt-4 pb-2 sticky top-0 z-10 shadow-sm">
+          <div className="flex items-center gap-3 mb-2">
+            <button onClick={() => { setView('CLASSES'); setEditBuffer({}); }} className="p-2 -ml-2 bg-slate-100 rounded-full text-slate-600">
               <ArrowLeft size={20} />
             </button>
-            <div>
+            <div className="flex-1">
               <h2 className="text-xl font-black text-slate-900 uppercase tracking-tight">{selectedClass.className}-{selectedClass.section}</h2>
               <p className="text-[10px] font-bold text-slate-400">{selectedClass.subject} · {selectedClass.studentCount} students</p>
             </div>
+            {gridLoading && <RefreshCw size={16} className="text-slate-400 animate-spin"/>}
           </div>
 
-          {/* Date strip */}
-          <div ref={stripRef} className="flex border-t border-slate-100 overflow-x-auto hide-scrollbar -mx-4 px-4 pt-1.5 pb-1">
-            {dateStrip.map(d => {
-              const isSelected = selectedDate === d;
-              const status     = dateStatuses[d] ?? 'NOT_MARKED';
-              const today      = isToday(d);
-              return (
-                <button key={d}
-                  data-today={today ? 'true' : 'false'}
-                  onClick={() => { setSelectedDate(d); setEditStudents([]); setSearch(''); }}
-                  className={`shrink-0 flex flex-col items-center mx-0.5 px-2.5 py-1.5 rounded-xl border-2 transition-colors ${
-                    isSelected
-                      ? today ? 'bg-blue-600 border-blue-600 text-white' : 'bg-slate-800 border-slate-800 text-white'
-                      : today ? 'border-blue-200 text-blue-600 bg-blue-50' : 'border-transparent text-slate-400'
-                  }`}>
-                  <span className="text-[9px] font-black uppercase tracking-widest">{dayShort(d)}</span>
-                  <span className="text-base font-black tabular-nums leading-none my-0.5">{dayNum(d)}</span>
-                  <span className="text-[8px] font-bold uppercase tracking-wide opacity-75">{monthShort(d)}</span>
-                  <div className={`w-1.5 h-1.5 rounded-full mt-1 ${isSelected ? 'bg-white' : STATUS_DOT[status]}`}/>
-                </button>
-              );
-            })}
-          </div>
-        </div>
-
-        {/* Status bar for selected date */}
-        <div className="bg-white border-b border-slate-100 px-4 py-3">
-          <div className="flex items-center justify-between">
-            <div>
-              <div className="font-black text-slate-900 text-sm">
-                {new Date(selectedDate).toLocaleDateString('en-IN', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' })}
-              </div>
-              <div className="text-[10px] font-bold text-slate-400 mt-0.5">
-                {selectedRecord
-                  ? (selectedRecord.status === 'PENDING' ? 'Pending Principal Approval'
-                    : selectedRecord.status === 'APPROVED' ? 'Approved by Principal'
-                    : 'Rejected — please re-submit')
-                  : isTodayDate ? 'Not yet marked' : isFutureDate ? 'Future date' : 'No attendance recorded'}
-              </div>
-            </div>
-            {selectedRecord && selectedRecord.status === 'PENDING' && (
-              <span className="flex items-center gap-1 text-[9px] font-black text-amber-700 bg-amber-50 border border-amber-200 px-2 py-1 rounded-full uppercase">
-                <Hourglass size={9}/> Pending
-              </span>
-            )}
-            {selectedRecord && selectedRecord.status === 'APPROVED' && (
-              <span className="flex items-center gap-1 text-[9px] font-black text-emerald-700 bg-emerald-50 border border-emerald-200 px-2 py-1 rounded-full uppercase">
-                <ShieldCheck size={9}/> Approved
-              </span>
-            )}
-            {selectedRecord && selectedRecord.status === 'REJECTED' && (
-              <span className="flex items-center gap-1 text-[9px] font-black text-rose-700 bg-rose-50 border border-rose-200 px-2 py-1 rounded-full uppercase">
-                Rejected
-              </span>
-            )}
+          {/* Month navigator */}
+          <div className="flex items-center justify-between gap-2 mb-2">
+            <button onClick={() => changeMonth(-1)} className="p-1.5 bg-slate-100 rounded-xl text-slate-600 active:scale-95">
+              <ChevronLeft size={15} />
+            </button>
+            <div className="font-black text-slate-900 text-sm">{fmtMonthLabel(gridYM)}</div>
+            <button onClick={() => changeMonth(1)} disabled={gridYM >= currentYearMonth()}
+              className="p-1.5 bg-slate-100 rounded-xl text-slate-600 active:scale-95 disabled:opacity-30">
+              <ChevronRight size={15} />
+            </button>
           </div>
 
-          {/* Stats (when there is data) */}
-          {(selectedRecord || canEdit) && (
-            <div className="grid grid-cols-3 gap-2 mt-3">
-              <div className="text-center bg-emerald-50 rounded-xl py-2">
-                <div className="text-base font-black text-emerald-600 tabular-nums">{present}</div>
-                <div className="text-[8px] font-black text-emerald-500 uppercase tracking-wide">Present</div>
-              </div>
-              <div className="text-center bg-rose-50 rounded-xl py-2">
-                <div className="text-base font-black text-rose-500 tabular-nums">{absent}</div>
-                <div className="text-[8px] font-black text-rose-400 uppercase tracking-wide">Absent</div>
-              </div>
-              <div className="text-center bg-slate-100 rounded-xl py-2">
-                <div className={`text-base font-black tabular-nums ${pct >= 75 ? 'text-emerald-600' : 'text-rose-500'}`}>{pct}%</div>
-                <div className="text-[8px] font-black text-slate-500 uppercase tracking-wide">Rate</div>
-              </div>
+          {/* Today actions */}
+          {gridYM === currentYearMonth() && (
+            <div className="pb-1 space-y-1.5">
+              {!todayRec && (
+                <div className="flex gap-2">
+                  <button onClick={() => { initTodayBuffer(); bulkSetToday('present'); }}
+                    className="flex-1 py-1.5 bg-emerald-500 text-white text-[10px] font-black rounded-xl active:scale-95 transition-transform">
+                    All Present
+                  </button>
+                  <button onClick={() => { initTodayBuffer(); bulkSetToday('absent'); }}
+                    className="flex-1 py-1.5 bg-rose-500 text-white text-[10px] font-black rounded-xl active:scale-95 transition-transform">
+                    All Absent
+                  </button>
+                  <button onClick={() => { initTodayBuffer(); bulkSetToday('holiday'); }}
+                    className="flex-1 py-1.5 bg-slate-400 text-white text-[10px] font-black rounded-xl active:scale-95 transition-transform">
+                    Holiday
+                  </button>
+                </div>
+              )}
+              {todayRec && todayRec.approvalStatus === 'PENDING' && (
+                <div className="flex items-center gap-2 bg-amber-50 border border-amber-100 rounded-xl px-3 py-2">
+                  <Hourglass size={12} className="text-amber-500 shrink-0"/>
+                  <span className="text-[10px] font-bold text-amber-700 flex-1">Submitted — pending principal approval</span>
+                </div>
+              )}
+              {todayRec && todayRec.approvalStatus === 'APPROVED' && (
+                <div className="flex items-center gap-2 bg-emerald-50 border border-emerald-100 rounded-xl px-3 py-2">
+                  <ShieldCheck size={12} className="text-emerald-500 shrink-0"/>
+                  <span className="text-[10px] font-bold text-emerald-700 flex-1">Approved — locked by principal</span>
+                </div>
+              )}
+              {todayRec && todayRec.approvalStatus === 'REJECTED' && (
+                <div className="space-y-1">
+                  <div className="flex items-center gap-2 bg-rose-50 border border-rose-100 rounded-xl px-3 py-2">
+                    <AlertCircle size={12} className="text-rose-500 shrink-0"/>
+                    <span className="text-[10px] font-bold text-rose-700 flex-1">Rejected — please re-submit</span>
+                  </div>
+                  <div className="flex gap-2">
+                    <button onClick={() => { initTodayBuffer(); bulkSetToday('present'); }}
+                      className="flex-1 py-1.5 bg-emerald-500 text-white text-[10px] font-black rounded-xl active:scale-95">All Present</button>
+                    <button onClick={() => { initTodayBuffer(); bulkSetToday('absent'); }}
+                      className="flex-1 py-1.5 bg-rose-500 text-white text-[10px] font-black rounded-xl active:scale-95">All Absent</button>
+                    <button onClick={() => { initTodayBuffer(); bulkSetToday('holiday'); }}
+                      className="flex-1 py-1.5 bg-slate-400 text-white text-[10px] font-black rounded-xl active:scale-95">Holiday</button>
+                  </div>
+                </div>
+              )}
             </div>
           )}
         </div>
 
-        {/* Edit/Submit toolbar (only when canEdit) */}
-        {canEdit && (
-          <div className="bg-white border-b border-slate-100 px-4 py-3 space-y-3">
-            <div className="flex gap-2">
-              <button onClick={() => setAll(true)}
-                className="flex-1 py-2 bg-emerald-500 text-white text-[11px] font-black rounded-xl active:scale-95 transition-transform">
-                All Present
-              </button>
-              <button onClick={() => setAll(false)}
-                className="flex-1 py-2 bg-rose-500 text-white text-[11px] font-black rounded-xl active:scale-95 transition-transform">
-                All Absent
-              </button>
-            </div>
-            <div className="relative">
-              <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400"/>
-              <input value={search} onChange={e => setSearch(e.target.value)}
-                placeholder="Search students…"
-                className="w-full bg-slate-50 border border-slate-200 rounded-xl pl-9 pr-4 py-2 font-bold text-sm outline-none focus:border-indigo-500"/>
-            </div>
+        {/* Search */}
+        <div className="bg-white border-b border-slate-100 px-4 py-2">
+          <div className="relative">
+            <Search size={12} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400"/>
+            <input value={gridSearch} onChange={e => setGridSearch(e.target.value)}
+              placeholder="Search students…"
+              className="w-full bg-slate-50 border border-slate-200 rounded-xl pl-8 pr-3 py-1.5 font-bold text-xs outline-none focus:border-indigo-500"/>
           </div>
-        )}
+        </div>
 
-        {/* Body banners */}
-        {isLoadingDate && (
-          <div className="mx-4 mt-3 text-center text-[11px] font-bold text-slate-400">Loading…</div>
-        )}
-        {!isLoadingDate && isPastDate && !selectedRecord && (
-          <div className="mx-4 mt-3 bg-slate-100 border border-slate-200 rounded-xl px-3 py-2.5 flex items-center gap-2">
-            <Lock size={14} className="text-slate-400 shrink-0"/>
-            <span className="text-[11px] font-bold text-slate-500">No attendance was marked for this day. Past dates cannot be edited.</span>
-          </div>
-        )}
-        {!isLoadingDate && isFutureDate && (
-          <div className="mx-4 mt-3 bg-slate-100 border border-slate-200 rounded-xl px-3 py-2.5 flex items-center gap-2">
-            <Lock size={14} className="text-slate-400 shrink-0"/>
-            <span className="text-[11px] font-bold text-slate-500">Cannot mark attendance for future dates.</span>
-          </div>
-        )}
-        {!isLoadingDate && isPastDate && selectedRecord && (
-          <div className="mx-4 mt-3 bg-amber-50 border border-amber-100 rounded-xl px-3 py-2.5 flex items-center gap-2">
-            <AlertCircle size={14} className="text-amber-500 shrink-0"/>
-            <span className="text-[11px] font-bold text-amber-700">This is a past record. Only the Principal can edit/approve it.</span>
-          </div>
-        )}
-        {!isLoadingDate && isTodayDate && selectedRecord && selectedRecord.status === 'PENDING' && (
-          <div className="mx-4 mt-3 bg-blue-50 border border-blue-100 rounded-xl px-3 py-2.5 flex items-center gap-2">
-            <Hourglass size={14} className="text-blue-500 shrink-0"/>
-            <span className="flex-1 text-[11px] font-bold text-blue-700">Submitted — pending principal approval. Only the principal can edit now.</span>
-          </div>
-        )}
-        {!isLoadingDate && isTodayDate && selectedRecord && selectedRecord.status === 'APPROVED' && (
-          <div className="mx-4 mt-3 bg-emerald-50 border border-emerald-100 rounded-xl px-3 py-2.5 flex items-center gap-2">
-            <ShieldCheck size={14} className="text-emerald-600 shrink-0"/>
-            <span className="text-[11px] font-bold text-emerald-700">Already approved — locked.</span>
-          </div>
-        )}
-
-        {/* Student list (read-only OR editable based on canEdit) */}
-        <div className="flex-1 overflow-y-auto pb-40">
-          {(selectedRecord || canEdit) && (
-            <div className="p-4">
-              <div className="bg-white rounded-2xl border border-slate-100 shadow-sm overflow-hidden">
-                {filtered.map((stu, idx) => {
-                  const onClick = canEdit ? () => toggleEditStudent(stu.id) : undefined;
-                  return (
-                    <div key={stu.id}
-                      onClick={onClick}
-                      className={`flex items-center gap-3 px-4 py-3 transition-colors ${
-                        idx < filtered.length - 1 ? 'border-b border-slate-100' : ''
-                      } ${stu.isPresent ? 'bg-emerald-50/40' : 'bg-rose-50/40'} ${canEdit ? 'cursor-pointer active:bg-slate-100' : ''}`}>
-                      <div className="w-9 h-9 rounded-full bg-indigo-100 text-indigo-700 flex items-center justify-center font-black text-xs shrink-0">
-                        {stu.name.split(' ').map(w => w[0]).join('').slice(0, 2)}
-                      </div>
-                      <div className="flex-1 min-w-0">
-                        <div className="font-bold text-slate-900 text-sm">{stu.name}</div>
-                        <div className="text-[10px] font-bold text-slate-400 mt-0.5">Roll {stu.rollNo.padStart(2, '0')}</div>
-                      </div>
-                      {stu.isPresent
-                        ? <span className="text-[9px] font-black text-emerald-700 bg-emerald-100 px-2.5 py-1 rounded-lg uppercase">Present</span>
-                        : <span className="text-[9px] font-black text-rose-700 bg-rose-100 px-2.5 py-1 rounded-lg uppercase">Absent</span>
-                      }
-                    </div>
-                  );
-                })}
-              </div>
+        {/* Grid */}
+        <div className="flex-1 overflow-hidden">
+          {gridLoading ? (
+            <div className="flex items-center justify-center py-16 text-slate-400 font-bold text-sm">Loading…</div>
+          ) : gridDates.length === 0 ? (
+            <div className="flex items-center justify-center py-16 text-slate-400 font-bold text-sm">No dates in this month</div>
+          ) : (
+            <div className="overflow-auto h-full">
+              <table className="min-w-max w-full border-collapse text-xs">
+                <thead className="sticky top-0 z-20">
+                  <tr className="bg-white">
+                    <th className="sticky left-0 z-30 bg-white border-b border-r border-slate-100 px-3 py-2 text-left text-[10px] font-black text-slate-500 uppercase tracking-widest min-w-[110px]">
+                      Student
+                    </th>
+                    {gridDates.map(d => {
+                      const rec = recordMap[d];
+                      const isSun = new Date(d).getDay() === 0;
+                      const isToday = d === todayDateStr;
+                      let colBg = 'bg-white';
+                      if (isToday)                               colBg = 'bg-blue-50';
+                      else if (rec?.approvalStatus === 'APPROVED') colBg = 'bg-emerald-50/60';
+                      else if (rec?.approvalStatus === 'PENDING')  colBg = 'bg-amber-50/60';
+                      else if (isSun)                             colBg = 'bg-slate-50';
+                      return (
+                        <th key={d} className={`border-b border-r border-slate-100 px-0.5 py-1 text-center min-w-[34px] ${colBg}`}>
+                          <div className={`text-[8px] font-bold ${isSun ? 'text-rose-400' : isToday ? 'text-blue-600' : 'text-slate-400'}`}>{fmtDayShort(d)}</div>
+                          <div className={`font-black text-[10px] tabular-nums ${isSun ? 'text-rose-400' : isToday ? 'text-blue-600' : 'text-slate-700'}`}>{fmtDay(d)}</div>
+                          <div className="flex items-center justify-center mt-0.5">
+                            {rec?.approvalStatus === 'APPROVED' && <div className="w-1.5 h-1.5 rounded-full bg-emerald-500"/>}
+                            {rec?.approvalStatus === 'PENDING'  && <div className="w-1.5 h-1.5 rounded-full bg-amber-400"/>}
+                            {(!rec || rec.approvalStatus === 'REJECTED') && isToday && hasEditToday && <div className="w-1.5 h-1.5 rounded-full bg-blue-500"/>}
+                            {(!rec || rec.approvalStatus === 'REJECTED') && !hasEditToday && <div className="w-1.5 h-1.5 rounded-full bg-slate-200"/>}
+                          </div>
+                        </th>
+                      );
+                    })}
+                    <th className="sticky right-0 bg-white border-b border-l border-slate-100 px-2 py-2 text-center text-[10px] font-black text-slate-500 min-w-[40px]">%</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {filteredStudents.map((stu, sidx) => {
+                    let totalP = 0, totalA = 0, totalHalf = 0;
+                    for (const d of gridDates) {
+                      const st = cellStatus(d, stu.id);
+                      if (!st) continue;
+                      if (st === 'present') totalP++;
+                      else if (st === 'absent') totalA++;
+                      else if (st === 'half') totalHalf++;
+                    }
+                    const workDays = totalP + totalA + totalHalf;
+                    const pct = workDays > 0 ? Math.round(((totalP + totalHalf * 0.5) / workDays) * 100) : null;
+                    return (
+                      <tr key={stu.id} className={`${sidx % 2 === 0 ? 'bg-white' : 'bg-slate-50/50'}`}>
+                        <td className={`sticky left-0 z-10 border-b border-r border-slate-100 px-3 py-2 ${sidx % 2 === 0 ? 'bg-white' : 'bg-slate-50'}`}>
+                          <div className="font-bold text-slate-900 text-xs truncate max-w-[100px]">{stu.name}</div>
+                          <div className="text-[9px] font-bold text-slate-400">Roll {stu.rollNo.padStart(2,'0')}</div>
+                        </td>
+                        {gridDates.map(d => {
+                          const rec = recordMap[d];
+                          const st = cellStatus(d, stu.id);
+                          const isToday = d === todayDateStr;
+                          const editable = isToday && todayEditable;
+                          const locked   = !editable;
+                          const bg = st ? CELL_BG[st] : (isToday && !rec ? 'bg-blue-100 text-blue-400' : 'bg-slate-100 text-slate-300');
+                          return (
+                            <td key={d}
+                              className={`border-b border-r border-slate-100 text-center px-0.5 py-1 ${editable ? 'cursor-pointer active:scale-90' : ''}`}
+                              onClick={() => toggleCell(d, stu.id)}>
+                              <span className={`inline-flex items-center justify-center w-7 h-7 rounded-lg text-[9px] font-black transition-colors ${bg} ${locked && st ? 'opacity-80' : ''}`}>
+                                {st ? CELL_LABEL[st] : (isToday && !rec ? '?' : '—')}
+                              </span>
+                            </td>
+                          );
+                        })}
+                        <td className="sticky right-0 bg-white border-b border-l border-slate-100 text-center px-1 py-1">
+                          {pct !== null
+                            ? <span className={`text-[10px] font-black tabular-nums ${pct >= 75 ? 'text-emerald-600' : 'text-rose-500'}`}>{pct}%</span>
+                            : <span className="text-[10px] text-slate-300">—</span>}
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
             </div>
           )}
         </div>
 
-        {/* Submit button */}
-        {canEdit && (
-          <div className="fixed bottom-16 left-0 right-0 p-4 bg-white border-t border-slate-100 z-30">
-            <button onClick={handleSubmit} disabled={isSubmitting || editStudents.length === 0}
+        {/* Submit today's attendance */}
+        {gridYM === currentYearMonth() && todayEditable && hasEditToday && (
+          <div className="bg-white border-t border-slate-100 p-4">
+            <button onClick={handleSubmitToday} disabled={isSubmitting}
               className="w-full flex items-center justify-center gap-2 bg-blue-600 text-white font-black text-sm uppercase tracking-widest py-4 rounded-2xl active:scale-95 transition-transform shadow-lg disabled:opacity-50">
               {isSubmitting ? 'Submitting…' : <><Save size={16}/> Submit For Review</>}
             </button>

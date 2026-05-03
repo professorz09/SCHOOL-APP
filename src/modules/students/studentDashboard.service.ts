@@ -669,20 +669,22 @@ export const studentDashboardService = {
   async getMyAttendance(): Promise<{ weekDays: AttendanceWeekDay[]; months: AttendanceMonth[] }> {
     const ctx = await getStudentContext();
 
-    // Pull this student's APPROVED detail rows for the active year. Tenant
-    // scoping is pushed into the SQL via the !inner join's filters so we
-    // don't have to rely on JS-side filtering after the fetch.
+    // Pull this student's APPROVED detail rows for the active year.
+    // Phase 6: also read the 4-way status column (present/absent/holiday/half).
     const { data: rawRows, error } = await supabase
       .from('attendance_student_details')
-      .select('is_present, attendance_records!inner(date)')
+      .select('is_present, status, attendance_records!inner(date)')
       .eq('student_id', ctx.studentId)
       .eq('attendance_records.school_id', ctx.schoolId)
       .eq('attendance_records.academic_year_id', ctx.yearId)
       .eq('attendance_records.approval_status', 'APPROVED');
     if (error) throw new Error(error.message);
 
+    type CellSt = 'present' | 'absent' | 'holiday' | 'half';
+    type DayStatus = AttendanceWeekDay['status'];
     type Row = {
       is_present: boolean;
+      status: CellSt | null;
       attendance_records:
         | { date: string }
         | { date: string }[]
@@ -690,11 +692,17 @@ export const studentDashboardService = {
     };
     const rows = (rawRows ?? []) as unknown as Row[];
 
-    const dateStatus = new Map<string, 'PRESENT' | 'ABSENT'>();
+    const dateStatus = new Map<string, DayStatus>();
     for (const r of rows) {
       const rec = Array.isArray(r.attendance_records) ? r.attendance_records[0] : r.attendance_records;
       if (!rec) continue;
-      dateStatus.set(rec.date, r.is_present ? 'PRESENT' : 'ABSENT');
+      const st: CellSt = r.status ?? (r.is_present ? 'present' : 'absent');
+      const dayS: DayStatus =
+        st === 'present' ? 'PRESENT' :
+        st === 'absent'  ? 'ABSENT'  :
+        st === 'holiday' ? 'HOLIDAY' :
+        /* half */         'HALF_DAY';
+      dateStatus.set(rec.date, dayS);
     }
 
     // Build current week (Mon-Sun).
@@ -707,18 +715,20 @@ export const studentDashboardService = {
       const dt = new Date(monday); dt.setDate(monday.getDate() + i);
       const dateStr = dt.toISOString().split('T')[0];
       const isFuture = dt.getTime() > today.getTime();
-      const status: AttendanceWeekDay['status'] =
+      const status: DayStatus =
         i === 6 || isFuture ? 'HOLIDAY' : (dateStatus.get(dateStr) ?? 'HOLIDAY');
       return { date: dateStr, day: label, status };
     });
 
     // Build per-month buckets (newest first).
-    const buckets = new Map<string, { present: number; absent: number; total: number }>();
+    const buckets = new Map<string, { present: number; absent: number; holiday: number; total: number }>();
     for (const [date, st] of dateStatus.entries()) {
       const key = date.slice(0, 7);
-      const b = buckets.get(key) ?? { present: 0, absent: 0, total: 0 };
+      const b = buckets.get(key) ?? { present: 0, absent: 0, holiday: 0, total: 0 };
       b.total += 1;
-      if (st === 'PRESENT') b.present += 1; else b.absent += 1;
+      if (st === 'PRESENT' || st === 'HALF_DAY') b.present += 1;
+      else if (st === 'ABSENT') b.absent += 1;
+      else if (st === 'HOLIDAY') b.holiday += 1;
       buckets.set(key, b);
     }
     const months: AttendanceMonth[] = Array.from(buckets.entries())
@@ -727,7 +737,7 @@ export const studentDashboardService = {
         month: new Date(key + '-01').toLocaleDateString('en-IN', { month: 'short', year: 'numeric' }),
         present: v.present,
         absent: v.absent,
-        holiday: 0,
+        holiday: v.holiday,
         total: v.total,
       }));
 

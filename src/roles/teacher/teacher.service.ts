@@ -500,68 +500,36 @@ export const teacherService = {
   async submitAttendance(
     sectionId: string,
     date: string,
-    students: { id: string; isPresent: boolean }[],
+    students: { id: string; isPresent?: boolean; status?: import('@/lib/apiClient').AttendanceCellStatus }[],
   ): Promise<{ id: string }> {
-    const schoolId = getSchoolId();
-    const yearId = await getActiveYearId();
-    const userId = getUserId();
     const sectionIds = await resolveMySectionIds();
     if (!sectionIds.includes(sectionId)) {
       throw new Error('You are not assigned to this class');
     }
 
-    // Lookup section meta for denorm columns.
-    const { data: secData } = await supabase
-      .from('sections').select('class_name, section')
-      .eq('id', sectionId).maybeSingle();
-    const sec = secData as { class_name: string; section: string } | null;
-
-    const present = students.filter(s => s.isPresent).length;
-    const absent = students.length - present;
-
-    const { data: insRec, error: rErr } = await supabase
-      .from('attendance_records')
-      .insert({
-        school_id: schoolId,
-        academic_year_id: yearId,
-        section_id: sectionId,
-        class_name: sec?.class_name ?? null,
-        section: sec?.section ?? null,
-        date,
-        total_present: present,
-        total_absent: absent,
-        total_students: students.length,
-        marked_by: userId,
-        approval_status: 'PENDING',
-      })
-      .select('id')
-      .single();
-    if (rErr) {
-      if (/duplicate/i.test(rErr.message)) {
-        throw new Error('Attendance already submitted for this date');
-      }
-      throw new Error(rErr.message);
-    }
-    const recId = (insRec as { id: string }).id;
-
-    if (students.length) {
-      const detailRows = students.map(s => ({
-        attendance_id: recId,
-        student_id: s.id,
-        is_present: s.isPresent,
-      }));
-      const { error: dErr } = await supabase.from('attendance_student_details').insert(detailRows);
-      if (dErr) {
-        // Roll back parent on detail failure to avoid orphan summary rows.
-        await supabase.from('attendance_records').delete().eq('id', recId);
-        throw new Error(dErr.message);
-      }
-    }
-
-    await logAudit('attendance_submitted', 'attendance_records', recId, {
-      sectionId, date, present, absent, total: students.length,
+    // Use the server-side API route so status is written correctly.
+    const { apiAttendance } = await import('@/lib/apiClient');
+    const res = await apiAttendance.submit({
+      sectionId,
+      date,
+      records: students.map(s => ({
+        studentId: s.id,
+        status: s.status ?? (s.isPresent !== undefined ? (s.isPresent ? 'present' : 'absent') : 'absent'),
+      })),
     });
-    return { id: recId };
+
+    await logAudit('attendance_submitted', 'attendance_records', res.attendanceId, {
+      sectionId, date, present: res.present, absent: res.absent, total: res.total,
+    });
+    return { id: res.attendanceId };
+  },
+
+  /** Grid data for a class/section within a date range (teacher view). */
+  async getGridForClass(
+    sectionId: string, startDate: string, endDate: string,
+  ) {
+    const { sharedAttendance } = await import('@/modules/attendance/attendance.service');
+    return sharedAttendance.getGrid(sectionId, startDate, endDate);
   },
 
   // ── Tests / Exams ─────────────────────────────────────────────────────────

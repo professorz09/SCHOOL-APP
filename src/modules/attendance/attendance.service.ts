@@ -2,25 +2,26 @@
 // attendance_student_details directly. All operations are async, scoped to the
 // caller's school + active academic year (RLS enforces tenant isolation).
 //
-// Used by the principal StudentAttendanceManager to list, edit, mark, and
-// approve daily class attendance. Teacher submissions land in the same tables
-// via teacher.service.submitAttendance — this module reads what teachers wrote
-// and lets the principal manage it.
+// Phase 6: cells now carry a 4-way status (present/absent/holiday/half)
+// instead of just is_present boolean.
 
 import { supabase } from '@/lib/supabase';
 import { apiAttendance } from '@/lib/apiClient';
+import type { AttendanceCellStatus } from '@/lib/apiClient';
 import { useAuthStore } from '@/store/authStore';
 import { useEditingYearStore } from '@/store/editingYearStore';
 import { logAudit } from '@/lib/audit';
 
 export type AttendanceApprovalStatus = 'PENDING' | 'APPROVED' | 'REJECTED';
 export type DateAttendanceStatus = 'NOT_MARKED' | 'PENDING' | 'APPROVED';
+export type { AttendanceCellStatus };
 
 export interface AttendanceStudentRecord {
   id: string;
   name: string;
   rollNo: string;
   isPresent: boolean;
+  status: AttendanceCellStatus;
 }
 
 export interface SharedAttendanceRecord {
@@ -28,16 +29,33 @@ export interface SharedAttendanceRecord {
   classId: string;       // section_id
   className: string;
   section: string;
-  subject: string;       // attendance is class-wide, not subject-bound
+  subject: string;
   date: string;
   totalPresent: number;
   totalAbsent: number;
   totalStudents: number;
+  totalHoliday: number;
+  totalHalf: number;
   markedBy: string;
   status: AttendanceApprovalStatus;
   isLocked: boolean;
-  students: AttendanceStudentRecord[];   // empty in list views; populated by getStudents()
+  students: AttendanceStudentRecord[];
 }
+
+export interface GridDateRecord {
+  id: string;
+  date: string;
+  approvalStatus: AttendanceApprovalStatus;
+  isLocked: boolean;
+  totalPresent: number;
+  totalAbsent: number;
+  totalHoliday: number;
+  totalHalf: number;
+  totalStudents: number;
+}
+
+// Map: date → { studentId → AttendanceCellStatus }
+export type GridStudentDetails = Record<string, Record<string, AttendanceCellStatus>>;
 
 // ─── Auth / year helpers ────────────────────────────────────────────────────
 
@@ -54,9 +72,6 @@ function getUserId(): string {
 }
 
 async function getActiveYearId(): Promise<string> {
-  // Honor Correction Mode override when set — lets the principal edit a
-  // closed year's attendance through the same UI surface. See
-  // src/store/editingYearStore.ts for the override lifecycle.
   const override = useEditingYearStore.getState().getEditingYearId();
   if (override) return override;
   const schoolId = getSchoolId();
@@ -79,6 +94,8 @@ interface AttendanceRow {
   total_present: number;
   total_absent: number;
   total_students: number;
+  total_holiday?: number;
+  total_half?: number;
   approval_status: string;
   is_locked: boolean;
   users: { name: string } | { name: string }[] | null;
@@ -86,7 +103,7 @@ interface AttendanceRow {
 
 const ATT_FIELDS =
   'id, section_id, class_name, section, date, total_present, total_absent, ' +
-  'total_students, approval_status, is_locked, users:marked_by(name)';
+  'total_students, total_holiday, total_half, approval_status, is_locked, users:marked_by(name)';
 
 function mapRow(r: AttendanceRow): SharedAttendanceRecord {
   const u = Array.isArray(r.users) ? r.users[0] : r.users;
@@ -100,6 +117,8 @@ function mapRow(r: AttendanceRow): SharedAttendanceRecord {
     totalPresent: r.total_present,
     totalAbsent: r.total_absent,
     totalStudents: r.total_students,
+    totalHoliday: r.total_holiday ?? 0,
+    totalHalf: r.total_half ?? 0,
     markedBy: u?.name ?? 'Unknown',
     status: (r.approval_status as AttendanceApprovalStatus) ?? 'PENDING',
     isLocked: r.is_locked,
@@ -124,12 +143,43 @@ export const sharedAttendance = {
     return ((data ?? []) as unknown as AttendanceRow[]).map(mapRow);
   },
 
+  /** Grid data for a class/section within a date range. */
+  async getGrid(sectionId: string, startDate: string, endDate: string): Promise<{
+    records: GridDateRecord[];
+    studentDetails: GridStudentDetails;
+  }> {
+    const result = await apiAttendance.grid(sectionId, startDate, endDate);
+    interface RawGridRecord {
+      id: string; date: string; approval_status: string; is_locked: boolean;
+      total_present: number; total_absent: number; total_holiday: number;
+      total_half: number; total_students: number;
+    }
+    const records: GridDateRecord[] = ((result.records ?? []) as RawGridRecord[]).map(r => ({
+      id: r.id,
+      date: r.date,
+      approvalStatus: r.approval_status as AttendanceApprovalStatus,
+      isLocked: r.is_locked,
+      totalPresent: r.total_present ?? 0,
+      totalAbsent: r.total_absent ?? 0,
+      totalHoliday: r.total_holiday ?? 0,
+      totalHalf: r.total_half ?? 0,
+      totalStudents: r.total_students ?? 0,
+    }));
+    const studentDetails: GridStudentDetails = {};
+    for (const [date, entries] of Object.entries(result.studentDetails ?? {})) {
+      studentDetails[date] = {};
+      for (const [stuId, val] of Object.entries(entries as Record<string, { status: AttendanceCellStatus }>)) {
+        studentDetails[date][stuId] = val.status ?? 'absent';
+      }
+    }
+    return { records, studentDetails };
+  },
+
   /** Lazy-load the per-student rows for a single attendance record. */
   async getStudents(recordId: string): Promise<AttendanceStudentRecord[]> {
     const schoolId = getSchoolId();
     const yearId = await getActiveYearId();
 
-    // Verify the parent record belongs to this tenant/year first.
     const { data: own, error: oErr } = await supabase
       .from('attendance_records').select('id')
       .eq('id', recordId).eq('school_id', schoolId).eq('academic_year_id', yearId)
@@ -139,15 +189,14 @@ export const sharedAttendance = {
 
     const { data, error } = await supabase
       .from('attendance_student_details')
-      .select('student_id, is_present, students!inner(id, name, school_id)')
+      .select('student_id, is_present, status, students!inner(id, name, school_id)')
       .eq('attendance_id', recordId)
       .eq('students.school_id', schoolId);
     if (error) throw new Error(error.message);
 
-    type J = { student_id: string; is_present: boolean; students: { id: string; name: string; school_id: string } | null };
+    type J = { student_id: string; is_present: boolean; status: string | null; students: { id: string; name: string; school_id: string } | null };
     const rows = ((data ?? []) as unknown as J[]).filter(r => r.students);
 
-    // Pull roll numbers from the year-scoped student_academic_records.
     const stuIds = rows.map(r => r.student_id);
     const rolls = new Map<string, string>();
     if (stuIds.length) {
@@ -160,12 +209,16 @@ export const sharedAttendance = {
     }
 
     return rows
-      .map(r => ({
-        id: r.student_id,
-        name: r.students!.name,
-        rollNo: rolls.get(r.student_id) ?? '',
-        isPresent: r.is_present,
-      }))
+      .map(r => {
+        const st = (r.status as AttendanceCellStatus | null) ?? (r.is_present ? 'present' : 'absent');
+        return {
+          id: r.student_id,
+          name: r.students!.name,
+          rollNo: rolls.get(r.student_id) ?? '',
+          isPresent: r.is_present,
+          status: st,
+        };
+      })
       .sort((a, b) => {
         const ar = parseInt(a.rollNo, 10);
         const br = parseInt(b.rollNo, 10);
@@ -191,6 +244,23 @@ export const sharedAttendance = {
     return mapRow(data as unknown as AttendanceRow);
   },
 
+  /** Save attendance for a section as PENDING (teacher-style submit, awaiting approval). */
+  async submitSection(
+    sectionId: string, date: string,
+    students: AttendanceStudentRecord[],
+  ): Promise<void> {
+    const res = await apiAttendance.submit({
+      sectionId,
+      date,
+      records: students.map(s => ({ studentId: s.id, status: s.status })),
+    });
+    await logAudit('attendance_submitted', 'attendance_records', res.attendanceId, {
+      sectionId, date,
+      present: res.present, absent: res.absent,
+      holiday: res.holiday ?? 0, half: res.half ?? 0, total: res.total,
+    });
+  },
+
   /** Principal marks attendance directly (auto-approved). */
   async submitPrincipal(
     className: string, section: string, date: string,
@@ -200,14 +270,13 @@ export const sharedAttendance = {
       className,
       section,
       date,
-      records: students.map(s => ({ studentId: s.id, isPresent: s.isPresent })),
+      records: students.map(s => ({ studentId: s.id, status: s.status })),
     });
     await logAudit('attendance_marked_by_principal', 'attendance_records', res.attendanceId, {
-      className, section, date, present: res.present, absent: res.absent, total: res.total,
+      className, section, date,
+      present: res.present, absent: res.absent,
+      holiday: res.holiday ?? 0, half: res.half ?? 0, total: res.total,
     });
-    // Re-fetch fully populated row (with marker name) so the UI shows it correctly.
-    const schoolId = getSchoolId();
-    const yearId = await getActiveYearId();
     const { data: full } = await supabase
       .from('attendance_records').select(ATT_FIELDS)
       .eq('id', res.attendanceId).single();
@@ -226,16 +295,18 @@ export const sharedAttendance = {
     await logAudit('attendance_rejected', 'attendance_records', id, { reason: reason ?? null });
   },
 
-  /** Replace per-student rows + recompute totals for a record. */
-  async updateStudents(id: string, students: AttendanceStudentRecord[]): Promise<void> {
+  /** Replace per-student rows + recompute totals for a record.
+   *  `reason` is required by the server when the record is already approved/locked. */
+  async updateStudents(id: string, students: AttendanceStudentRecord[], reason?: string): Promise<void> {
     await apiAttendance.updateStudents({
       attendanceId: id,
-      students: students.map(s => ({ studentId: s.id, isPresent: s.isPresent })),
+      reason,
+      students: students.map(s => ({ studentId: s.id, status: s.status })),
     });
-    const present = students.filter(s => s.isPresent).length;
-    const absent = students.length - present;
+    const present = students.filter(s => s.status === 'present' || s.status === 'half').length;
+    const absent = students.filter(s => s.status === 'absent').length;
     await logAudit('attendance_edited', 'attendance_records', id, {
-      present, absent, total: students.length,
+      present, absent, total: students.length, ...(reason ? { reason } : {}),
     });
   },
 }

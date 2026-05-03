@@ -1,229 +1,548 @@
 import { Router } from 'express';
-import { adminDb, userDb } from '../lib/db';
+import { adminDb } from '../lib/db';
 import { ok, fail, ApiError, requireBody } from '../lib/helpers';
 import { requireAuth, requireRole } from '../middleware/auth';
 
 export const attendanceRouter = Router();
 
-// GET /api/attendance?sectionId=&date=
+// ─── Value types ─────────────────────────────────────────────────────────────
+
+type AttendanceStatus = 'present' | 'absent' | 'holiday' | 'half';
+
+// ─── Typed row shapes (avoid as-any casts) ───────────────────────────────────
+
+interface StaffRow     { id: string }
+interface PermRow      { id: string }
+interface AssignRow    { id: string }
+interface SectionRow   { id: string; class_name: string; section: string; academic_year_id: string; school_id: string }
+interface RecordRow    { id: string; date: string; approval_status: string; is_locked: boolean; total_present: number; total_absent: number; total_holiday: number; total_half: number; total_students: number }
+interface RecordMinRow { id: string; is_locked: boolean; approval_status: string }
+interface RecordSchool { id: string; school_id: string; is_locked: boolean }
+interface DetailRow    { attendance_id: string; student_id: string; is_present: boolean; status: AttendanceStatus | null }
+interface StuDetailRow { student_id: string }
+interface AcYearRow    { id: string }
+interface StuAcRow     { student_id: string; roll_no: string | null; students: { name: string } | null }
+interface SectionIdRow { id: string }
+
+// ─── Helpers ──────────────────────────────────────────────────────────────────
+
+function statusToIsPresent(status: AttendanceStatus): boolean {
+  return status === 'present' || status === 'half';
+}
+
+function countsByStatus(records: { status: AttendanceStatus }[]) {
+  let present = 0, absent = 0, holiday = 0, half = 0;
+  for (const r of records) {
+    if (r.status === 'present')      present++;
+    else if (r.status === 'half')    half++;
+    else if (r.status === 'holiday') holiday++;
+    else                             absent++;
+  }
+  return { present, absent, holiday, half, total: records.length };
+}
+
+function normalizeStatus(
+  rawStatus: AttendanceStatus | undefined,
+  isPresent: boolean | undefined,
+): AttendanceStatus {
+  if (rawStatus) return rawStatus;
+  return isPresent !== undefined ? (isPresent ? 'present' : 'absent') : 'absent';
+}
+
+// ─── Teacher-to-section authorization ─────────────────────────────────────────
+// Returns true when the teacher (identified by userId) is assigned to sectionId.
+// Checks: staff_permissions (per-section) → staff_class_assignments (per-class).
+async function verifyTeacherSectionAccess(
+  userId: string, schoolId: string, sectionId: string,
+): Promise<boolean> {
+  const { data: staffData } = await adminDb
+    .from('staff').select('id')
+    .eq('user_id', userId).eq('school_id', schoolId).maybeSingle();
+  const staffRow = staffData as StaffRow | null;
+  if (!staffRow) return false;
+
+  // 1. Per-section permission row
+  const { data: permData } = await adminDb
+    .from('staff_permissions').select('id')
+    .eq('staff_id', staffRow.id).eq('section_id', sectionId).limit(1);
+  if (((permData ?? []) as PermRow[]).length > 0) return true;
+
+  // 2. Fallback: class-level assignment
+  const { data: secData } = await adminDb
+    .from('sections').select('class_name')
+    .eq('id', sectionId).maybeSingle();
+  const secRow = secData as Pick<SectionRow, 'class_name'> | null;
+  if (!secRow) return false;
+
+  const { data: assignData } = await adminDb
+    .from('staff_class_assignments').select('id')
+    .eq('staff_id', staffRow.id).eq('school_id', schoolId)
+    .eq('class_name', secRow.class_name).limit(1);
+  return ((assignData ?? []) as AssignRow[]).length > 0;
+}
+
+// ─── GET /api/attendance?sectionId=&date= ─────────────────────────────────────
 attendanceRouter.get('/', requireAuth, requireRole('TEACHER', 'PRINCIPAL'), async (req, res) => {
   try {
     const { sectionId, date } = req.query as Record<string, string>;
     if (!sectionId || !date) throw new ApiError(400, 'sectionId and date required');
 
+    // Tenant isolation: always scope to caller's school.
+    if (req.user.role === 'TEACHER') {
+      const allowed = await verifyTeacherSectionAccess(req.user.id, req.user.school_id!, sectionId);
+      if (!allowed) throw new ApiError(403, 'You are not assigned to this section');
+    }
+
     const { data: record } = await adminDb
       .from('attendance_records')
       .select('*, attendance_student_details(*)')
-      .eq('section_id', sectionId)
-      .eq('date', date)
+      .eq('school_id', req.user.school_id!)
+      .eq('section_id', sectionId).eq('date', date)
       .maybeSingle();
 
     ok(res, record ?? null);
   } catch (err) { fail(res, err); }
 });
 
-// POST /api/attendance/submit — teacher marks attendance
+// ─── GET /api/attendance/grid?sectionId=&startDate=&endDate= ─────────────────
+attendanceRouter.get('/grid', requireAuth, requireRole('TEACHER', 'PRINCIPAL'), async (req, res) => {
+  try {
+    const { sectionId, startDate, endDate } = req.query as Record<string, string>;
+    if (!sectionId || !startDate || !endDate) {
+      throw new ApiError(400, 'sectionId, startDate and endDate required');
+    }
+    if (req.user.role === 'TEACHER') {
+      const allowed = await verifyTeacherSectionAccess(req.user.id, req.user.school_id!, sectionId);
+      if (!allowed) throw new ApiError(403, 'You are not assigned to this section');
+    }
+
+    const { data: recData, error: recErr } = await adminDb
+      .from('attendance_records')
+      .select('id, date, approval_status, is_locked, total_present, total_absent, total_holiday, total_half, total_students')
+      .eq('school_id', req.user.school_id!).eq('section_id', sectionId)
+      .gte('date', startDate).lte('date', endDate)
+      .order('date', { ascending: true });
+    if (recErr) throw new ApiError(500, recErr.message);
+
+    const records = (recData ?? []) as RecordRow[];
+    if (records.length === 0) { ok(res, { records: [], studentDetails: {} }); return; }
+
+    const recordIds = records.map(r => r.id);
+    const { data: detData, error: detErr } = await adminDb
+      .from('attendance_student_details')
+      .select('attendance_id, student_id, is_present, status')
+      .in('attendance_id', recordIds);
+    if (detErr) throw new ApiError(500, detErr.message);
+
+    const details = (detData ?? []) as DetailRow[];
+    const recById = new Map(records.map(r => [r.id, r]));
+
+    const studentDetails: Record<string, Record<string, { status: AttendanceStatus; isPresent: boolean }>> = {};
+    for (const d of details) {
+      const rec = recById.get(d.attendance_id);
+      if (!rec) continue;
+      const { date } = rec;
+      if (!studentDetails[date]) studentDetails[date] = {};
+      const status: AttendanceStatus = d.status ?? (d.is_present ? 'present' : 'absent');
+      studentDetails[date][d.student_id] = { status, isPresent: d.is_present };
+    }
+
+    ok(res, { records, studentDetails });
+  } catch (err) { fail(res, err); }
+});
+
+// ─── GET /api/attendance/export-excel?sectionId=&startDate=&endDate= ─────────
+attendanceRouter.get('/export-excel', requireAuth, requireRole('TEACHER', 'PRINCIPAL'), async (req, res) => {
+  try {
+    const { sectionId, startDate, endDate, className, section: sectionName } = req.query as Record<string, string>;
+    if (!sectionId || !startDate || !endDate) {
+      throw new ApiError(400, 'sectionId, startDate and endDate required');
+    }
+    if (req.user.role === 'TEACHER') {
+      const allowed = await verifyTeacherSectionAccess(req.user.id, req.user.school_id!, sectionId);
+      if (!allowed) throw new ApiError(403, 'You are not assigned to this section');
+    }
+
+    const { data: recData, error: recErr } = await adminDb
+      .from('attendance_records')
+      .select('id, date, approval_status, is_locked')
+      .eq('school_id', req.user.school_id!).eq('section_id', sectionId)
+      .gte('date', startDate).lte('date', endDate)
+      .order('date', { ascending: true });
+    if (recErr) throw new ApiError(500, recErr.message);
+
+    const records = (recData ?? []) as Pick<RecordRow, 'id' | 'date' | 'approval_status' | 'is_locked'>[];
+    const recordIds = records.map(r => r.id);
+
+    // Skip detail query entirely when there are no records in range.
+    let details: DetailRow[] = [];
+    if (recordIds.length > 0) {
+      const { data: detData } = await adminDb
+        .from('attendance_student_details')
+        .select('attendance_id, student_id, is_present, status')
+        .in('attendance_id', recordIds);
+      details = (detData ?? []) as DetailRow[];
+    }
+
+    // Resolve academic year from the section itself (not just the active year),
+    // so exports work correctly in correction/non-active-year contexts.
+    const { data: secYearData } = await adminDb
+      .from('sections').select('academic_year_id')
+      .eq('id', sectionId).eq('school_id', req.user.school_id!).maybeSingle();
+    const yearId = (secYearData as { academic_year_id: string } | null)?.academic_year_id;
+    if (!yearId) throw new ApiError(400, 'Section not found or not accessible');
+
+    const { data: stuData, error: stuErr } = await adminDb
+      .from('student_academic_records')
+      .select('student_id, roll_no, students!inner(name)')
+      .eq('section_id', sectionId).eq('academic_year_id', yearId);
+    if (stuErr) throw new ApiError(500, stuErr.message);
+    const stuRows = (stuData ?? []) as unknown as StuAcRow[];
+    const students = stuRows
+      .filter(s => s.students)
+      .map(s => ({ id: s.student_id, name: s.students!.name, rollNo: s.roll_no ?? '' }))
+      .sort((a, b) => {
+        const ar = parseInt(a.rollNo, 10); const br = parseInt(b.rollNo, 10);
+        if (Number.isFinite(ar) && Number.isFinite(br)) return ar - br;
+        return a.name.localeCompare(b.name);
+      });
+
+    // Build ALL calendar dates in range so unmarked dates appear as columns.
+    const allDates: string[] = [];
+    const cur = new Date(startDate);
+    const last = new Date(endDate);
+    while (cur <= last) {
+      allDates.push(cur.toISOString().split('T')[0]);
+      cur.setDate(cur.getDate() + 1);
+    }
+
+    const dates = allDates;
+    const recByDate = new Map(records.map(r => [r.date, r.id]));
+
+    // Pre-build a reverse map: attendanceId → date for O(1) lookup per detail row.
+    const recIdToDate = new Map<string, string>(records.map(r => [r.id, r.date]));
+
+    const detailMap: Record<string, Record<string, AttendanceStatus>> = {};
+    for (const d of details) {
+      const date = recIdToDate.get(d.attendance_id);
+      if (!date) continue;
+      if (!detailMap[date]) detailMap[date] = {};
+      detailMap[date][d.student_id] = d.status ?? (d.is_present ? 'present' : 'absent');
+    }
+
+    const XLSX = await import('xlsx');
+    const wb = XLSX.utils.book_new();
+
+    const headerRow = [
+      'Roll No', 'Student Name',
+      ...dates.map(d => { const dt = new Date(d); return `${dt.getDate()}/${dt.getMonth() + 1}`; }),
+      'Total P', 'Total A', 'Total H', 'Total Half', '%',
+    ];
+
+    const dataRows = students.map(s => {
+      const statuses = dates.map(d => {
+        const st = detailMap[d]?.[s.id];
+        if (!st) return '-';
+        if (st === 'present') return 'P';
+        if (st === 'absent')  return 'A';
+        if (st === 'holiday') return 'H';
+        return 'HD'; // half
+      });
+      const totalP    = statuses.filter(x => x === 'P').length;
+      const totalA    = statuses.filter(x => x === 'A').length;
+      const totalH    = statuses.filter(x => x === 'H').length;
+      const totalHalf = statuses.filter(x => x === 'HD').length;
+      const workDays  = totalP + totalA + totalHalf;
+      const pct       = workDays > 0 ? Math.round(((totalP + totalHalf * 0.5) / workDays) * 100) : 0;
+      return [s.rollNo, s.name, ...statuses, totalP, totalA, totalH, totalHalf, `${pct}%`];
+    });
+
+    const ws = XLSX.utils.aoa_to_sheet([headerRow, ...dataRows]);
+    ws['!cols'] = [
+      { wch: 8 }, { wch: 24 },
+      ...dates.map(() => ({ wch: 5 })),
+      { wch: 8 }, { wch: 8 }, { wch: 8 }, { wch: 10 }, { wch: 6 },
+    ];
+
+    const sheetName = `${className ?? 'Class'}-${sectionName ?? 'Sec'}`.slice(0, 31);
+    XLSX.utils.book_append_sheet(wb, ws, sheetName);
+
+    const buf = XLSX.write(wb, { type: 'buffer', bookType: 'xlsx' });
+    const label = `Attendance_${className ?? ''}_${sectionName ?? ''}_${startDate}_to_${endDate}.xlsx`;
+    res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+    res.setHeader('Content-Disposition', `attachment; filename="${label}"`);
+    res.send(buf);
+  } catch (err) { fail(res, err); }
+});
+
+// ─── POST /api/attendance/submit — teacher submits attendance ─────────────────
 attendanceRouter.post('/submit', requireAuth, requireRole('TEACHER', 'PRINCIPAL'), async (req, res) => {
   try {
     const body = requireBody<{
       sectionId: string; date: string;
-      records: { studentId: string; isPresent: boolean }[];
+      records: { studentId: string; isPresent?: boolean; status?: AttendanceStatus }[];
     }>(req, ['sectionId', 'date', 'records']);
-
     if (!Array.isArray(body.records) || body.records.length === 0) {
       throw new ApiError(400, 'records array required');
     }
 
-    // Fetch section info for school_id, academic_year_id
-    const { data: section } = await adminDb
+    // Teachers must be assigned to this section before any DB write.
+    if (req.user.role === 'TEACHER') {
+      const allowed = await verifyTeacherSectionAccess(req.user.id, req.user.school_id!, body.sectionId);
+      if (!allowed) throw new ApiError(403, 'You are not assigned to this section');
+    }
+
+    const { data: secData } = await adminDb
       .from('sections')
       .select('id, class_name, section, academic_year_id, school_id')
       .eq('id', body.sectionId)
+      .eq('school_id', req.user.school_id!)   // tenant isolation
       .single();
+    const section = secData as SectionRow | null;
     if (!section) throw new ApiError(404, 'Section not found');
 
-    // Block if locked
-    const { data: existing } = await adminDb
+    const { data: existData } = await adminDb
       .from('attendance_records')
       .select('id, is_locked, approval_status')
-      .eq('section_id', body.sectionId)
-      .eq('date', body.date)
+      .eq('school_id', req.user.school_id!)   // tenant isolation
+      .eq('section_id', body.sectionId).eq('date', body.date)
       .maybeSingle();
+    const existing = existData as RecordMinRow | null;
 
-    if (existing?.is_locked) throw new ApiError(403, 'Attendance is locked — principal ne approve kar diya hai');
+    if (existing?.is_locked) {
+      throw new ApiError(403, 'Attendance is locked and approved — contact the principal for corrections');
+    }
 
-    const present = body.records.filter(r => r.isPresent).length;
-    const absent  = body.records.length - present;
+    const normalizedRecords = body.records.map(r => ({
+      studentId: r.studentId,
+      status: normalizeStatus(r.status, r.isPresent),
+    }));
+    const counts = countsByStatus(normalizedRecords);
 
     let attendanceId: string;
     if (existing) {
       attendanceId = existing.id;
-      // Update header counts, reset to PENDING if re-submitted
-      await adminDb
-        .from('attendance_records')
-        .update({
-          total_present:   present,
-          total_absent:    absent,
-          total_students:  body.records.length,
-          marked_by:       req.user.id,
-          approval_status: 'PENDING',
-        })
-        .eq('id', attendanceId);
+      await adminDb.from('attendance_records').update({
+        total_present:   counts.present,
+        total_absent:    counts.absent,
+        total_holiday:   counts.holiday,
+        total_half:      counts.half,
+        total_students:  body.records.length,
+        marked_by:       req.user.id,
+        approval_status: 'PENDING',
+      }).eq('id', attendanceId);
       await adminDb.from('attendance_student_details').delete().eq('attendance_id', attendanceId);
     } else {
-      const { data: record, error } = await adminDb
-        .from('attendance_records')
-        .insert({
-          school_id:       section.school_id,
+      const { data: recData, error: recErr } = await adminDb
+        .from('attendance_records').insert({
+          school_id:        section.school_id,
           academic_year_id: section.academic_year_id,
-          section_id:      body.sectionId,
-          class_name:      section.class_name,
-          section:         section.section,
-          date:            body.date,
-          total_present:   present,
-          total_absent:    absent,
-          total_students:  body.records.length,
-          marked_by:       req.user.id,
-          approval_status: 'PENDING',
-          is_locked:       false,
-        })
-        .select()
-        .single();
-      if (error) throw new ApiError(500, error.message);
-      attendanceId = record.id;
+          section_id:       body.sectionId,
+          class_name:       section.class_name,
+          section:          section.section,
+          date:             body.date,
+          total_present:    counts.present,
+          total_absent:     counts.absent,
+          total_holiday:    counts.holiday,
+          total_half:       counts.half,
+          total_students:   body.records.length,
+          marked_by:        req.user.id,
+          approval_status:  'PENDING',
+          is_locked:        false,
+        }).select('id').single();
+      if (recErr) throw new ApiError(500, recErr.message);
+      attendanceId = (recData as Pick<RecordRow, 'id'>).id;
     }
 
-    const rows = body.records.map(r => ({
+    const rows = normalizedRecords.map(r => ({
       attendance_id: attendanceId,
       student_id:    r.studentId,
-      is_present:    r.isPresent,
+      is_present:    statusToIsPresent(r.status),
+      status:        r.status,
     }));
-    const { error: re } = await adminDb.from('attendance_student_details').insert(rows);
-    if (re) throw new ApiError(500, re.message);
+    const { error: insErr } = await adminDb.from('attendance_student_details').insert(rows);
+    if (insErr) throw new ApiError(500, insErr.message);
 
-    ok(res, { attendanceId, date: body.date, present, absent, total: body.records.length });
+    ok(res, { attendanceId, date: body.date, ...counts });
   } catch (err) { fail(res, err); }
 });
 
-// POST /api/attendance/mark-by-principal — principal marks directly (APPROVED immediately)
+// ─── POST /api/attendance/mark-by-principal ────────────────────────────────────
 attendanceRouter.post('/mark-by-principal', requireAuth, requireRole('PRINCIPAL'), async (req, res) => {
   try {
     const body = requireBody<{
       className: string; section: string; date: string;
-      records: { studentId: string; isPresent: boolean }[];
+      records: { studentId: string; isPresent?: boolean; status?: AttendanceStatus }[];
     }>(req, ['className', 'section', 'date', 'records']);
-
     if (!Array.isArray(body.records) || body.records.length === 0) {
       throw new ApiError(400, 'records array required');
     }
 
-    // Resolve active year + section
-    const { data: ay } = await adminDb
+    const { data: ayData } = await adminDb
       .from('academic_years').select('id')
       .eq('school_id', req.user.school_id!).eq('is_active', true).maybeSingle();
-    if (!ay) throw new ApiError(400, 'No active academic year');
-    const yearId = (ay as any).id as string;
+    const yearId = (ayData as AcYearRow | null)?.id;
+    if (!yearId) throw new ApiError(400, 'No active academic year');
 
-    const { data: secRows } = await adminDb
+    const { data: secData } = await adminDb
       .from('sections').select('id')
       .eq('school_id', req.user.school_id!)
       .eq('academic_year_id', yearId)
       .eq('class_name', body.className)
       .eq('section', body.section)
       .limit(1);
-    const sectionId = ((secRows ?? [])[0] as any)?.id;
+    const sectionId = ((secData ?? []) as SectionIdRow[])[0]?.id;
     if (!sectionId) throw new ApiError(404, `Section ${body.className}-${body.section} not found`);
 
-    const present = body.records.filter(r => r.isPresent).length;
-    const absent  = body.records.length - present;
+    const normalizedRecords = body.records.map(r => ({
+      studentId: r.studentId,
+      status: normalizeStatus(r.status, r.isPresent),
+    }));
+    const counts = countsByStatus(normalizedRecords);
 
-    const { data: rec, error: rErr } = await adminDb
-      .from('attendance_records').insert({
-        school_id:        req.user.school_id,
-        academic_year_id: yearId,
-        section_id:       sectionId,
-        class_name:       body.className,
-        section:          body.section,
-        date:             body.date,
-        total_present:    present,
-        total_absent:     absent,
-        total_students:   body.records.length,
-        marked_by:        req.user.id,
-        approved_by:      req.user.id,
-        approval_status:  'APPROVED',
-        is_locked:        true,
-      }).select('id').single();
-    if (rErr) {
-      if (/duplicate/i.test(rErr.message))
-        throw new ApiError(409, 'Attendance already marked for this date');
-      throw new ApiError(500, rErr.message);
+    const { data: existData } = await adminDb
+      .from('attendance_records')
+      .select('id, is_locked')
+      .eq('school_id', req.user.school_id!)
+      .eq('section_id', sectionId).eq('date', body.date)
+      .maybeSingle();
+    const existing = existData as Pick<RecordRow, 'id' | 'is_locked'> | null;
+
+    // Guard: already approved+locked records must go through the correction flow.
+    if (existing?.is_locked) {
+      throw new ApiError(409, 'Attendance for this date is already approved and locked. Use the edit/correction flow.');
     }
-    const attendanceId = (rec as any).id as string;
 
-    const detail = body.records.map(r => ({
+    let attendanceId: string;
+    if (existing) {
+      attendanceId = existing.id;
+      await adminDb.from('attendance_records').update({
+        total_present:   counts.present,
+        total_absent:    counts.absent,
+        total_holiday:   counts.holiday,
+        total_half:      counts.half,
+        total_students:  body.records.length,
+        marked_by:       req.user.id,
+        approved_by:     req.user.id,
+        approval_status: 'APPROVED',
+        is_locked:       true,
+      }).eq('id', attendanceId);
+      await adminDb.from('attendance_student_details').delete().eq('attendance_id', attendanceId);
+    } else {
+      const { data: recData, error: rErr } = await adminDb
+        .from('attendance_records').insert({
+          school_id:        req.user.school_id,
+          academic_year_id: yearId,
+          section_id:       sectionId,
+          class_name:       body.className,
+          section:          body.section,
+          date:             body.date,
+          total_present:    counts.present,
+          total_absent:     counts.absent,
+          total_holiday:    counts.holiday,
+          total_half:       counts.half,
+          total_students:   body.records.length,
+          marked_by:        req.user.id,
+          approved_by:      req.user.id,
+          approval_status:  'APPROVED',
+          is_locked:        true,
+        }).select('id').single();
+      if (rErr) {
+        if (/duplicate/i.test(rErr.message)) throw new ApiError(409, 'Attendance already marked for this date');
+        throw new ApiError(500, rErr.message);
+      }
+      attendanceId = (recData as Pick<RecordRow, 'id'>).id;
+    }
+
+    const detail = normalizedRecords.map(r => ({
       attendance_id: attendanceId,
       student_id:    r.studentId,
-      is_present:    r.isPresent,
+      is_present:    statusToIsPresent(r.status),
+      status:        r.status,
     }));
     const { error: dErr } = await adminDb.from('attendance_student_details').insert(detail);
     if (dErr) {
-      await adminDb.from('attendance_records').delete().eq('id', attendanceId);
+      if (!existing) await adminDb.from('attendance_records').delete().eq('id', attendanceId);
       throw new ApiError(500, dErr.message);
     }
 
-    ok(res, { attendanceId, date: body.date, present, absent, total: body.records.length }, 201);
+    ok(res, { attendanceId, date: body.date, ...counts }, 201);
   } catch (err) { fail(res, err); }
 });
 
-// POST /api/attendance/reject — principal rejects a teacher-submitted record
+// ─── POST /api/attendance/reject ──────────────────────────────────────────────
 attendanceRouter.post('/reject', requireAuth, requireRole('PRINCIPAL'), async (req, res) => {
   try {
-    const body = requireBody<{ attendanceId: string; reason?: string }>(req, ['attendanceId']);
+    const { attendanceId, reason } = requireBody<{ attendanceId: string; reason?: string }>(req, ['attendanceId']);
 
-    const { data: record } = await adminDb.from('attendance_records')
-      .select('id, school_id').eq('id', body.attendanceId).maybeSingle();
+    const { data: recData } = await adminDb.from('attendance_records')
+      .select('id, school_id').eq('id', attendanceId).maybeSingle();
+    const record = recData as Pick<RecordSchool, 'id' | 'school_id'> | null;
     if (!record) throw new ApiError(404, 'Attendance record not found');
-    if ((record as any).school_id !== req.user.school_id) throw new ApiError(403, 'Access denied');
+    if (record.school_id !== req.user.school_id) throw new ApiError(403, 'Access denied');
 
     const { error } = await adminDb.from('attendance_records')
       .update({ approval_status: 'REJECTED', approved_by: req.user.id })
-      .eq('id', body.attendanceId);
+      .eq('id', attendanceId);
     if (error) throw new ApiError(500, error.message);
 
-    ok(res, { attendanceId: body.attendanceId, rejected: true });
+    await adminDb.from('attendance_approvals').insert({
+      attendance_id: attendanceId,
+      school_id:     record.school_id,
+      action:        'REJECTED',
+      performed_by:  req.user.id,
+      reason:        reason ?? null,
+    });
+
+    ok(res, { attendanceId, rejected: true });
   } catch (err) { fail(res, err); }
 });
 
-// POST /api/attendance/update-students — correction-mode: replace per-student rows
-attendanceRouter.post('/update-students', requireAuth, requireRole('PRINCIPAL', 'TEACHER'), async (req, res) => {
+// ─── POST /api/attendance/update-students ─────────────────────────────────────
+// Principal-only: edit per-student rows for an existing record.
+// Locked (APPROVED) records may be corrected by the principal only; a reason
+// is required for audit purposes. The record stays APPROVED after correction.
+attendanceRouter.post('/update-students', requireAuth, requireRole('PRINCIPAL'), async (req, res) => {
   try {
     const body = requireBody<{
       attendanceId: string;
-      students: { studentId: string; isPresent: boolean }[];
+      reason?: string;
+      students: { studentId: string; isPresent?: boolean; status?: AttendanceStatus }[];
     }>(req, ['attendanceId', 'students']);
 
-    // Verify record belongs to this school
-    const { data: own } = await adminDb.from('attendance_records')
-      .select('id, school_id').eq('id', body.attendanceId)
+    const { data: ownData } = await adminDb.from('attendance_records')
+      .select('id, school_id, is_locked')
+      .eq('id', body.attendanceId)
       .eq('school_id', req.user.school_id!).maybeSingle();
-    if (!own) throw new ApiError(404, 'Attendance record not found');
+    const ownRecord = ownData as (Pick<RecordRow, 'id' | 'is_locked'> & { school_id: string }) | null;
+    if (!ownRecord) throw new ApiError(404, 'Attendance record not found');
 
-    if (body.students.length) {
-      const rows = body.students.map(s => ({
+    // Locked records require an explicit correction reason for audit trail.
+    if (ownRecord.is_locked && !body.reason?.trim()) {
+      throw new ApiError(400, 'A correction reason is required when editing an approved and locked attendance record');
+    }
+
+    const normalizedStudents = body.students.map(s => ({
+      studentId: s.studentId,
+      status: normalizeStatus(s.status, s.isPresent),
+    }));
+
+    if (normalizedStudents.length) {
+      const rows = normalizedStudents.map(s => ({
         attendance_id: body.attendanceId,
         student_id:    s.studentId,
-        is_present:    s.isPresent,
+        is_present:    statusToIsPresent(s.status),
+        status:        s.status,
       }));
       const { error: uErr } = await adminDb.from('attendance_student_details')
         .upsert(rows, { onConflict: 'attendance_id,student_id' });
       if (uErr) throw new ApiError(500, uErr.message);
     }
 
-    // Drop rows for students no longer in the input
     const keepIds = new Set(body.students.map(s => s.studentId));
-    const { data: existing } = await adminDb.from('attendance_student_details')
+    const { data: existData } = await adminDb.from('attendance_student_details')
       .select('student_id').eq('attendance_id', body.attendanceId);
-    const toDelete = ((existing ?? []) as { student_id: string }[])
+    const toDelete = ((existData ?? []) as StuDetailRow[])
       .map(r => r.student_id).filter(sid => !keepIds.has(sid));
 
     if (toDelete.length) {
@@ -232,39 +551,56 @@ attendanceRouter.post('/update-students', requireAuth, requireRole('PRINCIPAL', 
       if (dErr) throw new ApiError(500, dErr.message);
     }
 
-    const present = body.students.filter(s => s.isPresent).length;
-    const absent  = body.students.length - present;
-
+    const counts = countsByStatus(normalizedStudents);
     const { error: rErr } = await adminDb.from('attendance_records').update({
-      total_present:  present,
-      total_absent:   absent,
+      total_present:  counts.present,
+      total_absent:   counts.absent,
+      total_holiday:  counts.holiday,
+      total_half:     counts.half,
       total_students: body.students.length,
     }).eq('id', body.attendanceId);
     if (rErr) throw new ApiError(500, rErr.message);
 
-    ok(res, { attendanceId: body.attendanceId, present, absent, total: body.students.length });
+    // Insert correction audit row when the record was locked.
+    if (ownRecord.is_locked) {
+      await adminDb.from('attendance_approvals').insert({
+        attendance_id: body.attendanceId,
+        school_id:     ownRecord.school_id,
+        action:        'CORRECTION',
+        performed_by:  req.user.id,
+        reason:        body.reason ?? null,
+      });
+    }
+
+    ok(res, { attendanceId: body.attendanceId, ...counts });
   } catch (err) { fail(res, err); }
 });
 
-// POST /api/attendance/approve — principal approves & locks
+// ─── POST /api/attendance/approve ─────────────────────────────────────────────
 attendanceRouter.post('/approve', requireAuth, requireRole('PRINCIPAL'), async (req, res) => {
   try {
     const { attendanceId } = requireBody<{ attendanceId: string }>(req, ['attendanceId']);
 
-    const { data: record } = await adminDb
+    const { data: recData } = await adminDb
       .from('attendance_records')
       .select('id, is_locked, school_id')
-      .eq('id', attendanceId)
-      .single();
+      .eq('id', attendanceId).single();
+    const record = recData as RecordSchool | null;
     if (!record) throw new ApiError(404, 'Attendance record not found');
     if (record.school_id !== req.user.school_id) throw new ApiError(403, 'Access denied');
     if (record.is_locked) throw new ApiError(400, 'Already approved and locked');
 
-    const { error } = await adminDb
-      .from('attendance_records')
+    const { error } = await adminDb.from('attendance_records')
       .update({ is_locked: true, approval_status: 'APPROVED', approved_by: req.user.id })
       .eq('id', attendanceId);
     if (error) throw new ApiError(500, error.message);
+
+    await adminDb.from('attendance_approvals').insert({
+      attendance_id: attendanceId,
+      school_id:     record.school_id,
+      action:        'APPROVED',
+      performed_by:  req.user.id,
+    });
 
     ok(res, { attendanceId, approved: true });
   } catch (err) { fail(res, err); }

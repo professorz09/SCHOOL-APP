@@ -224,12 +224,18 @@ export const apiTimetable = {
 
 // ─── Attendance ───────────────────────────────────────────────────────────────
 
+export type AttendanceCellStatus = 'present' | 'absent' | 'holiday' | 'half';
+
 export const apiAttendance = {
   get: (sectionId: string, date: string) =>
     get<any>(`/attendance?sectionId=${sectionId}&date=${date}`),
+  grid: (sectionId: string, startDate: string, endDate: string) =>
+    get<any>(`/attendance/grid?sectionId=${encodeURIComponent(sectionId)}&startDate=${encodeURIComponent(startDate)}&endDate=${encodeURIComponent(endDate)}`),
+  exportExcelUrl: (sectionId: string, startDate: string, endDate: string, className: string, section: string) =>
+    `/api/attendance/export-excel?sectionId=${encodeURIComponent(sectionId)}&startDate=${encodeURIComponent(startDate)}&endDate=${encodeURIComponent(endDate)}&className=${encodeURIComponent(className)}&section=${encodeURIComponent(section)}`,
   submit: (body: {
     sectionId: string; date: string;
-    records: { studentId: string; isPresent: boolean }[];
+    records: { studentId: string; isPresent?: boolean; status?: AttendanceCellStatus }[];
   }) => post<any>('/attendance/submit', body),
   approve: (attendanceId: string) =>
     post<any>('/attendance/approve', { attendanceId }),
@@ -237,11 +243,12 @@ export const apiAttendance = {
     post<any>('/attendance/reject', { attendanceId, reason }),
   updateStudents: (body: {
     attendanceId: string;
-    students: { studentId: string; isPresent: boolean }[];
+    reason?: string;
+    students: { studentId: string; isPresent?: boolean; status?: AttendanceCellStatus }[];
   }) => post<any>('/attendance/update-students', body),
   markByPrincipal: (body: {
     className: string; section: string; date: string;
-    records: { studentId: string; isPresent: boolean }[];
+    records: { studentId: string; isPresent?: boolean; status?: AttendanceCellStatus }[];
   }) => post<any>('/attendance/mark-by-principal', body),
 };
 
