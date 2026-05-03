@@ -9,6 +9,21 @@ const PRINCIPAL = requireRole('PRINCIPAL');
 
 // ─── Notices ─────────────────────────────────────────────────────────────────
 
+// GET /api/principal/notice/list
+principalRouter.get('/notice/list', requireAuth, async (req, res) => {
+  try {
+    const { data, error } = await adminDb
+      .from('notices')
+      .select('id, title, body, audience, pinned, sent_by_name, created_at')
+      .eq('school_id', req.user.school_id!)
+      .eq('is_active', true)
+      .order('pinned', { ascending: false })
+      .order('created_at', { ascending: false });
+    if (error) throw new ApiError(500, error.message);
+    ok(res, data ?? []);
+  } catch (err) { fail(res, err); }
+});
+
 // POST /api/principal/notice/create
 principalRouter.post('/notice/create', requireAuth, PRINCIPAL, async (req, res) => {
   try {

@@ -7,7 +7,7 @@ import {
 } from 'lucide-react';
 import { feeService, FeeInstallment, FeeStatus, FeeType, PaymentRecord, GovernmentPaymentRecord } from '@/modules/fees/fee.service';
 import { studentService } from '@/modules/students/student.service';
-import { principalService, FeeStructureRecord } from '@/roles/principal/principal.service';
+import type { FeeStructureRecord } from '@/modules/fees/fees.types';
 import { useUIStore } from '@/store/uiStore';
 import { FeePaymentSubmissionsQueue } from '@/modules/fees/components/FeePaymentSubmissionsQueue';
 import { PreviousYearDues } from '@/modules/fees/components/PreviousYearDues';
@@ -222,7 +222,7 @@ export const FeeLedger: React.FC<Props> = ({ onBack }) => {
     const baseClass = selected.className.split('-')[0]?.trim() ?? selected.className;
     if (feeStructures.length === 0) {
       try {
-        const rows = await principalService.getFeeStructures();
+        const rows = await feeService.getFeeStructures();
         setFeeStructures(rows);
         const match = rows.find(r => r.className === baseClass);
         if (match) setRegenStructureId(match.id);

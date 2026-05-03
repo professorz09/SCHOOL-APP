@@ -3,7 +3,7 @@ import {
   ArrowLeft, BookOpen, CheckCircle, Clock, ChevronRight,
   Users, Filter, Trophy, AlertCircle, Lock, Unlock, FileText,
 } from 'lucide-react';
-import { apiExams } from '@/lib/apiClient';
+import { examService } from '@/modules/exams/exam.service';
 import { useAcademicYear } from '@/shared/context/AcademicYearContext';
 import { useUIStore } from '@/store/uiStore';
 import { Marksheet } from '@/modules/exams/components/Marksheet';
@@ -54,7 +54,7 @@ export const PrincipalExamsManager: React.FC<Props> = ({ onBack }) => {
   useEffect(() => {
     if (!activeYear) return;
     setLoading(true);
-    apiExams.list({ yearId: activeYear.id })
+    examService.getExams(activeYear.id)
       .then((data: any[]) => setExams(data.sort((a, b) =>
         new Date(b.scheduled_date).getTime() - new Date(a.scheduled_date).getTime()
       )))
@@ -66,8 +66,8 @@ export const PrincipalExamsManager: React.FC<Props> = ({ onBack }) => {
     setPicked(exam);
     setView('RESULTS');
     setLoadingRes(true);
-    apiExams.getResults(exam.id)
-      .then((data: any[]) => setResults(data.sort((a, b) => b.obtained_marks - a.obtained_marks)))
+    examService.getResults(exam.id)
+      .then((data: any[]) => setResults(data.sort((a: any, b: any) => b.obtained_marks - a.obtained_marks)))
       .catch(() => setResults([]))
       .finally(() => setLoadingRes(false));
   };
@@ -75,7 +75,7 @@ export const PrincipalExamsManager: React.FC<Props> = ({ onBack }) => {
   const handleLockResults = async (examId: string) => {
     setLockingExam(examId);
     try {
-      await apiExams.lockResults(examId);
+      await examService.lockResults(examId);
       setExams(exams.map(e => e.id === examId ? { ...e, result_status: 'LOCKED' } : e));
       if (picked?.id === examId) setPicked({ ...picked, result_status: 'LOCKED' });
       showToast('Exam results locked');
@@ -89,7 +89,7 @@ export const PrincipalExamsManager: React.FC<Props> = ({ onBack }) => {
   const handleUnlockResults = async (examId: string) => {
     setLockingExam(examId);
     try {
-      await apiExams.unlockResults(examId);
+      await examService.unlockResults(examId);
       setExams(exams.map(e => e.id === examId ? { ...e, result_status: 'SUBMITTED' } : e));
       if (picked?.id === examId) setPicked({ ...picked, result_status: 'SUBMITTED' });
       showToast('Exam results unlocked');

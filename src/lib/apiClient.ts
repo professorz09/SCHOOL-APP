@@ -329,6 +329,7 @@ export const apiSettings = {
 
 export const apiPrincipal = {
   // Notices
+  noticeList: () => get<any[]>('/principal/notice/list'),
   noticeCreate: (body: { title: string; body: string; audience: string; pinned?: boolean; sentBy?: string }) =>
     post<any>('/principal/notice/create', body),
   noticeDelete: (noticeId: string) =>

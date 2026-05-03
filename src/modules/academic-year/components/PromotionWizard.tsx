@@ -7,7 +7,8 @@ import {
 import { useAcademicYear } from '@/shared/context/AcademicYearContext';
 import { useUIStore } from '@/store/uiStore';
 import { apiPromotion } from '@/lib/apiClient';
-import { principalService, FeeStructureRecord } from '@/roles/principal/principal.service';
+import { feeService } from '@/modules/fees/fee.service';
+import type { FeeStructureRecord } from '@/modules/fees/fees.types';
 
 interface StudentPromotion {
   studentId: string;
@@ -77,7 +78,7 @@ export const PromotionWizard: React.FC<Props> = ({ onBack }) => {
   const [feeStructures, setFeeStructures] = useState<FeeStructureRecord[]>([]);
 
   useEffect(() => {
-    principalService.getFeeStructures().then(setFeeStructures).catch(() => {});
+    feeService.getFeeStructures().then(setFeeStructures).catch(() => {});
   }, []);
   const [result, setResult]         = useState<{
     promoted: number; retained: number; tcIssued: number; skipped: number;

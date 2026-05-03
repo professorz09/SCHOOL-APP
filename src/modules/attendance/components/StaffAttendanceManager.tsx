@@ -2,8 +2,8 @@ import React, { useState, useMemo, useEffect, useRef } from 'react';
 import {
   ArrowLeft, CheckCircle2, Lock, Save, Search, ChevronLeft, ChevronRight,
 } from 'lucide-react';
-import { principalService, StaffAttendanceRow, StaffAttendanceStatus }
-  from '@/roles/principal/principal.service';
+import { staffAttendanceService, StaffAttendanceRow, StaffAttendanceStatus }
+  from '@/modules/attendance/attendance.service';
 import { useUIStore } from '@/store/uiStore';
 import { useAcademicYear } from '@/shared/context/AcademicYearContext';
 import { useEditGuard } from '@/store/correctionStore';
@@ -105,7 +105,7 @@ export const StaffAttendanceManager: React.FC<Props> = ({ onBack }) => {
     setActiveStatus(null);
     setClearedIds(new Set());
     try {
-      const data = await principalService.getStaffAttendance(date);
+      const data = await staffAttendanceService.getForDate(date);
       setRecord({ date, rows: data.rows, isLocked: data.isLocked, savedAt: data.savedAt });
     } catch (e) {
       showToast((e as Error).message || 'Failed to load staff attendance', 'error');
@@ -117,7 +117,7 @@ export const StaffAttendanceManager: React.FC<Props> = ({ onBack }) => {
     setHistoryData(null);
     setHistoryLoading(true);
     try {
-      const data = await principalService.getStaffAttendanceMonth(ym);
+      const data = await staffAttendanceService.getMonth(ym);
       setHistoryData(data);
     } catch (e) {
       showToast((e as Error).message || 'Failed to load attendance history', 'error');
@@ -206,7 +206,7 @@ export const StaffAttendanceManager: React.FC<Props> = ({ onBack }) => {
       const toUpsert = record.rows.filter(r => !clearedIds.has(r.staffId));
       const toClear: string[] = Array.from(clearedIds.values());
       const result = await editGuard.gate(
-        () => principalService.saveStaffAttendance(record.date, toUpsert, toClear),
+        () => staffAttendanceService.save(record.date, toUpsert, toClear),
         { entityType: 'staff_attendance', entityId: record.date },
       );
       if (result === undefined) return;

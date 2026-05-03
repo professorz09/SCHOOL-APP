@@ -3,7 +3,7 @@ import { ToastContainer } from '@/shared/components/ui/Toast';
 import { useUIStore } from '@/store/uiStore';
 import {
   FileCheck2, ClipboardList, ScrollText, CircleAlert,
-  Bell, CalendarDays, Clock, MapPin,
+  Bell, CalendarDays, Clock, MapPin, Users,
 } from 'lucide-react';
 import { teacherService } from '@/roles/teacher/teacher.service';
 import { AttendanceManager } from '@/modules/attendance/components/TeacherAttendanceManager';
@@ -12,10 +12,11 @@ import { ExamPaperGeneratorView } from '@/modules/exams/components/ExamPaperGene
 import { TeacherComplaintsView } from '@/roles/teacher/components/TeacherComplaints';
 import { TeacherNoticesView } from '@/modules/notices/components/TeacherNoticesView';
 import { TeacherTimetableView } from '@/modules/timetable/components/TeacherTimetableView';
+import { TeacherStudentList } from '@/roles/teacher/components/TeacherStudentList';
 import { useAuthStore } from '@/store/authStore';
 import { TeacherClass } from '@/roles/teacher/teacher.types';
 
-type TeacherView = 'DASHBOARD' | 'ATTENDANCE' | 'TESTS' | 'EXAM_GEN' | 'COMPLAINTS' | 'NOTICES' | 'TIMETABLE';
+type TeacherView = 'DASHBOARD' | 'ATTENDANCE' | 'TESTS' | 'EXAM_GEN' | 'COMPLAINTS' | 'NOTICES' | 'TIMETABLE' | 'STUDENTS';
 
 interface TodayEntry {
   id: string;
@@ -65,9 +66,11 @@ export const TeacherLayout: React.FC = () => {
   if (view === 'COMPLAINTS')  return <TeacherComplaintsView  onBack={goBack} />;
   if (view === 'NOTICES')     return <TeacherNoticesView     onBack={goBack} />;
   if (view === 'TIMETABLE')   return <TeacherTimetableView   onBack={goBack} />;
+  if (view === 'STUDENTS')    return <TeacherStudentList      onBack={goBack} />;
 
   const modules = [
     { icon: CalendarDays,   label: 'My Timetable', view: 'TIMETABLE'   as TeacherView, color: 'bg-sky-50 text-sky-600',        desc: 'Weekly schedule & periods' },
+    { icon: Users,          label: 'My Students',  view: 'STUDENTS'    as TeacherView, color: 'bg-emerald-50 text-emerald-600', desc: 'View roster for my classes' },
     { icon: FileCheck2,     label: 'Attendance',   view: 'ATTENDANCE'  as TeacherView, color: 'bg-blue-50 text-blue-600',      desc: 'Mark class attendance' },
     { icon: ClipboardList,  label: 'Tests',        view: 'TESTS'       as TeacherView, color: 'bg-indigo-50 text-indigo-600',  desc: 'Schedule & manage exams' },
     { icon: Bell,           label: 'Notices',      view: 'NOTICES'     as TeacherView, color: 'bg-violet-50 text-violet-600',  desc: 'Send notices to your classes' },

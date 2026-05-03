@@ -2,6 +2,7 @@ import React, { useEffect, useState } from 'react';
 import { ArrowLeft, Plus, Trash2, ChevronDown, ChevronUp, Save, QrCode, CreditCard, CheckCircle2, Lock, Eye, EyeOff, ShieldCheck, IndianRupee, Edit2, Building2, BookOpen, ChevronRight, X, Download, Database, History, ShieldOff, Unlock } from 'lucide-react';
 import { supabase } from '@/lib/supabase';
 import { principalService } from '@/roles/principal/principal.service';
+import { feeService } from '@/modules/fees/fee.service';
 import { AcademicYearConfig, ClassConfig } from '@/roles/principal/principal.types';
 import { useUIStore } from '@/store/uiStore';
 import { authService } from '@/modules/auth/auth.service';
@@ -96,12 +97,12 @@ export const SettingsManager: React.FC<Props> = ({ onBack, initialView }) => {
   useEffect(() => {
     if (view !== 'FEE_STRUCT') return;
     setFeeStructuresLoading(true);
-    principalService.getFeeStructures()
+    feeService.getFeeStructures()
       .then(rows => setFeeStructures(rows))
       .catch(e => showToast(e instanceof Error ? e.message : 'Failed to load fee structures', 'error'))
       .finally(() => setFeeStructuresLoading(false));
     // Depend on activeYear?.id so the list re-fetches after a year switch.
-    // principalService.getFeeStructures resolves the year internally via the
+    // feeService.getFeeStructures resolves the year internally via the
     // active session — flipping the active year invalidates upstream caches
     // and we need to re-pull to show the new year's structures.
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -168,7 +169,7 @@ export const SettingsManager: React.FC<Props> = ({ onBack, initialView }) => {
 
   const handleDeleteFs = async (id: string) => {
     try {
-      await principalService.deleteFeeStructure(id);
+      await feeService.deleteFeeStructure(id);
       setFeeStructures(prev => prev.filter(f => f.id !== id));
       showToast('Fee structure removed');
     } catch (e) {
@@ -178,7 +179,7 @@ export const SettingsManager: React.FC<Props> = ({ onBack, initialView }) => {
 
   const handleSaveFs = async (data: FeeStructureItem) => {
     try {
-      const saved = await principalService.saveFeeStructure(data);
+      const saved = await feeService.saveFeeStructure(data);
       setFeeStructures(prev => {
         const exists = prev.some(f => f.id === saved.id);
         return exists ? prev.map(f => f.id === saved.id ? saved : f) : [...prev, saved];
@@ -482,7 +483,7 @@ export const SettingsManager: React.FC<Props> = ({ onBack, initialView }) => {
             }, 0);
             // structureType is 'CLASS' (default) or 'VEHICLE' — distinguishes
             // class-wide tuition/fee templates from per-vehicle transport
-            // schedules. Field comes back from principalService.getFeeStructures.
+            // schedules. Field comes back from feeService.getFeeStructures.
             const isVehicle = (fs as { structureType?: 'CLASS' | 'VEHICLE' }).structureType === 'VEHICLE';
             const tileLabel = isVehicle ? 'BUS' : fs.className.replace('Class ', '').slice(0, 4);
             const tileClass = isVehicle

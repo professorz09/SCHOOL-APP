@@ -1,23 +1,16 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { ArrowLeft, Printer, Download, ChevronDown } from 'lucide-react';
-import { apiExams } from '@/lib/apiClient';
 import { useAcademicYear } from '@/shared/context/AcademicYearContext';
 import { useUIStore } from '@/store/uiStore';
 import { schoolInfoService, SchoolInfo } from '@/shared/utils/schoolInfo.service';
+import { examService } from '@/modules/exams/exam.service';
 
 interface Props { onBack: () => void; }
 
 type View = 'SELECT' | 'SHEET';
 
-const GRADE = (pct: number) =>
-  pct >= 91 ? 'A1' : pct >= 81 ? 'A2' : pct >= 71 ? 'B1' : pct >= 61 ? 'B2' :
-  pct >= 51 ? 'C1' : pct >= 41 ? 'C2' : pct >= 33 ? 'D' : 'E';
-
-const GRADE_COLOR = (g: string) => {
-  if (g === 'E') return 'text-rose-600';
-  if (g === 'D') return 'text-amber-600';
-  return 'text-emerald-700';
-};
+const GRADE = examService.calculateGrade;
+const GRADE_COLOR = (g: string) => examService.gradeColor(g as any);
 
 const CLASS_OPTIONS = [
   'Nursery','LKG','UKG',
@@ -51,7 +44,7 @@ export const Marksheet: React.FC<Props> = ({ onBack }) => {
     }
     setLoading(true);
     try {
-      const data = await apiExams.getMarksheet(className, activeYear.id);
+      const data = await examService.getMarksheet(className, activeYear.id);
       if (data.exams.length === 0) {
         showToast('No Final exams found for this class', 'error');
         return;

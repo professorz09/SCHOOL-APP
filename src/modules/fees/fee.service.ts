@@ -10,7 +10,11 @@ import { supabase } from '@/lib/supabase';
 import { useAuthStore } from '@/store/authStore';
 import { logAudit } from '@/lib/audit';
 import { registerCacheResetter } from '@/lib/cacheBus';
-import { apiFees } from '@/lib/apiClient';
+import { apiFees, apiPrincipal } from '@/lib/apiClient';
+import type {
+  FeeUploadStatus, FeePaymentUploadRecord,
+  BillingCycle, FeeStructureType, FeeStructureRecord,
+} from '@/modules/fees/fees.types';
 // NOTE: All writes go through /api/fees/* — writeOffFee migrated to server
 
 // ─── Types ────────────────────────────────────────────────────────────────────
@@ -777,5 +781,142 @@ export const feeService = {
   async loadForStudent(studentId: string): Promise<void> {
     if (_cacheLoadedFor === useAuthStore.getState().session?.schoolId && _installmentsCache.some(i => i.studentId === studentId)) return;
     await this.refreshAll();
+  },
+
+  // ─── Fee Structures ────────────────────────────────────────────────────────
+
+  async getFeeStructures(yearId?: string): Promise<FeeStructureRecord[]> {
+    const schoolId = useAuthStore.getState().session?.schoolId;
+    if (!schoolId) return [];
+
+    let ayId = yearId;
+    if (!ayId) {
+      const { data: ay } = await supabase
+        .from('academic_years').select('id')
+        .eq('school_id', schoolId).eq('is_active', true).maybeSingle();
+      if (!ay) return [];
+      ayId = (ay as { id: string }).id;
+    }
+
+    const read = async () => {
+      const { data, error } = await supabase
+        .from('fee_structures')
+        .select('id, name, class_name, structure_type, billing_cycle, fee_heads, monthly_due_dates, late_fee')
+        .eq('school_id', schoolId).eq('academic_year_id', ayId!)
+        .order('class_name');
+      if (error) throw new Error(error.message);
+      return ((data ?? []) as any[]).map(r => ({
+        id: r.id,
+        name: r.name,
+        className: r.class_name,
+        structureType: (r.structure_type ?? 'CLASS') as FeeStructureType,
+        billingCycle: (r.billing_cycle ?? 'MONTHLY') as BillingCycle,
+        feeHeads: r.fee_heads ?? [],
+        monthlyDueDates: r.monthly_due_dates ?? [],
+        lateFee: r.late_fee ?? { enabled: false, gracePeriodDays: 0, type: 'FIXED', amount: 0, maxCap: 0 },
+      })) as FeeStructureRecord[];
+    };
+
+    let rows = await read();
+    if (rows.length === 0 && !yearId) {
+      try {
+        await apiPrincipal.feeStructureSeed(ayId!);
+        rows = await read();
+      } catch { /* seed failure is non-fatal */ }
+    }
+    return rows;
+  },
+
+  async saveFeeStructure(input: FeeStructureRecord): Promise<FeeStructureRecord> {
+    const result = await apiPrincipal.feeStructureSave({
+      id: input.id, name: input.name, className: input.className,
+      structureType: input.structureType ?? 'CLASS', billingCycle: input.billingCycle,
+      feeHeads: input.feeHeads, monthlyDueDates: input.monthlyDueDates, lateFee: input.lateFee,
+    });
+    await logAudit('fee_structure_saved', 'fee_structures', result.id, { name: input.name, mode: result.mode });
+    return { ...input, structureType: input.structureType ?? 'CLASS', id: result.id };
+  },
+
+  async saveFeeStructureForYear(
+    yearId: string,
+    input: Omit<FeeStructureRecord, 'id'>,
+  ): Promise<FeeStructureRecord> {
+    const result = await apiPrincipal.feeStructureSaveForYear({
+      yearId, name: input.name, className: input.className,
+      structureType: input.structureType ?? 'CLASS', billingCycle: input.billingCycle,
+      feeHeads: input.feeHeads, monthlyDueDates: input.monthlyDueDates, lateFee: input.lateFee,
+    });
+    await logAudit('fee_structure_saved', 'fee_structures', result.id, { name: input.name, mode: 'create' });
+    return { ...input, structureType: input.structureType ?? 'CLASS', id: result.id };
+  },
+
+  async deleteFeeStructure(id: string): Promise<void> {
+    await apiPrincipal.feeStructureDelete(id);
+    await logAudit('fee_structure_deleted', 'fee_structures', id);
+  },
+
+  // ─── Fee Payment Uploads ────────────────────────────────────────────────────
+
+  async getFeePaymentUploads(
+    status: FeeUploadStatus | 'ALL' = 'ALL',
+  ): Promise<FeePaymentUploadRecord[]> {
+    const schoolId = useAuthStore.getState().session?.schoolId;
+    if (!schoolId) return [];
+    let query = supabase
+      .from('fee_payment_uploads')
+      .select('id, student_id, submitted_by, amount, description, screenshot_name, screenshot_url, status, reviewed_at, reviewer_note, recorded_payment_id, created_at')
+      .eq('school_id', schoolId)
+      .order('created_at', { ascending: false });
+    if (status !== 'ALL') query = query.eq('status', status);
+    const { data, error } = await query;
+    if (error) throw new Error(error.message);
+    const rows = (data ?? []) as any[];
+
+    const ids = Array.from(new Set(rows.map((r: any) => r.student_id)));
+    const nameMap = new Map<string, { name: string; admissionNo: string | null }>();
+    if (ids.length) {
+      const { data: stu } = await supabase
+        .from('students').select('id, name, admission_no').in('id', ids);
+      for (const s of (stu ?? []) as any[]) {
+        nameMap.set(s.id, { name: s.name, admissionNo: s.admission_no });
+      }
+    }
+
+    return rows.map((r: any) => ({
+      id: r.id,
+      studentId: r.student_id,
+      studentName: nameMap.get(r.student_id)?.name ?? 'Unknown',
+      admissionNo: nameMap.get(r.student_id)?.admissionNo ?? null,
+      submittedBy: r.submitted_by,
+      amount: r.amount,
+      description: r.description ?? '',
+      screenshotName: r.screenshot_name ?? '',
+      screenshotUrl: r.screenshot_url,
+      status: r.status as FeeUploadStatus,
+      submittedAt: r.created_at,
+      reviewedAt: r.reviewed_at,
+      reviewerNote: r.reviewer_note,
+      recordedPaymentId: r.recorded_payment_id,
+    }));
+  },
+
+  async reviewFeePaymentUpload(
+    id: string,
+    decision: 'APPROVED' | 'REJECTED',
+    note?: string,
+  ): Promise<{ paymentId: string | null }> {
+    return apiPrincipal.feeUploadReview({ uploadId: id, decision, note });
+  },
+
+  async getFeePaymentScreenshotUrl(
+    storagePath: string | null,
+    ttlSeconds = 300,
+  ): Promise<string | null> {
+    if (!storagePath) return null;
+    const { data, error } = await supabase.storage
+      .from('fee-screenshots')
+      .createSignedUrl(storagePath, ttlSeconds);
+    if (error) return null;
+    return data?.signedUrl ?? null;
   },
 };
