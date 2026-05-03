@@ -449,8 +449,9 @@ export const FeeLedger: React.FC<Props> = ({ onBack }) => {
 
   // ─── Loading ─────────────────────────────────────────────────────────────────
   if (loading) return (
-    <div className="w-full bg-slate-50 flex items-center justify-center">
-      <div className="w-8 h-8 border-2 border-slate-200 border-t-blue-600 rounded-full animate-spin" />
+    <div className="w-full min-h-screen bg-slate-50 flex flex-col items-center justify-center gap-3">
+      <div className="w-10 h-10 border-[3px] border-slate-200 border-t-blue-600 rounded-full animate-spin" />
+      <p className="text-[11px] font-black text-slate-400 uppercase tracking-widest">Loading…</p>
     </div>
   );
 
