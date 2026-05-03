@@ -1,12 +1,12 @@
 import React, { useEffect, useState } from 'react';
 import { ArrowLeft, Plus, Trash2, ChevronDown, ChevronUp, Save, QrCode, CreditCard, CheckCircle2, Lock, Eye, EyeOff, ShieldCheck, IndianRupee, Edit2, Building2, BookOpen, ChevronRight, X, Download, Database, History, ShieldOff, Unlock } from 'lucide-react';
 import { supabase } from '@/lib/supabase';
-import { principalService } from '@/shared/services/principal.service';
-import { AcademicYearConfig, ClassConfig } from '@/shared/types/principal.types';
+import { principalService } from '@/roles/principal/principal.service';
+import { AcademicYearConfig, ClassConfig } from '@/roles/principal/principal.types';
 import { useUIStore } from '@/store/uiStore';
-import { authService } from '@/shared/services/auth.service';
+import { authService } from '@/modules/auth/auth.service';
 import { useAuthStore } from '@/store/authStore';
-import { schoolInfoService, SchoolInfo } from '@/shared/services/schoolInfo.service';
+import { schoolInfoService, SchoolInfo } from '@/shared/utils/schoolInfo.service';
 import { FeeStructureForm, FeeStructureItem } from '@/modules/fees/components/FeeStructureForm';
 import { AuditLogsViewer } from '@/roles/principal/components/AuditLogsViewer';
 import { useEditorModeStore } from '@/store/editorModeStore';

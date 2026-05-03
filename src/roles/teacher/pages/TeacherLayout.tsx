@@ -13,7 +13,7 @@ import { TeacherComplaintsView } from '@/roles/teacher/components/TeacherComplai
 import { TeacherNoticesView } from '@/modules/notices/components/TeacherNoticesView';
 import { TeacherTimetableView } from '@/modules/timetable/components/TeacherTimetableView';
 import { useAuthStore } from '@/store/authStore';
-import { TeacherClass } from '@/shared/types/teacher.types';
+import { TeacherClass } from '@/roles/teacher/teacher.types';
 
 type TeacherView = 'DASHBOARD' | 'ATTENDANCE' | 'TESTS' | 'EXAM_GEN' | 'COMPLAINTS' | 'NOTICES' | 'TIMETABLE';
 

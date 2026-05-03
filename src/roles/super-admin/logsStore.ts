@@ -1,5 +1,5 @@
 import { create } from 'zustand';
-import { SystemLog } from '@/shared/types/logs.types';
+import { SystemLog } from '@/roles/super-admin/logs.types';
 import { logsService } from '@/roles/super-admin/logs.service';
 import { LogType } from '@/shared/config/constants';
 

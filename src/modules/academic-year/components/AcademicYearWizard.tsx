@@ -6,7 +6,7 @@ import {
 } from 'lucide-react';
 import { useUIStore } from '@/store/uiStore';
 import { academicYearService, type WizardSection } from '@/modules/academic-year/academicYear.service';
-import { principalService } from '@/shared/services/principal.service';
+import { principalService } from '@/roles/principal/principal.service';
 import { apiPromotion } from '@/lib/apiClient';
 
 interface Props {

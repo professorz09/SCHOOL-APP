@@ -3,7 +3,7 @@
 
 import { supabase } from '@/lib/supabase';
 import { adminApi } from '@/lib/adminApi';
-import { AdminUser, CreateAdminInput, AdminRole, AdminStatus } from '@/shared/types/admin.types';
+import { AdminUser, CreateAdminInput, AdminRole, AdminStatus } from '@/roles/super-admin/admin.types';
 
 interface UserRow {
   id: string;

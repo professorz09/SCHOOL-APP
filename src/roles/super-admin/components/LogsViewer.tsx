@@ -1,6 +1,6 @@
 import React, { useEffect } from 'react';
 import { ArrowLeft, History, ShieldCheck, Building2, IndianRupee, MailPlus, Server, Shield } from 'lucide-react';
-import { useLogsStore } from '@/store/logsStore';
+import { useLogsStore } from '@/roles/super-admin/logsStore';
 import { useUIStore } from '@/store/uiStore';
 import { LogType } from '@/shared/config/constants';
 

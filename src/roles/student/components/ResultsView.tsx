@@ -4,7 +4,7 @@ import {
   CheckCircle2, Hourglass, BookOpen, ChevronDown, ChevronUp,
 } from 'lucide-react';
 import { studentDashboardService, UpcomingExam } from '@/modules/students/studentDashboard.service';
-import { StudentExamResult } from '@/shared/types/student.types';
+import { StudentExamResult } from '@/roles/student/student-role.types';
 
 interface Props { onBack: () => void; }
 

@@ -5,8 +5,10 @@ import {
 } from 'lucide-react';
 import { staffService } from '@/modules/staff/staff.service';
 import { studentService } from '@/modules/students/student.service';
-import { principalService } from '@/shared/services/principal.service';
-import { StaffMember, ClassPermission, Student } from '@/shared/types/principal.types';
+import { principalService } from '@/roles/principal/principal.service';
+import { StaffMember } from '@/modules/staff/staff.types';
+import { ClassPermission } from '@/roles/principal/principal.types';
+import { Student } from '@/modules/students/student.types';
 import { useUIStore } from '@/store/uiStore';
 
 interface SectionInfo {

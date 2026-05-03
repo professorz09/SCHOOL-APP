@@ -1,7 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import { ArrowLeft, Plus, CircleAlert } from 'lucide-react';
 import { teacherService } from '@/roles/teacher/teacher.service';
-import { TeacherComplaint } from '@/shared/types/teacher.types';
+import { TeacherComplaint } from '@/roles/teacher/teacher.types';
 import { useUIStore } from '@/store/uiStore';
 
 type View = 'LIST' | 'CREATE';

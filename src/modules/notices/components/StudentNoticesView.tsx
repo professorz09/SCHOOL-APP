@@ -4,7 +4,7 @@ import {
   Clock, CheckCircle2, AlertCircle, Calendar, User, BookOpen,
 } from 'lucide-react';
 import { studentDashboardService, HomeworkItem } from '@/modules/students/studentDashboard.service';
-import { StudentNotice } from '@/shared/types/student.types';
+import { StudentNotice } from '@/roles/student/student-role.types';
 import { useRealtimeTable } from '@/shared/hooks/useRealtimeTable';
 
 interface Props { onBack: () => void; }

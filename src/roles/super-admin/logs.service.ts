@@ -3,7 +3,7 @@
 
 import { supabase } from '@/lib/supabase';
 import { logAudit } from '@/lib/audit';
-import { SystemLog } from '@/shared/types/logs.types';
+import { SystemLog } from '@/roles/super-admin/logs.types';
 import { LogType } from '@/shared/config/constants';
 
 interface AuditRow {

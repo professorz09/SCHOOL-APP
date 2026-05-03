@@ -1,9 +1,9 @@
 import React, { useEffect, useState } from 'react';
 import { ArrowLeft, ShieldCheck, Plus, Search, UserCircle, Star, CheckCircle2, XCircle, Trash2, ChevronDown, ChevronUp, KeyRound } from 'lucide-react';
-import { useAdminStore } from '@/store/adminStore';
+import { useAdminStore } from '@/roles/super-admin/adminStore';
 import { useAuthStore } from '@/store/authStore';
 import { useUIStore } from '@/store/uiStore';
-import { AdminUser, CreateAdminInput } from '@/shared/types/admin.types';
+import { AdminUser, CreateAdminInput } from '@/roles/super-admin/admin.types';
 import { adminService } from '@/roles/super-admin/admin.service';
 
 const PASSWORD_RESET_VALUE = 'edugrow@reset';

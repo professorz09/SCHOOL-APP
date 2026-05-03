@@ -9,7 +9,7 @@ import {
   School,
   CreateSchoolInput,
   UpdateSchoolInput,
-} from '@/shared/types/school.types';
+} from '@/roles/super-admin/school.types';
 import { SchoolStatus, BillingPlan, PaymentStatus, PLAN_PRICES } from '@/shared/config/constants';
 
 const SCHOOL_FIELDS = [

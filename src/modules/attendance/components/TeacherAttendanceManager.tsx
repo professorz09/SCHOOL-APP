@@ -4,7 +4,7 @@ import {
   ShieldCheck, Hourglass, AlertCircle, ChevronLeft, RefreshCw,
 } from 'lucide-react';
 import { teacherService } from '@/roles/teacher/teacher.service';
-import { TeacherClass } from '@/shared/types/teacher.types';
+import { TeacherClass } from '@/roles/teacher/teacher.types';
 import { useUIStore } from '@/store/uiStore';
 import type { DateAttendanceStatus, AttendanceCellStatus, GridDateRecord, GridStudentDetails } from '@/modules/attendance/attendance.service';
 import { useAcademicYear } from '@/shared/context/AcademicYearContext';

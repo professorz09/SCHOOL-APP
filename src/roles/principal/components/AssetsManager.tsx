@@ -3,10 +3,10 @@ import {
   ArrowLeft, Library, FlaskConical, BookOpen, Wrench, Plus, Search,
   Trash2, X, Save, RotateCcw, UserCheck, ChevronRight, History as HistoryIcon,
 } from 'lucide-react';
-import { principalService } from '@/shared/services/principal.service';
-import { LibraryBook, LabEquipment } from '@/shared/types/principal.types';
+import { principalService } from '@/roles/principal/principal.service';
+import { LibraryBook, LabEquipment } from '@/roles/principal/principal.types';
 import { studentService } from '@/modules/students/student.service';
-import { Student } from '@/shared/types/principal.types';
+import { Student } from '@/modules/students/student.types';
 import { useUIStore } from '@/store/uiStore';
 
 type Tab = 'LIBRARY' | 'LAB';

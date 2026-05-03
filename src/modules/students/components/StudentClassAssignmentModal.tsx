@@ -1,9 +1,9 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { X, Loader2, CheckCircle2, AlertTriangle, Bus, IndianRupee, Calendar } from 'lucide-react';
 import { studentService } from '@/modules/students/student.service';
-import { principalService, FeeStructureRecord } from '@/shared/services/principal.service';
+import { principalService, FeeStructureRecord } from '@/roles/principal/principal.service';
 import { transportService, TransportVehicle } from '@/modules/transport/transport.service';
-import { Student } from '@/shared/types/principal.types';
+import { Student } from '@/modules/students/student.types';
 import { useUIStore } from '@/store/uiStore';
 import { useAcademicYear } from '@/shared/context/AcademicYearContext';
 import { apiAcademicYear } from '@/lib/apiClient';

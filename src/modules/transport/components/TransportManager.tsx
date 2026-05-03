@@ -9,7 +9,7 @@ import {
   TRANSPORT_CHANGE_REASONS,
 } from '@/modules/transport/transport.service';
 import { staffService } from '@/modules/staff/staff.service';
-import { StaffMember } from '@/shared/types/principal.types';
+import { StaffMember } from '@/modules/staff/staff.types';
 
 type Tab = 'VEHICLES' | 'DRIVERS' | 'ROUTES' | 'STUDENTS' | 'LOCATIONS';
 

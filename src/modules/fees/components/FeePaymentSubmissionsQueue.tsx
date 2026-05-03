@@ -4,7 +4,7 @@ import {
   principalService,
   type FeePaymentUploadRecord,
   type FeeUploadStatus,
-} from '@/shared/services/principal.service';
+} from '@/roles/principal/principal.service';
 import { useUIStore } from '@/store/uiStore';
 
 const STATUS_BADGE: Record<FeeUploadStatus, string> = {

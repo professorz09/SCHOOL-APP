@@ -10,20 +10,20 @@ import {
 } from 'lucide-react';
 import { studentService } from '@/modules/students/student.service';
 import { apiStudents, apiFees } from '@/lib/apiClient';
-import { Student, CreateStudentInput, StudentAcademicRecord, STREAMS, STREAM_CLASSES, StudentStream, StudentDoc } from '@/shared/types/principal.types';
+import { Student, CreateStudentInput, StudentAcademicRecord, STREAMS, STREAM_CLASSES, StudentStream, StudentDoc } from '@/modules/students/student.types';
 import { PaymentStatus, PAYMENT_COLORS } from '@/shared/config/constants';
 import { useUIStore } from '@/store/uiStore';
 type ParentCredsView = { mobileNumber: string; password: string };
-import { schoolInfoService, SchoolInfo } from '@/shared/services/schoolInfo.service';
+import { schoolInfoService, SchoolInfo } from '@/shared/utils/schoolInfo.service';
 import { AdmissionFormPrint } from '@/shared/components/AdmissionFormPrint';
 import {
   transportService, TransportVehicle, StudentTransportAssignment,
   TRANSPORT_CHANGE_REASONS,
 } from '@/modules/transport/transport.service';
-import { storageService } from '@/shared/services/storage.service';
+import { storageService } from '@/shared/utils/storage.service';
 import { StudentClassAssignmentModal } from '@/modules/students/components/StudentClassAssignmentModal';
 import { useAcademicYear } from '@/shared/context/AcademicYearContext';
-import { principalService, FeeStructureRecord } from '@/shared/services/principal.service';
+import { principalService, FeeStructureRecord } from '@/roles/principal/principal.service';
 import { useEditorModeStore } from '@/store/editorModeStore';
 import { feeService, FeeInstallment } from '@/modules/fees/fee.service';
 

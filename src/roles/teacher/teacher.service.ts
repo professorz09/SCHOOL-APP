@@ -24,7 +24,7 @@ import { useAuthStore } from '@/store/authStore';
 import { useEditingYearStore } from '@/store/editingYearStore';
 import { logAudit } from '@/lib/audit';
 import { generateText, stripJsonFence, GeminiUnavailableError } from '@/lib/gemini';
-import type { PublishResultsInput, FinalExamPublishInput } from '@/shared/types/teacher.types';
+import type { PublishResultsInput, FinalExamPublishInput } from '@/roles/teacher/teacher.types';
 import type {
   TeacherClass,
   AttendanceStudent,
@@ -38,7 +38,7 @@ import type {
   ExamSection,
   ExamQuestion,
   FinalExamSchedule,
-} from '@/shared/types/teacher.types';
+} from '@/roles/teacher/teacher.types';
 import type { DateAttendanceStatus } from '@/modules/attendance/attendance.service';
 
 // ─── Session helpers ────────────────────────────────────────────────────────

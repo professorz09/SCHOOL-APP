@@ -2,11 +2,11 @@ import React, { useEffect, useState, useMemo, useCallback } from 'react';
 import {
   ArrowLeft, IndianRupee, CheckCircle2, AlertCircle, Plus, CreditCard, Clock, CalendarPlus, Settings,
 } from 'lucide-react';
-import { useBillingStore } from '@/store/billingStore';
+import { useBillingStore } from '@/roles/super-admin/billingStore';
 import { useUIStore } from '@/store/uiStore';
 import {
   Payment, SchoolBillingBreakdown, PaymentAllocationPreview,
-} from '@/shared/types/billing.types';
+} from '@/roles/super-admin/billing.types';
 import { PLAN_COLORS, PLAN_PRICES, BillingPlan } from '@/shared/config/constants';
 
 type View = 'LIST' | 'SCHOOL_DETAIL' | 'RECORD_PAYMENT' | 'SETUP_BILLING';

@@ -3,7 +3,7 @@ import { supabase } from '@/lib/supabase';
 import { useAuthStore } from '@/store/authStore';
 import { useEditingYearStore } from '@/store/editingYearStore';
 import { logAudit } from '@/lib/audit';
-import type { AcademicYearStatus } from '@/shared/types/yearClosing.types';
+import type { AcademicYearStatus } from '@/modules/academic-year/yearClosing.types';
 import { resetAllCaches } from '@/lib/cacheBus';
 import { apiAcademicYear } from '@/lib/apiClient';
 

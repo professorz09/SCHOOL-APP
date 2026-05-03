@@ -8,7 +8,7 @@ import { useUIStore } from '@/store/uiStore';
 import { yearClosingService } from '@/modules/academic-year/yearClosing.service';
 import { useCorrectionStore } from '@/store/correctionStore';
 import { useEditingYearStore } from '@/store/editingYearStore';
-import type { PreClosingChecklist } from '@/shared/types/yearClosing.types';
+import type { PreClosingChecklist } from '@/modules/academic-year/yearClosing.types';
 import { AcademicYearWizard } from '@/modules/academic-year/components/AcademicYearWizard';
 import { PromotionWizard } from '@/modules/academic-year/components/PromotionWizard';
 

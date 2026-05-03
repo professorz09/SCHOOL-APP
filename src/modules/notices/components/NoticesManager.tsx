@@ -1,7 +1,7 @@
 import React, { useCallback, useEffect, useState } from 'react';
 import { ArrowLeft, Plus, Bell, Trash2, Pin } from 'lucide-react';
-import { principalService } from '@/shared/services/principal.service';
-import { Notice, NoticeAudience } from '@/shared/types/principal.types';
+import { principalService } from '@/roles/principal/principal.service';
+import { Notice, NoticeAudience } from '@/roles/principal/principal.types';
 import { useUIStore } from '@/store/uiStore';
 import { useRealtimeTable } from '@/shared/hooks/useRealtimeTable';
 

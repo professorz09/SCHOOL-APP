@@ -5,14 +5,14 @@ import {
   IndianRupee, Copy, ChevronRight, BookOpen, TrendingUp, AlertCircle,
   Wallet, CreditCard, RefreshCw,
 } from 'lucide-react';
-import { useSchoolStore } from '@/store/schoolStore';
-import { useBillingStore } from '@/store/billingStore';
+import { useSchoolStore } from '@/roles/super-admin/schoolStore';
+import { useBillingStore } from '@/roles/super-admin/billingStore';
 import { useUIStore } from '@/store/uiStore';
-import { School, CreateSchoolInput } from '@/shared/types/school.types';
+import { School, CreateSchoolInput } from '@/roles/super-admin/school.types';
 import { SchoolStatus, BillingPlan, STATUS_COLORS, PLAN_COLORS } from '@/shared/config/constants';
-import { schoolService } from '@/shared/services/school.service';
+import { schoolService } from '@/shared/utils/school.service';
 import { billingService, ANNUAL_PLAN_PRICES } from '@/roles/super-admin/billing.service';
-import { BillingYear } from '@/shared/types/billing.types';
+import { BillingYear } from '@/roles/super-admin/billing.types';
 import { apiAdminSchools, SchoolBillingInfo, SchoolFeePayment } from '@/lib/apiClient';
 
 type View = 'LIST' | 'CREATE' | 'DETAIL' | 'EDIT' | 'SECTIONS' | 'STUDENTS' | 'STAFF' | 'BILLING';

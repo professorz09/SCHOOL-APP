@@ -4,7 +4,7 @@ import {
   BookOpen, Trash2,
 } from 'lucide-react';
 import { teacherService } from '@/roles/teacher/teacher.service';
-import { TestSchedule, TestType, TeacherClass } from '@/shared/types/teacher.types';
+import { TestSchedule, TestType, TeacherClass } from '@/roles/teacher/teacher.types';
 import { useUIStore } from '@/store/uiStore';
 import { useAuthStore } from '@/store/authStore';
 import { useAcademicYear } from '@/shared/context/AcademicYearContext';

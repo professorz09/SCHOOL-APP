@@ -3,7 +3,7 @@ import {
   ArrowLeft, CheckCircle2, Lock, Save, Search, ChevronLeft, ChevronRight,
 } from 'lucide-react';
 import { principalService, StaffAttendanceRow, StaffAttendanceStatus }
-  from '@/shared/services/principal.service';
+  from '@/roles/principal/principal.service';
 import { useUIStore } from '@/store/uiStore';
 import { useAcademicYear } from '@/shared/context/AcademicYearContext';
 import { useEditGuard } from '@/store/correctionStore';

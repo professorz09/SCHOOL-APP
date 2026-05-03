@@ -12,7 +12,7 @@ import type {
   StaffMember, SalaryPayment, StaffRole, StaffStatus,
   StaffSalaryHistoryEntry, StaffStatusHistoryEntry, StaffDocument,
   SalaryReminderRow, SalaryPaymentMethod,
-} from '@/shared/types/principal.types';
+} from '@/modules/staff/staff.types';
 
 function getSchoolId(): string {
   const id = useAuthStore.getState().session?.schoolId;

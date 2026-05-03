@@ -1,9 +1,9 @@
 import React, { useEffect, useState } from 'react';
 import { ArrowLeft, MailPlus, Send, History, Trash2, Users, School, BookOpen, GraduationCap } from 'lucide-react';
-import { useBroadcastStore } from '@/store/broadcastStore';
+import { useBroadcastStore } from '@/roles/super-admin/broadcastStore';
 import { useUIStore } from '@/store/uiStore';
 import { BroadcastAudience } from '@/shared/config/constants';
-import { Broadcast } from '@/shared/types/broadcast.types';
+import { Broadcast } from '@/roles/super-admin/broadcast.types';
 
 interface Props {
   onBack: () => void;

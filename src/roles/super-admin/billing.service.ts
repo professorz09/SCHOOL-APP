@@ -10,7 +10,7 @@ import {
   SchoolBillingBreakdown,
   PaymentAllocationPreview,
   PaymentAllocationLine,
-} from '@/shared/types/billing.types';
+} from '@/roles/super-admin/billing.types';
 import { BillingPlan, PLAN_PRICES } from '@/shared/config/constants';
 
 // Back-compat re-export — older call sites import this name from the service.

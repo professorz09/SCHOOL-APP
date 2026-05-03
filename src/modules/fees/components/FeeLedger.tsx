@@ -7,7 +7,7 @@ import {
 } from 'lucide-react';
 import { feeService, FeeInstallment, FeeStatus, FeeType, PaymentRecord, GovernmentPaymentRecord } from '@/modules/fees/fee.service';
 import { studentService } from '@/modules/students/student.service';
-import { principalService, FeeStructureRecord } from '@/shared/services/principal.service';
+import { principalService, FeeStructureRecord } from '@/roles/principal/principal.service';
 import { useUIStore } from '@/store/uiStore';
 import { FeePaymentSubmissionsQueue } from '@/modules/fees/components/FeePaymentSubmissionsQueue';
 

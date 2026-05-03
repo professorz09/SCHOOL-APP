@@ -3,7 +3,7 @@
 
 import { supabase } from '@/lib/supabase';
 import { logAudit } from '@/lib/audit';
-import { Broadcast, CreateBroadcastInput, BroadcastStatus } from '@/shared/types/broadcast.types';
+import { Broadcast, CreateBroadcastInput, BroadcastStatus } from '@/roles/super-admin/broadcast.types';
 import { BroadcastAudience } from '@/shared/config/constants';
 
 interface BroadcastRow {

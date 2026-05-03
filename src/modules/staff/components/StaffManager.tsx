@@ -8,7 +8,7 @@ import { staffService } from '@/modules/staff/staff.service';
 import {
   StaffMember, StaffRole, StaffStatus, SalaryPaymentMethod,
   StaffSalaryHistoryEntry, StaffStatusHistoryEntry, StaffDocument, SalaryPayment,
-} from '@/shared/types/principal.types';
+} from '@/modules/staff/staff.types';
 import { useUIStore } from '@/store/uiStore';
 
 type View = 'LIST' | 'CREATE' | 'PROFILE' | 'EDIT';

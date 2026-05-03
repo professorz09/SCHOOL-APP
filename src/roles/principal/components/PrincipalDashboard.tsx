@@ -7,7 +7,7 @@ import {
 } from 'lucide-react';
 import { studentService } from '@/modules/students/student.service';
 import { staffService } from '@/modules/staff/staff.service';
-import { principalService } from '@/shared/services/principal.service';
+import { principalService } from '@/roles/principal/principal.service';
 import { transportService } from '@/modules/transport/transport.service';
 import { supabase } from '@/lib/supabase';
 import { PrincipalView } from '@/roles/principal/pages/PrincipalLayout';

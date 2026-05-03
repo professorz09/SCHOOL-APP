@@ -3,7 +3,7 @@ import { BanknoteIcon, ChevronRight, X, Loader2, IndianRupee } from 'lucide-reac
 import { staffService } from '@/modules/staff/staff.service';
 import {
   SalaryReminderRow, SalaryPaymentMethod,
-} from '@/shared/types/principal.types';
+} from '@/modules/staff/staff.types';
 import { useUIStore } from '@/store/uiStore';
 import { PrincipalView } from '@/roles/principal/pages/PrincipalLayout';
 

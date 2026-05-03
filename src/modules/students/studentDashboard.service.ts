@@ -19,7 +19,7 @@ import {
   TimetableDay, TimetablePeriod, PeriodType,
   StudentExamResult, FeePaymentUpload, TransportStop,
   StudentNotice, StudentComplaint,
-} from '@/shared/types/student.types';
+} from '@/roles/student/student-role.types';
 
 export interface HomeworkItem {
   id: string;
