@@ -7,6 +7,7 @@ import {
   CreditCard, TrendingUp, Home as HomeIcon,
   UserCheck, AlertTriangle, Trash2,
   Lock, Edit2, History, Download,
+  UserPlus, BookmarkCheck, Banknote, Truck, TruckIcon, FileX, RotateCcw, ArrowUpCircle,
 } from 'lucide-react';
 import { studentService } from '@/modules/students/student.service';
 import { apiStudents, apiFees } from '@/lib/apiClient';
@@ -77,6 +78,8 @@ export const StudentProfilePanel: React.FC<Props> = ({ student, onBack, onStuden
   const [transportHistoryError, setTransportHistoryError] = useState<string | null>(null);
   const [classHistory, setClassHistory] = useState<AcademicHistoryEntry[]>([]);
   const [classHistoryLoading, setClassHistoryLoading] = useState(false);
+  const [timeline, setTimeline] = useState<Array<{ type: string; date: string; label: string; sub?: string }>>([]);
+  const [timelineLoading, setTimelineLoading] = useState(false);
   const [profileDocs, setProfileDocs] = useState<DocumentUpload[]>(BLANK_PROFILE_DOCS);
   const [profileDocsLive, setProfileDocsLive] = useState<StudentDoc[]>([]);
   const [profileDocUploading, setProfileDocUploading] = useState<DocumentUpload['type'] | null>(null);
@@ -160,13 +163,20 @@ export const StudentProfilePanel: React.FC<Props> = ({ student, onBack, onStuden
     setProfileDocs(prev => prev.map(d => ({ ...d, uploaded: docs.some(x => x.type === d.type) })));
 
     setClassHistoryLoading(true);
+    setTimelineLoading(true);
     try {
-      const hist = await apiStudents.getAcademicHistory(s.id);
-      setClassHistory(hist as AcademicHistoryEntry[]);
+      const [hist, tl] = await Promise.allSettled([
+        apiStudents.getAcademicHistory(s.id),
+        apiStudents.getTimeline(s.id),
+      ]);
+      setClassHistory(hist.status === 'fulfilled' ? hist.value as AcademicHistoryEntry[] : []);
+      setTimeline(tl.status === 'fulfilled' ? tl.value : []);
     } catch {
       setClassHistory([]);
+      setTimeline([]);
     } finally {
       setClassHistoryLoading(false);
+      setTimelineLoading(false);
     }
   };
 
@@ -1007,123 +1017,142 @@ export const StudentProfilePanel: React.FC<Props> = ({ student, onBack, onStuden
             </div>
           )}
 
-          {/* ── CLASS HISTORY TAB ─────────────────────── */}
-          {activeProfileTab === 'CLASS_HISTORY' && (
-            <>
-              <div className="bg-white rounded-2xl border border-slate-100 shadow-sm p-4">
-                <SectionTitle icon={History} title="Academic Year History" />
-                {classHistoryLoading ? (
-                  <div className="flex flex-col items-center py-8 text-slate-400">
-                    <div className="w-6 h-6 border-4 border-slate-200 border-t-indigo-500 rounded-full animate-spin" />
-                    <p className="font-bold text-xs mt-3">Loading history…</p>
-                  </div>
-                ) : classHistory.length === 0 ? (
-                  <div className="flex flex-col items-center py-8 text-slate-400">
-                    <BookOpen size={28} className="mb-2 opacity-40" />
-                    <p className="font-bold text-sm">No academic history</p>
-                    <p className="text-xs font-bold mt-1 opacity-60">
-                      Records will appear once the student is assigned to a class
-                    </p>
-                  </div>
-                ) : (
-                  <div className="relative">
-                    <div className="absolute left-4 top-2 bottom-2 w-0.5 bg-slate-100" />
-                    <div className="space-y-3">
-                      {classHistory.map((entry, idx) => {
+          {/* ── CLASS HISTORY / TIMELINE TAB ─────────── */}
+          {activeProfileTab === 'CLASS_HISTORY' && (() => {
+            const tlConfig: Record<string, { icon: React.ComponentType<{ size?: number; className?: string }>; dot: string; card: string; label: string }> = {
+              ADMISSION:        { icon: UserPlus,       dot: 'bg-indigo-600',  card: 'bg-indigo-50 border-indigo-200',  label: 'Admission' },
+              CLASS_ASSIGNED:   { icon: BookmarkCheck,  dot: 'bg-emerald-500', card: 'bg-emerald-50 border-emerald-200', label: 'Class Assign' },
+              FEE_STRUCTURE:    { icon: Banknote,        dot: 'bg-violet-500',  card: 'bg-violet-50 border-violet-200',  label: 'Fee' },
+              TRANSPORT_ADDED:  { icon: Truck,           dot: 'bg-sky-500',     card: 'bg-sky-50 border-sky-200',        label: 'Transport' },
+              TRANSPORT_REMOVED:{ icon: TruckIcon,       dot: 'bg-orange-400',  card: 'bg-orange-50 border-orange-200',  label: 'Transport' },
+              PROMOTED:         { icon: ArrowUpCircle,   dot: 'bg-teal-500',    card: 'bg-teal-50 border-teal-200',      label: 'Promotion' },
+              TC_ISSUED:        { icon: FileX,           dot: 'bg-rose-500',    card: 'bg-rose-50 border-rose-200',      label: 'TC' },
+              READMITTED:       { icon: RotateCcw,       dot: 'bg-amber-500',   card: 'bg-amber-50 border-amber-200',    label: 'Rejoin' },
+            };
+            const fmtDate = (d: string) => {
+              try {
+                return new Date(d).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' });
+              } catch { return d; }
+            };
+            return (
+              <>
+                <div className="bg-white rounded-2xl border border-slate-100 shadow-sm p-4">
+                  <SectionTitle icon={History} title="Student Timeline" />
+                  {timelineLoading ? (
+                    <div className="flex flex-col items-center py-10 text-slate-400">
+                      <div className="w-6 h-6 border-4 border-slate-200 border-t-indigo-500 rounded-full animate-spin" />
+                      <p className="font-bold text-xs mt-3">Loading timeline…</p>
+                    </div>
+                  ) : timeline.length === 0 ? (
+                    <div className="flex flex-col items-center py-10 text-slate-400">
+                      <History size={28} className="mb-2 opacity-40" />
+                      <p className="font-bold text-sm">No history yet</p>
+                      <p className="text-xs font-bold mt-1 opacity-60">Events will appear as the student progresses</p>
+                    </div>
+                  ) : (
+                    <div className="relative mt-2">
+                      {/* vertical line */}
+                      <div className="absolute left-5 top-3 bottom-3 w-0.5 bg-slate-100" />
+                      <div className="space-y-3">
+                        {[...timeline].reverse().map((ev, idx) => {
+                          const cfg = tlConfig[ev.type] ?? tlConfig['ADMISSION'];
+                          const Icon = cfg.icon;
+                          const isFirst = idx === 0;
+                          return (
+                            <div key={idx} className="relative flex gap-3 pl-12">
+                              {/* dot */}
+                              <div className={`absolute left-3 top-3 w-5 h-5 rounded-full flex items-center justify-center border-2 border-white shadow-sm ${cfg.dot} ${isFirst ? 'ring-2 ring-offset-1 ring-indigo-300' : ''}`}>
+                                <Icon size={10} className="text-white" />
+                              </div>
+                              {/* card */}
+                              <div className={`flex-1 rounded-2xl border px-4 py-3 ${cfg.card}`}>
+                                <div className="flex items-start justify-between gap-2">
+                                  <div className="flex-1 min-w-0">
+                                    <p className="text-sm font-black text-slate-800 leading-tight">{ev.label}</p>
+                                    {ev.sub && (
+                                      <p className="text-[11px] font-bold text-slate-500 mt-0.5 truncate">{ev.sub}</p>
+                                    )}
+                                  </div>
+                                  <div className="shrink-0 text-right">
+                                    <p className="text-[10px] font-black text-slate-500 whitespace-nowrap">{fmtDate(ev.date)}</p>
+                                  </div>
+                                </div>
+                              </div>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    </div>
+                  )}
+                </div>
+
+                {/* Academic year cards (kept below timeline) */}
+                {classHistory.length > 0 && (
+                  <div className="bg-white rounded-2xl border border-slate-100 shadow-sm p-4">
+                    <SectionTitle icon={BookOpen} title="Academic Year Records" />
+                    <div className="space-y-3 mt-2">
+                      {classHistory.map((entry) => {
                         const isCurrentYear = entry.academic_year_id === activeYear?.id;
                         const due = Math.max(0, (entry.total_fee ?? 0) - (entry.paid_fee ?? 0));
                         const histPct = (entry.total_fee ?? 0) > 0
-                          ? Math.round(((entry.paid_fee ?? 0) / (entry.total_fee ?? 0)) * 100)
-                          : 0;
-                        const statusColor =
-                          entry.status === 'ACTIVE'  ? 'bg-emerald-500' :
-                          entry.status === 'PASSED'  ? 'bg-indigo-500'  :
-                          entry.status === 'FAILED'  ? 'bg-rose-500'    : 'bg-slate-400';
-                        const feeColor =
-                          entry.fee_status === 'PAID'    ? 'text-emerald-600' :
-                          entry.fee_status === 'PARTIAL' ? 'text-amber-600'   : 'text-rose-600';
+                          ? Math.round(((entry.paid_fee ?? 0) / (entry.total_fee ?? 0)) * 100) : 0;
                         return (
-                          <div key={entry.id} className="relative flex gap-4 pl-8">
-                            <div className={`absolute left-2.5 top-3 w-3 h-3 rounded-full border-2 border-white shadow ${
-                              isCurrentYear ? 'bg-indigo-600 ring-2 ring-indigo-200' : statusColor
-                            }`} />
-                            <div className={`flex-1 rounded-2xl border p-4 ${
-                              isCurrentYear
-                                ? 'bg-indigo-50 border-indigo-200'
-                                : idx === 0 && !isCurrentYear
-                                  ? 'bg-slate-50 border-slate-200'
-                                  : 'bg-white border-slate-100'
-                            }`}>
-                              <div className="flex items-center justify-between mb-2">
-                                <div className="flex items-center gap-2">
-                                  <span className={`text-[10px] font-black px-2 py-0.5 rounded-full ${
-                                    isCurrentYear ? 'bg-indigo-600 text-white' : 'bg-slate-200 text-slate-600'
-                                  }`}>
-                                    {(entry.academic_years as any)?.name ?? 'Unknown Year'}
-                                  </span>
-                                  {isCurrentYear && (
-                                    <span className="text-[9px] font-black text-indigo-500 uppercase tracking-widest">Current</span>
-                                  )}
-                                </div>
-                                <span className={`text-[9px] font-black px-2 py-0.5 rounded-full uppercase ${
-                                  entry.status === 'ACTIVE' ? 'bg-emerald-100 text-emerald-700' :
-                                  entry.status === 'PASSED' ? 'bg-indigo-100 text-indigo-700'   :
-                                  entry.status === 'FAILED' ? 'bg-rose-100 text-rose-700'       :
-                                  'bg-slate-100 text-slate-500'
-                                }`}>
-                                  {entry.status}
+                          <div key={entry.id} className={`rounded-2xl border p-4 ${isCurrentYear ? 'bg-indigo-50 border-indigo-200' : 'bg-slate-50 border-slate-100'}`}>
+                            <div className="flex items-center justify-between mb-3">
+                              <div className="flex items-center gap-2">
+                                <span className={`text-[10px] font-black px-2 py-0.5 rounded-full ${isCurrentYear ? 'bg-indigo-600 text-white' : 'bg-slate-200 text-slate-600'}`}>
+                                  {(entry.academic_years as any)?.name ?? 'Unknown Year'}
                                 </span>
+                                {isCurrentYear && <span className="text-[9px] font-black text-indigo-500 uppercase tracking-widest">Current</span>}
                               </div>
-                              <div className="grid grid-cols-3 gap-2 mb-3">
-                                <div className="bg-white rounded-xl p-2 text-center border border-slate-100">
-                                  <div className="text-sm font-black text-slate-800 leading-tight">
-                                    {entry.class_name?.replace('Class ', '') ?? '—'}
-                                  </div>
-                                  <div className="text-[9px] font-bold text-slate-400 mt-0.5">Class</div>
-                                </div>
-                                <div className="bg-white rounded-xl p-2 text-center border border-slate-100">
-                                  <div className="text-sm font-black text-slate-800">{entry.section ?? '—'}</div>
-                                  <div className="text-[9px] font-bold text-slate-400 mt-0.5">Section</div>
-                                </div>
-                                <div className="bg-white rounded-xl p-2 text-center border border-slate-100">
-                                  <div className="text-sm font-black text-slate-800">{entry.roll_no ?? '—'}</div>
-                                  <div className="text-[9px] font-bold text-slate-400 mt-0.5">Roll</div>
-                                </div>
-                              </div>
-                              {(entry.total_fee ?? 0) > 0 && (
-                                <div className="bg-white rounded-xl border border-slate-100 px-3 py-2">
-                                  <div className="flex items-center justify-between mb-1.5">
-                                    <span className="text-[10px] font-black text-slate-500 uppercase tracking-wider">Fee</span>
-                                    <span className={`text-[9px] font-black uppercase px-2 py-0.5 rounded-full ${
-                                      entry.fee_status === 'PAID'    ? 'bg-emerald-100 text-emerald-700' :
-                                      entry.fee_status === 'PARTIAL' ? 'bg-amber-100 text-amber-700'    :
-                                      'bg-rose-100 text-rose-600'
-                                    }`}>{entry.fee_status}</span>
-                                  </div>
-                                  <div className="flex items-center justify-between text-[11px] font-bold text-slate-600 mb-1.5">
-                                    <span>₹{((entry.paid_fee ?? 0) / 1000).toFixed(1)}K paid</span>
-                                    {due > 0 && <span className="text-rose-600">₹{(due / 1000).toFixed(1)}K due</span>}
-                                  </div>
-                                  <div className="bg-slate-100 rounded-full h-1.5">
-                                    <div className={`h-1.5 rounded-full transition-all ${
-                                      histPct === 100 ? 'bg-emerald-500' : histPct > 50 ? 'bg-amber-400' : 'bg-rose-400'
-                                    }`} style={{ width: `${histPct}%` }} />
-                                  </div>
-                                  <div className="text-right text-[9px] font-black mt-0.5">
-                                    <span className={feeColor}>{histPct}%</span>
-                                  </div>
-                                </div>
-                              )}
+                              <span className={`text-[9px] font-black px-2 py-0.5 rounded-full uppercase ${
+                                entry.status === 'ACTIVE' ? 'bg-emerald-100 text-emerald-700' :
+                                entry.status === 'PASSED' ? 'bg-indigo-100 text-indigo-700' :
+                                entry.status === 'FAILED' ? 'bg-rose-100 text-rose-700' : 'bg-slate-100 text-slate-500'
+                              }`}>{entry.status}</span>
                             </div>
+                            <div className="grid grid-cols-3 gap-2 mb-3">
+                              {[
+                                { v: entry.class_name?.replace('Class ', '') ?? '—', l: 'Class' },
+                                { v: entry.section ?? '—', l: 'Section' },
+                                { v: entry.roll_no ?? '—', l: 'Roll' },
+                              ].map(({ v, l }) => (
+                                <div key={l} className="bg-white rounded-xl p-2 text-center border border-white/80">
+                                  <div className="text-sm font-black text-slate-800">{v}</div>
+                                  <div className="text-[9px] font-bold text-slate-400 mt-0.5">{l}</div>
+                                </div>
+                              ))}
+                            </div>
+                            {(entry.total_fee ?? 0) > 0 && (
+                              <div className="bg-white rounded-xl border border-slate-100 px-3 py-2">
+                                <div className="flex items-center justify-between mb-1.5">
+                                  <span className="text-[10px] font-black text-slate-500 uppercase tracking-wider">Fee</span>
+                                  <span className={`text-[9px] font-black uppercase px-2 py-0.5 rounded-full ${
+                                    entry.fee_status === 'PAID' ? 'bg-emerald-100 text-emerald-700' :
+                                    entry.fee_status === 'PARTIAL' ? 'bg-amber-100 text-amber-700' : 'bg-rose-100 text-rose-600'
+                                  }`}>{entry.fee_status}</span>
+                                </div>
+                                <div className="flex items-center justify-between text-[11px] font-bold text-slate-600 mb-1.5">
+                                  <span>₹{((entry.paid_fee ?? 0) / 1000).toFixed(1)}K paid</span>
+                                  {due > 0 && <span className="text-rose-600">₹{(due / 1000).toFixed(1)}K due</span>}
+                                </div>
+                                <div className="bg-slate-100 rounded-full h-1.5">
+                                  <div className={`h-1.5 rounded-full transition-all ${histPct === 100 ? 'bg-emerald-500' : histPct > 50 ? 'bg-amber-400' : 'bg-rose-400'}`} style={{ width: `${histPct}%` }} />
+                                </div>
+                                <div className="text-right text-[9px] font-black mt-0.5">
+                                  <span className={entry.fee_status === 'PAID' ? 'text-emerald-600' : entry.fee_status === 'PARTIAL' ? 'text-amber-600' : 'text-rose-600'}>{histPct}%</span>
+                                </div>
+                              </div>
+                            )}
                           </div>
                         );
                       })}
                     </div>
                   </div>
                 )}
-              </div>
-            </>
-          )}
+              </>
+            );
+          })()}
 
           {/* ── DOCS TAB ─────────────────────────────── */}
           {activeProfileTab === 'DOCS' && (

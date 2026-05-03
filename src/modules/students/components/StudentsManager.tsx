@@ -416,12 +416,14 @@ const [mainView, setMainView] = useState<MainView>(initialView ?? 'CLASSES');
 
             {/* Basic text fields */}
             {[
-              { label: 'Full Name *', key: 'name', placeholder: 'Student full name' },
-              { label: 'Admission No. *', key: 'admissionNo', placeholder: 'ADM-2024-XXX' },
+              { label: 'Full Name', key: 'name', placeholder: 'Student full name', req: true },
+              { label: 'Admission No.', key: 'admissionNo', placeholder: 'ADM-2024-XXX', req: true },
               { label: 'Aadhaar No.', key: 'aadhaarNo', placeholder: 'XXXX XXXX XXXX' },
-            ].map(({ label, key, placeholder }) => (
+            ].map(({ label, key, placeholder, req }) => (
               <div key={key}>
-                <label className="block text-[10px] font-black uppercase tracking-widest text-slate-500 mb-1.5">{label}</label>
+                <label className="block text-[10px] font-black uppercase tracking-widest text-slate-500 mb-1.5">
+                  {label}{req && <sup className="text-rose-500 font-black ml-0.5">*</sup>}
+                </label>
                 <input value={(form as any)[key] ?? ''} onChange={e => setForm(f => ({ ...f, [key]: e.target.value }))}
                   placeholder={placeholder}
                   className="w-full border border-slate-200 bg-slate-50 rounded-xl px-4 py-3 font-bold text-sm outline-none focus:border-indigo-500 focus:bg-white transition-colors" />
@@ -430,7 +432,7 @@ const [mainView, setMainView] = useState<MainView>(initialView ?? 'CLASSES');
 
             {/* Gender dropdown */}
             <div>
-              <label className="block text-[10px] font-black uppercase tracking-widest text-slate-500 mb-1.5">Gender</label>
+              <label className="block text-[10px] font-black uppercase tracking-widest text-slate-500 mb-1.5">Gender <span className="text-slate-400 normal-case font-bold text-[9px]">(optional)</span></label>
               <select value={form.gender} onChange={e => setForm(f => ({ ...f, gender: e.target.value as any }))}
                 className="w-full border border-slate-200 bg-slate-50 rounded-xl px-4 py-3 font-bold text-sm outline-none focus:border-indigo-500 focus:bg-white transition-colors">
                 {GENDER_OPTIONS.map(g => <option key={g.value} value={g.value}>{g.label}</option>)}
@@ -439,7 +441,7 @@ const [mainView, setMainView] = useState<MainView>(initialView ?? 'CLASSES');
 
             {/* Religion dropdown + Other text */}
             <div>
-              <label className="block text-[10px] font-black uppercase tracking-widest text-slate-500 mb-1.5">Religion</label>
+              <label className="block text-[10px] font-black uppercase tracking-widest text-slate-500 mb-1.5">Religion <span className="text-slate-400 normal-case font-bold text-[9px]">(optional)</span></label>
               <select
                 value={religionIsOther ? 'Other' : (RELIGION_OPTIONS.includes(form.religion ?? '') ? form.religion : '')}
                 onChange={e => {
@@ -464,7 +466,7 @@ const [mainView, setMainView] = useState<MainView>(initialView ?? 'CLASSES');
 
             {/* Caste dropdown + Other text */}
             <div>
-              <label className="block text-[10px] font-black uppercase tracking-widest text-slate-500 mb-1.5">Caste / Category</label>
+              <label className="block text-[10px] font-black uppercase tracking-widest text-slate-500 mb-1.5">Caste / Category <span className="text-slate-400 normal-case font-bold text-[9px]">(optional)</span></label>
               <select
                 value={casteIsOther ? 'Other' : (CASTE_OPTIONS.includes(form.caste ?? '') ? form.caste : '')}
                 onChange={e => {
@@ -527,7 +529,9 @@ const [mainView, setMainView] = useState<MainView>(initialView ?? 'CLASSES');
               { label: 'Address', key: 'address', placeholder: 'Full residential address' },
             ].map(({ label, key, placeholder }) => (
               <div key={key}>
-                <label className="block text-[10px] font-black uppercase tracking-widest text-slate-500 mb-1.5">{label}</label>
+                <label className="block text-[10px] font-black uppercase tracking-widest text-slate-500 mb-1.5">
+                  {label} <span className="text-slate-400 normal-case font-bold text-[9px]">(optional)</span>
+                </label>
                 <input value={(form as any)[key]} onChange={e => setForm(f => ({ ...f, [key]: e.target.value }))}
                   placeholder={placeholder}
                   className="w-full border border-slate-200 bg-slate-50 rounded-xl px-4 py-3 font-bold text-sm outline-none focus:border-indigo-500" />
@@ -543,12 +547,15 @@ const [mainView, setMainView] = useState<MainView>(initialView ?? 'CLASSES');
               </p>
             </div>
             {[
-              { label: 'Parent Mobile Number *', key: 'parentMobileNumber', placeholder: '10-digit mobile' },
-              { label: 'Parent Name *', key: 'parentName', placeholder: 'Mother or Father name' },
+              { label: 'Parent Mobile Number', key: 'parentMobileNumber', placeholder: '10-digit mobile', req: true },
+              { label: 'Parent Name', key: 'parentName', placeholder: 'Mother or Father name', req: true },
               { label: 'Parent Email', key: 'parentEmail', placeholder: 'parent@email.com' },
-            ].map(({ label, key, placeholder }) => (
+            ].map(({ label, key, placeholder, req }) => (
               <div key={key}>
-                <label className="block text-[10px] font-black uppercase tracking-widest text-slate-500 mb-1.5">{label}</label>
+                <label className="block text-[10px] font-black uppercase tracking-widest text-slate-500 mb-1.5">
+                  {label}{req && <sup className="text-rose-500 font-black ml-0.5">*</sup>}
+                  {!req && <span className="text-slate-400 normal-case font-bold text-[9px] ml-1">(optional)</span>}
+                </label>
                 <input value={(form as any)[key]} onChange={e => setForm(f => ({ ...f, [key]: e.target.value }))}
                   placeholder={placeholder}
                   className="w-full border border-slate-200 bg-slate-50 rounded-xl px-4 py-3 font-bold text-sm outline-none focus:border-indigo-500" />

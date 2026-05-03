@@ -126,6 +126,8 @@ export const apiStudents = {
     post<{ documentId: string; docUrl: string }>('/students/document/remove', { documentId }),
   getAcademicHistory: (studentId: string) =>
     get<any[]>(`/students/${studentId}/academic-history`),
+  getTimeline: (studentId: string) =>
+    get<Array<{ type: string; date: string; label: string; sub?: string }>>(`/students/${studentId}/timeline`),
 };
 
 // ─── Fees ────────────────────────────────────────────────────────────────────

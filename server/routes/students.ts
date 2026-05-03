@@ -38,6 +38,105 @@ studentsRouter.get('/', requireAuth, requireRole('PRINCIPAL', 'TEACHER'), async 
   } catch (err) { fail(res, err); }
 });
 
+// GET /api/students/:id/timeline — chronological lifecycle events for a student
+studentsRouter.get('/:id/timeline', requireAuth, requireRole('PRINCIPAL', 'TEACHER'), async (req, res) => {
+  try {
+    const studentId = req.params.id;
+    const schoolId = req.user.school_id!;
+
+    const [stuRes, recRes, trRes] = await Promise.all([
+      adminDb.from('students')
+        .select('id, name, admission_date, created_at, status, updated_at, tc_number')
+        .eq('id', studentId).eq('school_id', schoolId).maybeSingle(),
+      adminDb.from('student_academic_records')
+        .select('id, class_name, section, roll_no, total_fee, status, created_at, academic_year_id, academic_years!inner(name, start_date, school_id)')
+        .eq('student_id', studentId)
+        .eq('academic_years.school_id', schoolId)
+        .order('created_at', { ascending: true }),
+      adminDb.from('student_transport_assignments')
+        .select('id, start_date, end_date, is_active, end_reason, transport_vehicles(vehicle_no)')
+        .eq('student_id', studentId)
+        .order('start_date', { ascending: true }),
+    ]);
+
+    if (!stuRes.data) throw new ApiError(404, 'Student not found');
+    const stu = stuRes.data as any;
+    const records = (recRes.data ?? []) as any[];
+    const transport = (trRes.data ?? []) as any[];
+
+    type Event = { type: string; date: string; label: string; sub?: string };
+    const events: Event[] = [];
+
+    // Admission
+    events.push({
+      type: 'ADMISSION',
+      date: stu.admission_date || stu.created_at,
+      label: 'Student Admitted',
+      sub: stu.name,
+    });
+
+    // Class assignments + fee structure
+    for (const rec of records) {
+      const yearName = rec.academic_years?.name ?? '';
+      events.push({
+        type: 'CLASS_ASSIGNED',
+        date: rec.created_at,
+        label: `Assigned to ${rec.class_name}${rec.section ? `-${rec.section}` : ''}`,
+        sub: yearName,
+      });
+      if ((rec.total_fee ?? 0) > 0) {
+        events.push({
+          type: 'FEE_STRUCTURE',
+          date: rec.created_at,
+          label: 'Fee Structure Assigned',
+          sub: `₹${Math.round((rec.total_fee ?? 0) / 100) / 10}K / year · ${yearName}`,
+        });
+      }
+      if (rec.status === 'PASSED') {
+        events.push({
+          type: 'PROMOTED',
+          date: rec.created_at,
+          label: `Promoted from ${rec.class_name}`,
+          sub: yearName,
+        });
+      }
+    }
+
+    // Transport history
+    for (const t of transport) {
+      if (t.start_date) {
+        events.push({
+          type: 'TRANSPORT_ADDED',
+          date: t.start_date,
+          label: 'Transport Assigned',
+          sub: t.transport_vehicles?.vehicle_no ? `Vehicle ${t.transport_vehicles.vehicle_no}` : undefined,
+        });
+      }
+      if (t.end_date) {
+        events.push({
+          type: 'TRANSPORT_REMOVED',
+          date: t.end_date,
+          label: 'Transport Removed',
+          sub: t.end_reason || undefined,
+        });
+      }
+    }
+
+    // TC and re-admit (best-effort from current status + updated_at)
+    if (stu.status === 'TC_ISSUED' && stu.updated_at) {
+      events.push({
+        type: 'TC_ISSUED',
+        date: stu.updated_at,
+        label: 'TC Issued',
+        sub: stu.tc_number ? `TC No: ${stu.tc_number}` : undefined,
+      });
+    }
+
+    events.sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime());
+    ok(res, events);
+  } catch (err) { fail(res, err); }
+});
+
 // GET /api/students/:id/academic-history — all yearly records for a student across all years
 studentsRouter.get('/:id/academic-history', requireAuth, requireRole('PRINCIPAL', 'TEACHER'), async (req, res) => {
   try {
