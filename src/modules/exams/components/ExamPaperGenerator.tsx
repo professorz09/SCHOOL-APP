@@ -235,14 +235,6 @@ export const ExamPaperGeneratorView: React.FC<Props> = ({ onBack }) => {
         </button>
       </div>
       <div className="flex-1 overflow-y-auto p-4 space-y-4">
-        <div className="bg-gradient-to-br from-slate-900 to-slate-700 rounded-2xl p-4 text-white">
-          <div className="flex items-center gap-2 mb-2">
-            <Sparkles size={18} className="text-amber-400" />
-            <span className="font-black text-sm">Gemini AI Paper Generator</span>
-          </div>
-          <p className="text-[11px] font-bold text-slate-300">Enter details below and get a complete exam paper with Section A/B/C questions auto-generated from your syllabus topics. Every generated paper is saved to your library.</p>
-        </div>
-
         <div className="bg-white rounded-2xl border border-slate-100 shadow-sm p-4 space-y-4">
           <div>
             <label className="block text-[10px] font-black uppercase tracking-widest text-slate-500 mb-1.5">Subject *</label>

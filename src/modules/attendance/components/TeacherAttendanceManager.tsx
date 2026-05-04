@@ -36,7 +36,8 @@ const buildMonthDates = (ym: string, yearStart?: string, yearEnd?: string): stri
   const [y, m] = ym.split('-').map(Number);
   const today = todayStr();
   const ceiling = yearEnd && yearEnd < today ? yearEnd : today;
-  const floor   = yearStart ?? '0000-01-01';
+  // Only enforce yearStart floor if it's not in the future
+  const floor = yearStart && yearStart <= today ? yearStart : '0000-01-01';
   const out: string[] = [];
   const dim = new Date(y, m, 0).getDate();
   for (let d = 1; d <= dim; d++) {
@@ -45,8 +46,21 @@ const buildMonthDates = (ym: string, yearStart?: string, yearEnd?: string): stri
   }
   return out;
 };
-const fmtDay      = (d: string) => String(new Date(d).getDate());
-const fmtDayShort = (d: string) => new Date(d).toLocaleDateString('en-IN', { weekday: 'narrow' });
+
+// Build last N days strip (newest last = rightmost = today)
+const buildDateStrip = (count = 14): string[] => {
+  const out: string[] = [];
+  for (let i = count - 1; i >= 0; i--) {
+    const d = new Date();
+    d.setDate(d.getDate() - i);
+    out.push(d.toISOString().split('T')[0]);
+  }
+  return out;
+};
+
+const fmtDay       = (d: string) => String(new Date(d + 'T12:00:00').getDate());
+const fmtDayShort  = (d: string) => new Date(d + 'T12:00:00').toLocaleDateString('en-IN', { weekday: 'short' });
+const fmtMonthShort = (d: string) => new Date(d + 'T12:00:00').toLocaleDateString('en-IN', { month: 'short' });
 const fmtMonthLabel = (ym: string) =>
   new Date(ym + '-01').toLocaleDateString('en-IN', { month: 'long', year: 'numeric' });
 
@@ -64,6 +78,8 @@ export const AttendanceManager: React.FC<Props> = ({ onBack }) => {
   const [classes, setClasses]         = useState<TeacherClass[]>([]);
   const [todayStatuses, setTodayStatuses] = useState<Record<string, DateAttendanceStatus>>({});
   const [selectedClass, setSelectedClass] = useState<TeacherClass | null>(null);
+  const stripRef = useRef<HTMLDivElement | null>(null);
+  const dateStrip = useMemo(() => buildDateStrip(14), []);
 
   // Grid state
   const [gridYM,        setGridYM]       = useState(currentYearMonth());
@@ -86,6 +102,13 @@ export const AttendanceManager: React.FC<Props> = ({ onBack }) => {
       return prev;
     });
   }, [currentYear?.id]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Scroll date strip to today on mount
+  useEffect(() => {
+    if (!stripRef.current) return;
+    const todayEl = stripRef.current.querySelector('[data-today="true"]');
+    if (todayEl) (todayEl as HTMLElement).scrollIntoView({ behavior: 'auto', inline: 'end', block: 'nearest' });
+  }, [dateStrip]);
 
   // Load class list once
   useEffect(() => {
@@ -225,6 +248,50 @@ export const AttendanceManager: React.FC<Props> = ({ onBack }) => {
             <h2 className="text-xl font-black text-slate-900 uppercase tracking-tight">Attendance</h2>
             <p className="text-[10px] font-bold text-slate-400">Select a class to open the grid</p>
           </div>
+        </div>
+
+        {/* Date strip — same style as principal's staff attendance */}
+        <div ref={stripRef} className="flex gap-2 overflow-x-auto hide-scrollbar pt-3 pb-0.5">
+          {dateStrip.map(d => {
+            const isToday = d === todayStr();
+            return (
+              <button
+                key={d}
+                data-today={isToday}
+                onClick={() => {
+                  if (classes.length === 1) {
+                    setSelectedClass(classes[0]);
+                    setGridYM(d.slice(0, 7));
+                    setView('GRID');
+                  }
+                }}
+                className={`flex-shrink-0 flex flex-col items-center px-3 py-2 rounded-2xl min-w-[52px] transition-all ${
+                  isToday
+                    ? 'bg-indigo-600 text-white shadow-md'
+                    : 'bg-slate-50 border border-slate-100 text-slate-600'
+                }`}>
+                <span className={`text-[9px] font-black uppercase tracking-widest ${isToday ? 'text-indigo-200' : 'text-slate-400'}`}>
+                  {fmtDayShort(d)}
+                </span>
+                <span className={`text-lg font-black leading-none mt-0.5 ${isToday ? 'text-white' : 'text-slate-800'}`}>
+                  {fmtDay(d)}
+                </span>
+                <span className={`text-[9px] font-bold mt-0.5 ${isToday ? 'text-indigo-200' : 'text-slate-400'}`}>
+                  {fmtMonthShort(d)}
+                </span>
+                {/* status dot — today status for primary class */}
+                {classes.length > 0 && (
+                  <div className={`w-1.5 h-1.5 rounded-full mt-1 ${
+                    isToday
+                      ? (todayStatuses[classes[0]?.id] === 'APPROVED' ? 'bg-emerald-300'
+                        : todayStatuses[classes[0]?.id] === 'PENDING' ? 'bg-amber-300'
+                        : 'bg-white/40')
+                      : 'bg-slate-200'
+                  }`} />
+                )}
+              </button>
+            );
+          })}
         </div>
       </div>
 

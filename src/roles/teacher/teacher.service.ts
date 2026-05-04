@@ -550,34 +550,27 @@ export const teacherService = {
   },
 
   async createTest(input: Omit<TestSchedule, 'id' | 'resultsUploaded'>): Promise<TestSchedule> {
-    const schoolId = getSchoolId();
     const yearId = await getActiveYearId();
     const { staffId } = await getMyStaff();
     const sectionIds = await resolveMySectionIds();
     if (input.classId && !sectionIds.includes(input.classId)) {
       throw new Error('You are not assigned to this class');
     }
-    const { data, error } = await supabase
-      .from('test_schedules')
-      .insert({
-        school_id: schoolId,
-        academic_year_id: yearId,
-        section_id: input.classId || null,
-        teacher_id: staffId,
-        class_name: input.className,
-        section: input.section,
-        subject: input.subject,
-        test_type: input.testType,
-        title: input.title,
-        scheduled_date: input.scheduledDate || null,
-        duration: input.duration,
-        max_marks: input.maxMarks,
-        syllabus: input.syllabus,
-        results_uploaded: false,
-      })
-      .select('id, section_id, class_name, section, subject, test_type, title, scheduled_date, duration, max_marks, syllabus, results_uploaded')
-      .single();
-    if (error) throw new Error(error.message);
+    const { apiTeacher } = await import('@/lib/apiClient');
+    const data = await apiTeacher.createTest({
+      academicYearId: yearId,
+      sectionId: input.classId || null,
+      teacherId: staffId,
+      className: input.className,
+      section: input.section,
+      subject: input.subject,
+      testType: input.testType,
+      title: input.title,
+      scheduledDate: input.scheduledDate || null,
+      duration: input.duration,
+      maxMarks: input.maxMarks,
+      syllabus: input.syllabus,
+    });
     const test = rowToTest(data as TestRow);
     await logAudit('test_created', 'test_schedules', test.id, { title: test.title });
     return test;
@@ -719,23 +712,9 @@ export const teacherService = {
   },
 
   async submitComplaint(subject: string, description: string): Promise<TeacherComplaint> {
-    const schoolId = getSchoolId();
-    const userId = getUserId();
     const name = getUserName();
-    const { data, error } = await supabase
-      .from('complaints')
-      .insert({
-        school_id: schoolId,
-        from_role: 'TEACHER',
-        from_name: name,
-        from_user_id: userId,
-        subject,
-        description,
-        status: 'PENDING',
-      })
-      .select('id, subject, description, status, response, created_at, resolved_at')
-      .single();
-    if (error) throw new Error(error.message);
+    const { apiTeacher } = await import('@/lib/apiClient');
+    const data = await apiTeacher.submitComplaint({ subject, description, fromName: name });
     await logAudit('complaint_filed', 'complaints', (data as { id: string }).id, { subject });
     return rowToComplaint(data as ComplaintRow);
   },
@@ -817,30 +796,21 @@ export const teacherService = {
     targetSectionId: string; targetClass: string; targetSection: string;
     type: 'HOMEWORK' | 'EXAM' | 'GENERAL';
   }): Promise<{ id: string }> {
-    const schoolId = getSchoolId();
-    const userId = getUserId();
     const name = getUserName();
     const sectionIds = await resolveMySectionIds();
     if (!sectionIds.includes(input.targetSectionId)) {
       throw new Error('You are not assigned to this class');
     }
     const audience = `SECTION:${input.targetSectionId}:${input.targetClass}:${input.targetSection}:${input.type}`;
-    const { data, error } = await supabase
-      .from('notices')
-      .insert({
-        school_id: schoolId,
-        title: input.title,
-        body: input.body,
-        audience,
-        sent_by: userId,
-        sent_by_name: name,
-      })
-      .select('id')
-      .single();
-    if (error) throw new Error(error.message);
-    const id = (data as { id: string }).id;
-    await logAudit('notice_sent', 'notices', id, { title: input.title, audience });
-    return { id };
+    const { apiTeacher } = await import('@/lib/apiClient');
+    const row = await apiTeacher.createNotice({
+      title: input.title,
+      body: input.body,
+      audience,
+      sentByName: name,
+    });
+    await logAudit('notice_sent', 'notices', row.id, { title: input.title, audience });
+    return { id: row.id };
   },
 
   // ── Timetable ─────────────────────────────────────────────────────────────
@@ -977,6 +947,62 @@ export const teacherService = {
       sections,
     };
     return paper;
+  },
+
+  /** Rich student profiles for My Students view — includes admission no, phone, father name. */
+  async getStudentProfiles(): Promise<Array<{
+    id: string; name: string; rollNo: string; admissionNo: string;
+    className: string; section: string; phone: string; fatherName: string;
+  }>> {
+    const sectionIds = await resolveMySectionIds();
+    if (!sectionIds.length) return [];
+    const yearId = await getActiveYearId();
+    const sections = await loadSectionsByIds(sectionIds);
+    const sectionMap = new Map(sections.map(s => [s.id, s]));
+
+    type RichStudentRow = {
+      student_id: string; section_id: string | null; roll_no: string | null;
+      students: {
+        id: string; name: string; is_active: boolean;
+        phone: string | null; father_name: string | null; father_phone: string | null;
+        admission_no: string;
+      } | null;
+    };
+
+    const { data, error } = await supabase
+      .from('student_academic_records')
+      .select('student_id, section_id, roll_no, students!inner(id, name, is_active, phone, father_name, father_phone, admission_no)')
+      .eq('academic_year_id', yearId)
+      .in('section_id', sectionIds);
+    if (error) throw new Error(error.message);
+
+    const results: Array<{
+      id: string; name: string; rollNo: string; admissionNo: string;
+      className: string; section: string; phone: string; fatherName: string;
+    }> = [];
+
+    for (const r of ((data ?? []) as unknown as RichStudentRow[])) {
+      if (!r.section_id || !r.students || !r.students.is_active) continue;
+      const sec = sectionMap.get(r.section_id);
+      results.push({
+        id: r.student_id,
+        name: r.students.name,
+        rollNo: r.roll_no ?? '',
+        admissionNo: r.students.admission_no ?? '',
+        className: sec?.class_name ?? '',
+        section: sec?.section ?? '',
+        phone: r.students.father_phone || r.students.phone || '',
+        fatherName: r.students.father_name ?? '',
+      });
+    }
+
+    return results.sort((a, b) => {
+      const cc = a.className.localeCompare(b.className) || a.section.localeCompare(b.section);
+      if (cc !== 0) return cc;
+      const ar = parseInt(a.rollNo, 10); const br = parseInt(b.rollNo, 10);
+      if (Number.isFinite(ar) && Number.isFinite(br)) return ar - br;
+      return a.name.localeCompare(b.name);
+    });
   },
 
   /** Expose this teacher's staff row id + primary subject (cached). */

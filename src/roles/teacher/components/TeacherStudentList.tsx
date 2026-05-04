@@ -1,35 +1,42 @@
 import React, { useEffect, useState } from 'react';
-import { ArrowLeft, Users, Search, User } from 'lucide-react';
+import { ArrowLeft, Users, Search, Phone } from 'lucide-react';
 import { teacherService } from '@/roles/teacher/teacher.service';
-import { TeacherClass } from '@/roles/teacher/teacher.types';
+
+interface StudentProfile {
+  id: string; name: string; rollNo: string; admissionNo: string;
+  className: string; section: string; phone: string; fatherName: string;
+}
 
 interface Props {
   onBack: () => void;
 }
 
 export const TeacherStudentList: React.FC<Props> = ({ onBack }) => {
-  const [classes, setClasses] = useState<TeacherClass[]>([]);
+  const [students, setStudents] = useState<StudentProfile[]>([]);
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState('');
   const [selectedClass, setSelectedClass] = useState<string>('ALL');
 
   useEffect(() => {
-    teacherService.getClasses()
-      .then(setClasses)
-      .catch(() => setClasses([]))
+    teacherService.getStudentProfiles()
+      .then(setStudents)
+      .catch(() => setStudents([]))
       .finally(() => setLoading(false));
   }, []);
 
-  const allStudents = classes.flatMap(c =>
-    c.students.map(s => ({ ...s, className: c.className, section: c.section, classId: c.id })),
-  );
-
-  const classOptions = classes.map(c => ({ id: c.id, label: `${c.className}-${c.section}` }));
+  // Unique class+section labels
+  const classOptions = Array.from(
+    new Map(students.map(s => [`${s.className}-${s.section}`, { className: s.className, section: s.section }])).entries(),
+  ).map(([label, val]) => ({ label, ...val }));
 
   const q = search.trim().toLowerCase();
-  const filtered = allStudents.filter(s => {
-    const matchesClass = selectedClass === 'ALL' || s.classId === selectedClass;
-    const matchesSearch = !q || s.name.toLowerCase().includes(q) || s.rollNo.includes(q);
+  const filtered = students.filter(s => {
+    const matchesClass = selectedClass === 'ALL' || `${s.className}-${s.section}` === selectedClass;
+    const matchesSearch = !q ||
+      s.name.toLowerCase().includes(q) ||
+      s.rollNo.includes(q) ||
+      s.admissionNo.toLowerCase().includes(q) ||
+      s.fatherName.toLowerCase().includes(q);
     return matchesClass && matchesSearch;
   });
 
@@ -45,7 +52,7 @@ export const TeacherStudentList: React.FC<Props> = ({ onBack }) => {
         </div>
         <div className="flex items-center gap-1.5 bg-indigo-50 text-indigo-700 px-3 py-1.5 rounded-full text-[10px] font-black">
           <Users size={12} />
-          {allStudents.length}
+          {filtered.length}
         </div>
       </div>
 
@@ -56,7 +63,7 @@ export const TeacherStudentList: React.FC<Props> = ({ onBack }) => {
           <input
             value={search}
             onChange={e => setSearch(e.target.value)}
-            placeholder="Search by name or roll no."
+            placeholder="Search by name, roll no. or admission no."
             className="w-full pl-9 pr-4 py-2 bg-slate-50 border border-slate-200 rounded-xl text-sm font-bold outline-none focus:border-indigo-400 transition-colors"
           />
         </div>
@@ -71,10 +78,10 @@ export const TeacherStudentList: React.FC<Props> = ({ onBack }) => {
             </button>
             {classOptions.map(c => (
               <button
-                key={c.id}
-                onClick={() => setSelectedClass(c.id)}
+                key={c.label}
+                onClick={() => setSelectedClass(c.label)}
                 className={`flex-shrink-0 px-3 py-1 rounded-full text-[11px] font-black uppercase tracking-widest transition-all ${
-                  selectedClass === c.id ? 'bg-indigo-600 text-white' : 'bg-slate-100 text-slate-500'
+                  selectedClass === c.label ? 'bg-indigo-600 text-white' : 'bg-slate-100 text-slate-500'
                 }`}>
                 {c.label}
               </button>
@@ -98,10 +105,10 @@ export const TeacherStudentList: React.FC<Props> = ({ onBack }) => {
           </div>
         ) : (
           <div className="space-y-2">
-            {filtered.map((student, idx) => (
-              <div key={student.id + idx}
+            {filtered.map(student => (
+              <div key={student.id}
                 className="flex items-center gap-3 bg-white rounded-2xl border border-slate-100 shadow-sm px-4 py-3">
-                <div className="w-9 h-9 rounded-xl bg-gradient-to-br from-indigo-400 to-violet-500 text-white flex items-center justify-center font-black text-sm shrink-0">
+                <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-indigo-400 to-violet-500 text-white flex items-center justify-center font-black text-sm shrink-0">
                   {student.name.charAt(0).toUpperCase()}
                 </div>
                 <div className="flex-1 min-w-0">
@@ -109,7 +116,19 @@ export const TeacherStudentList: React.FC<Props> = ({ onBack }) => {
                   <div className="text-[10px] font-bold text-slate-400 mt-0.5">
                     {student.className}-{student.section}
                     {student.rollNo && ` · Roll #${student.rollNo}`}
+                    {student.admissionNo && ` · Adm. ${student.admissionNo}`}
                   </div>
+                  {student.fatherName && (
+                    <div className="text-[10px] font-bold text-slate-400">
+                      Father: {student.fatherName}
+                    </div>
+                  )}
+                  {student.phone && (
+                    <div className="flex items-center gap-1 text-[10px] font-bold text-slate-400">
+                      <Phone size={9} className="shrink-0" />
+                      {student.phone}
+                    </div>
+                  )}
                 </div>
               </div>
             ))}

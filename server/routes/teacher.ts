@@ -137,3 +137,94 @@ teacherRouter.get('/attendance', requireAuth, requireRole('PRINCIPAL', 'TEACHER'
     ok(res, data);
   } catch (err) { fail(res, err); }
 });
+
+// ─── Teacher Notice ────────────────────────────────────────────────────────────
+
+// POST /api/teacher/notice/create
+teacherRouter.post('/notice/create', requireAuth, requireRole('TEACHER'), async (req, res) => {
+  try {
+    const body = requireBody<{
+      title: string; body: string; audience: string; sentByName: string;
+    }>(req, ['title', 'body', 'audience']);
+
+    const { data, error } = await adminDb
+      .from('notices')
+      .insert({
+        school_id:    req.user.school_id,
+        title:        body.title,
+        body:         body.body,
+        audience:     body.audience,
+        sent_by:      req.user.id,
+        sent_by_name: body.sentByName || req.user.name || '',
+        pinned:       false,
+      })
+      .select('id, title, body, audience, sent_at, sent_by, sent_by_name')
+      .single();
+    if (error) throw new ApiError(500, error.message);
+    ok(res, data, 201);
+  } catch (err) { fail(res, err); }
+});
+
+// ─── Teacher Test Schedule ─────────────────────────────────────────────────────
+
+// POST /api/teacher/test/create
+teacherRouter.post('/test/create', requireAuth, requireRole('TEACHER'), async (req, res) => {
+  try {
+    const body = requireBody<{
+      schoolId: string; academicYearId: string; sectionId: string | null;
+      teacherId: string; className: string; section: string; subject: string;
+      testType: string; title: string; scheduledDate: string | null;
+      duration: number; maxMarks: number; syllabus: string;
+    }>(req, ['academicYearId', 'teacherId', 'className', 'title', 'testType']);
+
+    const { data, error } = await adminDb
+      .from('test_schedules')
+      .insert({
+        school_id:       req.user.school_id,
+        academic_year_id: body.academicYearId,
+        section_id:      body.sectionId || null,
+        teacher_id:      body.teacherId,
+        class_name:      body.className,
+        section:         body.section,
+        subject:         body.subject,
+        test_type:       body.testType,
+        title:           body.title,
+        scheduled_date:  body.scheduledDate || null,
+        duration:        body.duration,
+        max_marks:       body.maxMarks,
+        syllabus:        body.syllabus,
+        results_uploaded: false,
+      })
+      .select('id, section_id, class_name, section, subject, test_type, title, scheduled_date, duration, max_marks, syllabus, results_uploaded')
+      .single();
+    if (error) throw new ApiError(500, error.message);
+    ok(res, data, 201);
+  } catch (err) { fail(res, err); }
+});
+
+// ─── Teacher Complaint ─────────────────────────────────────────────────────────
+
+// POST /api/teacher/complaint/create
+teacherRouter.post('/complaint/create', requireAuth, requireRole('TEACHER'), async (req, res) => {
+  try {
+    const body = requireBody<{ subject: string; description: string; fromName: string }>(
+      req, ['subject', 'description'],
+    );
+
+    const { data, error } = await adminDb
+      .from('complaints')
+      .insert({
+        school_id:    req.user.school_id,
+        from_role:    'TEACHER',
+        from_name:    body.fromName || req.user.name || '',
+        from_user_id: req.user.id,
+        subject:      body.subject,
+        description:  body.description,
+        status:       'PENDING',
+      })
+      .select('id, subject, description, status, response, created_at, resolved_at')
+      .single();
+    if (error) throw new ApiError(500, error.message);
+    ok(res, data, 201);
+  } catch (err) { fail(res, err); }
+});
