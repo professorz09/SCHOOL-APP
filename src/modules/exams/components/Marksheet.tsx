@@ -34,7 +34,7 @@ export const Marksheet: React.FC<Props> = ({ onBack }) => {
   const printRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
-    schoolInfoService.getSchoolInfo().then(setSchoolInfo).catch(() => {});
+    schoolInfoService.get().then(setSchoolInfo).catch(() => {});
   }, []);
 
   const loadMarksheet = async () => {

@@ -1,5 +1,6 @@
 import React, { useEffect, useState } from 'react';
-import { ArrowLeft, Plus, Wallet, IndianRupee } from 'lucide-react';
+import { ArrowLeft, Plus, Wallet, IndianRupee, Download } from 'lucide-react';
+import { exportCsv } from '@/shared/utils/csv';
 import { principalService } from '@/roles/principal/principal.service';
 import { Expense } from '@/roles/principal/principal.types';
 import { useUIStore } from '@/store/uiStore';
@@ -107,7 +108,24 @@ export const ExpensesManager: React.FC<Props> = ({ onBack }) => {
   return (
     <div className="w-full bg-slate-50 flex flex-col animate-in slide-in-from-right-8 duration-300">
       {renderHeader('Expenses', onBack,
-        <button onClick={() => setView('ADD')} className="p-2 bg-rose-500 text-white rounded-full shadow-md"><Plus size={18} /></button>
+        <div className="flex items-center gap-2">
+          <button
+            onClick={() => exportCsv(
+              `expenses_${new Date().toISOString().slice(0, 10)}`,
+              expenses.map(e => ({
+                date:        e.date,
+                category:    e.category,
+                amount:      e.amount,
+                description: e.description ?? '',
+                approved_by: e.approvedBy ?? '',
+              })),
+            )}
+            disabled={expenses.length === 0}
+            className="flex items-center gap-1.5 px-3 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 font-black text-xs rounded-xl active:scale-95 transition-all disabled:opacity-40">
+            <Download size={13} /> CSV
+          </button>
+          <button onClick={() => setView('ADD')} className="p-2 bg-rose-500 text-white rounded-full shadow-md"><Plus size={18} /></button>
+        </div>
       )}
       <div className="flex-1 overflow-y-auto p-4  space-y-4">
         {/* Total */}

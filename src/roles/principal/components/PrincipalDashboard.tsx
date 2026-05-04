@@ -1,10 +1,9 @@
 import React, { useEffect, useState } from 'react';
 import {
   Users, UserCheck, BookOpen, IndianRupee, Bus, CircleAlert,
-  Wallet, MoreHorizontal, CircleCheckBig, MapPin, ChevronRight,
-  Bell, ClipboardCheck, Clock, BanknoteIcon, Settings, ChevronUp,
-  UserCog, CalendarCheck, Sparkles, Calendar, GraduationCap,
-  ArrowRight,
+  Wallet, MapPin, ChevronRight, Bell, ClipboardCheck, Clock,
+  BanknoteIcon, Settings, UserCog, CalendarCheck, Sparkles,
+  Calendar, GraduationCap, ArrowRight, TrendingUp, AlertCircle, BarChart3,
 } from 'lucide-react';
 import { studentService } from '@/modules/students/student.service';
 import { staffService } from '@/modules/staff/staff.service';
@@ -38,18 +37,25 @@ const LIVE_COLORS = [
   'bg-rose-100 text-rose-700',
 ];
 
+type Action = { icon: React.ReactNode; label: string; view: PrincipalView; tint: string };
+type Hub = {
+  key: 'STUDENTS' | 'STAFF' | 'ACADEMICS' | 'OPERATIONS';
+  label: string;
+  icon: React.ReactNode;
+  gradient: string;
+  ring: string;
+  items: Action[];
+};
+
 export const PrincipalDashboard: React.FC<Props> = ({ onNavigate }) => {
   const session = useAuthStore(s => s.session);
-  // Subscribe to the academic-year context so the dashboard re-fetches
-  // its stats whenever the active year changes (e.g. after the principal
-  // closes the current year or finishes the new-year wizard). Without
-  // this, the setup checklist and section/fee counts stay frozen at
-  // their first-mount values and the just-created year never registers.
   const { activeYear, academicYears } = useAcademicYear();
   const ayKey = `${activeYear?.id ?? 'none'}|${academicYears.length}`;
-  const [showMore, setShowMore] = useState(false);
+
+  const [openHub, setOpenHub] = useState<Hub['key'] | null>(null);
   const [stats, setStats] = useState({
     totalStudents: 0, avgAttendance: 0, paidFees: 0, totalFees: 0,
+    monthlyCollection: 0,
     totalStaff: 0, openComplaints: 0, pendingApprovals: 0,
     studentsWithDues: 0, pendingLeaves: 0, lowAttendanceStudents: 0, unsubmittedAttendanceDays: 0,
   });
@@ -59,11 +65,13 @@ export const PrincipalDashboard: React.FC<Props> = ({ onNavigate }) => {
   useEffect(() => {
     const load = async () => {
       const today = new Date().toISOString().slice(0, 10);
-      // Transport service caches vehicles in memory — on a fresh dashboard
-      // mount that cache may be empty, so prime it before reading. All other
-      // services here fetch fresh per call.
+      // First / last day of the current calendar month — used by the
+      // monthly-collection query for the green hero card.
+      const now = new Date();
+      const monthStart = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-01`;
+      const monthEnd   = today;
       await transportService.refreshAll();
-      const [students, staff, complaints, approvals, allVehicles, attRes, dashStats] = await Promise.all([
+      const [students, staff, complaints, approvals, allVehicles, attRes, dashStats, monthPayRes] = await Promise.all([
         studentService.getAll(),
         staffService.getAll(),
         principalService.getComplaints(),
@@ -77,7 +85,16 @@ export const PrincipalDashboard: React.FC<Props> = ({ onNavigate }) => {
           .order('created_at', { ascending: false })
           .limit(5),
         activeYear ? apiPrincipal.getDashboardStats(activeYear.id) : Promise.resolve(null),
+        // Sum positive payments in the current month. Reversal rows have
+        // negative amounts so they self-deduct without extra logic.
+        supabase
+          .from('payment_records')
+          .select('amount')
+          .eq('school_id', session?.schoolId ?? '00000000-0000-0000-0000-000000000000')
+          .gte('date', monthStart).lte('date', monthEnd),
       ]);
+      const monthlyCollection = ((monthPayRes.data ?? []) as Array<{ amount: number }>)
+        .reduce((sum, r) => sum + Number(r.amount || 0), 0);
       const liveRows = ((attRes.data ?? []) as Array<{
         id: string; class_name: string | null; section: string | null;
         total_present: number; total_students: number;
@@ -101,6 +118,7 @@ export const PrincipalDashboard: React.FC<Props> = ({ onNavigate }) => {
           : 0,
         paidFees: students.reduce((a, s) => a + s.paidFee, 0),
         totalFees: students.reduce((a, s) => a + s.totalFee, 0),
+        monthlyCollection,
         totalStaff: staff.length,
         openComplaints: complaints.filter(c => c.status !== 'RESOLVED').length,
         pendingApprovals: approvals.filter(a => a.status === 'PENDING').length,
@@ -119,212 +137,253 @@ export const PrincipalDashboard: React.FC<Props> = ({ onNavigate }) => {
       })));
     };
     load();
-    // Re-run whenever the active academic year (or the year list) changes,
-    // so the checklist's `hasActiveYear` and the section/fee/student counts
-    // stay in sync with the AY context immediately after a year-close or
-    // a successful "create new academic year" wizard run.
   }, [ayKey, session?.schoolId]);
 
   const feePercent = stats.totalFees > 0 ? Math.round((stats.paidFees / stats.totalFees) * 100) : 0;
+  const totalAlerts = stats.openComplaints + stats.pendingApprovals + stats.pendingLeaves;
 
-  const MAIN_ACTIONS: { icon: React.ReactNode; label: string; view: PrincipalView; color: string }[] = [
-    { icon: <Users size={22} />,          label: 'Students',   view: 'STUDENTS',       color: 'text-violet-600 bg-violet-50' },
-    { icon: <UserCheck size={22} />,      label: 'Staff',      view: 'STAFF',          color: 'text-blue-600 bg-blue-50' },
-    { icon: <CalendarCheck size={22} />,  label: 'Attendance', view: 'ATTENDANCE',     color: 'text-teal-600 bg-teal-50' },
-    { icon: <BookOpen size={22} />,       label: 'Classes',    view: 'CLASS_MGMT',     color: 'text-purple-600 bg-purple-50' },
-    { icon: <IndianRupee size={22} />,    label: 'Fees Col.',  view: 'FEE_LEDGER',     color: 'text-emerald-600 bg-emerald-50' },
-    { icon: <Bus size={22} />,            label: 'Transport',  view: 'TRANSPORT_MGMT', color: 'text-orange-500 bg-orange-50' },
-    { icon: <CircleAlert size={22} />,    label: 'Complaints', view: 'COMPLAINTS',     color: 'text-rose-600 bg-rose-50' },
-  ];
-
-  const MORE_ACTIONS: { icon: React.ReactNode; label: string; view: PrincipalView; color: string }[] = [
-    { icon: <Bell size={22} />,           label: 'Notices',       view: 'NOTICES',          color: 'text-sky-600 bg-sky-50' },
-    { icon: <ClipboardCheck size={22} />, label: 'Approvals',     view: 'APPROVALS',        color: 'text-indigo-600 bg-indigo-50' },
-    { icon: <UserCog size={22} />,        label: 'Admission',     view: 'ADMISSION',        color: 'text-indigo-600 bg-indigo-50' },
-    { icon: <GraduationCap size={22} />,  label: 'Exams',         view: 'EXAMS',            color: 'text-rose-600 bg-rose-50' },
-    { icon: <Clock size={22} />,          label: 'Timetable',     view: 'TIMETABLE',        color: 'text-fuchsia-600 bg-fuchsia-50' },
-    { icon: <BanknoteIcon size={22} />,   label: 'Salary',        view: 'SALARY_LEDGER',    color: 'text-lime-600 bg-lime-50' },
-    { icon: <Wallet size={22} />,         label: 'Expenses',      view: 'EXPENSES',         color: 'text-red-500 bg-red-50' },
-    { icon: <Sparkles size={22} />,       label: 'Tools',         view: 'TOOLS',            color: 'text-purple-600 bg-purple-50' },
-    { icon: <Calendar size={22} />,       label: 'Academic Year', view: 'YEAR_CLOSING',     color: 'text-amber-600 bg-amber-50' },
-    { icon: <ArrowRight size={22} />,     label: 'Promotion',     view: 'PROMOTION',        color: 'text-emerald-600 bg-emerald-50' },
-    { icon: <Settings size={22} />,       label: 'Settings',      view: 'SETTINGS',         color: 'text-slate-600 bg-slate-100' },
+  // ── Hub config — every action lives in one of four hubs ────────────────────
+  const HUBS: Hub[] = [
+    {
+      key: 'STUDENTS',
+      label: 'Students',
+      icon: <Users size={26}/>,
+      gradient: 'from-violet-500 to-fuchsia-500',
+      ring: 'ring-violet-300',
+      items: [
+        { icon: <Users size={20}/>,       label: 'Classes',   view: 'STUDENTS',    tint: 'bg-violet-50 text-violet-600' },
+        { icon: <UserCog size={20}/>,     label: 'Admission', view: 'ADMISSION',   tint: 'bg-indigo-50 text-indigo-600' },
+        { icon: <IndianRupee size={20}/>, label: 'Fees',      view: 'FEE_LEDGER',  tint: 'bg-emerald-50 text-emerald-600' },
+        { icon: <BookOpen size={20}/>,    label: 'Management',view: 'CLASS_MGMT',  tint: 'bg-purple-50 text-purple-600' },
+      ],
+    },
+    {
+      key: 'STAFF',
+      label: 'Staff',
+      icon: <UserCheck size={26}/>,
+      gradient: 'from-sky-500 to-blue-500',
+      ring: 'ring-sky-300',
+      items: [
+        { icon: <Users size={20}/>,         label: 'Staff List',  view: 'STAFF',            tint: 'bg-blue-50 text-blue-600' },
+        { icon: <CalendarCheck size={20}/>, label: 'Attendance',  view: 'STAFF_ATTENDANCE', tint: 'bg-teal-50 text-teal-600' },
+        { icon: <BanknoteIcon size={20}/>,  label: 'Salary',      view: 'SALARY_LEDGER',    tint: 'bg-lime-50 text-lime-600' },
+        { icon: <Wallet size={20}/>,        label: 'Expenses',    view: 'EXPENSES',         tint: 'bg-red-50 text-red-500' },
+      ],
+    },
+    {
+      key: 'ACADEMICS',
+      label: 'Academics',
+      icon: <GraduationCap size={26}/>,
+      gradient: 'from-rose-500 to-pink-500',
+      ring: 'ring-rose-300',
+      items: [
+        { icon: <GraduationCap size={20}/>, label: 'Exams',     view: 'EXAMS',        tint: 'bg-rose-50 text-rose-600' },
+        { icon: <Clock size={20}/>,         label: 'Timetable', view: 'TIMETABLE',    tint: 'bg-fuchsia-50 text-fuchsia-600' },
+        { icon: <CalendarCheck size={20}/>, label: 'Attendance',view: 'ATTENDANCE',   tint: 'bg-teal-50 text-teal-600' },
+        { icon: <ArrowRight size={20}/>,    label: 'Promotion', view: 'PROMOTION',    tint: 'bg-emerald-50 text-emerald-600' },
+      ],
+    },
+    {
+      key: 'OPERATIONS',
+      label: 'Operations',
+      icon: <Bus size={26}/>,
+      gradient: 'from-amber-500 to-orange-500',
+      ring: 'ring-amber-300',
+      items: [
+        { icon: <Bus size={20}/>,            label: 'Transport',  view: 'TRANSPORT_MGMT', tint: 'bg-orange-50 text-orange-500' },
+        { icon: <Bell size={20}/>,           label: 'Notices',    view: 'NOTICES',        tint: 'bg-sky-50 text-sky-600' },
+        { icon: <ClipboardCheck size={20}/>, label: 'Approvals',  view: 'APPROVALS',      tint: 'bg-indigo-50 text-indigo-600' },
+        { icon: <CircleAlert size={20}/>,    label: 'Complaints', view: 'COMPLAINTS',     tint: 'bg-rose-50 text-rose-600' },
+        // Admin / system items previously lived in the bottom utility strip.
+        // Folded into Operations on the user's request — Operations is now the
+        // single home for everything that isn't People / Money / Academics.
+        { icon: <BarChart3 size={20}/>,      label: 'Analytics',  view: 'ANALYTICS',      tint: 'bg-blue-50 text-blue-600' },
+        { icon: <Sparkles size={20}/>,       label: 'Tools',      view: 'TOOLS',          tint: 'bg-purple-50 text-purple-600' },
+        { icon: <Calendar size={20}/>,       label: 'Year',       view: 'YEAR_CLOSING',   tint: 'bg-amber-50 text-amber-600' },
+        { icon: <Settings size={20}/>,       label: 'Settings',   view: 'SETTINGS',       tint: 'bg-slate-100 text-slate-600' },
+      ],
+    },
   ];
 
   return (
-    <div className="flex flex-col gap-5 pb-4 px-5">
+    <div className="flex flex-col gap-4 lg:gap-6 pb-4 lg:pb-8 px-4 lg:px-8 xl:px-12 pt-3 lg:pt-6">
 
-      {/* ── Header: Attendance ──────────────────────────────────────────── */}
-      <div>
-        <p className="text-[11px] font-black uppercase tracking-widest text-slate-400">Today's Attendance</p>
-        <h1 className="text-5xl font-black text-blue-600 mt-1 leading-none tabular-nums">
-          {stats.avgAttendance}<span className="text-3xl">%</span>
-        </h1>
-      </div>
 
-      {/* ── Quick Actions Grid ──────────────────────────────────────────── */}
-      <div className="space-y-3">
-        {/* Main row — always visible */}
-        <div className="grid grid-cols-4 gap-3">
-          {MAIN_ACTIONS.map(({ icon, label, view, color }) => (
-            <button key={label} onClick={() => onNavigate(view)}
-              className="flex flex-col items-center gap-2 active:scale-95 transition-transform">
-              <div className={`w-14 h-14 rounded-2xl flex items-center justify-center ${color} shadow-sm`}>{icon}</div>
-              <span className="text-[10px] font-black text-slate-500 uppercase tracking-wide text-center leading-tight">{label}</span>
-            </button>
-          ))}
-          {/* More chip */}
-          <button onClick={() => setShowMore(p => !p)}
-            className="flex flex-col items-center gap-2 active:scale-95 transition-transform">
-            <div className={`w-14 h-14 rounded-2xl flex items-center justify-center shadow-sm transition-colors ${showMore ? 'bg-slate-800 text-white' : 'bg-slate-100 text-slate-500'}`}>
-              {showMore ? <ChevronUp size={22} /> : <MoreHorizontal size={22} />}
+      {/* ── Hero · Total Collection card (green) ────────────────────────────
+          Mirrors the reference: big monthly collection number, "Dues Collected"
+          progress bar (year-to-date paid vs billed), and a faint ₹ watermark
+          for visual texture. */}
+      <button onClick={() => onNavigate('FEE_LEDGER')}
+        className="relative bg-gradient-to-br from-emerald-500 via-emerald-600 to-emerald-700 rounded-3xl p-5 lg:p-7 shadow-xl shadow-emerald-200/40 text-white overflow-hidden text-left active:scale-[0.99] transition-transform">
+        {/* Decorative ₹ watermark + soft wave */}
+        <span aria-hidden className="pointer-events-none absolute -top-6 -right-2 text-[160px] lg:text-[220px] font-black text-white/10 leading-none select-none tracking-tighter">₹</span>
+        <span aria-hidden className="pointer-events-none absolute bottom-0 right-0 w-3/4 h-1/3 opacity-15"
+          style={{ backgroundImage: 'radial-gradient(circle at 30% 60%, rgba(255,255,255,.4) 0 1px, transparent 2px)', backgroundSize: '14px 14px' }} />
+
+        <div className="relative">
+          <div className="flex items-start justify-between gap-2">
+            <p className="text-[10px] lg:text-xs font-black uppercase tracking-widest text-white/85">
+              Total Collection · This Month
+            </p>
+            {activeYear && (
+              <span className="flex items-center gap-1 bg-white/20 backdrop-blur-sm border border-white/30 px-2 py-0.5 rounded-full text-[10px] font-black text-white tabular-nums shrink-0">
+                <Calendar size={10}/> {activeYear.name}
+              </span>
+            )}
+          </div>
+          <div className="text-4xl lg:text-6xl font-black tabular-nums mt-1 mb-4 lg:mb-5">
+            ₹{stats.monthlyCollection.toLocaleString('en-IN')}
+          </div>
+
+          {/* Progress bar — Dues Collected (year-to-date paid / billed) */}
+          <div className="bg-emerald-800/40 rounded-2xl p-3 lg:p-4">
+            <div className="flex items-center justify-between mb-2">
+              <span className="text-[11px] lg:text-sm font-black text-white">Dues Collected</span>
+              <span className="text-[11px] lg:text-sm font-black text-white tabular-nums">{feePercent}%</span>
             </div>
-            <span className="text-[10px] font-black text-slate-500 uppercase tracking-wide text-center leading-tight">
-              {showMore ? 'Less' : 'More'}
-            </span>
-          </button>
+            <div className="h-2 lg:h-2.5 bg-emerald-900/40 rounded-full overflow-hidden">
+              <div className="h-full bg-white rounded-full transition-all" style={{ width: `${feePercent}%` }} />
+            </div>
+          </div>
         </div>
+      </button>
 
-        {/* Expanded More row */}
-        {showMore && (
-          <div className="grid grid-cols-4 gap-3 animate-in slide-in-from-top-2 duration-200">
-            {MORE_ACTIONS.map(({ icon, label, view, color }) => (
-              <button key={label} onClick={() => { onNavigate(view); setShowMore(false); }}
-                className="flex flex-col items-center gap-2 active:scale-95 transition-transform">
-                <div className={`w-14 h-14 rounded-2xl flex items-center justify-center ${color} shadow-sm`}>{icon}</div>
-                <span className="text-[10px] font-black text-slate-500 uppercase tracking-wide text-center leading-tight">{label}</span>
-              </button>
-            ))}
-          </div>
-        )}
-      </div>
 
-      {/* ── Stat Cards ─────────────────────────────────────────────────── */}
-      <div className="grid grid-cols-2 gap-3">
-        {/* Total Students */}
-        <button
-          onClick={() => onNavigate('STUDENTS')}
-          className="bg-white rounded-2xl border border-slate-100 shadow-sm p-4 text-left active:scale-[0.97] transition-transform"
-        >
-          <p className="text-[10px] font-black uppercase tracking-widest text-slate-400">Total Students</p>
-          <p className="text-4xl font-black text-slate-900 mt-2 tabular-nums leading-none">{stats.totalStudents.toLocaleString('en-IN')}</p>
-          <div className="flex items-center gap-1.5 mt-2">
-            <CircleCheckBig size={13} className="text-emerald-500" />
-            <span className="text-[10px] font-black text-emerald-600">Active this year</span>
-          </div>
-        </button>
+      {/* ── 4 Hub Cards — 2x2 mobile, 4-col desktop ─────────────────────────
+          On mobile the actions panel slots in BETWEEN the two rows so it
+          opens directly under the tapped hub instead of all the way at the
+          bottom. On desktop (single 4-col row) it always renders below. */}
+      {(() => {
+        const renderHubButton = (hub: Hub) => {
+          const isOpen = openHub === hub.key;
+          return (
+            <button key={hub.key} onClick={() => setOpenHub(prev => prev === hub.key ? null : hub.key)}
+              className={`relative flex flex-col items-start gap-2 lg:gap-3 p-4 lg:p-5 rounded-2xl shadow-sm active:scale-[0.97] hover:scale-[1.02] transition-all overflow-hidden ${isOpen ? `bg-gradient-to-br ${hub.gradient} text-white shadow-lg ring-2 ${hub.ring}` : 'bg-white border border-slate-100 hover:shadow-md hover:border-slate-200'}`}>
+              <div className={`w-12 h-12 lg:w-14 lg:h-14 rounded-2xl flex items-center justify-center ${isOpen ? 'bg-white/20 text-white' : `bg-gradient-to-br ${hub.gradient} text-white shadow-md`}`}>
+                {hub.icon}
+              </div>
+              <div className="flex items-center justify-between w-full">
+                <span className={`text-sm lg:text-base font-black uppercase tracking-tight ${isOpen ? 'text-white' : 'text-slate-800'}`}>
+                  {hub.label}
+                </span>
+                <span className={`text-[9px] lg:text-[10px] font-black px-1.5 lg:px-2 py-0.5 rounded-full ${isOpen ? 'bg-white/20 text-white' : 'bg-slate-100 text-slate-500'}`}>
+                  {hub.items.length}
+                </span>
+              </div>
+            </button>
+          );
+        };
 
-        {/* Fee Collected */}
-        <button
-          onClick={() => onNavigate('FEE_LEDGER')}
-          className="bg-white rounded-2xl border border-slate-100 shadow-sm p-4 text-left active:scale-[0.97] transition-transform"
-        >
-          <p className="text-[10px] font-black uppercase tracking-widest text-slate-400">Fee Collected</p>
-          <p className="text-4xl font-black text-slate-900 mt-2 tabular-nums leading-none">{feePercent}<span className="text-2xl text-slate-400">%</span></p>
-          <div className="mt-2">
-            <span className={`inline-block text-[10px] font-black px-2 py-0.5 rounded-full ${feePercent >= 80 ? 'bg-emerald-100 text-emerald-700' : 'bg-amber-100 text-amber-700'}`}>
-              {feePercent >= 80 ? '✓ ON TARGET' : 'BELOW TARGET'}
-            </span>
-          </div>
-        </button>
-      </div>
+        const actionsPanel = openHub ? (() => {
+          const hub = HUBS.find(h => h.key === openHub)!;
+          return (
+            <div className="bg-white rounded-2xl border border-slate-100 shadow-sm p-3 lg:p-5 animate-in slide-in-from-top-2 duration-200">
+              <div className="text-[10px] lg:text-xs font-black uppercase tracking-widest text-slate-400 mb-2 lg:mb-3 px-1">
+                {hub.label} Actions
+              </div>
+              <div className="grid grid-cols-4 lg:grid-cols-8 gap-2 lg:gap-3">
+                {hub.items.map(({ icon, label, view, tint }) => (
+                  <button key={label} onClick={() => { onNavigate(view); setOpenHub(null); }}
+                    className="flex flex-col items-center gap-1.5 lg:gap-2 p-2 lg:p-3 rounded-xl active:scale-95 hover:bg-slate-50 transition-all">
+                    <div className={`w-11 h-11 lg:w-14 lg:h-14 rounded-2xl flex items-center justify-center ${tint}`}>{icon}</div>
+                    <span className="text-[9px] lg:text-[11px] font-black text-slate-600 uppercase tracking-wide text-center leading-tight">{label}</span>
+                  </button>
+                ))}
+              </div>
+            </div>
+          );
+        })() : null;
+
+        // Which mobile row contains the open hub? 0 = row1 (Students/Staff), 1 = row2 (Academics/Operations)
+        const openIndex = openHub ? HUBS.findIndex(h => h.key === openHub) : -1;
+        const openRow = openIndex >= 0 ? Math.floor(openIndex / 2) : -1;
+
+        return (
+          <>
+            {/* Mobile: 2-row grid with actions slotted in between */}
+            <div className="space-y-3 lg:hidden">
+              <div className="grid grid-cols-2 gap-3">
+                {HUBS.slice(0, 2).map(renderHubButton)}
+              </div>
+              {openRow === 0 && actionsPanel}
+              <div className="grid grid-cols-2 gap-3">
+                {HUBS.slice(2, 4).map(renderHubButton)}
+              </div>
+              {openRow === 1 && actionsPanel}
+            </div>
+
+            {/* Desktop: single 4-col row with actions below (always full-width) */}
+            <div className="hidden lg:block space-y-4">
+              <div className="grid grid-cols-4 gap-4">
+                {HUBS.map(renderHubButton)}
+              </div>
+              {actionsPanel}
+            </div>
+          </>
+        );
+      })()}
 
       {/* ── Salary Reminder Widget ─────────────────────────────────────── */}
       <SalaryReminderCard onNavigate={onNavigate} />
 
-      {/* ── Alert Strip ────────────────────────────────────────────────── */}
-      {(stats.openComplaints > 0 || stats.pendingApprovals > 0) && (
-        <div className="flex gap-2">
-          {stats.openComplaints > 0 && (
-            <button
-              onClick={() => onNavigate('COMPLAINTS')}
-              className="flex-1 flex items-center gap-2 bg-orange-50 border border-orange-100 rounded-2xl px-3 py-2.5 active:scale-[0.97] transition-transform"
-            >
-              <CircleAlert size={15} className="text-orange-500 shrink-0" />
-              <span className="text-xs font-black text-orange-700 truncate">{stats.openComplaints} Complaints</span>
-              <ChevronRight size={13} className="text-orange-400 ml-auto shrink-0" />
+      {/* ── Live Classes + Transport — side-by-side on desktop ───────────── */}
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 lg:gap-6">
+        <div>
+          <div className="flex items-center justify-between mb-2.5 lg:mb-3">
+            <h2 className="text-sm lg:text-base font-black text-slate-900 uppercase tracking-tight">Live Classes</h2>
+            <button onClick={() => onNavigate('TIMETABLE')} className="flex items-center gap-0.5 text-[10px] lg:text-xs font-black text-blue-600 uppercase tracking-wide hover:text-blue-700">
+              Monitor <ChevronRight size={12}/>
             </button>
-          )}
-          {stats.pendingApprovals > 0 && (
-            <button
-              onClick={() => onNavigate('APPROVALS')}
-              className="flex-1 flex items-center gap-2 bg-violet-50 border border-violet-100 rounded-2xl px-3 py-2.5 active:scale-[0.97] transition-transform"
-            >
-              <CircleCheckBig size={15} className="text-violet-500 shrink-0" />
-              <span className="text-xs font-black text-violet-700 truncate">{stats.pendingApprovals} Approvals</span>
-              <ChevronRight size={13} className="text-violet-400 ml-auto shrink-0" />
-            </button>
-          )}
-        </div>
-      )}
-
-      {/* ── Live Classes ────────────────────────────────────────────────── */}
-      <div>
-        <div className="flex items-center justify-between mb-3">
-          <h2 className="text-base font-black text-slate-900 uppercase tracking-tight">Live Classes</h2>
-          <button
-            onClick={() => onNavigate('TIMETABLE')}
-            className="text-xs font-black text-blue-600 uppercase tracking-wide"
-          >
-            Monitor All
-          </button>
-        </div>
-        <div className="bg-white rounded-2xl border border-slate-100 shadow-sm overflow-hidden divide-y divide-slate-50">
-          {liveClasses.length === 0 && (
-            <div className="px-4 py-6 text-center text-xs font-bold text-slate-400">
-              No attendance recorded yet today.
-            </div>
-          )}
-          {liveClasses.map((cls) => (
-            <div key={cls.classId} className="flex items-center gap-3 px-4 py-3.5">
-              <div className={`w-11 h-11 rounded-xl flex items-center justify-center shrink-0 font-black text-sm ${cls.color}`}>
-                {cls.classId}
+          </div>
+          <div className="bg-white rounded-2xl border border-slate-100 shadow-sm overflow-hidden divide-y divide-slate-50">
+            {liveClasses.length === 0 ? (
+              <div className="px-4 py-6 lg:py-8 text-center text-xs font-bold text-slate-400">
+                No attendance recorded yet today.
               </div>
-              <div className="flex-1 min-w-0">
-                <p className="text-sm font-black text-slate-900">{cls.subject}</p>
-                <p className="text-[11px] font-bold text-slate-400 mt-0.5">{cls.teacher} · {cls.present}/{cls.total} Present</p>
-              </div>
-              <div className="w-2.5 h-2.5 rounded-full bg-red-400 shrink-0 animate-pulse" />
-            </div>
-          ))}
-        </div>
-      </div>
-
-      {/* ── Transport Fleet ─────────────────────────────────────────────── */}
-      <div>
-        <div className="flex items-center justify-between mb-3">
-          <h2 className="text-base font-black text-slate-900 uppercase tracking-tight">Transport Fleet</h2>
-          <button
-            onClick={() => onNavigate('TRANSPORT_MGMT')}
-            className="text-xs font-black text-blue-600 uppercase tracking-wide"
-          >
-            Locations
-          </button>
-        </div>
-        <div className="bg-white rounded-2xl border border-slate-100 shadow-sm overflow-hidden divide-y divide-slate-50">
-          {vehicles.map((v) => (
-            <div key={v.id} className="flex items-center gap-3 px-4 py-3.5">
-              <div className="w-11 h-11 rounded-xl bg-amber-100 flex items-center justify-center shrink-0">
-                <Bus size={20} className="text-amber-600" />
-              </div>
-              <div className="flex-1 min-w-0">
-                <p className="text-sm font-black text-slate-900">{v.routeName.toUpperCase()} · {v.vehicleNo}</p>
-                <div className="flex items-center gap-1 mt-0.5">
-                  <MapPin size={10} className="text-blue-500 shrink-0" />
-                  <p className="text-[11px] font-bold text-blue-600 truncate">{v.currentStop}</p>
+            ) : liveClasses.map((cls) => (
+              <div key={cls.classId} className="flex items-center gap-3 px-4 py-3 lg:py-3.5">
+                <div className={`w-10 h-10 lg:w-11 lg:h-11 rounded-xl flex items-center justify-center shrink-0 font-black text-xs lg:text-sm ${cls.color}`}>
+                  {cls.classId}
                 </div>
-                <p className="text-[10px] font-bold text-slate-400 mt-0.5 uppercase tracking-wide">Driver: {v.driverName} · Ongoing</p>
+                <div className="flex-1 min-w-0">
+                  <p className="text-xs lg:text-sm font-black text-slate-900 truncate">{cls.teacher}</p>
+                  <p className="text-[10px] lg:text-[11px] font-bold text-slate-400 mt-0.5">{cls.present}/{cls.total} Present</p>
+                </div>
+                <div className="w-2 h-2 rounded-full bg-red-400 shrink-0 animate-pulse" />
               </div>
-              <div className="w-2.5 h-2.5 rounded-full bg-emerald-400 shrink-0" />
-            </div>
-          ))}
-          {vehicles.length === 0 && (
-            <div className="px-4 py-6 text-center text-sm font-bold text-slate-400">No active vehicles</div>
-          )}
+            ))}
+          </div>
         </div>
+
+        {vehicles.length > 0 && (
+          <div>
+            <div className="flex items-center justify-between mb-2.5 lg:mb-3">
+              <h2 className="text-sm lg:text-base font-black text-slate-900 uppercase tracking-tight">Transport Fleet</h2>
+              <button onClick={() => onNavigate('TRANSPORT_MGMT')} className="flex items-center gap-0.5 text-[10px] lg:text-xs font-black text-blue-600 uppercase tracking-wide hover:text-blue-700">
+                Locations <ChevronRight size={12}/>
+              </button>
+            </div>
+            <div className="bg-white rounded-2xl border border-slate-100 shadow-sm overflow-hidden divide-y divide-slate-50">
+              {vehicles.map((v) => (
+                <div key={v.id} className="flex items-center gap-3 px-4 py-3 lg:py-3.5">
+                  <div className="w-10 h-10 lg:w-11 lg:h-11 rounded-xl bg-amber-100 flex items-center justify-center shrink-0">
+                    <Bus size={18} className="text-amber-600" />
+                  </div>
+                  <div className="flex-1 min-w-0">
+                    <p className="text-xs lg:text-sm font-black text-slate-900 truncate">{v.routeName.toUpperCase()} · {v.vehicleNo}</p>
+                    <div className="flex items-center gap-1 mt-0.5">
+                      <MapPin size={9} className="text-blue-500 shrink-0" />
+                      <p className="text-[10px] lg:text-[11px] font-bold text-blue-600 truncate">{v.currentStop}</p>
+                    </div>
+                  </div>
+                  <div className="w-2 h-2 rounded-full bg-emerald-400 shrink-0" />
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
       </div>
 
     </div>
   );
 };
-

@@ -13,7 +13,11 @@ import type { StudentDoc } from '@/modules/students/student.types';
 
 export const STUDENT_DOCS_BUCKET = 'student-documents';
 
-const MAX_BYTES = 5 * 1024 * 1024;
+// Tight upload ceiling — schools generate thousands of docs across rosters,
+// so we keep individual files small to stay fast on slow connections and
+// limit storage cost. Anything bigger than this would be a scanned full-size
+// PDF that should be downsampled before upload.
+const MAX_BYTES = 1.5 * 1024 * 1024;
 const ALLOWED_MIME = new Set([
   'image/jpeg', 'image/png', 'image/webp', 'image/heic', 'image/heif',
   'application/pdf',
@@ -47,7 +51,7 @@ export const storageService = {
     if (!studentId) throw new Error('Student id required');
     if (!file) throw new Error('File required');
     if (file.size > MAX_BYTES) {
-      throw new Error(`File must be < 5 MB (got ${(file.size / 1024 / 1024).toFixed(1)} MB)`);
+      throw new Error(`File must be < 1.5 MB (got ${(file.size / 1024 / 1024).toFixed(1)} MB)`);
     }
     if (file.type && !ALLOWED_MIME.has(file.type)) {
       throw new Error(`Unsupported file type: ${file.type}`);

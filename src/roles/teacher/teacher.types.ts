@@ -1,5 +1,7 @@
-export type TestType = 'UNIT_TEST' | 'MID_TERM' | 'FINAL' | 'QUIZ' | 'PRACTICAL';
-export type HomeworkStatus = 'PENDING' | 'SUBMITTED' | 'GRADED';
+// 'NORMAL' and 'FINAL' are the two user-facing types.
+// Older values (UNIT_TEST, MID_TERM, QUIZ, PRACTICAL) are kept in the union so
+// historical rows still render with their original label.
+export type TestType = 'NORMAL' | 'FINAL' | 'UNIT_TEST' | 'MID_TERM' | 'QUIZ' | 'PRACTICAL';
 
 export interface FinalExamSubject {
   subject: string;
@@ -49,6 +51,8 @@ export interface AttendanceRecord {
   markedBy: string;
 }
 
+export type TestResultStatus = 'DRAFT' | 'SUBMITTED' | 'LOCKED';
+
 export interface TestSchedule {
   id: string;
   classId: string;
@@ -62,6 +66,10 @@ export interface TestSchedule {
   maxMarks: number;
   syllabus: string;
   resultsUploaded: boolean;
+  // DRAFT — created, not yet submitted.
+  // SUBMITTED — teacher uploaded results, awaiting principal publish/lock.
+  // LOCKED — principal published, locked from teacher edits.
+  resultStatus: TestResultStatus;
   results?: TestResult[];
 }
 
@@ -74,20 +82,6 @@ export interface TestResult {
   maxMarks: number;
   grade: string;
   remarks: string;
-}
-
-export interface HomeworkItem {
-  id: string;
-  classId: string;
-  className: string;
-  section: string;
-  subject: string;
-  title: string;
-  description: string;
-  assignedDate: string;
-  dueDate: string;
-  submittedCount: number;
-  totalStudents: number;
 }
 
 export interface TeacherComplaint {

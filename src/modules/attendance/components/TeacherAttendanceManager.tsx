@@ -13,10 +13,16 @@ type View = 'CLASSES' | 'GRID';
 
 interface Props { onBack: () => void; }
 
-const CELL_CYCLE: AttendanceCellStatus[] = ['present', 'absent', 'holiday', 'half'];
+// Per-cell click only toggles present ↔ absent. Holiday is a class-wide
+// state set via the bulk "Holiday" button. Half-day removed entirely.
+// Existing 'half' / 'holiday' rows from history still render with their
+// label so old data isn't visually broken.
+const CELL_CYCLE: AttendanceCellStatus[] = ['present', 'absent'];
 const NEXT_STATUS = (s: AttendanceCellStatus): AttendanceCellStatus => {
-  const idx = CELL_CYCLE.indexOf(s);
-  return CELL_CYCLE[(idx + 1) % CELL_CYCLE.length];
+  // From any non-P/A status (holiday/half), default to present so the user
+  // can switch a previously-bulk-marked holiday cell to P then A.
+  if (s !== 'present' && s !== 'absent') return 'present';
+  return s === 'present' ? 'absent' : 'present';
 };
 const CELL_LABEL: Record<AttendanceCellStatus, string> = {
   present: 'P', absent: 'A', holiday: 'H', half: 'HD',
@@ -78,6 +84,9 @@ export const AttendanceManager: React.FC<Props> = ({ onBack }) => {
   const [classes, setClasses]         = useState<TeacherClass[]>([]);
   const [todayStatuses, setTodayStatuses] = useState<Record<string, DateAttendanceStatus>>({});
   const [selectedClass, setSelectedClass] = useState<TeacherClass | null>(null);
+  // Date picked from the top date strip — drives the month a newly-opened
+  // class grid lands on. Defaults to today.
+  const [targetDate, setTargetDate]   = useState<string>(todayStr());
   const stripRef = useRef<HTMLDivElement | null>(null);
   const dateStrip = useMemo(() => buildDateStrip(14), []);
 
@@ -236,6 +245,21 @@ export const AttendanceManager: React.FC<Props> = ({ onBack }) => {
 
   const hasEditToday = !!(editBuffer[todayDateStr] && Object.keys(editBuffer[todayDateStr]).length > 0);
 
+  // Live counts for today's edit buffer
+  const todayCounts = useMemo(() => {
+    const buf = editBuffer[todayDateStr] ?? {};
+    let p = 0, a = 0, h = 0, total = 0;
+    for (const stu of (selectedClass?.students ?? [])) {
+      const st = buf[stu.id];
+      if (!st) continue;
+      total++;
+      if (st === 'present') p++;
+      else if (st === 'absent') a++;
+      else if (st === 'holiday') h++;
+    }
+    return { p, a, h, total };
+  }, [editBuffer, selectedClass, todayDateStr]);
+
   /* ════════════════ CLASSES VIEW ══════════════════════════════════ */
   if (view === 'CLASSES') return (
     <div className="w-full bg-slate-50 flex flex-col animate-in slide-in-from-right-8 duration-300">
@@ -254,35 +278,43 @@ export const AttendanceManager: React.FC<Props> = ({ onBack }) => {
         <div ref={stripRef} className="flex gap-2 overflow-x-auto hide-scrollbar pt-3 pb-0.5">
           {dateStrip.map(d => {
             const isToday = d === todayStr();
+            const isPicked = d === targetDate;
             return (
               <button
                 key={d}
                 data-today={isToday}
                 onClick={() => {
+                  // Single class → jump straight into grid for that date.
+                  // Multiple classes → pick the date and let the user tap a
+                  // class card below to open the grid scrolled to that month.
                   if (classes.length === 1) {
                     setSelectedClass(classes[0]);
                     setGridYM(d.slice(0, 7));
+                    setTargetDate(d);
                     setView('GRID');
+                  } else {
+                    setTargetDate(d);
                   }
                 }}
                 className={`flex-shrink-0 flex flex-col items-center px-3 py-2 rounded-2xl min-w-[52px] transition-all ${
-                  isToday
+                  isPicked
                     ? 'bg-indigo-600 text-white shadow-md'
-                    : 'bg-slate-50 border border-slate-100 text-slate-600'
+                    : isToday
+                      ? 'bg-indigo-50 border border-indigo-200 text-indigo-700'
+                      : 'bg-slate-50 border border-slate-100 text-slate-600'
                 }`}>
-                <span className={`text-[9px] font-black uppercase tracking-widest ${isToday ? 'text-indigo-200' : 'text-slate-400'}`}>
+                <span className={`text-[9px] font-black uppercase tracking-widest ${isPicked ? 'text-indigo-200' : isToday ? 'text-indigo-400' : 'text-slate-400'}`}>
                   {fmtDayShort(d)}
                 </span>
-                <span className={`text-lg font-black leading-none mt-0.5 ${isToday ? 'text-white' : 'text-slate-800'}`}>
+                <span className={`text-lg font-black leading-none mt-0.5 ${isPicked ? 'text-white' : isToday ? 'text-indigo-700' : 'text-slate-800'}`}>
                   {fmtDay(d)}
                 </span>
-                <span className={`text-[9px] font-bold mt-0.5 ${isToday ? 'text-indigo-200' : 'text-slate-400'}`}>
+                <span className={`text-[9px] font-bold mt-0.5 ${isPicked ? 'text-indigo-200' : isToday ? 'text-indigo-400' : 'text-slate-400'}`}>
                   {fmtMonthShort(d)}
                 </span>
-                {/* status dot — today status for primary class */}
                 {classes.length > 0 && (
                   <div className={`w-1.5 h-1.5 rounded-full mt-1 ${
-                    isToday
+                    isPicked
                       ? (todayStatuses[classes[0]?.id] === 'APPROVED' ? 'bg-emerald-300'
                         : todayStatuses[classes[0]?.id] === 'PENDING' ? 'bg-amber-300'
                         : 'bg-white/40')
@@ -307,7 +339,7 @@ export const AttendanceManager: React.FC<Props> = ({ onBack }) => {
             const status = todayStatuses[cls.id] ?? 'NOT_MARKED';
             return (
               <button key={cls.id}
-                onClick={() => { setSelectedClass(cls); setGridYM(currentYearMonth()); setView('GRID'); }}
+                onClick={() => { setSelectedClass(cls); setGridYM(targetDate.slice(0, 7)); setView('GRID'); }}
                 className={`w-full flex items-center gap-3 px-4 py-4 text-left active:bg-slate-50 transition-colors ${idx < classes.length - 1 ? 'border-b border-slate-100' : ''}`}>
                 <div className="w-10 h-10 rounded-full bg-indigo-100 text-indigo-700 flex items-center justify-center font-black text-sm shrink-0">
                   {cls.className.replace('Class ', '')}
@@ -521,11 +553,29 @@ export const AttendanceManager: React.FC<Props> = ({ onBack }) => {
 
         {/* Submit today's attendance */}
         {gridYM === currentYearMonth() && todayEditable && hasEditToday && (
-          <div className="bg-white border-t border-slate-100 p-4">
+          <div className="bg-white border-t border-slate-100 p-4 space-y-2.5">
+            {/* Live summary chips */}
+            <div className="flex items-center gap-2 justify-center">
+              <span className="inline-flex items-center gap-1 bg-emerald-50 border border-emerald-100 text-emerald-700 text-[10px] font-black px-2.5 py-1 rounded-full">
+                <span className="w-1.5 h-1.5 rounded-full bg-emerald-500"/>P {todayCounts.p}
+              </span>
+              <span className="inline-flex items-center gap-1 bg-rose-50 border border-rose-100 text-rose-700 text-[10px] font-black px-2.5 py-1 rounded-full">
+                <span className="w-1.5 h-1.5 rounded-full bg-rose-500"/>A {todayCounts.a}
+              </span>
+              <span className="inline-flex items-center gap-1 bg-slate-100 border border-slate-200 text-slate-600 text-[10px] font-black px-2.5 py-1 rounded-full">
+                <span className="w-1.5 h-1.5 rounded-full bg-slate-400"/>H {todayCounts.h}
+              </span>
+              <span className="text-[10px] font-bold text-slate-400">
+                {todayCounts.total}/{selectedClass.students.length}
+              </span>
+            </div>
             <button onClick={handleSubmitToday} disabled={isSubmitting}
               className="w-full flex items-center justify-center gap-2 bg-blue-600 text-white font-black text-sm uppercase tracking-widest py-4 rounded-2xl active:scale-95 transition-transform shadow-lg disabled:opacity-50">
               {isSubmitting ? 'Submitting…' : <><Save size={16}/> Submit For Review</>}
             </button>
+            <p className="text-center text-[10px] font-bold text-slate-400">
+              After submit, attendance becomes <span className="text-amber-600">read-only</span> until principal approves
+            </p>
           </div>
         )}
       </div>

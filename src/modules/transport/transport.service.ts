@@ -490,13 +490,16 @@ export const transportService = {
   async getTransportHistory(
     studentId: string, academicYearId?: string,
   ): Promise<StudentTransportAssignment[]> {
+    // student_transport_assignments has no FK to student_academic_records,
+    // so the supabase nested-select fails with "Could not find a relationship".
+    // We resolve class/section in a second query keyed on (student_id, year_id)
+    // and merge in JS.
     let q = supabase
       .from('student_transport_assignments')
       .select(`
         id, student_id, academic_year_id, vehicle_id, stop_id,
         monthly_amount, start_date, end_date, is_active, reason, end_reason,
         students!inner(name, school_id),
-        student_academic_records(class_name, section, academic_year_id),
         route_stops(name),
         transport_vehicles(vehicle_no)
       `)
@@ -505,25 +508,41 @@ export const transportService = {
     if (academicYearId) q = q.eq('academic_year_id', academicYearId);
     const { data, error } = await q;
     if (error) throw new Error(error.message);
-    return ((data ?? []) as unknown as AssignmentRow[]).map(a => ({
-      id: a.id,
-      studentId: a.student_id,
-      studentName: a.students?.name ?? '',
-      className: a.student_academic_records
-        ? `${a.student_academic_records.class_name}-${a.student_academic_records.section}`
-        : '',
-      vehicleId: a.vehicle_id ?? '',
-      boardingStopId: a.stop_id ?? '',
-      boardingStopName: a.route_stops?.name ?? '—',
-      academicYearId: a.academic_year_id,
-      monthlyAmount: Number(a.monthly_amount),
-      startDate: a.start_date ?? '',
-      endDate: a.end_date,
-      isActive: a.is_active,
-      reason: a.reason,
-      endReason: a.end_reason,
-      vehicleNo: a.transport_vehicles?.vehicle_no,
-    }));
+    const assignments = (data ?? []) as unknown as Omit<AssignmentRow, 'student_academic_records'>[];
+    if (assignments.length === 0) return [];
+
+    // Resolve class/section per assignment via separate AR query.
+    const yearIds = Array.from(new Set(assignments.map(a => a.academic_year_id)));
+    const { data: arRows } = await supabase
+      .from('student_academic_records')
+      .select('academic_year_id, class_name, section')
+      .eq('student_id', studentId)
+      .in('academic_year_id', yearIds);
+    const arByYear = new Map<string, { class_name: string; section: string }>();
+    for (const r of (arRows ?? []) as Array<{ academic_year_id: string; class_name: string; section: string }>) {
+      arByYear.set(r.academic_year_id, { class_name: r.class_name, section: r.section });
+    }
+
+    return assignments.map(a => {
+      const ar = arByYear.get(a.academic_year_id);
+      return {
+        id: a.id,
+        studentId: a.student_id,
+        studentName: a.students?.name ?? '',
+        className: ar ? `${ar.class_name}-${ar.section}` : '',
+        vehicleId: a.vehicle_id ?? '',
+        boardingStopId: a.stop_id ?? '',
+        boardingStopName: a.route_stops?.name ?? '—',
+        academicYearId: a.academic_year_id,
+        monthlyAmount: Number(a.monthly_amount),
+        startDate: a.start_date ?? '',
+        endDate: a.end_date,
+        isActive: a.is_active,
+        reason: a.reason,
+        endReason: a.end_reason,
+        vehicleNo: a.transport_vehicles?.vehicle_no,
+      };
+    });
   },
 
   /**

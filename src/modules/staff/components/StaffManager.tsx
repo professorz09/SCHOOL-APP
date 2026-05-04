@@ -1,10 +1,11 @@
 import React, { useEffect, useState, useCallback, useMemo } from 'react';
 import {
   ArrowLeft, Plus, Search, UserCheck, Phone, Mail, X, Save, Edit3,
-  IndianRupee, FileText, Calendar, History, Upload, Eye, Trash2,
+  IndianRupee, FileText, Calendar, History, Upload, Eye, Trash2, Download,
   Loader2, BadgeAlert, BookOpen, AlertTriangle, CheckCircle2, Clock,
 } from 'lucide-react';
 import { staffService } from '@/modules/staff/staff.service';
+import { exportCsv } from '@/shared/utils/csv';
 import {
   StaffMember, StaffRole, StaffStatus, SalaryPaymentMethod,
   StaffSalaryHistoryEntry, StaffStatusHistoryEntry, StaffDocument, SalaryPayment,
@@ -343,6 +344,9 @@ export const StaffManager: React.FC<Props> = ({ onBack }) => {
   const [relieveBusy, setRelieveBusy] = useState(false);
 
   const [docType, setDocType] = useState<string>('PAN');
+  // Documents queued during the CREATE flow — uploaded after the staff row is
+  // inserted (we need the staffId before we can attach files).
+  const [pendingDocs, setPendingDocs] = useState<{ type: string; file: File }[]>([]);
   const [docBusy, setDocBusy] = useState(false);
 
   useEffect(() => { staffService.getAll().then(setStaff); }, []);
@@ -394,9 +398,27 @@ export const StaffManager: React.FC<Props> = ({ onBack }) => {
       // staff row and throws, so we never end up with a salaried staff
       // member that has no salary history.
       const member = await staffService.create(form);
+
+      // Upload any documents queued during creation — best-effort. Staff is
+      // already inserted, so failed uploads don't abort the flow; we just
+      // warn for the ones that didn't make it.
+      let uploadFailures = 0;
+      for (const { type, file } of pendingDocs) {
+        try { await staffService.uploadDocument(member.id, type, file); }
+        catch (err) {
+          console.error('[staff create] doc upload failed:', type, file.name, err);
+          uploadFailures++;
+        }
+      }
+      if (uploadFailures > 0) {
+        showToast(`Staff added — but ${uploadFailures} document(s) failed to upload`, 'error');
+      } else {
+        showToast(`${member.name} added${pendingDocs.length ? ` with ${pendingDocs.length} document(s)` : ''}`);
+      }
+
       setStaff(prev => [...prev, member]);
-      showToast(`${member.name} added to staff`);
       setForm(BLANK);
+      setPendingDocs([]);
       setView('LIST');
     } catch (e) {
       showToast(e instanceof Error ? e.message : 'Failed to create staff', 'error');
@@ -526,6 +548,28 @@ export const StaffManager: React.FC<Props> = ({ onBack }) => {
     window.open(url, '_blank', 'noopener,noreferrer');
   };
 
+  /** Force-download the actual file (not just open it). Fetches the signed URL,
+   *  pulls the blob, and triggers a save dialog with the original filename. */
+  const handleDownloadDoc = async (path: string, filename: string) => {
+    try {
+      const url = await staffService.getDocumentSignedUrl(path);
+      if (!url) { showToast('Could not fetch document', 'error'); return; }
+      const res = await fetch(url);
+      if (!res.ok) throw new Error('Download failed');
+      const blob = await res.blob();
+      const objUrl = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = objUrl;
+      a.download = filename || 'document';
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      URL.revokeObjectURL(objUrl);
+    } catch (e) {
+      showToast(e instanceof Error ? e.message : 'Download failed', 'error');
+    }
+  };
+
   const handleDeleteDoc = async (id: string) => {
     if (!selected) return;
     try {
@@ -575,7 +619,30 @@ export const StaffManager: React.FC<Props> = ({ onBack }) => {
   if (view === 'LIST') return (
     <div className="w-full bg-slate-50 flex flex-col animate-in slide-in-from-right-8 duration-300">
       {renderHeader('Staff', onBack,
-        <button onClick={() => setView('CREATE')} className="w-9 h-9 bg-blue-600 text-white rounded-full shadow-md flex items-center justify-center active:scale-90 transition-transform"><Plus size={18} /></button>
+        <div className="flex items-center gap-2">
+          <button
+            onClick={() => exportCsv(
+              `staff_list_${new Date().toISOString().slice(0, 10)}`,
+              filtered.map(s => ({
+                name: s.name,
+                role: s.role,
+                subject: s.subject ?? '',
+                phone: s.phone ?? '',
+                email: s.email ?? '',
+                status: s.status,
+                salary: s.salary,
+                joined_on: s.joiningDate ?? '',
+                relieved_on: s.relievingDate ?? '',
+                relieving_reason: s.relievingReason ?? '',
+                is_active: s.isActive ? 'YES' : 'NO',
+              })),
+            )}
+            disabled={filtered.length === 0}
+            className="hidden sm:flex items-center gap-1.5 px-3 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 font-black text-xs rounded-xl active:scale-95 transition-all disabled:opacity-40">
+            <Download size={13} /> CSV
+          </button>
+          <button onClick={() => setView('CREATE')} className="w-9 h-9 bg-blue-600 text-white rounded-full shadow-md flex items-center justify-center active:scale-90 transition-transform"><Plus size={18} /></button>
+        </div>
       )}
       <div className="flex-1 overflow-y-auto ">
 
@@ -681,9 +748,55 @@ export const StaffManager: React.FC<Props> = ({ onBack }) => {
             The salary you enter is recorded as the &quot;Initial&quot; entry in this staff member&apos;s salary history. You can revise it any time from the Salary tab.
           </p>
         </div>
+
+        {/* Optional documents — queued and uploaded after staff is created */}
+        <div className="bg-white rounded-2xl border border-slate-100 shadow-sm p-4 space-y-3">
+          <div>
+            <p className="text-[10px] font-black uppercase tracking-widest text-slate-500">Documents (optional)</p>
+            <p className="text-[10px] font-bold text-slate-400 mt-0.5">Add PAN, Aadhaar, resume etc. — uploaded after staff is created. You can also add later from the profile.</p>
+          </div>
+
+          <div className="grid grid-cols-2 gap-2">
+            <select value={docType} onChange={e => setDocType(e.target.value)}
+              className="border border-slate-200 bg-slate-50 rounded-xl px-3 py-2.5 text-xs font-bold outline-none focus:border-blue-500">
+              {DOC_TYPES.map(t => <option key={t} value={t}>{t.replace('_', ' ')}</option>)}
+            </select>
+            <label className="flex items-center justify-center gap-1.5 bg-blue-50 border border-blue-200 text-blue-700 font-black text-xs rounded-xl px-3 py-2.5 cursor-pointer hover:bg-blue-100 transition-colors">
+              <Upload size={13}/>
+              <span>Add File</span>
+              <input type="file" accept="image/*,application/pdf" className="hidden"
+                onChange={e => {
+                  const f = e.target.files?.[0];
+                  if (f) setPendingDocs(p => [...p, { type: docType, file: f }]);
+                  e.target.value = '';
+                }} />
+            </label>
+          </div>
+
+          {pendingDocs.length > 0 && (
+            <div className="space-y-1.5">
+              {pendingDocs.map((d, i) => (
+                <div key={i} className="flex items-center gap-2 bg-slate-50 rounded-xl px-3 py-2">
+                  <FileText size={13} className="text-slate-500 shrink-0"/>
+                  <div className="flex-1 min-w-0">
+                    <div className="text-xs font-black text-slate-800 truncate">{d.file.name}</div>
+                    <div className="text-[9px] font-bold text-slate-400">{d.type.replace('_', ' ')} · {(d.file.size / 1024).toFixed(0)} KB</div>
+                  </div>
+                  <button onClick={() => setPendingDocs(p => p.filter((_, idx) => idx !== i))}
+                    className="p-1.5 bg-rose-100 text-rose-600 rounded-lg hover:bg-rose-200 transition-colors" title="Remove">
+                    <Trash2 size={12}/>
+                  </button>
+                </div>
+              ))}
+            </div>
+          )}
+
+          <p className="text-[10px] font-bold text-slate-400">JPG/PNG/WEBP/HEIC/PDF · max 5 MB each</p>
+        </div>
+
         <button onClick={handleCreate} disabled={isSubmitting}
           className="w-full flex items-center justify-center gap-2 bg-blue-600 text-white font-black text-xs uppercase tracking-widest py-4 rounded-2xl active:scale-95 transition-transform shadow-lg disabled:opacity-60">
-          {isSubmitting ? 'Adding…' : <><Plus size={16} /> Add Staff Member</>}
+          {isSubmitting ? 'Adding…' : <><Plus size={16} /> Add Staff Member{pendingDocs.length > 0 ? ` + ${pendingDocs.length} doc${pendingDocs.length > 1 ? 's' : ''}` : ''}</>}
         </button>
       </div>
     </div>
@@ -933,10 +1046,13 @@ export const StaffManager: React.FC<Props> = ({ onBack }) => {
                           <div className="text-[10px] font-bold text-slate-400 mt-0.5">{d.docType.replace('_', ' ')} · {fmtDate(d.uploadedAt)}</div>
                         </div>
                         <div className="flex gap-1">
-                          <button onClick={() => handleViewDoc(d.storagePath)} className="p-2 bg-blue-100 text-blue-600 rounded-lg active:scale-90 transition-transform" title="View">
+                          <button onClick={() => handleViewDoc(d.storagePath)} className="p-2 bg-blue-100 text-blue-600 rounded-lg active:scale-90 hover:bg-blue-200 transition-all" title="View">
                             <Eye size={13} />
                           </button>
-                          <button onClick={() => handleDeleteDoc(d.id)} className="p-2 bg-rose-100 text-rose-600 rounded-lg active:scale-90 transition-transform" title="Delete">
+                          <button onClick={() => handleDownloadDoc(d.storagePath, d.docName)} className="p-2 bg-emerald-100 text-emerald-600 rounded-lg active:scale-90 hover:bg-emerald-200 transition-all" title="Download">
+                            <Download size={13} />
+                          </button>
+                          <button onClick={() => handleDeleteDoc(d.id)} className="p-2 bg-rose-100 text-rose-600 rounded-lg active:scale-90 hover:bg-rose-200 transition-all" title="Delete">
                             <Trash2 size={13} />
                           </button>
                         </div>

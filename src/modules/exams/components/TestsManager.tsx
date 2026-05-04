@@ -1,7 +1,7 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import {
   ArrowLeft, Plus, Calendar, Clock, Upload, CheckCircle, ChevronRight,
-  BookOpen, Trash2,
+  BookOpen, Trash2, Lock,
 } from 'lucide-react';
 import { teacherService } from '@/roles/teacher/teacher.service';
 import { TestSchedule, TestType, TeacherClass } from '@/roles/teacher/teacher.types';
@@ -12,33 +12,50 @@ import { useEditGuard } from '@/store/correctionStore';
 
 type View = 'LIST' | 'CREATE' | 'UPLOAD';
 
-interface Subject { subject: string; maxMarks: number; }
+interface Subject { subject: string; maxMarks: number; passMarks: number; }
 interface StudentRow { studentId: string; name: string; rollNo: string; marks: string; subjectMarks: Record<string, string>; note: string; }
 
-// Parse per-subject {subject, maxMarks} from a multi-subject exam.
-// New exams store this as JSON in syllabus; legacy exams fall back to equal split.
-function parseSubjectsFromExam(exam: TestSchedule): Subject[] | null {
-  if (!exam.subject?.includes(',')) return null;
+// Parse the syllabus JSON wrapper. Older exams stored plain-text syllabus; newer
+// exams wrap it as JSON with optional subjects[] and passMarks.
+function parseSyllabus(exam: TestSchedule): { subjects?: Subject[]; desc?: string; passMarks?: number } {
   try {
     const parsed = JSON.parse(exam.syllabus ?? '');
-    if (Array.isArray(parsed?.subjects)) return parsed.subjects as Subject[];
+    if (parsed && typeof parsed === 'object') return parsed;
   } catch { /* not JSON */ }
+  return { desc: exam.syllabus ?? '' };
+}
+
+// Per-subject {subject, maxMarks, passMarks} for a multi-subject exam, or null for single-subject.
+function parseSubjectsFromExam(exam: TestSchedule): Subject[] | null {
+  if (!exam.subject?.includes(',')) return null;
+  const parsed = parseSyllabus(exam);
+  if (Array.isArray(parsed.subjects)) {
+    return parsed.subjects.map(s => ({
+      subject: s.subject,
+      maxMarks: s.maxMarks,
+      passMarks: s.passMarks ?? Math.ceil(s.maxMarks * 0.33),
+    }));
+  }
   const names = exam.subject.split(', ').map((s: string) => s.trim()).filter(Boolean);
   const per = names.length > 0 ? Math.round(exam.maxMarks / names.length) : exam.maxMarks;
-  return names.map((s: string) => ({ subject: s, maxMarks: per }));
+  return names.map((s: string) => ({ subject: s, maxMarks: per, passMarks: Math.ceil(per * 0.33) }));
 }
 
-// Get plain-text description from exam (strips JSON wrapper for multi-subject exams).
 function getExamDescription(exam: TestSchedule): string {
-  if (!exam.subject?.includes(',')) return exam.syllabus ?? '';
-  try { return (JSON.parse(exam.syllabus ?? '') as { desc?: string })?.desc ?? ''; }
-  catch { return exam.syllabus ?? ''; }
+  return parseSyllabus(exam).desc ?? '';
 }
 
-const EXAM_TYPES: TestType[] = ['UNIT_TEST', 'MID_TERM', 'QUIZ', 'PRACTICAL', 'FINAL'];
+function getExamPassMarks(exam: TestSchedule): number {
+  const p = parseSyllabus(exam).passMarks;
+  return typeof p === 'number' ? p : Math.ceil(exam.maxMarks * 0.33);
+}
+
+// Only two creator-facing types now. Historical types still render via label/color maps.
+const EXAM_TYPES: TestType[] = ['NORMAL', 'FINAL'];
 
 const typeColor = (t: string): string => {
   const map: Record<string, string> = {
+    NORMAL:    'bg-blue-50 text-blue-700 border-blue-100',
     UNIT_TEST: 'bg-blue-50 text-blue-700 border-blue-100',
     MID_TERM:  'bg-violet-50 text-violet-700 border-violet-100',
     FINAL:     'bg-rose-50 text-rose-700 border-rose-100',
@@ -50,8 +67,8 @@ const typeColor = (t: string): string => {
 
 const typeLabel = (t: string): string => {
   const map: Record<string, string> = {
-    UNIT_TEST: 'Unit Test', MID_TERM: 'Mid Term', FINAL: 'Final Exam',
-    QUIZ: 'Quiz', PRACTICAL: 'Practical',
+    NORMAL: 'Normal Test', UNIT_TEST: 'Unit Test', MID_TERM: 'Mid Term',
+    FINAL: 'Final Exam', QUIZ: 'Quiz', PRACTICAL: 'Practical',
   };
   return map[t] ?? t;
 };
@@ -74,9 +91,9 @@ export const TestsManager: React.FC<Props> = ({ onBack }) => {
   // Create form
   const [cForm, setCForm] = useState({
     classId: '', className: '', section: '',
-    title: '', description: '', testType: 'UNIT_TEST' as TestType,
-    scheduledDate: '', duration: 60, maxMarks: 25, hasSubjects: false,
-    primarySubject: '',
+    title: '', description: '', testType: 'NORMAL' as TestType,
+    scheduledDate: '', duration: 60, maxMarks: 25, passMarks: 9,
+    hasSubjects: false, primarySubject: '',
   });
   const [subjects, setSubjects] = useState<Subject[]>([]);
 
@@ -85,6 +102,11 @@ export const TestsManager: React.FC<Props> = ({ onBack }) => {
   const [uploadSubjects, setUploadSubjects] = useState<Subject[]>([]);
   const [stuRows, setStuRows]          = useState<StudentRow[]>([]);
   const [expandedStu, setExpandedStu]  = useState<string | null>(null);
+  // When the test was already locked by the principal (status=LOCKED), the
+  // upload screen flips into a fully read-only "view what you submitted"
+  // mode. SUBMITTED state is still editable so teacher can fix typos before
+  // principal publishes.
+  const [viewLocked, setViewLocked]    = useState(false);
 
   useEffect(() => {
     teacherService.getTests().then(setExams);
@@ -107,6 +129,25 @@ export const TestsManager: React.FC<Props> = ({ onBack }) => {
       setCForm(f => ({ ...f, primarySubject: classSubjects[0] }));
     }
   }, [classSubjects, cForm.primarySubject]);
+
+  // Multi-subject mode: keep total passing marks in sync with the sum of
+  // per-subject pass marks until the user explicitly overrides it. We only
+  // overwrite when the current value still matches the previous sum, so a
+  // manual edit isn't blown away on the next subject tweak.
+  const subjectsPassSum = subjects.reduce((a, s) => a + s.passMarks, 0);
+  const subjectsMaxSum  = subjects.reduce((a, s) => a + s.maxMarks, 0);
+  const lastAutoPassRef = useRef<number>(0);
+  useEffect(() => {
+    if (!cForm.hasSubjects) return;
+    setCForm(f => {
+      // If the user has manually changed passMarks (it differs from the last
+      // auto-applied value), respect their value and only clamp to new max.
+      const wasManual = f.passMarks !== lastAutoPassRef.current;
+      const next = wasManual ? Math.min(f.passMarks, subjectsMaxSum) : subjectsPassSum;
+      lastAutoPassRef.current = subjectsPassSum;
+      return { ...f, passMarks: next };
+    });
+  }, [subjectsPassSum, subjectsMaxSum, cForm.hasSubjects]);
 
   const handleCreateExam = async () => {
     if (!cForm.title || !cForm.scheduledDate || !cForm.classId) {
@@ -132,29 +173,39 @@ export const TestsManager: React.FC<Props> = ({ onBack }) => {
     setIsBusy(true);
     try {
       const totalMarks = cForm.hasSubjects ? subjects.reduce((a, s) => a + s.maxMarks, 0) : cForm.maxMarks;
-      const exam = await editGuard.gate(
-        () => teacherService.createTest({
-          classId:      cForm.classId,
-          className:    cForm.className,
-          section:      cForm.section,
-          subject:      cForm.hasSubjects ? subjects.map(s => s.subject).join(', ') : cForm.primarySubject,
-          testType:     cForm.testType,
-          title:        cForm.title,
-          scheduledDate: cForm.scheduledDate,
-          duration:     cForm.duration,
-          maxMarks:     totalMarks,
-          syllabus:     cForm.hasSubjects
-            ? JSON.stringify({ subjects, desc: cForm.description })
-            : cForm.description,
-        }),
+      // For multi-subject, cForm.passMarks is the *overall* passing threshold,
+      // separate from per-subject pass marks (which are stored on each subject row).
+      // For single-subject, cForm.passMarks is the only pass threshold.
+      const totalPass = cForm.passMarks;
+      const syllabusPayload = cForm.hasSubjects
+        ? JSON.stringify({ subjects, desc: cForm.description, passMarks: totalPass })
+        : JSON.stringify({ desc: cForm.description, passMarks: totalPass });
+      let createdExam: TestSchedule | null = null;
+      const ran = await editGuard.gate(
+        async () => {
+          createdExam = await teacherService.createTest({
+            classId:      cForm.classId,
+            className:    cForm.className,
+            section:      cForm.section,
+            subject:      cForm.hasSubjects ? subjects.map(s => s.subject).join(', ') : cForm.primarySubject,
+            testType:     cForm.testType,
+            title:        cForm.title,
+            scheduledDate: cForm.scheduledDate,
+            duration:     cForm.duration,
+            maxMarks:     totalMarks,
+            syllabus:     syllabusPayload,
+          });
+          return true as const;
+        },
         { entityType: 'test_schedule', entityId: `${cForm.classId}/${cForm.title}` },
       );
-      if (exam === undefined) return; // user cancelled correction prompt
-      setExams(p => [exam, ...p]);
+      if (!ran || !createdExam) return; // user cancelled correction prompt
+      setExams(p => [createdExam!, ...p]);
       showToast(`${typeLabel(cForm.testType)} scheduled`);
       resetForm();
       setView('LIST');
     } catch (err) {
+      console.error('[createTest] failed:', err);
       showToast(err instanceof Error ? err.message : 'Failed to create exam', 'error');
     } finally { setIsBusy(false); }
   };
@@ -162,22 +213,64 @@ export const TestsManager: React.FC<Props> = ({ onBack }) => {
   const resetForm = () => {
     setCForm({
       classId: '', className: '', section: '',
-      title: '', description: '', testType: 'UNIT_TEST',
-      scheduledDate: '', duration: 60, maxMarks: 25, hasSubjects: false,
-      primarySubject: '',
+      title: '', description: '', testType: 'NORMAL',
+      scheduledDate: '', duration: 60, maxMarks: 25, passMarks: 9,
+      hasSubjects: false, primarySubject: '',
     });
     setSubjects([]);
   };
 
-  const openUpload = (exam: TestSchedule) => {
+  const openUpload = async (exam: TestSchedule) => {
     const cls = classes.find(c => c.id === exam.classId);
-    const rows = (cls?.students ?? []).map(s => ({
+    const baseRows: StudentRow[] = (cls?.students ?? []).map(s => ({
       studentId: s.id, name: s.name, rollNo: s.rollNo,
       marks: '', subjectMarks: {}, note: '',
     }));
-    setStuRows(rows);
+    const subjs = parseSubjectsFromExam(exam) ?? [];
+    setUploadSubjects(subjs);
     setUploadExam(exam);
-    setUploadSubjects(parseSubjectsFromExam(exam) ?? []);
+
+    // Pre-fill existing results when teacher comes back to view what they
+    // submitted. For multi-subject exams the per-subject breakdown comes
+    // from the JSON we now stash in `remarks` at publish time.
+    let rows = baseRows;
+    if (exam.resultsUploaded) {
+      try {
+        const existing = await teacherService.getResultsByTest(exam.id);
+        rows = baseRows.map(r => {
+          const ex = existing[r.studentId];
+          if (!ex) return r;
+          let subjectMarks: Record<string, string> = {};
+          let note = '';
+          if (ex.remarks) {
+            try {
+              const parsed = JSON.parse(ex.remarks);
+              if (parsed && typeof parsed === 'object') {
+                if (parsed.subjectMarks && typeof parsed.subjectMarks === 'object') {
+                  for (const [k, v] of Object.entries(parsed.subjectMarks as Record<string, unknown>)) {
+                    subjectMarks[k] = String(v ?? '');
+                  }
+                }
+                if (typeof parsed.note === 'string') note = parsed.note;
+              } else {
+                note = ex.remarks;
+              }
+            } catch {
+              note = ex.remarks;
+            }
+          }
+          return { ...r, marks: String(ex.obtainedMarks ?? ''), subjectMarks, note };
+        });
+      } catch (e) {
+        console.error('[openUpload] failed to fetch existing results:', e);
+      }
+    }
+
+    setStuRows(rows);
+    // result_status comes from the DB row but isn't typed on TestSchedule yet;
+    // peek at it via index access so we don't churn the type.
+    const status = (exam as unknown as { result_status?: string }).result_status;
+    setViewLocked(status === 'LOCKED');
     setExpandedStu(rows[0]?.studentId ?? null);
     setView('UPLOAD');
   };
@@ -206,29 +299,45 @@ export const TestsManager: React.FC<Props> = ({ onBack }) => {
     setIsBusy(true);
     try {
       const cls = classes.find(c => c.id === uploadExam.classId);
-      const result = await editGuard.gate(
-        () => teacherService.publishResults({
-          testId:       uploadExam.id,
-          examName:     uploadExam.title,
-          description:  uploadExam.syllabus,
-          testType:     uploadExam.testType,
-          subject:      uploadExam.subject,
-          teacherName:  teacherName,
-          date:         uploadExam.scheduledDate,
-          maxMarks:     uploadExam.maxMarks,
-          studentResults: stuRows.map(r => ({
-            studentId:    r.studentId,
-            obtainedMarks: hasSubjects ? Object.values(r.subjectMarks).reduce((a: number, v) => a + (Number(v) || 0), 0) : +r.marks,
-            note:         r.note,
-          })),
-          allStudents: cls?.students.map(s => ({ id: s.id, name: s.name, rollNo: s.rollNo })) ?? [],
-        }),
+      // Wrap action to return a sentinel `true` so we can distinguish a real
+      // success from gate's `undefined` (which means user cancelled the
+      // correction prompt). Without this, void-returning actions look like
+      // cancellations and the success path is skipped silently.
+      const ran = await editGuard.gate(
+        async () => {
+          await teacherService.publishResults({
+            testId:       uploadExam.id,
+            examName:     uploadExam.title,
+            description:  uploadExam.syllabus,
+            testType:     uploadExam.testType,
+            subject:      uploadExam.subject,
+            teacherName:  teacherName,
+            date:         uploadExam.scheduledDate,
+            maxMarks:     uploadExam.maxMarks,
+            studentResults: stuRows.map(r => ({
+              studentId:    r.studentId,
+              obtainedMarks: hasSubjects ? Object.values(r.subjectMarks).reduce((a: number, v) => a + (Number(v) || 0), 0) : +r.marks,
+              // For multi-subject exams, persist the per-subject breakdown as
+              // JSON in remarks so the marksheet/view-results screens can
+              // re-render the breakdown later. Single-subject keeps the
+              // teacher's plain note in remarks.
+              note:         hasSubjects
+                ? JSON.stringify({ subjectMarks: r.subjectMarks, note: r.note })
+                : r.note,
+            })),
+            allStudents: cls?.students.map(s => ({ id: s.id, name: s.name, rollNo: s.rollNo })) ?? [],
+          });
+          return true as const;
+        },
         { entityType: 'exam_result', entityId: uploadExam.id },
       );
-      if (result === undefined) return; // user cancelled correction prompt
+      if (!ran) return; // user cancelled correction prompt
       setExams(p => p.map(e => e.id === uploadExam.id ? { ...e, resultsUploaded: true } : e));
       showToast('Results published!');
       setView('LIST');
+    } catch (err) {
+      console.error('[publishResults] failed:', err);
+      showToast(err instanceof Error ? err.message : 'Failed to publish results', 'error');
     } finally { setIsBusy(false); }
   };
 
@@ -258,7 +367,7 @@ export const TestsManager: React.FC<Props> = ({ onBack }) => {
 
     return (
       <div className="w-full bg-slate-50 flex flex-col animate-in slide-in-from-right-8 duration-300">
-        {header('Upload Results', () => setView('LIST'))}
+        {header(viewLocked ? 'View Results' : (uploadExam.resultsUploaded ? 'Edit Results' : 'Upload Results'), () => setView('LIST'))}
         <div className="flex-1 overflow-y-auto p-4  space-y-4">
           {/* Exam info */}
           <div className={`rounded-2xl p-4 text-white ${uploadExam.testType === 'FINAL' ? 'bg-[#0d1b3e]' : 'bg-indigo-600'}`}>
@@ -268,6 +377,26 @@ export const TestsManager: React.FC<Props> = ({ onBack }) => {
               <span>📅 {uploadExam.scheduledDate}</span><span>⏱ {uploadExam.duration} min</span><span>📊 {uploadExam.maxMarks} marks</span>
             </div>
           </div>
+
+          {/* Status banner — shown when revisiting an already-uploaded test */}
+          {viewLocked && (
+            <div className="flex items-start gap-2 bg-emerald-50 border border-emerald-200 rounded-2xl p-3">
+              <Lock size={14} className="text-emerald-600 shrink-0 mt-0.5"/>
+              <div>
+                <div className="text-xs font-black text-emerald-800">Published & Locked</div>
+                <div className="text-[10px] font-bold text-emerald-600 mt-0.5">Results published by principal — read-only. Ask principal to enable Editor Mode for corrections.</div>
+              </div>
+            </div>
+          )}
+          {!viewLocked && uploadExam.resultsUploaded && (
+            <div className="flex items-start gap-2 bg-amber-50 border border-amber-200 rounded-2xl p-3">
+              <Clock size={14} className="text-amber-600 shrink-0 mt-0.5"/>
+              <div>
+                <div className="text-xs font-black text-amber-800">Submitted — pending principal publish</div>
+                <div className="text-[10px] font-bold text-amber-600 mt-0.5">You can still fix typos and resubmit before the principal publishes.</div>
+              </div>
+            </div>
+          )}
 
           {/* Students */}
           <div className="space-y-3">
@@ -301,8 +430,8 @@ export const TestsManager: React.FC<Props> = ({ onBack }) => {
                             <div key={subj} className="flex items-center gap-3">
                               <div className="flex-1 text-xs font-bold text-slate-700">{subj}</div>
                               <div className="flex items-center gap-1.5 shrink-0">
-                                <input type="number" min={0} max={subjMax} value={m} onChange={e => updateSubjectMark(row.studentId, subj, e.target.value)} placeholder="—"
-                                  className="w-14 border border-slate-200 bg-slate-50 rounded-xl px-2 py-1.5 text-center font-black text-sm outline-none focus:border-indigo-400"/>
+                                <input type="number" min={0} max={subjMax} value={m} disabled={viewLocked} onChange={e => updateSubjectMark(row.studentId, subj, e.target.value)} placeholder="—"
+                                  className="w-14 border border-slate-200 bg-slate-50 rounded-xl px-2 py-1.5 text-center font-black text-sm outline-none focus:border-indigo-400 disabled:bg-slate-100 disabled:text-slate-500"/>
                                 <span className="text-[10px] font-bold text-slate-400 w-8">/{subjMax}</span>
                                 {sp !== null && <span className={`text-[10px] font-black w-8 text-right ${sp >= 75 ? 'text-emerald-600' : sp >= 50 ? 'text-amber-600' : 'text-rose-500'}`}>{sp}%</span>}
                               </div>
@@ -312,13 +441,13 @@ export const TestsManager: React.FC<Props> = ({ onBack }) => {
                       ) : (
                         <div className="flex items-center gap-3">
                           <div className="flex-1 text-xs font-bold text-slate-700">Marks</div>
-                          <input type="number" min={0} max={uploadExam.maxMarks} value={row.marks} onChange={e => updateStuRow(stuRows.findIndex(r => r.studentId === row.studentId), 'marks', e.target.value)} placeholder="—"
-                            className="w-14 border border-slate-200 bg-slate-50 rounded-xl px-2 py-1.5 text-center font-black text-sm outline-none focus:border-indigo-400"/>
+                          <input type="number" min={0} max={uploadExam.maxMarks} value={row.marks} disabled={viewLocked} onChange={e => updateStuRow(stuRows.findIndex(r => r.studentId === row.studentId), 'marks', e.target.value)} placeholder="—"
+                            className="w-14 border border-slate-200 bg-slate-50 rounded-xl px-2 py-1.5 text-center font-black text-sm outline-none focus:border-indigo-400 disabled:bg-slate-100 disabled:text-slate-500"/>
                           <span className="text-[10px] font-bold text-slate-400">/{uploadExam.maxMarks}</span>
                         </div>
                       )}
-                      <input type="text" value={row.note} onChange={e => updateStuRow(stuRows.findIndex(r => r.studentId === row.studentId), 'note', e.target.value)} placeholder="Note (optional)…"
-                        className="w-full border border-slate-100 bg-slate-50 rounded-xl px-3 py-2 text-[11px] font-medium outline-none focus:border-indigo-300 placeholder:text-slate-300"/>
+                      <input type="text" value={row.note} disabled={viewLocked} onChange={e => updateStuRow(stuRows.findIndex(r => r.studentId === row.studentId), 'note', e.target.value)} placeholder="Note (optional)…"
+                        className="w-full border border-slate-100 bg-slate-50 rounded-xl px-3 py-2 text-[11px] font-medium outline-none focus:border-indigo-300 placeholder:text-slate-300 disabled:bg-slate-100 disabled:text-slate-500"/>
                     </div>
                   )}
                 </div>
@@ -326,159 +455,238 @@ export const TestsManager: React.FC<Props> = ({ onBack }) => {
             })}
           </div>
 
-          <button onClick={handlePublish} disabled={isBusy || !allFilled}
-            className="w-full flex items-center justify-center gap-2 bg-emerald-600 text-white font-black text-xs uppercase tracking-widest py-4 rounded-2xl active:scale-95 transition-transform shadow-lg disabled:opacity-50">
-            {isBusy ? 'Publishing…' : <><CheckCircle size={16}/> Publish Results</>}
-          </button>
+          {!viewLocked && (
+            <button onClick={handlePublish} disabled={isBusy || !allFilled}
+              className="w-full flex items-center justify-center gap-2 bg-emerald-600 text-white font-black text-xs uppercase tracking-widest py-4 rounded-2xl active:scale-95 transition-transform shadow-lg disabled:opacity-50">
+              {isBusy ? 'Submitting…' : <><CheckCircle size={16}/> {uploadExam.resultsUploaded ? 'Resubmit Results' : 'Submit Results'}</>}
+            </button>
+          )}
         </div>
       </div>
     );
   }
 
   /* ── CREATE ────────────────────────────────────────────────────────── */
-  if (view === 'CREATE') return (
+  if (view === 'CREATE') {
+    const totalMax  = cForm.hasSubjects ? subjectsMaxSum  : cForm.maxMarks;
+    const subjPassSum = subjectsPassSum;
+    const passOverridden = cForm.hasSubjects && cForm.passMarks !== subjPassSum;
+
+    const sectionLabel = (n: string) => (
+      <div className="px-1 text-[10px] font-black uppercase tracking-widest text-slate-400 mb-1.5">{n}</div>
+    );
+
+    return (
     <div className="w-full bg-slate-50 flex flex-col animate-in slide-in-from-right-8 duration-300">
       {header('Create Exam', () => setView('LIST'))}
-      <div className="flex-1 overflow-y-auto p-4  space-y-4">
-        <div className="bg-white rounded-2xl border border-slate-100 shadow-sm p-4 space-y-4">
-          {/* Class selection */}
-          <div>
-            <label className="block text-[10px] font-black uppercase tracking-widest text-slate-500 mb-1.5">Class *</label>
-            <select value={cForm.classId} onChange={e => {
-              const c = classes.find(x => x.id === e.target.value);
-              if (c) setCForm(f => ({ ...f, classId: c.id, className: c.className, section: c.section }));
-            }} className="w-full border border-slate-200 bg-slate-50 rounded-xl px-4 py-3 font-bold text-sm outline-none">
-              <option value="">Select class…</option>
-              {classes.map(c => <option key={c.id} value={c.id}>{c.className}-{c.section}</option>)}
-            </select>
-          </div>
+      <div className="flex-1 overflow-y-auto p-4 space-y-3 pb-24">
+        {/* Section 1: Basics */}
+        <div>
+          {sectionLabel('Basics')}
+          <div className="bg-white rounded-2xl border border-slate-100 shadow-sm p-4 space-y-3">
+            <div>
+              <label className="block text-[10px] font-black uppercase tracking-widest text-slate-500 mb-1.5">Class *</label>
+              <select value={cForm.classId} onChange={e => {
+                const c = classes.find(x => x.id === e.target.value);
+                if (c) setCForm(f => ({ ...f, classId: c.id, className: c.className, section: c.section }));
+              }} className="w-full border border-slate-200 bg-slate-50 rounded-xl px-4 py-3 font-bold text-sm outline-none focus:border-indigo-500">
+                <option value="">Select class…</option>
+                {classes.map(c => <option key={c.id} value={c.id}>{c.className}-{c.section}</option>)}
+              </select>
+            </div>
 
-          {/* Exam type */}
-          <div>
-            <label className="block text-[10px] font-black uppercase tracking-widest text-slate-500 mb-1.5">Exam Type</label>
-            <div className="flex flex-wrap gap-2">
-              {EXAM_TYPES.map(t => (
-                <button key={t} onClick={() => setCForm(f => ({ ...f, testType: t }))}
-                  className={`px-3 py-1.5 rounded-xl text-[10px] font-black uppercase tracking-widest border transition-colors ${cForm.testType === t ? typeColor(t) + ' ring-1 ring-current' : 'bg-slate-50 border-slate-200 text-slate-400'}`}>
-                  {typeLabel(t)}
-                </button>
-              ))}
+            <div>
+              <label className="block text-[10px] font-black uppercase tracking-widest text-slate-500 mb-1.5">Exam Type</label>
+              <div className="grid grid-cols-2 gap-2">
+                {EXAM_TYPES.map(t => (
+                  <button key={t} onClick={() => setCForm(f => ({ ...f, testType: t }))}
+                    className={`px-3 py-2.5 rounded-xl text-[11px] font-black uppercase tracking-wider border transition-all ${cForm.testType === t ? typeColor(t) + ' ring-2 ring-offset-1 ring-current/30 shadow-sm' : 'bg-slate-50 border-slate-200 text-slate-400'}`}>
+                    {typeLabel(t)}
+                  </button>
+                ))}
+              </div>
+              {cForm.testType === 'FINAL' && (
+                <p className="text-[10px] font-bold text-rose-500 mt-1.5 px-1">⚠ Final exams are used for student promotion</p>
+              )}
             </div>
           </div>
+        </div>
 
-          {/* Title & Description */}
-          <div>
-            <label className="block text-[10px] font-black uppercase tracking-widest text-slate-500 mb-1.5">Exam Title *</label>
-            <input value={cForm.title} onChange={e => setCForm(f => ({ ...f, title: e.target.value }))} placeholder="e.g. Unit Test 1 — Algebra"
-              className="w-full border border-slate-200 bg-slate-50 rounded-xl px-4 py-3 font-bold text-sm outline-none focus:border-indigo-500"/>
-          </div>
-
-          <div>
-            <label className="block text-[10px] font-black uppercase tracking-widest text-slate-500 mb-1.5">Description / Topics</label>
-            <textarea value={cForm.description} onChange={e => setCForm(f => ({ ...f, description: e.target.value }))} rows={2}
-              placeholder="Chapter numbers, topics covered…"
-              className="w-full border border-slate-200 bg-slate-50 rounded-xl px-4 py-3 font-bold text-sm outline-none focus:border-indigo-500 resize-none"/>
-          </div>
-
-          {/* Date & Duration */}
-          <div className="grid grid-cols-2 gap-3">
+        {/* Section 2: Details */}
+        <div>
+          {sectionLabel('Details')}
+          <div className="bg-white rounded-2xl border border-slate-100 shadow-sm p-4 space-y-3">
             <div>
-              <label className="block text-[10px] font-black uppercase tracking-widest text-slate-500 mb-1.5">Date *</label>
-              <input type="date" value={cForm.scheduledDate} onChange={e => setCForm(f => ({ ...f, scheduledDate: e.target.value }))}
-                className="w-full border border-slate-200 bg-slate-50 rounded-xl px-3 py-3 font-bold text-sm outline-none focus:border-indigo-500"/>
-            </div>
-            <div>
-              <label className="block text-[10px] font-black uppercase tracking-widest text-slate-500 mb-1.5">Duration (min)</label>
-              <input type="number" value={cForm.duration} onChange={e => setCForm(f => ({ ...f, duration: +e.target.value }))}
+              <label className="block text-[10px] font-black uppercase tracking-widest text-slate-500 mb-1.5">Exam Title *</label>
+              <input value={cForm.title} onChange={e => setCForm(f => ({ ...f, title: e.target.value }))} placeholder="e.g. Mid Term — September"
                 className="w-full border border-slate-200 bg-slate-50 rounded-xl px-4 py-3 font-bold text-sm outline-none focus:border-indigo-500"/>
             </div>
-          </div>
 
-          {/* Subjects toggle */}
-          <div>
-            <label className="flex items-center gap-2 cursor-pointer">
-              <input type="checkbox" checked={cForm.hasSubjects} onChange={e => {
-                setCForm(f => ({ ...f, hasSubjects: e.target.checked }));
-                if (!e.target.checked) setSubjects([]);
-              }} className="w-4 h-4 rounded border-slate-300"/>
-              <span className="text-[10px] font-black uppercase tracking-widest text-slate-500">Add Multiple Subjects (each with marks)</span>
-            </label>
-          </div>
+            <div>
+              <label className="block text-[10px] font-black uppercase tracking-widest text-slate-500 mb-1.5">Description / Topics</label>
+              <textarea value={cForm.description} onChange={e => setCForm(f => ({ ...f, description: e.target.value }))} rows={2}
+                placeholder="Chapter numbers, topics covered…"
+                className="w-full border border-slate-200 bg-slate-50 rounded-xl px-4 py-3 font-bold text-sm outline-none focus:border-indigo-500 resize-none"/>
+            </div>
 
-          {/* Single subject + max marks OR subjects list */}
-          {!cForm.hasSubjects ? (
             <div className="grid grid-cols-2 gap-3">
               <div>
-                <label className="block text-[10px] font-black uppercase tracking-widest text-slate-500 mb-1.5">Subject *</label>
-                {classSubjects.length > 0 ? (
-                  <select value={cForm.primarySubject}
-                    onChange={e => setCForm(f => ({ ...f, primarySubject: e.target.value }))}
-                    className="w-full border border-slate-200 bg-slate-50 rounded-xl px-3 py-3 font-bold text-sm outline-none focus:border-indigo-500">
-                    {classSubjects.map(s => <option key={s} value={s}>{s}</option>)}
-                  </select>
-                ) : (
-                  <input value={cForm.primarySubject}
-                    onChange={e => setCForm(f => ({ ...f, primarySubject: e.target.value }))}
-                    placeholder={cForm.classId ? 'Type subject…' : 'Pick a class first'}
-                    disabled={!cForm.classId}
-                    className="w-full border border-slate-200 bg-slate-50 rounded-xl px-3 py-3 font-bold text-sm outline-none focus:border-indigo-500 disabled:opacity-60"/>
-                )}
+                <label className="block text-[10px] font-black uppercase tracking-widest text-slate-500 mb-1.5">Date *</label>
+                <input type="date" value={cForm.scheduledDate} onChange={e => setCForm(f => ({ ...f, scheduledDate: e.target.value }))}
+                  className="w-full border border-slate-200 bg-slate-50 rounded-xl px-3 py-3 font-bold text-sm outline-none focus:border-indigo-500"/>
               </div>
               <div>
-                <label className="block text-[10px] font-black uppercase tracking-widest text-slate-500 mb-1.5">Max Marks</label>
-                <input type="number" value={cForm.maxMarks} onChange={e => setCForm(f => ({ ...f, maxMarks: +e.target.value }))}
+                <label className="block text-[10px] font-black uppercase tracking-widest text-slate-500 mb-1.5">Duration (min)</label>
+                <input type="number" min={1} value={cForm.duration} onChange={e => setCForm(f => ({ ...f, duration: +e.target.value }))}
                   className="w-full border border-slate-200 bg-slate-50 rounded-xl px-4 py-3 font-bold text-sm outline-none focus:border-indigo-500"/>
               </div>
             </div>
-          ) : (
-            <div className="bg-white rounded-2xl border border-slate-100 shadow-sm overflow-hidden">
-              <div className="px-4 py-3 border-b border-slate-50 flex items-center justify-between">
-                <span className="font-black text-slate-800 text-sm">Subjects & Max Marks</span>
-                <button onClick={() => setSubjects(p => [...p, { subject: '', maxMarks: 25 }])}
-                  className="p-1.5 bg-indigo-50 rounded-lg text-indigo-600"><Plus size={14}/></button>
-              </div>
-              <div className="divide-y divide-slate-50">
-                {subjects.map((s, idx) => (
-                  <div key={idx} className="px-4 py-3 flex items-center gap-2">
-                    <BookOpen size={14} className="text-slate-400 shrink-0"/>
-                    {classSubjects.length > 0 ? (
-                      <select value={s.subject}
-                        onChange={e => setSubjects(p => p.map((x, i) => i === idx ? { ...x, subject: e.target.value } : x))}
-                        className="flex-1 font-bold text-sm text-slate-800 bg-transparent outline-none">
-                        <option value="">Select subject…</option>
-                        {classSubjects.map(opt => <option key={opt} value={opt}>{opt}</option>)}
-                      </select>
-                    ) : (
-                      <input value={s.subject} onChange={e => setSubjects(p => p.map((x, i) => i === idx ? { ...x, subject: e.target.value } : x))}
-                        placeholder="Subject name"
-                        className="flex-1 font-bold text-sm text-slate-800 bg-transparent outline-none placeholder:text-slate-300"/>
-                    )}
-                    <input type="number" value={s.maxMarks} onChange={e => setSubjects(p => p.map((x, i) => i === idx ? { ...x, maxMarks: +e.target.value } : x))}
-                      className="w-16 border border-slate-200 bg-slate-50 rounded-xl px-2 py-1.5 text-center font-black text-sm outline-none focus:border-indigo-400"/>
-                    <span className="text-[10px] font-bold text-slate-400 shrink-0">marks</span>
-                    <button onClick={() => setSubjects(p => p.filter((_, i) => i !== idx))} className="text-slate-300 hover:text-rose-400">
-                      <Trash2 size={14}/>
-                    </button>
-                  </div>
-                ))}
-              </div>
-              {subjects.length > 0 && (
-                <div className="px-4 py-2 bg-slate-50 border-t border-slate-100 flex justify-between text-[10px] font-black text-slate-500">
-                  <span>{subjects.length} subjects</span>
-                  <span>Total: {subjects.reduce((a, s) => a + s.maxMarks, 0)} marks</span>
-                </div>
-              )}
-            </div>
-          )}
+          </div>
         </div>
 
+        {/* Section 3: Marks */}
+        <div>
+          {sectionLabel('Subjects & Marks')}
+          <div className="bg-white rounded-2xl border border-slate-100 shadow-sm overflow-hidden">
+            {/* Mode toggle */}
+            <div className="px-4 py-3 border-b border-slate-50 flex items-center gap-2">
+              <button onClick={() => { setCForm(f => ({ ...f, hasSubjects: false })); setSubjects([]); }}
+                className={`flex-1 py-2 rounded-xl text-[10px] font-black uppercase tracking-wider transition-colors ${!cForm.hasSubjects ? 'bg-indigo-600 text-white shadow-sm' : 'bg-slate-50 text-slate-500'}`}>
+                Single Subject
+              </button>
+              <button onClick={() => setCForm(f => ({ ...f, hasSubjects: true }))}
+                className={`flex-1 py-2 rounded-xl text-[10px] font-black uppercase tracking-wider transition-colors ${cForm.hasSubjects ? 'bg-indigo-600 text-white shadow-sm' : 'bg-slate-50 text-slate-500'}`}>
+                Multiple Subjects
+              </button>
+            </div>
+
+            {!cForm.hasSubjects ? (
+              <div className="p-4 space-y-3">
+                <div>
+                  <label className="block text-[10px] font-black uppercase tracking-widest text-slate-500 mb-1.5">Subject *</label>
+                  {classSubjects.length > 0 ? (
+                    <select value={cForm.primarySubject}
+                      onChange={e => setCForm(f => ({ ...f, primarySubject: e.target.value }))}
+                      className="w-full border border-slate-200 bg-slate-50 rounded-xl px-3 py-3 font-bold text-sm outline-none focus:border-indigo-500">
+                      {classSubjects.map(s => <option key={s} value={s}>{s}</option>)}
+                    </select>
+                  ) : (
+                    <input value={cForm.primarySubject}
+                      onChange={e => setCForm(f => ({ ...f, primarySubject: e.target.value }))}
+                      placeholder={cForm.classId ? 'Type subject…' : 'Pick a class first'}
+                      disabled={!cForm.classId}
+                      className="w-full border border-slate-200 bg-slate-50 rounded-xl px-3 py-3 font-bold text-sm outline-none focus:border-indigo-500 disabled:opacity-60"/>
+                  )}
+                </div>
+                <div className="grid grid-cols-2 gap-3">
+                  <div>
+                    <label className="block text-[10px] font-black uppercase tracking-widest text-slate-500 mb-1.5">Max Marks</label>
+                    <input type="number" min={1} value={cForm.maxMarks}
+                      onChange={e => {
+                        const v = +e.target.value;
+                        setCForm(f => ({ ...f, maxMarks: v, passMarks: Math.min(f.passMarks, v) }));
+                      }}
+                      className="w-full border border-slate-200 bg-slate-50 rounded-xl px-4 py-3 font-bold text-sm outline-none focus:border-indigo-500"/>
+                  </div>
+                  <div>
+                    <label className="block text-[10px] font-black uppercase tracking-widest text-emerald-600 mb-1.5">Passing Marks</label>
+                    <input type="number" min={0} max={cForm.maxMarks} value={cForm.passMarks}
+                      onChange={e => setCForm(f => ({ ...f, passMarks: Math.min(+e.target.value, f.maxMarks) }))}
+                      className="w-full border-2 border-emerald-100 bg-emerald-50/50 rounded-xl px-4 py-3 font-bold text-sm outline-none focus:border-emerald-500"/>
+                  </div>
+                </div>
+              </div>
+            ) : (
+              <>
+                {/* Per-subject rows */}
+                <div className="divide-y divide-slate-50">
+                  {subjects.length === 0 && (
+                    <div className="px-4 py-8 text-center">
+                      <BookOpen size={24} className="mx-auto text-slate-300 mb-2"/>
+                      <p className="text-[11px] font-bold text-slate-400">Add subjects below</p>
+                    </div>
+                  )}
+                  {subjects.map((s, idx) => (
+                    <div key={idx} className="px-4 py-3 space-y-2">
+                      <div className="flex items-center gap-2">
+                        <BookOpen size={14} className="text-slate-400 shrink-0"/>
+                        {classSubjects.length > 0 ? (
+                          <select value={s.subject}
+                            onChange={e => setSubjects(p => p.map((x, i) => i === idx ? { ...x, subject: e.target.value } : x))}
+                            className="flex-1 font-bold text-sm text-slate-800 bg-transparent outline-none">
+                            <option value="">Select subject…</option>
+                            {classSubjects.map(opt => <option key={opt} value={opt}>{opt}</option>)}
+                          </select>
+                        ) : (
+                          <input value={s.subject} onChange={e => setSubjects(p => p.map((x, i) => i === idx ? { ...x, subject: e.target.value } : x))}
+                            placeholder="Subject name"
+                            className="flex-1 font-bold text-sm text-slate-800 bg-transparent outline-none placeholder:text-slate-300"/>
+                        )}
+                        <button onClick={() => setSubjects(p => p.filter((_, i) => i !== idx))} className="text-slate-300 hover:text-rose-400">
+                          <Trash2 size={14}/>
+                        </button>
+                      </div>
+                      <div className="flex items-center gap-2 pl-6">
+                        <span className="text-[9px] font-black uppercase tracking-widest text-slate-400 w-10">Max</span>
+                        <input type="number" min={1} value={s.maxMarks}
+                          onChange={e => {
+                            const max = +e.target.value;
+                            setSubjects(p => p.map((x, i) => i === idx ? { ...x, maxMarks: max, passMarks: Math.min(x.passMarks, max) } : x));
+                          }}
+                          className="w-16 border border-slate-200 bg-slate-50 rounded-xl px-2 py-1.5 text-center font-black text-sm outline-none focus:border-indigo-400"/>
+                        <span className="text-[9px] font-black uppercase tracking-widest text-emerald-600 w-10 ml-3">Pass</span>
+                        <input type="number" min={0} max={s.maxMarks} value={s.passMarks}
+                          onChange={e => setSubjects(p => p.map((x, i) => i === idx ? { ...x, passMarks: Math.min(+e.target.value, x.maxMarks) } : x))}
+                          className="w-16 border-2 border-emerald-100 bg-emerald-50/50 rounded-xl px-2 py-1.5 text-center font-black text-sm outline-none focus:border-emerald-500"/>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+                <button onClick={() => setSubjects(p => [...p, { subject: '', maxMarks: 25, passMarks: 9 }])}
+                  className="w-full flex items-center justify-center gap-1.5 px-4 py-2.5 bg-indigo-50 text-indigo-700 text-[11px] font-black uppercase tracking-wider border-t border-slate-50 active:scale-95 transition-transform">
+                  <Plus size={14}/> Add Subject
+                </button>
+
+                {/* Total passing marks (overall threshold) — separate from sum of per-subject */}
+                {subjects.length > 0 && (
+                  <div className="px-4 py-3 bg-slate-50 border-t border-slate-100 space-y-2.5">
+                    <div className="flex items-center justify-between">
+                      <span className="text-[10px] font-black uppercase tracking-widest text-slate-500">Total Max</span>
+                      <span className="text-sm font-black text-slate-700 tabular-nums">{totalMax}</span>
+                    </div>
+                    <div className="flex items-center justify-between gap-3">
+                      <div className="flex-1">
+                        <div className="text-[10px] font-black uppercase tracking-widest text-emerald-600">Total Passing Marks</div>
+                        <div className="text-[9px] font-bold text-slate-400 mt-0.5">
+                          Subjects sum: {subjPassSum}
+                          {passOverridden && <span className="text-amber-600"> · overridden</span>}
+                        </div>
+                      </div>
+                      <input type="number" min={0} max={totalMax} value={cForm.passMarks}
+                        onChange={e => {
+                          const v = Math.min(+e.target.value, totalMax);
+                          setCForm(f => ({ ...f, passMarks: v }));
+                        }}
+                        className="w-20 border-2 border-emerald-200 bg-white rounded-xl px-2 py-2 text-center font-black text-sm outline-none focus:border-emerald-500"/>
+                    </div>
+                  </div>
+                )}
+              </>
+            )}
+          </div>
+        </div>
+      </div>
+
+      {/* Sticky submit bar */}
+      <div className="bg-white border-t border-slate-100 p-4">
         <button onClick={handleCreateExam} disabled={isBusy}
           className="w-full flex items-center justify-center gap-2 bg-indigo-600 text-white font-black text-xs uppercase tracking-widest py-4 rounded-2xl active:scale-95 transition-transform shadow-lg disabled:opacity-60">
           {isBusy ? 'Creating…' : <><Plus size={16}/> Create Exam</>}
         </button>
       </div>
     </div>
-  );
+    );
+  }
 
   /* ── LIST ──────────────────────────────────────────────────────────── */
   const pendingCount = exams.filter(e => !e.resultsUploaded).length;
@@ -510,13 +718,30 @@ export const TestsManager: React.FC<Props> = ({ onBack }) => {
                 <span className="flex items-center gap-1 text-[10px] font-bold text-slate-600"><Clock size={11} className="text-slate-400"/> {exam.duration}m</span>
                 <span className="ml-auto text-[10px] font-black text-slate-700">{exam.maxMarks} marks</span>
               </div>
-              {isPending
-                ? <button onClick={() => openUpload(exam)} className="mt-2 w-full flex items-center justify-between bg-indigo-50 border border-indigo-100 text-indigo-700 font-black text-[11px] uppercase tracking-widest px-3 py-2 rounded-xl active:scale-95 transition-transform">
-                    <span className="flex items-center gap-1.5"><Upload size={12}/> Upload Results</span>
-                    <ChevronRight size={14} className="text-indigo-400"/>
+              {isPending ? (
+                <button onClick={() => openUpload(exam)} className="mt-2 w-full flex items-center justify-between bg-indigo-50 border border-indigo-100 text-indigo-700 font-black text-[11px] uppercase tracking-widest px-3 py-2 rounded-xl active:scale-95 transition-transform">
+                  <span className="flex items-center gap-1.5"><Upload size={12}/> Upload Results</span>
+                  <ChevronRight size={14} className="text-indigo-400"/>
+                </button>
+              ) : (
+                <div className="mt-2 space-y-1.5">
+                  {exam.resultStatus === 'LOCKED' ? (
+                    <div className="flex items-center gap-1.5 text-[10px] font-black text-emerald-700 bg-emerald-50 border border-emerald-100 px-2 py-1.5 rounded-lg">
+                      <CheckCircle size={10}/> Published & Locked by Principal
+                    </div>
+                  ) : (
+                    <div className="flex items-center gap-1.5 text-[10px] font-black text-amber-700 bg-amber-50 border border-amber-100 px-2 py-1.5 rounded-lg">
+                      <Clock size={10}/> Submitted — pending principal publish
+                    </div>
+                  )}
+                  <button onClick={() => openUpload(exam)} className="w-full flex items-center justify-between bg-slate-50 border border-slate-100 text-slate-700 font-black text-[11px] uppercase tracking-widest px-3 py-2 rounded-xl active:scale-95 transition-transform">
+                    <span className="flex items-center gap-1.5">
+                      {exam.resultStatus === 'LOCKED' ? <><BookOpen size={12}/> View Results</> : <><Upload size={12}/> Edit & Resubmit</>}
+                    </span>
+                    <ChevronRight size={14} className="text-slate-400"/>
                   </button>
-                : <div className="mt-2 flex items-center gap-1.5 text-[10px] font-black text-emerald-600 bg-emerald-50 px-2 py-1 rounded-lg w-fit"><CheckCircle size={10}/> Results Published</div>
-              }
+                </div>
+              )}
             </div>
           );
         })}

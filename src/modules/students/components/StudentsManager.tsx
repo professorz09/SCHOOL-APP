@@ -6,8 +6,9 @@ import {
   Bus, Briefcase, Droplets, GraduationCap, Shield, Heart,
   CreditCard, Building2, TrendingUp, Home as HomeIcon,
   Archive, UserCheck, UserX, Award, Trash2, AlertTriangle, RefreshCw,
-  Lock, Edit2, History, Eye, Upload,
+  Lock, Edit2, History, Eye, Upload, Download,
 } from 'lucide-react';
+import { exportCsv } from '@/shared/utils/csv';
 import { studentService } from '@/modules/students/student.service';
 import { storageService } from '@/shared/utils/storage.service';
 import { Student, CreateStudentInput, STREAMS, STREAM_CLASSES, StudentStream } from '@/modules/students/student.types';
@@ -101,6 +102,14 @@ const [mainView, setMainView] = useState<MainView>(initialView ?? 'CLASSES');
   const [selectedSection, setSelectedSection] = useState<string | null>(null);
   const [search, setSearch] = useState('');
   const [classFilter, setClassFilter] = useState<string>('ALL');
+  // Admission-list filter — All / Unassigned / specific class / fee-status.
+  // 'ALL' is the default no-op; UI pills toggle this state.
+  const [admFilter, setAdmFilter] = useState<
+    | { type: 'ALL' }
+    | { type: 'CLASS'; value: string }
+    | { type: 'UNASSIGNED' }
+    | { type: 'FEE'; value: string }
+  >({ type: 'ALL' });
   const [form, setForm] = useState<FormWithParent>(BLANK_FORM_WITH_PARENT);
   const [religionIsOther, setReligionIsOther] = useState(false);
   const [casteIsOther, setCasteIsOther] = useState(false);
@@ -125,7 +134,6 @@ const [mainView, setMainView] = useState<MainView>(initialView ?? 'CLASSES');
     { type: 'BIRTH_CERT', name: 'Birth Certificate', uploaded: false },
     { type: 'TRANSFER_CERT', name: 'Transfer Certificate', uploaded: false },
     { type: 'AADHAAR', name: 'Aadhaar Card', uploaded: false },
-    { type: 'PHOTO', name: 'Student Photo', uploaded: false },
     { type: 'OTHER', name: 'Other Documents', uploaded: false },
   ]);
   // Actual File objects collected during form fill — uploaded after student is created
@@ -186,7 +194,7 @@ const [mainView, setMainView] = useState<MainView>(initialView ?? 'CLASSES');
     if (mainView === 'ARCHIVE') void refreshArchive();
   }, [mainView, refreshArchive, activeYear?.id]);
 
-  useEffect(() => { setShowCountAdmission(PAGE_SIZE); }, [search]);
+  useEffect(() => { setShowCountAdmission(PAGE_SIZE); }, [search, admFilter]);
   useEffect(() => { setShowCountArchive(PAGE_SIZE); }, [search, archiveTab]);
   useEffect(() => { setShowCountFees(PAGE_SIZE); }, [search, classFilter]);
 
@@ -240,10 +248,12 @@ const [mainView, setMainView] = useState<MainView>(initialView ?? 'CLASSES');
           const { path } = await storageService.uploadStudentDocument(student.id, docType, file);
           await studentService.addDocumentRecord(student.id, docType, path);
         });
+        const filesArr: File[] = [];
+        documentFiles.forEach(f => filesArr.push(f));
         const results = await Promise.allSettled(uploads);
         results.forEach((r, i) => {
           if (r.status === 'rejected') {
-            const file = Array.from(documentFiles.values())[i];
+            const file = filesArr[i];
             showToast(`Document upload failed: ${file?.name ?? 'unknown'}`, 'error');
           }
         });
@@ -256,7 +266,11 @@ const [mainView, setMainView] = useState<MainView>(initialView ?? 'CLASSES');
       setCasteIsOther(false);
       setDocumentFiles(new Map());
       setDocuments(prev => prev.map(d => ({ ...d, uploaded: false })));
-      setShowAdmissionForm(true);
+      // Land the user on the LIST (or PROFILE) — never leave them on a blank
+      // CREATE form. The admission-print is opt-in: only open it if school
+      // info is already loaded so we don't strand the user on a spinner.
+      setSubView('LIST');
+      if (schoolInfo) setShowAdmissionForm(true);
     } catch (e) {
       const msg = e instanceof Error ? e.message : 'Admission failed';
       showToast(msg, 'error');
@@ -390,7 +404,22 @@ const [mainView, setMainView] = useState<MainView>(initialView ?? 'CLASSES');
   if (!renderProfile && mainView === 'ADMISSION') {
     const q = search.trim().toLowerCase();
     const digits = q.replace(/\D/g, '');
+    // Filter pills — class chips driven by what's actually in the data, plus
+    // an "Unassigned" pseudo-bucket and a fee-status filter. The active filter
+    // lives in `admFilter` state above; "ALL" is the default no-op.
+    const distinctClasses: string[] = Array.from(
+      new Set<string>(students.map(s => s.className).filter((c): c is string => !!c && c !== ''))
+    ).sort();
+    const passesFilter = (s: Student): boolean => {
+      switch (admFilter.type) {
+        case 'ALL':        return true;
+        case 'UNASSIGNED': return !s.className;
+        case 'CLASS':      return s.className === admFilter.value;
+        case 'FEE':        return String(s.feeStatus) === admFilter.value;
+      }
+    };
     const filteredStudents = students
+      .filter(passesFilter)
       .filter(s => {
         if (!q) return true;
         if (s.name.toLowerCase().includes(q)) return true;
@@ -407,10 +436,63 @@ const [mainView, setMainView] = useState<MainView>(initialView ?? 'CLASSES');
       })
       .sort((a, b) => new Date(b.admissionDate ?? 0).getTime() - new Date(a.admissionDate ?? 0).getTime());
 
+    const unassignedCount = students.filter(s => !s.className).length;
+    const feeStatusOptions: Array<{ key: string; label: string; cls: string }> = [
+      { key: 'PAID',    label: 'Paid',    cls: 'bg-emerald-50 text-emerald-700 border-emerald-200' },
+      { key: 'PARTIAL', label: 'Partial', cls: 'bg-amber-50 text-amber-700 border-amber-200' },
+      { key: 'PENDING', label: 'Pending', cls: 'bg-rose-50 text-rose-700 border-rose-200' },
+    ];
+
     if (subView === 'CREATE') return (
       <div className="w-full bg-slate-50 flex flex-col animate-in slide-in-from-right-8 duration-300">
         {renderHeader('New Admission', () => setSubView('LIST'))}
         <div className="flex-1 overflow-y-auto p-4 space-y-4">
+
+          {/* Passport-size photo — top of form, dedicated upload with preview */}
+          <div className="bg-white rounded-2xl border border-slate-100 shadow-sm p-4">
+            <p className="text-[10px] font-black uppercase tracking-widest text-slate-400 mb-3">Passport-Size Photo</p>
+            <div className="flex items-start gap-4">
+              <div className="w-24 h-32 lg:w-28 lg:h-36 rounded-xl border-2 border-dashed border-slate-300 bg-slate-50 overflow-hidden flex items-center justify-center shrink-0">
+                {documentFiles.get('PHOTO') ? (
+                  <img
+                    src={URL.createObjectURL(documentFiles.get('PHOTO')!)}
+                    alt="Passport"
+                    className="w-full h-full object-cover"
+                  />
+                ) : (
+                  <div className="text-center px-2">
+                    <User size={24} className="mx-auto text-slate-300 mb-1" />
+                    <p className="text-[9px] font-bold text-slate-400 leading-tight">No photo</p>
+                  </div>
+                )}
+              </div>
+              <div className="flex-1 min-w-0 space-y-2">
+                <p className="text-[11px] font-bold text-slate-600 leading-relaxed">
+                  Recent passport-size photo with plain background. Used on ID card, admit card, and admission form.
+                </p>
+                <p className="text-[9px] font-bold text-slate-400">JPG / PNG · Max 5MB · 3:4 ratio recommended</p>
+                <div className="flex items-center gap-2">
+                  <label className="cursor-pointer">
+                    <input type="file" onChange={e => handleDocumentUpload(e, 'PHOTO')} className="hidden"
+                      accept="image/jpeg,image/png,image/webp,image/heic,image/heif" />
+                    <span className="flex items-center gap-1.5 text-[10px] font-black px-3 py-2 bg-indigo-600 text-white hover:bg-indigo-700 rounded-xl transition-colors">
+                      <Upload size={11} /> {documentFiles.get('PHOTO') ? 'Replace Photo' : 'Upload Photo'}
+                    </span>
+                  </label>
+                  {documentFiles.get('PHOTO') && (
+                    <button type="button"
+                      onClick={() => {
+                        setDocumentFiles(prev => { const n = new Map(prev); n.delete('PHOTO'); return n; });
+                      }}
+                      className="flex items-center gap-1 text-[10px] font-black px-3 py-2 bg-rose-50 text-rose-600 hover:bg-rose-100 rounded-xl transition-colors">
+                      <X size={11} /> Remove
+                    </button>
+                  )}
+                </div>
+              </div>
+            </div>
+          </div>
+
           <div className="bg-white rounded-2xl border border-slate-100 shadow-sm p-4 space-y-4">
             <p className="text-[10px] font-black uppercase tracking-widest text-slate-400">Student Info</p>
 
@@ -655,16 +737,104 @@ const [mainView, setMainView] = useState<MainView>(initialView ?? 'CLASSES');
                 <p className="text-[10px] font-bold text-slate-400">{filteredStudents.length} of {students.length} students</p>
               </div>
             </div>
-            <button onClick={() => setSubView('CREATE')}
-              className="flex items-center gap-1.5 px-3 py-2 bg-indigo-600 text-white font-black text-xs rounded-xl shadow-md active:scale-95 transition-transform">
-              <Plus size={14} /> New
-            </button>
+            <div className="flex items-center gap-2">
+              <button
+                onClick={() => {
+                  // Filename reflects the active filter so the downloaded file
+                  // is self-describing — "students_class-8-A_…" instead of an
+                  // anonymous "students_admissions_…".
+                  const slug =
+                    admFilter.type === 'CLASS'      ? `class-${admFilter.value.replace(/^Class\s*/i,'').replace(/\s+/g,'-')}` :
+                    admFilter.type === 'UNASSIGNED' ? 'unassigned' :
+                    admFilter.type === 'FEE'        ? `fee-${admFilter.value.toLowerCase()}` :
+                    'all';
+                  exportCsv(
+                    `students_${slug}_${new Date().toISOString().slice(0, 10)}`,
+                    filteredStudents.map(s => ({
+                      admission_no: s.admissionNo,
+                      name: s.name,
+                      admission_date: s.admissionDate ?? '',
+                      class: s.className ?? '',
+                      section: s.section ?? '',
+                      roll_no: s.rollNo ?? '',
+                      gender: s.gender ?? '',
+                      dob: s.dob ?? '',
+                      phone: s.phone ?? '',
+                      father_name: s.fatherName ?? '',
+                      father_phone: s.fatherPhone ?? '',
+                      mother_name: s.motherName ?? '',
+                      mother_phone: s.motherPhone ?? '',
+                      is_rte: s.rte ? 'YES' : 'NO',
+                      fee_status: String(s.feeStatus ?? ''),
+                      total_fee: s.totalFee ?? 0,
+                      paid_fee: s.paidFee ?? 0,
+                      pending_fee: Math.max(0, (s.totalFee ?? 0) - (s.paidFee ?? 0)),
+                    })),
+                  );
+                }}
+                disabled={filteredStudents.length === 0}
+                className="flex items-center gap-1.5 px-3 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 font-black text-xs rounded-xl active:scale-95 transition-all disabled:opacity-40">
+                <Download size={13} /> CSV
+              </button>
+              <button onClick={() => setSubView('CREATE')}
+                className="flex items-center gap-1.5 px-3 py-2 bg-indigo-600 text-white font-black text-xs rounded-xl shadow-md active:scale-95 transition-transform">
+                <Plus size={14} /> New
+              </button>
+            </div>
           </div>
-          <div className="px-4 pb-3">
+          <div className="px-4 pb-3 space-y-2">
             <div className="relative">
               <Search size={15} className="absolute left-3.5 top-1/2 -translate-y-1/2 text-slate-400" />
               <input value={search} onChange={e => setSearch(e.target.value)} placeholder="Search by name, roll, admission or mobile…"
                 className="w-full bg-slate-50 border border-slate-200 rounded-xl pl-10 pr-4 py-2.5 font-bold text-sm outline-none focus:border-indigo-500 focus:bg-white transition-colors" />
+            </div>
+            {/* Filter pills row — All · Unassigned · classes · fee statuses */}
+            <div className="flex gap-1.5 overflow-x-auto hide-scrollbar -mx-1 px-1">
+              <button onClick={() => setAdmFilter({ type: 'ALL' })}
+                className={`shrink-0 px-3 py-1.5 rounded-full text-[10px] font-black uppercase tracking-widest border transition-colors ${
+                  admFilter.type === 'ALL'
+                    ? 'bg-slate-900 text-white border-slate-900'
+                    : 'bg-white text-slate-500 border-slate-200 hover:border-slate-300'
+                }`}>
+                All ({students.length})
+              </button>
+              {unassignedCount > 0 && (
+                <button onClick={() => setAdmFilter({ type: 'UNASSIGNED' })}
+                  className={`shrink-0 px-3 py-1.5 rounded-full text-[10px] font-black uppercase tracking-widest border transition-colors ${
+                    admFilter.type === 'UNASSIGNED'
+                      ? 'bg-amber-500 text-white border-amber-500'
+                      : 'bg-amber-50 text-amber-700 border-amber-200 hover:border-amber-300'
+                  }`}>
+                  Unassigned ({unassignedCount})
+                </button>
+              )}
+              {distinctClasses.map(c => {
+                const count = students.filter(s => s.className === c).length;
+                const active = admFilter.type === 'CLASS' && admFilter.value === c;
+                return (
+                  <button key={c} onClick={() => setAdmFilter({ type: 'CLASS', value: c })}
+                    className={`shrink-0 px-3 py-1.5 rounded-full text-[10px] font-black uppercase tracking-widest border transition-colors ${
+                      active
+                        ? 'bg-indigo-600 text-white border-indigo-600'
+                        : 'bg-white text-slate-500 border-slate-200 hover:border-slate-300'
+                    }`}>
+                    {c.replace(/^Class\s*/i, '')} ({count})
+                  </button>
+                );
+              })}
+              {feeStatusOptions.map(opt => {
+                const count = students.filter(s => String(s.feeStatus) === opt.key).length;
+                if (count === 0) return null;
+                const active = admFilter.type === 'FEE' && admFilter.value === opt.key;
+                return (
+                  <button key={opt.key} onClick={() => setAdmFilter({ type: 'FEE', value: opt.key })}
+                    className={`shrink-0 px-3 py-1.5 rounded-full text-[10px] font-black uppercase tracking-widest border transition-colors ${
+                      active ? 'bg-slate-900 text-white border-slate-900' : `${opt.cls} hover:opacity-90`
+                    }`}>
+                    {opt.label} ({count})
+                  </button>
+                );
+              })}
             </div>
           </div>
         </div>
@@ -893,7 +1063,15 @@ const [mainView, setMainView] = useState<MainView>(initialView ?? 'CLASSES');
             student={assignTarget}
             onClose={() => setAssignTarget(null)}
             onSuccess={async () => {
-              await refreshArchive();
+              // Refresh the fee cache too — assignment generated installments
+              // server-side, but the in-memory cache used by FeeLedger /
+              // FeesView is stale until we explicitly reload. Without this,
+              // the principal opens FeeLedger right after and sees an empty
+              // schedule until they hard-refresh the page.
+              await Promise.all([
+                refreshArchive(),
+                feeService.refreshAll().catch(() => undefined),
+              ]);
               const all = await studentService.getAll(); setStudents(all);
             }}
           />
@@ -1422,17 +1600,12 @@ const [mainView, setMainView] = useState<MainView>(initialView ?? 'CLASSES');
     );
   }
 
-  {/* Admission Form Print Modal */}
-  if (showAdmissionForm && selected) {
-    if (!schoolInfo) {
-      return (
-        <div className="w-full p-6 text-center">
-          <div className="inline-block w-8 h-8 border-4 border-slate-300 border-t-emerald-600 rounded-full animate-spin" />
-          <p className="text-sm font-bold text-slate-600 mt-3">Loading school info…</p>
-        </div>
-      );
-    }
-    return <AdmissionFormPrint student={selected} schoolInfo={schoolInfo} onClose={() => setShowAdmissionForm(false)} />;
+  {/* Admission Form Print Modal — only render when school info is ready.
+      The handleCreate guard above already skips opening this if schoolInfo
+      is null, so the user can't get stuck on a spinner here. */}
+  if (showAdmissionForm && selected && schoolInfo) {
+    return <AdmissionFormPrint student={selected} schoolInfo={schoolInfo}
+      onClose={() => { setShowAdmissionForm(false); setSubView('LIST'); }} />;
   }
 
   return null;

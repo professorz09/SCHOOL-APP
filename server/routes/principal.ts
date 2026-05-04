@@ -7,20 +7,139 @@ export const principalRouter = Router();
 
 const PRINCIPAL = requireRole('PRINCIPAL');
 
+// ─── Connected Users (students + staff) — for the Settings → Users screen ──
+
+// GET /api/principal/users/list — every public.user that belongs to this school
+// (PRINCIPAL itself excluded so the principal can't accidentally reset themselves).
+principalRouter.get('/users/list', requireAuth, PRINCIPAL, async (req, res) => {
+  try {
+    const { data, error } = await adminDb
+      .from('users')
+      .select('id, name, mobile_number, role, email, is_active, first_login_changed, last_login')
+      .eq('school_id', req.user.school_id!)
+      .neq('id', req.user.id)
+      .order('role').order('name');
+    if (error) throw new ApiError(500, error.message);
+    ok(res, data ?? []);
+  } catch (err) { fail(res, err); }
+});
+
+// Roles a principal is allowed to reset. PRINCIPAL and SUPER_ADMIN are
+// excluded so a same-school co-principal or platform admin can't be locked
+// out by a single principal action — those roles must use Settings → Security
+// (self) or contact platform support.
+const RESETTABLE_ROLES = new Set(['STUDENT', 'PARENT', 'TEACHER', 'DRIVER', 'PEON', 'STAFF']);
+
+// POST /api/principal/users/reset-password — forces password back to mobile
+// number and flips first_login_changed=false so the user is required to set
+// a new one on their next login. Multiple guards stack:
+//   1. Same-school check (cross-school target → 403)
+//   2. Self-reset blocked (would lock principal out)
+//   3. Role allowlist (no resetting other principals or super-admins)
+//   4. Rate limit: same target can only be reset once per 7 days
+//   5. Force logout: invalidates all active sessions for the target user
+//   6. Audit log includes target role + IP
+principalRouter.post('/users/reset-password', requireAuth, PRINCIPAL, async (req, res) => {
+  try {
+    const { userId } = requireBody<{ userId: string }>(req, ['userId']);
+
+    if (userId === req.user.id) {
+      throw new ApiError(400, 'Cannot reset your own password from here. Use Settings → Security.');
+    }
+
+    // Verify same-school ownership + load target details before touching anything.
+    const { data: target } = await adminDb
+      .from('users')
+      .select('id, name, role, school_id, mobile_number')
+      .eq('id', userId).maybeSingle();
+    const t = target as { id: string; name: string; role: string; school_id: string | null; mobile_number: string } | null;
+    if (!t) throw new ApiError(404, 'User not found');
+    if (t.school_id !== req.user.school_id) {
+      throw new ApiError(403, 'User is not in your school');
+    }
+    if (!RESETTABLE_ROLES.has(t.role)) {
+      throw new ApiError(403, `Role ${t.role} cannot be reset from here. ${t.name} must change their password from their own Settings.`);
+    }
+
+    // Rate limit — once per 7 days per target user, regardless of which
+    // principal does it. Prevents spam-locking a single user.
+    const sevenDaysAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString();
+    const { data: recent } = await adminDb
+      .from('audit_logs')
+      .select('id, created_at')
+      .eq('action', 'principal_reset_user_password')
+      .eq('entity_id', t.id)
+      .gte('created_at', sevenDaysAgo)
+      .limit(1);
+    if ((recent ?? []).length > 0) {
+      const last = (recent as { created_at: string }[])[0].created_at;
+      const nextAvailable = new Date(new Date(last).getTime() + 7 * 24 * 60 * 60 * 1000)
+        .toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' });
+      throw new ApiError(429, `${t.name} ka password 7 din me ek baar hi reset ho sakta hai. Next available: ${nextAvailable}.`);
+    }
+
+    // Reset auth password to mobile (the default new-user pattern). Service
+    // role bypasses the prevent_self_escalation trigger, so the subsequent
+    // first_login_changed=false flip is allowed.
+    const { error: pwErr } = await adminDb.auth.admin.updateUserById(t.id, {
+      password: t.mobile_number,
+    });
+    if (pwErr) throw new ApiError(500, `Password reset failed: ${pwErr.message}`);
+
+    const { error: flagErr } = await adminDb
+      .from('users')
+      .update({ first_login_changed: false, updated_at: new Date().toISOString() })
+      .eq('id', t.id);
+    if (flagErr) throw new ApiError(500, `Flag flip failed: ${flagErr.message}`);
+
+    // Force logout: invalidate every active session for the target user so
+    // their old JWT can't keep working until expiry. Best-effort — if the
+    // sign-out API call fails the password is still reset.
+    try {
+      await adminDb.auth.admin.signOut(t.id);
+    } catch (e) {
+      console.warn('[reset-password] signOut failed', e);
+    }
+
+    // Audit who reset whom + IP for accountability.
+    const ip = (req.headers['x-forwarded-for'] as string | undefined)?.split(',')[0].trim()
+      ?? req.socket.remoteAddress
+      ?? null;
+    await adminDb.from('audit_logs').insert({
+      user_id:     req.user.id,
+      school_id:   req.user.school_id,
+      action:      'principal_reset_user_password',
+      entity_type: 'user',
+      entity_id:   t.id,
+      ip_address:  ip,
+      details:     { target_name: t.name, target_role: t.role, target_mobile: t.mobile_number },
+    });
+
+    ok(res, { ok: true, name: t.name, mobile: t.mobile_number });
+  } catch (err) { fail(res, err); }
+});
+
 // ─── Notices ─────────────────────────────────────────────────────────────────
 
-// GET /api/principal/notice/list
+// GET /api/principal/notice/list — also returns target student name when present
 principalRouter.get('/notice/list', requireAuth, async (req, res) => {
   try {
     const { data, error } = await adminDb
       .from('notices')
-      .select('id, title, body, audience, pinned, sent_by_name, created_at')
+      .select('id, title, body, audience, pinned, sent_by_name, created_at, target_student_id, students(name)')
       .eq('school_id', req.user.school_id!)
       .eq('is_active', true)
       .order('pinned', { ascending: false })
       .order('created_at', { ascending: false });
     if (error) throw new ApiError(500, error.message);
-    ok(res, data ?? []);
+    // Flatten the joined student.name into target_student_name so the client
+    // doesn't have to dig through the nested object.
+    const rows = (data ?? []).map((n: any) => ({
+      ...n,
+      target_student_name: n.students?.name ?? null,
+      students: undefined,
+    }));
+    ok(res, rows);
   } catch (err) { fail(res, err); }
 });
 
@@ -30,19 +149,31 @@ principalRouter.post('/notice/create', requireAuth, PRINCIPAL, async (req, res) 
     const body = requireBody<{
       title: string; body: string; audience: string;
       pinned?: boolean; sentBy?: string;
+      targetStudentId?: string | null;
     }>(req, ['title', 'body', 'audience']);
 
+    // SPECIFIC_STUDENT audience must include a target id; other audiences must NOT
+    // (we store NULL so per-row filters stay clean).
+    if (body.audience === 'SPECIFIC_STUDENT' && !body.targetStudentId) {
+      throw new ApiError(400, 'targetStudentId required for SPECIFIC_STUDENT notices');
+    }
+    const targetId = body.audience === 'SPECIFIC_STUDENT' ? body.targetStudentId : null;
+
     const { data, error } = await adminDb.from('notices').insert({
-      school_id:     req.user.school_id,
-      title:         body.title,
-      body:          body.body,
-      audience:      body.audience,
-      pinned:        body.pinned ?? false,
-      sent_by:       req.user.id,
-      sent_by_name:  body.sentBy || req.user.name || '',
-    }).select('id, title, body, audience, pinned, sent_by_name, created_at, is_active').single();
+      school_id:         req.user.school_id,
+      title:             body.title,
+      body:              body.body,
+      audience:          body.audience,
+      pinned:            body.pinned ?? false,
+      sent_by:           req.user.id,
+      sent_by_name:      body.sentBy || req.user.name || '',
+      target_student_id: targetId,
+    }).select('id, title, body, audience, pinned, sent_by_name, created_at, is_active, target_student_id, students(name)').single();
     if (error) throw new ApiError(500, error.message);
-    ok(res, data, 201);
+    const out: any = data;
+    out.target_student_name = out?.students?.name ?? null;
+    delete out.students;
+    ok(res, out, 201);
   } catch (err) { fail(res, err); }
 });
 
@@ -172,13 +303,27 @@ principalRouter.post('/approval/reject', requireAuth, PRINCIPAL, async (req, res
   } catch (err) { fail(res, err); }
 });
 
-// POST /api/principal/leave/submit — student leave request
-principalRouter.post('/leave/submit', requireAuth, PRINCIPAL, async (req, res) => {
+// POST /api/principal/leave/submit — student leave request.
+// Authenticated PRINCIPAL/TEACHER/PARENT may submit; PARENT must be linked to
+// the student via parent_student_links (ownership enforced server-side, RLS-bypass
+// via adminDb).
+principalRouter.post('/leave/submit', requireAuth, async (req, res) => {
   try {
     const body = requireBody<{
       studentId: string; studentName: string; title: string;
       fromDate: string; toDate: string; reason: string;
     }>(req, ['studentId', 'studentName', 'title', 'fromDate', 'toDate', 'reason']);
+
+    // Ownership check for PARENT/STUDENT roles. PRINCIPAL/TEACHER skip this.
+    if (req.user.role === 'PARENT' || req.user.role === 'STUDENT') {
+      const { data: link } = await adminDb
+        .from('parent_student_links')
+        .select('id')
+        .eq('parent_user_id', req.user.id)
+        .eq('student_id', body.studentId)
+        .maybeSingle();
+      if (!link) throw new ApiError(403, 'Not linked to this student');
+    }
 
     const newValue = {
       fromName: body.studentName, fromRole: 'STUDENT', subject: body.title,
@@ -197,6 +342,37 @@ principalRouter.post('/leave/submit', requireAuth, PRINCIPAL, async (req, res) =
     }).select(APPROVAL_FIELDS).single();
     if (error) throw new ApiError(500, error.message);
     ok(res, data, 201);
+  } catch (err) { fail(res, err); }
+});
+
+// GET /api/principal/leave/list?studentId=... — list leaves for one student.
+// Same ownership rules as submit. Bypasses RLS so PARENT can read their own
+// approvals row (RLS only allows PRINCIPAL/TEACHER selects on `approvals`).
+principalRouter.get('/leave/list', requireAuth, async (req, res) => {
+  try {
+    const studentId = String(req.query.studentId ?? '');
+    if (!studentId) throw new ApiError(400, 'studentId required');
+
+    if (req.user.role === 'PARENT' || req.user.role === 'STUDENT') {
+      const { data: link } = await adminDb
+        .from('parent_student_links')
+        .select('id')
+        .eq('parent_user_id', req.user.id)
+        .eq('student_id', studentId)
+        .maybeSingle();
+      if (!link) throw new ApiError(403, 'Not linked to this student');
+    }
+
+    const { data, error } = await adminDb
+      .from('approvals')
+      .select(APPROVAL_FIELDS)
+      .eq('school_id', req.user.school_id!)
+      .eq('request_type', 'LEAVE')
+      .eq('entity_type', 'student')
+      .eq('entity_id', studentId)
+      .order('created_at', { ascending: false });
+    if (error) throw new ApiError(500, error.message);
+    ok(res, data ?? []);
   } catch (err) { fail(res, err); }
 });
 

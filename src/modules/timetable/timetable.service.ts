@@ -64,6 +64,13 @@ const DEFAULT_SLOTS: PeriodSlot[] = [
 
 export let PERIOD_SLOTS: PeriodSlot[] = [...DEFAULT_SLOTS];
 
+/** "HH:MM" string compare-based overlap check. Two ranges [aS,aE) and [bS,bE)
+ *  overlap iff aS < bE && bS < aE. Touching boundaries (aE === bS) do NOT
+ *  conflict — back-to-back periods are allowed. */
+function _timesOverlap(aStart: string, aEnd: string, bStart: string, bEnd: string): boolean {
+  return aStart < bEnd && bStart < aEnd;
+}
+
 function getSchoolId(): string {
   const id = useAuthStore.getState().session?.schoolId;
   if (!id) throw new Error('No school in session');
@@ -194,16 +201,31 @@ export const timetableService = {
   },
 
   hasConflict(teacherId: string, day: TDay, slotId: string, excludeId?: string): TimetableEntry | null {
-    return _entriesCache.find(e =>
-      e.teacherId === teacherId && e.day === day && e.slotId === slotId && e.id !== excludeId
-    ) ?? null;
+    // Catch BOTH same-slot collisions and time-range overlaps with other slots.
+    // Two slots that share even a minute (e.g. Prayer 08:00-09:00 + Period-1
+    // 08:30-09:30) must conflict for the same teacher on the same day.
+    const target = PERIOD_SLOTS.find(s => s.slotId === slotId);
+    if (!target) return null;
+    return _entriesCache.find(e => {
+      if (e.teacherId !== teacherId || e.day !== day || e.id === excludeId) return false;
+      if (e.slotId === slotId) return true;
+      const other = PERIOD_SLOTS.find(s => s.slotId === e.slotId);
+      if (!other) return false;
+      return _timesOverlap(target.startTime, target.endTime, other.startTime, other.endTime);
+    }) ?? null;
   },
 
-  /** Same-class slot overlap (only one entry per class+day+slot allowed). */
+  /** Same-class slot overlap — exact slot match OR time-range overlap. */
   hasClassConflict(classId: string, day: TDay, slotId: string, excludeId?: string): TimetableEntry | null {
-    return _entriesCache.find(e =>
-      e.classId === classId && e.day === day && e.slotId === slotId && e.id !== excludeId
-    ) ?? null;
+    const target = PERIOD_SLOTS.find(s => s.slotId === slotId);
+    if (!target) return null;
+    return _entriesCache.find(e => {
+      if (e.classId !== classId || e.day !== day || e.id === excludeId) return false;
+      if (e.slotId === slotId) return true;
+      const other = PERIOD_SLOTS.find(s => s.slotId === e.slotId);
+      if (!other) return false;
+      return _timesOverlap(target.startTime, target.endTime, other.startTime, other.endTime);
+    }) ?? null;
   },
 
   /** Validate then save (insert or update). Returns conflict reason on rejection. */

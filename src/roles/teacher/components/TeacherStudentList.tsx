@@ -25,9 +25,12 @@ export const TeacherStudentList: React.FC<Props> = ({ onBack }) => {
   }, []);
 
   // Unique class+section labels
-  const classOptions = Array.from(
-    new Map(students.map(s => [`${s.className}-${s.section}`, { className: s.className, section: s.section }])).entries(),
-  ).map(([label, val]) => ({ label, ...val }));
+  const classOptionsMap = new Map<string, { className: string; section: string }>();
+  students.forEach(s => {
+    classOptionsMap.set(`${s.className}-${s.section}`, { className: s.className, section: s.section });
+  });
+  const classOptions: Array<{ label: string; className: string; section: string }> = [];
+  classOptionsMap.forEach((val, label) => classOptions.push({ label, ...val }));
 
   const q = search.trim().toLowerCase();
   const filtered = students.filter(s => {

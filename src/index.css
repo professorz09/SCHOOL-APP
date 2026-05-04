@@ -29,3 +29,48 @@ body {
   -ms-overflow-style: none;  /* IE and Edge */
   scrollbar-width: none;  /* Firefox */
 }
+
+/* ── Print rules ──────────────────────────────────────────────────────────
+   When the user hits Print (Ctrl/Cmd-P or our Print button), we want only
+   the document inside `.printable` to make it onto paper — not the sidebar,
+   nav header, action buttons, etc. The trick: hide everything via
+   `visibility: hidden`, then re-show the printable subtree, and detach it
+   from the viewport flow with `position: absolute` so the rest of the app
+   doesn't reserve empty pages around it.
+*/
+@media print {
+  @page { margin: 12mm; }
+
+  html, body, #root { height: auto; overflow: visible; background: #fff; }
+
+  body * { visibility: hidden !important; }
+  .printable, .printable * { visibility: visible !important; }
+  .printable {
+    position: absolute !important;
+    left: 0 !important;
+    top: 0 !important;
+    width: 100% !important;
+    background: #fff !important;
+    box-shadow: none !important;
+  }
+  /* Hide anything explicitly marked no-print even if it's inside .printable */
+  .no-print, .no-print * { display: none !important; }
+
+  /* Each .print-page is one paginated unit — keep its content together and
+     force the next page to start on a fresh sheet. Used by bulk admit cards,
+     id cards, etc. so a single card never gets split across two pages. */
+  .print-page {
+    page-break-inside: avoid !important;
+    break-inside: avoid !important;
+    page-break-after: always !important;
+    break-after: page !important;
+  }
+  .print-page:last-child {
+    page-break-after: auto !important;
+    break-after: auto !important;
+  }
+
+  /* Tighten admit-card spacing for print so a single card fits on one A4
+     without overflow → each card stays self-contained on one page. */
+  .print-page { padding: 8mm !important; }
+}

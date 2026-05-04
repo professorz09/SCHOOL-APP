@@ -117,29 +117,31 @@ export const ResultsView: React.FC<Props> = ({ onBack }) => {
   return (
     <div className="w-full bg-slate-50 flex flex-col animate-in slide-in-from-right-8 duration-300">
       {/* ── Header ── */}
-      <div className="bg-white border-b border-slate-100 px-4 pt-4 pb-4 flex items-center gap-3 sticky top-0 z-10 shadow-sm">
-        <button onClick={onBack} className="p-2 -ml-2 bg-slate-100 rounded-full text-slate-600">
-          <ArrowLeft size={20}/>
-        </button>
-        <div>
-          <h2 className="text-xl font-black text-slate-900 uppercase tracking-tight leading-none">My Results</h2>
-          <p className="text-[10px] font-bold text-slate-400 mt-0.5">Academic Timeline</p>
+      <div className="bg-white border-b border-slate-100 px-4 lg:px-8 pt-4 lg:pt-6 pb-4 flex items-center gap-3 sticky top-0 z-10 shadow-sm">
+        <div className="flex items-center gap-3 lg:max-w-5xl lg:mx-auto lg:w-full">
+          <button onClick={onBack} className="p-2 -ml-2 bg-slate-100 rounded-full text-slate-600 hover:bg-slate-200 transition-colors">
+            <ArrowLeft size={20}/>
+          </button>
+          <div>
+            <h2 className="text-xl lg:text-2xl font-black text-slate-900 uppercase tracking-tight leading-none">My Results</h2>
+            <p className="text-[10px] lg:text-xs font-bold text-slate-400 mt-0.5">Academic Timeline</p>
+          </div>
         </div>
       </div>
 
-      <div className="flex-1 overflow-y-auto ">
+      <div className="flex-1 overflow-y-auto lg:px-8 lg:pb-10 lg:max-w-5xl lg:mx-auto lg:w-full">
 
         {/* ── Overall Performance Card ── */}
         {results.length > 0 && (
-          <div className="m-4 mb-0 bg-[#0d1b3e] rounded-3xl p-5 text-white">
-            <p className="text-[10px] font-black uppercase tracking-widest text-blue-300 mb-3">Overall Performance</p>
+          <div className="m-4 lg:m-0 lg:mt-6 mb-0 bg-[#0d1b3e] rounded-3xl p-5 lg:p-7 text-white">
+            <p className="text-[10px] lg:text-xs font-black uppercase tracking-widest text-blue-300 mb-3">Overall Performance</p>
             <div className="flex items-end gap-4 mb-4">
-              <div className="text-6xl font-black leading-none tabular-nums">
-                {avgPercent}<span className="text-3xl text-blue-300">%</span>
+              <div className="text-6xl lg:text-7xl font-black leading-none tabular-nums">
+                {avgPercent}<span className="text-3xl lg:text-4xl text-blue-300">%</span>
               </div>
               <div className="pb-1">
-                <div className="text-sm font-black text-blue-100">{performanceLabel}</div>
-                <div className="text-[10px] font-bold text-blue-300 mt-0.5">
+                <div className="text-sm lg:text-base font-black text-blue-100">{performanceLabel}</div>
+                <div className="text-[10px] lg:text-xs font-bold text-blue-300 mt-0.5">
                   {results.length} exams completed · All subjects
                 </div>
               </div>
@@ -150,15 +152,15 @@ export const ResultsView: React.FC<Props> = ({ onBack }) => {
                 style={{ width: `${avgPercent}%` }}
               />
             </div>
-            <div className="grid grid-cols-3 gap-2">
+            <div className="grid grid-cols-3 gap-2 lg:gap-3">
               {[
                 { label: 'Exams Done',    val: String(results.length) },
                 { label: 'Avg Score',     val: `${avgPercent}%` },
                 { label: 'Upcoming',      val: String(upcoming.length) },
               ].map(({ label, val }) => (
-                <div key={label} className="bg-white/10 rounded-xl p-2.5 text-center">
-                  <div className="font-black text-white text-base">{val}</div>
-                  <div className="text-[9px] font-black uppercase tracking-widest text-blue-300 mt-0.5">{label}</div>
+                <div key={label} className="bg-white/10 rounded-xl p-2.5 lg:p-3.5 text-center">
+                  <div className="font-black text-white text-base lg:text-xl">{val}</div>
+                  <div className="text-[9px] lg:text-[10px] font-black uppercase tracking-widest text-blue-300 mt-0.5">{label}</div>
                 </div>
               ))}
             </div>
@@ -167,9 +169,9 @@ export const ResultsView: React.FC<Props> = ({ onBack }) => {
 
         {/* ── Timeline heading ── */}
         {timeline.length > 0 && (
-          <div className="mx-4 mt-5 flex items-center gap-2 mb-1">
+          <div className="mx-4 lg:mx-0 mt-5 lg:mt-7 flex items-center gap-2 mb-1">
             <div className="w-1 h-5 bg-slate-800 rounded-full"/>
-            <h3 className="font-black text-slate-800 text-sm uppercase tracking-widest">Academic Timeline</h3>
+            <h3 className="font-black text-slate-800 text-sm lg:text-base uppercase tracking-widest">Academic Timeline</h3>
           </div>
         )}
 
@@ -177,15 +179,15 @@ export const ResultsView: React.FC<Props> = ({ onBack }) => {
         {groups.map(group => (
           <div key={group.month} className="mt-4">
             {/* Month label */}
-            <div className="mx-4 flex items-center gap-2 mb-3">
-              <span className="text-[10px] font-black uppercase tracking-widest text-slate-400 bg-slate-100 px-2.5 py-1 rounded-full">
+            <div className="mx-4 lg:mx-0 flex items-center gap-2 mb-3">
+              <span className="text-[10px] lg:text-xs font-black uppercase tracking-widest text-slate-400 bg-slate-100 px-2.5 py-1 rounded-full">
                 {group.month}
               </span>
               <div className="flex-1 h-px bg-slate-200"/>
             </div>
 
             {/* Timeline items */}
-            <div className="relative mx-4">
+            <div className="relative mx-4 lg:mx-0">
               {/* Vertical line */}
               <div className="absolute left-3.5 top-4 bottom-4 w-px bg-slate-200"/>
 
@@ -210,7 +212,7 @@ export const ResultsView: React.FC<Props> = ({ onBack }) => {
         ))}
 
         {results.length === 0 && upcoming.length === 0 && (
-          <div className="flex flex-col items-center py-16 text-slate-400">
+          <div className="flex flex-col items-center py-20 text-slate-400">
             <Trophy size={36} className="mb-3 opacity-30"/>
             <p className="font-bold text-sm">No results yet</p>
           </div>

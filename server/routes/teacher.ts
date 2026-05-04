@@ -195,10 +195,60 @@ teacherRouter.post('/test/create', requireAuth, requireRole('TEACHER'), async (r
         syllabus:        body.syllabus,
         results_uploaded: false,
       })
-      .select('id, section_id, class_name, section, subject, test_type, title, scheduled_date, duration, max_marks, syllabus, results_uploaded')
+      .select('id, section_id, class_name, section, subject, test_type, title, scheduled_date, duration, max_marks, syllabus, results_uploaded, result_status')
       .single();
     if (error) throw new ApiError(500, error.message);
     ok(res, data, 201);
+  } catch (err) { fail(res, err); }
+});
+
+// POST /api/teacher/test/publish-results
+// Bulk upsert exam_results for a test + flip results_uploaded flag.
+// Teacher writes go through here because RLS only allows PRINCIPAL/SUPER_ADMIN
+// direct write access on test_schedules / exam_results.
+teacherRouter.post('/test/publish-results', requireAuth, requireRole('TEACHER'), async (req, res) => {
+  try {
+    const body = requireBody<{
+      testId: string; academicYearId: string;
+      results: { studentId: string; obtainedMarks: number; remarks?: string | null }[];
+    }>(req, ['testId', 'academicYearId', 'results']);
+
+    // Verify the test belongs to the caller's school (defence-in-depth — RLS
+    // is bypassed since we use adminDb here).
+    const { data: test, error: tErr } = await adminDb
+      .from('test_schedules')
+      .select('id, school_id')
+      .eq('id', body.testId)
+      .maybeSingle();
+    if (tErr) throw new ApiError(500, tErr.message);
+    if (!test) throw new ApiError(404, 'Test not found');
+    if ((test as any).school_id !== req.user.school_id) {
+      throw new ApiError(403, 'Test belongs to another school');
+    }
+
+    if (body.results.length > 0) {
+      const rows = body.results.map(r => ({
+        test_id: body.testId,
+        student_id: r.studentId,
+        academic_year_id: body.academicYearId,
+        obtained_marks: r.obtainedMarks,
+        remarks: r.remarks ?? null,
+      }));
+      const { error: rErr } = await adminDb
+        .from('exam_results')
+        .upsert(rows, { onConflict: 'test_id,student_id' });
+      if (rErr) throw new ApiError(500, rErr.message);
+    }
+
+    // Flip the test into SUBMITTED — awaiting principal publish/lock.
+    // result_status check constraint allows DRAFT / SUBMITTED / LOCKED.
+    const { error: uErr } = await adminDb
+      .from('test_schedules')
+      .update({ results_uploaded: true, result_status: 'SUBMITTED' })
+      .eq('id', body.testId);
+    if (uErr) throw new ApiError(500, uErr.message);
+
+    ok(res, { testId: body.testId, count: body.results.length });
   } catch (err) { fail(res, err); }
 });
 

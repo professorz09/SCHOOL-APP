@@ -1,5 +1,6 @@
 import React, { useEffect, useState } from 'react';
-import { ArrowLeft, Plus, Trash2, ChevronDown, ChevronUp, Save, QrCode, CreditCard, CheckCircle2, Lock, Eye, EyeOff, ShieldCheck, IndianRupee, Edit2, Building2, BookOpen, ChevronRight, X, Download, Database, History, ShieldOff, Unlock } from 'lucide-react';
+import { ArrowLeft, Plus, Trash2, ChevronDown, ChevronUp, Save, QrCode, CreditCard, CheckCircle2, Lock, Eye, EyeOff, ShieldCheck, IndianRupee, Edit2, Building2, BookOpen, ChevronRight, X, Download, Database, History, ShieldOff, Unlock, Users, Search, KeyRound, AlertTriangle } from 'lucide-react';
+import { apiPrincipal } from '@/lib/apiClient';
 import { supabase } from '@/lib/supabase';
 import { principalService } from '@/roles/principal/principal.service';
 import { feeService } from '@/modules/fees/fee.service';
@@ -13,7 +14,7 @@ import { AuditLogsViewer } from '@/roles/principal/components/AuditLogsViewer';
 import { useEditorModeStore } from '@/store/editorModeStore';
 import { useAcademicYear } from '@/shared/context/AcademicYearContext';
 
-type View = 'MENU' | 'SCHOOL_INFO' | 'CLASSES' | 'FEE_STRUCT' | 'FEE_STRUCT_EDIT' | 'PAYMENTS' | 'SECURITY' | 'DATA_EXPORT' | 'ACTIVITY_LOG';
+type View = 'MENU' | 'SCHOOL_INFO' | 'CLASSES' | 'FEE_STRUCT' | 'FEE_STRUCT_EDIT' | 'PAYMENTS' | 'SECURITY' | 'DATA_EXPORT' | 'ACTIVITY_LOG' | 'USERS';
 
 interface Props { onBack: () => void; initialView?: View; }
 
@@ -311,6 +312,7 @@ export const SettingsManager: React.FC<Props> = ({ onBack, initialView }) => {
           { icon: IndianRupee, title: 'Fee Structure', desc: 'Class-wise fee configuration',   iconBg: 'bg-emerald-100', iconColor: 'text-emerald-600', action: () => setView('FEE_STRUCT') },
           { icon: CreditCard, title: 'Payments',      desc: 'UPI & QR code setup',             iconBg: 'bg-orange-100',  iconColor: 'text-orange-600',  action: () => setView('PAYMENTS') },
           { icon: Lock,      title: 'Security',       desc: 'Password & account security',     iconBg: 'bg-rose-100',    iconColor: 'text-rose-600',    action: () => setView('SECURITY') },
+          { icon: Users,     title: 'Users',          desc: 'Students & staff connected to this school · reset passwords', iconBg: 'bg-indigo-100', iconColor: 'text-indigo-600', action: () => setView('USERS') },
           { icon: History,   title: 'Activity Logs',  desc: 'Who changed what · old → new · date/time',  iconBg: 'bg-violet-100',  iconColor: 'text-violet-600',  action: () => setView('ACTIVITY_LOG') },
           { icon: Database,  title: 'Download Data',  desc: 'Operational JSON snapshot — not a full DB backup',  iconBg: 'bg-cyan-100',    iconColor: 'text-cyan-600',    action: () => setView('DATA_EXPORT') },
         ].map(({ icon: Icon, title, desc, iconBg, iconColor, action }) => (
@@ -329,6 +331,9 @@ export const SettingsManager: React.FC<Props> = ({ onBack, initialView }) => {
       </div>
     </div>
   );
+
+  // USERS VIEW — students + staff connected to the school, with password reset
+  if (view === 'USERS') return <UsersView onBack={() => setView('MENU')} />;
 
   // SCHOOL INFO VIEW
   if (view === 'SCHOOL_INFO') return (
@@ -1045,6 +1050,204 @@ const DataExportPanel: React.FC<DataExportProps> = ({ onBack, schoolId, showToas
           </div>
         )}
       </div>
+    </div>
+  );
+};
+
+// ─── Users panel ──────────────────────────────────────────────────────────────
+// Lists every public.users row attached to this school (students + staff,
+// principal excluded). Each row has a "Reset" button → confirmation modal →
+// server route resets password to mobile + flips first_login_changed = false.
+//
+// Server enforces same-school + cannot-reset-self; UI just provides the
+// confirmation step so the principal doesn't accidentally reset somebody.
+type ConnectedUser = {
+  id: string; name: string; mobile_number: string; role: string;
+  email: string | null; is_active: boolean; first_login_changed: boolean;
+  last_login: string | null;
+};
+
+const ROLE_TONE: Record<string, string> = {
+  STUDENT:  'bg-indigo-50 text-indigo-700 border-indigo-200',
+  PARENT:   'bg-violet-50 text-violet-700 border-violet-200',
+  TEACHER:  'bg-blue-50 text-blue-700 border-blue-200',
+  DRIVER:   'bg-orange-50 text-orange-700 border-orange-200',
+  PEON:     'bg-amber-50 text-amber-700 border-amber-200',
+  STAFF:    'bg-emerald-50 text-emerald-700 border-emerald-200',
+};
+
+const UsersView: React.FC<{ onBack: () => void }> = ({ onBack }) => {
+  const { showToast } = useUIStore();
+  const [users, setUsers] = useState<ConnectedUser[] | null>(null);
+  const [search, setSearch] = useState('');
+  const [roleFilter, setRoleFilter] = useState<string>('ALL');
+  const [confirm, setConfirm] = useState<ConnectedUser | null>(null);
+  const [resetting, setResetting] = useState(false);
+
+  const reload = async () => {
+    try {
+      const list = await apiPrincipal.usersList();
+      setUsers(list);
+    } catch (e) {
+      showToast(e instanceof Error ? e.message : 'Failed to load users', 'error');
+      setUsers([]);
+    }
+  };
+  useEffect(() => { void reload(); /* eslint-disable-next-line */ }, []);
+
+  const handleReset = async () => {
+    if (!confirm) return;
+    setResetting(true);
+    try {
+      const res = await apiPrincipal.resetUserPassword(confirm.id);
+      showToast(`Password reset · ${res.name} can log in with mobile ${res.mobile}`);
+      setConfirm(null);
+      await reload();
+    } catch (e) {
+      showToast(e instanceof Error ? e.message : 'Reset failed', 'error');
+    } finally {
+      setResetting(false);
+    }
+  };
+
+  const distinctRoles = users
+    ? Array.from(new Set<string>(users.map(u => u.role))).sort()
+    : [];
+  const q = search.trim().toLowerCase();
+  const filtered = (users ?? []).filter(u => {
+    if (roleFilter !== 'ALL' && u.role !== roleFilter) return false;
+    if (!q) return true;
+    return u.name.toLowerCase().includes(q)
+      || u.mobile_number.includes(search.trim())
+      || (u.email ?? '').toLowerCase().includes(q);
+  });
+
+  return (
+    <div className="w-full bg-slate-50 flex flex-col animate-in slide-in-from-right-8 duration-300 min-h-[60vh] lg:min-h-[80vh]">
+      <div className="bg-white border-b border-slate-100 px-4 lg:px-6 pt-4 lg:pt-6 pb-4 sticky top-0 z-10 shadow-sm">
+        <div className="flex items-center gap-3 mb-3">
+          <button onClick={onBack} className="p-2 -ml-2 bg-slate-100 rounded-full text-slate-600 hover:bg-slate-200 transition-colors">
+            <ArrowLeft size={20} />
+          </button>
+          <div>
+            <h2 className="text-xl lg:text-2xl font-black text-slate-900 uppercase tracking-tight">Connected Users</h2>
+            <p className="text-[10px] lg:text-xs font-bold text-slate-400">{users?.length ?? 0} accounts in this school</p>
+          </div>
+        </div>
+        <div className="relative mb-2">
+          <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400"/>
+          <input value={search} onChange={e => setSearch(e.target.value)}
+            placeholder="Search by name, mobile, or email…"
+            className="w-full pl-9 pr-3 py-2.5 border border-slate-200 bg-slate-50 rounded-xl text-sm font-bold text-slate-800 outline-none focus:border-indigo-400"/>
+        </div>
+        {distinctRoles.length > 1 && (
+          <div className="flex gap-1.5 overflow-x-auto hide-scrollbar -mx-1 px-1">
+            <button onClick={() => setRoleFilter('ALL')}
+              className={`shrink-0 px-3 py-1.5 rounded-full text-[10px] font-black uppercase tracking-widest border transition-colors ${
+                roleFilter === 'ALL' ? 'bg-slate-900 text-white border-slate-900' : 'bg-white text-slate-500 border-slate-200'
+              }`}>
+              All ({users?.length ?? 0})
+            </button>
+            {distinctRoles.map(r => {
+              const count = (users ?? []).filter(u => u.role === r).length;
+              return (
+                <button key={r} onClick={() => setRoleFilter(r)}
+                  className={`shrink-0 px-3 py-1.5 rounded-full text-[10px] font-black uppercase tracking-widest border transition-colors ${
+                    roleFilter === r ? 'bg-slate-900 text-white border-slate-900' : 'bg-white text-slate-500 border-slate-200'
+                  }`}>
+                  {r} ({count})
+                </button>
+              );
+            })}
+          </div>
+        )}
+      </div>
+
+      <div className="flex-1 overflow-y-auto p-4 lg:p-6 space-y-2">
+        {users === null ? (
+          <p className="text-center text-sm font-bold text-slate-400 py-12">Loading…</p>
+        ) : filtered.length === 0 ? (
+          <p className="text-center text-sm font-bold text-slate-400 py-12">No users match.</p>
+        ) : (
+          filtered.map(u => {
+            const initials = u.name.split(' ').map(w => w[0]).join('').slice(0,2).toUpperCase();
+            // Mirror server allowlist: PRINCIPAL / SUPER_ADMIN cannot be reset
+            // by another principal. They use Settings → Security themselves.
+            const canReset = ['STUDENT','PARENT','TEACHER','DRIVER','PEON','STAFF'].includes(u.role);
+            return (
+              <div key={u.id} className="bg-white rounded-2xl border border-slate-100 shadow-sm p-3.5 flex items-center gap-3">
+                <div className="w-11 h-11 rounded-xl bg-gradient-to-br from-indigo-400 to-violet-500 text-white flex items-center justify-center font-black text-sm shrink-0">
+                  {initials}
+                </div>
+                <div className="flex-1 min-w-0">
+                  <div className="flex items-center gap-2 flex-wrap">
+                    <span className="font-extrabold text-slate-900 text-sm truncate">{u.name}</span>
+                    <span className={`text-[9px] font-black px-2 py-0.5 rounded-full border uppercase ${ROLE_TONE[u.role] ?? 'bg-slate-100 text-slate-600 border-slate-200'}`}>
+                      {u.role}
+                    </span>
+                    {!u.first_login_changed && (
+                      <span className="text-[9px] font-black px-2 py-0.5 rounded-full bg-amber-50 text-amber-700 border border-amber-200 uppercase">
+                        Default Pwd
+                      </span>
+                    )}
+                  </div>
+                  <div className="text-[10px] font-bold text-slate-400 mt-0.5 truncate">
+                    {u.mobile_number}{u.email ? ` · ${u.email}` : ''}
+                  </div>
+                </div>
+                {canReset ? (
+                  <button onClick={() => setConfirm(u)}
+                    className="flex items-center gap-1 px-3 py-2 bg-rose-50 hover:bg-rose-100 text-rose-700 border border-rose-200 rounded-xl text-[10px] font-black uppercase tracking-widest active:scale-95 transition-all shrink-0">
+                    <KeyRound size={12}/> Reset
+                  </button>
+                ) : (
+                  <span title="Admin roles must change password from their own Settings → Security"
+                    className="flex items-center gap-1 px-3 py-2 bg-slate-50 text-slate-400 border border-slate-200 rounded-xl text-[10px] font-black uppercase tracking-widest cursor-not-allowed shrink-0">
+                    <Lock size={12}/> Self-only
+                  </span>
+                )}
+              </div>
+            );
+          })
+        )}
+      </div>
+
+      {/* Confirmation modal — explicit copy so a misclick doesn't reset by accident */}
+      {confirm && (
+        <div className="absolute inset-0 z-50 bg-slate-900/60 backdrop-blur-sm flex items-end sm:items-center justify-center p-0 sm:p-4 animate-in fade-in">
+          <div className="bg-white w-full sm:max-w-md rounded-t-3xl sm:rounded-3xl p-6 pb-8 animate-in slide-in-from-bottom-4">
+            <div className="flex items-start gap-3 mb-4">
+              <div className="w-11 h-11 rounded-xl bg-rose-100 text-rose-600 flex items-center justify-center shrink-0">
+                <AlertTriangle size={20}/>
+              </div>
+              <div>
+                <h3 className="font-black text-slate-900 text-lg">Reset password?</h3>
+                <p className="text-sm text-slate-500 mt-1">
+                  <span className="font-black text-slate-900">{confirm.name}</span> ({confirm.role}) ka password reset hoga to <span className="font-black text-slate-900">{confirm.mobile_number}</span> (their mobile number).
+                </p>
+              </div>
+            </div>
+            <div className="bg-amber-50 border border-amber-200 rounded-xl p-3 mb-5 space-y-1">
+              <p className="text-[11px] font-bold text-amber-800 leading-relaxed">
+                User ko next login par naya password set karna padega. Active sessions turant log-out ho jayengi.
+              </p>
+              <p className="text-[10px] font-bold text-amber-700 leading-relaxed">
+                Note: same user ka password 7 din me sirf ek baar reset ho sakta hai.
+              </p>
+            </div>
+            <div className="flex gap-3">
+              <button onClick={() => setConfirm(null)} disabled={resetting}
+                className="flex-1 py-3 rounded-2xl border border-slate-200 font-black text-slate-600 disabled:opacity-50">
+                Cancel
+              </button>
+              <button onClick={handleReset} disabled={resetting}
+                className="flex-1 py-3 rounded-2xl bg-rose-600 text-white font-black active:scale-95 transition-transform disabled:opacity-60">
+                {resetting ? 'Resetting…' : 'Reset Password'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 };

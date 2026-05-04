@@ -24,6 +24,7 @@ import { AttendanceHub } from '@/modules/attendance/components/AttendanceHub';
 import { ToolsManager } from '@/roles/principal/components/ToolsManager';
 import { PrincipalExamsManager } from '@/modules/exams/components/PrincipalExamsManager';
 import { PromotionWizard } from '@/modules/academic-year/components/PromotionWizard';
+import { AnalyticsManager } from '@/roles/principal/components/AnalyticsManager';
 
 export type PrincipalView =
   | 'DASHBOARD'
@@ -49,7 +50,8 @@ export type PrincipalView =
   | 'SETTINGS_SCHOOL_INFO'
   | 'SETTINGS_FEE_STRUCT'
   | 'SETTINGS_CLASSES'
-  | 'PROMOTION';
+  | 'PROMOTION'
+  | 'ANALYTICS';
 
 export const PrincipalLayout: React.FC = () => {
   const [view, setView] = useState<PrincipalView>('DASHBOARD');
@@ -120,6 +122,7 @@ export const PrincipalLayout: React.FC = () => {
   if (view === 'TOOLS')            return <ToolsManager            onBack={goBack} />;
   if (view === 'EXAMS')            return <PrincipalExamsManager   onBack={goBack} />;
   if (view === 'PROMOTION')        return <PromotionWizard         onBack={goBack} />;
+  if (view === 'ANALYTICS')        return <AnalyticsManager        onBack={goBack} />;
 
   return (
     <>

@@ -14,15 +14,21 @@ import { useEditorModeStore } from '@/store/editorModeStore';
 import { apiAttendance } from '@/lib/apiClient';
 import { supabase } from '@/lib/supabase';
 import { useAuthStore } from '@/store/authStore';
+import { exportCsv } from '@/shared/utils/csv';
 
 interface Props { onBack: () => void; }
 
 type View = 'OVERVIEW' | 'GRID' | 'RECORDS' | 'MARK' | 'EDIT_RECORD';
 
-const CELL_CYCLE: AttendanceCellStatus[] = ['present', 'absent', 'holiday', 'half'];
+// Half-day was removed from the student attendance flow — schools mark either
+// Present, Absent, or Holiday. Existing records still render with their old
+// 'half' status (the type stays in AttendanceCellStatus for backward compat),
+// but the cell-cycle and bulk-set buttons no longer offer it.
+const CELL_CYCLE: AttendanceCellStatus[] = ['present', 'absent', 'holiday'];
 const NEXT_STATUS = (s: AttendanceCellStatus): AttendanceCellStatus => {
   const idx = CELL_CYCLE.indexOf(s);
-  return CELL_CYCLE[(idx + 1) % CELL_CYCLE.length];
+  // Unknown/legacy values (e.g. 'half') reset to 'present' on next click.
+  return CELL_CYCLE[(idx === -1 ? 0 : idx + 1) % CELL_CYCLE.length];
 };
 const CELL_LABEL: Record<AttendanceCellStatus, string> = {
   present: 'P', absent: 'A', holiday: 'H', half: 'HD',
@@ -215,9 +221,18 @@ export const StudentAttendanceManager: React.FC<Props> = ({ onBack }) => {
 
   const toggleCell = (date: string, stuId: string) => {
     const rec = recordMap[date];
-    // Locked (approved) records must be corrected through the Records → Edit flow,
-    // which enforces a correction-reason requirement. Disallow grid edits entirely.
-    if (rec?.isLocked) return;
+    // Locked (approved) records can only be corrected via Records → Edit, and
+    // even there it requires Editor Mode. Bounce the user with a clear toast
+    // instead of silently doing nothing — that silent block was confusing.
+    if (rec?.isLocked) {
+      showToast(
+        editorModeActive
+          ? 'Locked dates: open Records → Edit to make a correction with a reason.'
+          : 'Locked. Enable Editor Mode in Settings, then edit via Records.',
+        'error',
+      );
+      return;
+    }
     setEditBuffer(prev => {
       const cur = prev[date]?.[stuId] ?? gridDetails[date]?.[stuId] ?? 'present';
       return { ...prev, [date]: { ...(prev[date] ?? {}), [stuId]: NEXT_STATUS(cur) } };
@@ -226,7 +241,10 @@ export const StudentAttendanceManager: React.FC<Props> = ({ onBack }) => {
 
   const bulkSetDate = (date: string, status: AttendanceCellStatus) => {
     const rec = recordMap[date];
-    if (rec?.isLocked) return;
+    if (rec?.isLocked) {
+      showToast('Locked. Open Records → Edit (Editor Mode required).', 'error');
+      return;
+    }
     const entries: Record<string, AttendanceCellStatus> = {};
     for (const s of gridStudents) entries[s.id] = status;
     setEditBuffer(prev => ({ ...prev, [date]: entries }));
@@ -592,10 +610,34 @@ export const StudentAttendanceManager: React.FC<Props> = ({ onBack }) => {
             </div>
             {gridLoading && <RefreshCw size={16} className="text-slate-400 animate-spin"/>}
             {sectionId && gridDates.length > 0 && (
-              <button onClick={handleExcelExport}
-                className="flex items-center gap-1.5 px-3 py-2 bg-emerald-600 text-white rounded-xl text-[10px] font-black active:scale-95 transition-transform">
-                <Download size={13}/> Excel
-              </button>
+              <>
+                <button
+                  onClick={() => {
+                    // Export the *currently visible month* as CSV — one row per
+                    // student × date with status. Lets the principal pull a
+                    // month at a time without hitting the full-year Excel.
+                    const rows: Record<string, unknown>[] = [];
+                    for (const s of gridStudents) {
+                      for (const d of gridDates) {
+                        const cell = gridDetails[s.id]?.[d];
+                        rows.push({
+                          date: d,
+                          roll_no: s.rollNo ?? '',
+                          name: s.name,
+                          status: cell ?? 'NOT_MARKED',
+                        });
+                      }
+                    }
+                    exportCsv(`attendance_${gridClass}-${gridSection}_${gridYM}`, rows);
+                  }}
+                  className="flex items-center gap-1.5 px-3 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-xl text-[10px] font-black active:scale-95 transition-transform">
+                  <Download size={13}/> CSV
+                </button>
+                <button onClick={handleExcelExport}
+                  className="flex items-center gap-1.5 px-3 py-2 bg-emerald-600 text-white rounded-xl text-[10px] font-black active:scale-95 transition-transform">
+                  <Download size={13}/> Excel
+                </button>
+              </>
             )}
           </div>
 
@@ -700,7 +742,7 @@ export const StudentAttendanceManager: React.FC<Props> = ({ onBack }) => {
                             <Lock size={8} className="mx-auto text-emerald-400" title="Approved — edit via Records tab"/>
                           ) : (
                             <div className="flex flex-col gap-0.5 items-center">
-                              {(['present','absent','holiday','half'] as AttendanceCellStatus[]).map(s => (
+                              {(['present','absent','holiday'] as AttendanceCellStatus[]).map(s => (
                                 <button key={s}
                                   onClick={() => bulkSetDate(d, s)}
                                   title={`All ${CELL_LABEL[s]}`}
@@ -741,9 +783,10 @@ export const StudentAttendanceManager: React.FC<Props> = ({ onBack }) => {
                           const bg = st ? CELL_BG[st] : 'bg-slate-100 text-slate-300';
                           return (
                             <td key={d}
-                              className={`border-b border-r border-slate-100 text-center px-0.5 py-1 ${!locked ? 'cursor-pointer active:scale-90' : 'cursor-default'}`}
-                              onClick={() => !locked && toggleCell(d, stu.id)}>
-                              <span className={`inline-flex items-center justify-center w-7 h-7 rounded-lg text-[9px] font-black transition-colors ${bg} ${locked ? 'opacity-60' : ''}`}>
+                              className={`border-b border-r border-slate-100 text-center px-0.5 py-1 ${locked ? 'cursor-not-allowed bg-slate-50/40' : 'cursor-pointer active:scale-90'}`}
+                              onClick={() => toggleCell(d, stu.id)}
+                              title={locked ? 'Locked — edit via Records (Editor Mode required)' : undefined}>
+                              <span className={`inline-flex items-center justify-center w-7 h-7 rounded-lg text-[9px] font-black transition-colors ${bg} ${locked ? 'opacity-40' : ''}`}>
                                 {st ? CELL_LABEL[st] : '—'}
                               </span>
                             </td>
@@ -1001,29 +1044,44 @@ export const StudentAttendanceManager: React.FC<Props> = ({ onBack }) => {
           ))}
         </div>
 
-        {/* Action cards */}
-        <div className="space-y-2">
-          {[
-            { icon: LayoutGrid, title: 'Grid View', desc: 'Date × Student grid with Excel export', color: 'bg-indigo-100 text-indigo-600', action: () => setView('GRID') },
-            { icon: Save, title: 'Mark Attendance', desc: 'Mark & approve attendance directly', color: 'bg-blue-100 text-blue-600', action: () => setView('MARK') },
-            { icon: Users, title: 'Records', desc: `${pendingCount} pending · all submitted records`, color: 'bg-amber-100 text-amber-600', action: () => setView('RECORDS') },
-          ].map(({ icon: Icon, title, desc, color, action }) => (
-            <button key={title} onClick={action}
-              className="w-full flex items-center gap-4 bg-white border border-slate-100 rounded-2xl p-4 shadow-sm text-left active:scale-[0.98] transition-transform">
-              <div className={`w-11 h-11 rounded-xl flex items-center justify-center shrink-0 ${color}`}>
-                <Icon size={20} />
-              </div>
-              <div className="flex-1">
-                <div className="font-extrabold text-slate-900 text-sm">{title}</div>
-                <div className="text-[10px] font-bold text-slate-400 mt-0.5">{desc}</div>
-              </div>
-              {title === 'Records' && pendingCount > 0 && (
-                <span className="text-[9px] font-black text-amber-700 bg-amber-100 border border-amber-200 px-2 py-1 rounded-full uppercase">{pendingCount} Pending</span>
-              )}
-              <ChevronRight size={16} className="text-slate-300"/>
-            </button>
-          ))}
+        {/* Two primary actions — Mark vs History */}
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+          <button onClick={() => setView('MARK')}
+            className="flex flex-col items-start gap-3 bg-gradient-to-br from-blue-600 to-indigo-600 text-white rounded-2xl p-5 shadow-md hover:shadow-lg active:scale-[0.98] transition-all text-left">
+            <div className="w-12 h-12 rounded-xl bg-white/15 backdrop-blur-sm border border-white/30 flex items-center justify-center">
+              <Save size={22}/>
+            </div>
+            <div>
+              <div className="font-black text-lg">Attendance</div>
+              <div className="text-[11px] font-bold text-blue-100 mt-0.5">Mark today's attendance</div>
+            </div>
+          </button>
+          <button onClick={() => setView('GRID')}
+            className="flex flex-col items-start gap-3 bg-white border border-slate-100 rounded-2xl p-5 shadow-sm hover:shadow-md hover:border-indigo-200 active:scale-[0.98] transition-all text-left">
+            <div className="w-12 h-12 rounded-xl bg-indigo-50 text-indigo-600 flex items-center justify-center">
+              <LayoutGrid size={22}/>
+            </div>
+            <div>
+              <div className="font-black text-lg text-slate-900">History</div>
+              <div className="text-[11px] font-bold text-slate-400 mt-0.5">Date range view · CSV / Excel export</div>
+            </div>
+          </button>
         </div>
+
+        {/* Pending review — only show when there's something to act on */}
+        {pendingCount > 0 && (
+          <button onClick={() => setView('RECORDS')}
+            className="w-full flex items-center gap-4 bg-amber-50 border border-amber-200 rounded-2xl p-4 active:scale-[0.99] hover:bg-amber-100 transition-colors text-left">
+            <div className="w-11 h-11 rounded-xl bg-amber-100 text-amber-600 flex items-center justify-center shrink-0">
+              <Users size={20} />
+            </div>
+            <div className="flex-1">
+              <div className="font-extrabold text-amber-900 text-sm">{pendingCount} pending {pendingCount === 1 ? 'review' : 'reviews'}</div>
+              <div className="text-[10px] font-bold text-amber-700 mt-0.5">Approve or reject teacher submissions</div>
+            </div>
+            <ChevronRight size={16} className="text-amber-400"/>
+          </button>
+        )}
 
         {/* Recent records */}
         {records.slice(0, 5).length > 0 && (

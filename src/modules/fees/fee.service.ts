@@ -24,7 +24,17 @@ export type FeeType = 'TUITION' | 'TRANSPORT' | 'EXAM' | 'OTHER';
 // transport installments after a vehicle change/un-assign — frozen at the paid
 // portion so historical receipts still tie out. UI must render it (it does NOT
 // indicate a future bill).
-export type FeeStatus = 'PAID' | 'PARTIAL' | 'UNPAID' | 'OVERDUE' | 'WAIVED' | 'WRITTEN_OFF' | 'CANCELLED';
+// Status values:
+//   • UPCOMING     — due_date in the future, nothing paid yet (slate UI)
+//   • DUE          — due_date today/past, balance > 0, no payment yet (rose)
+//   • PARTIAL      — paid > 0, balance > 0, due_date still in future (amber)
+//   • PARTIAL_DUE  — paid > 0, balance > 0, due_date passed (rose, action needed)
+//   • PAID         — fully cleared (paid + write-off ≥ amount)
+//   • WAIVED / WRITTEN_OFF / CANCELLED — terminal states set explicitly by ops
+//   • UNPAID / OVERDUE — legacy values from older rows; the JS layer always
+//     overrides them via computeEffectiveStatus() on read so the UI never
+//     shows stale categories.
+export type FeeStatus = 'PAID' | 'PARTIAL' | 'PARTIAL_DUE' | 'UPCOMING' | 'DUE' | 'UNPAID' | 'OVERDUE' | 'WAIVED' | 'WRITTEN_OFF' | 'CANCELLED';
 export type PayerType = 'PARENT' | 'GOVERNMENT';
 
 export interface PaymentRecord {
@@ -41,6 +51,14 @@ export interface PaymentRecord {
   installmentDetails: { month: string; feeType: FeeType; amount: number }[];
   advanceAmount: number;
   note?: string;
+  createdAt?: string;
+  // Reversal metadata. If `reversedAt` is set, this row was reversed by a later
+  // negative-amount entry whose id is `reversedByPaymentId`. If `reversesPaymentId`
+  // is set, THIS row IS the reversal of an earlier payment.
+  reversedAt?: string;
+  reversedBy?: string;
+  reversalReason?: string;
+  reversesPaymentId?: string;
 }
 
 export interface FeeInstallment {
@@ -107,7 +125,44 @@ interface InstallmentRow {
 
 const INST_FIELDS = 'id, student_id, academic_year_id, month, due_date, fee_type, amount, paid_amount, write_off_amount, write_off_reason, status, payer_type, related_id';
 
+/** Today's date in IST (Asia/Kolkata), YYYY-MM-DD. We never use the raw UTC
+ *  date here because school operations are IST: a parent opening the app at
+ *  5 AM IST on Apr 5 must see Apr 5 as today, not "2025-04-04" (UTC). */
+function todayIST(): string {
+  // 'en-CA' locale formats as YYYY-MM-DD natively, so no manual splitting.
+  return new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Kolkata' });
+}
+
+/** Compute the effective status the UI should show. Cron-free: derived every
+ *  read from amount, paid_amount, write_off_amount and due_date.
+ *
+ *  Decision order (precedence top → bottom):
+ *    1. Terminal DB states win (WAIVED / WRITTEN_OFF / CANCELLED)
+ *    2. Fully cleared → PAID
+ *    3. Partially paid + due_date passed → PARTIAL_DUE  (rose, action needed)
+ *    4. Partially paid + still future       → PARTIAL    (amber, on track)
+ *    5. Nothing paid + due_date passed      → DUE         (rose)
+ *    6. Otherwise                           → UPCOMING    (slate, info)
+ */
+function computeEffectiveStatus(
+  amount: number, paidAmount: number, writeOff: number,
+  dueDate: string, dbStatus: string,
+): FeeStatus {
+  if (dbStatus === 'WAIVED' || dbStatus === 'WRITTEN_OFF' || dbStatus === 'CANCELLED') {
+    return dbStatus;
+  }
+  const balance = Math.max(0, amount - paidAmount - writeOff);
+  if (balance <= 0) return 'PAID';
+  const today = todayIST();
+  const datePassed = dueDate <= today;
+  if (paidAmount > 0) return datePassed ? 'PARTIAL_DUE' : 'PARTIAL';
+  return datePassed ? 'DUE' : 'UPCOMING';
+}
+
 function rowToInstallment(r: InstallmentRow): FeeInstallment {
+  const amount    = Number(r.amount);
+  const paid      = Number(r.paid_amount);
+  const writeOff  = Number(r.write_off_amount);
   return {
     id: r.id,
     studentId: r.student_id,
@@ -115,11 +170,11 @@ function rowToInstallment(r: InstallmentRow): FeeInstallment {
     month: r.month,
     dueDate: r.due_date,
     feeType: (r.fee_type as FeeType) ?? 'OTHER',
-    amount: Number(r.amount),
-    paidAmount: Number(r.paid_amount),
-    writeOffAmount: Number(r.write_off_amount),
+    amount,
+    paidAmount: paid,
+    writeOffAmount: writeOff,
     writeOffReason: r.write_off_reason ?? '',
-    status: (r.status as FeeStatus) ?? 'UNPAID',
+    status: computeEffectiveStatus(amount, paid, writeOff, r.due_date, r.status),
     payerType: (r.payer_type as PayerType) ?? 'PARENT',
     relatedId: r.related_id ?? undefined,
   };
@@ -158,7 +213,7 @@ async function _loadInstallments(schoolId: string): Promise<void> {
 async function _loadPaymentHistory(schoolId: string): Promise<void> {
   const { data, error } = await supabase
     .from('payment_records')
-    .select('id, student_id, amount, method, date, receipt_no, advance_amount, note, students(name, admission_no)')
+    .select('id, student_id, amount, method, date, receipt_no, advance_amount, note, created_at, reverses_payment_id, reversed_at, reversed_by, reversal_reason, students(name, admission_no)')
     .eq('school_id', schoolId)
     .order('date', { ascending: false }).order('created_at', { ascending: false })
     .limit(500);
@@ -167,6 +222,11 @@ async function _loadPaymentHistory(schoolId: string): Promise<void> {
   type PRow = {
     id: string; student_id: string; amount: number; method: string;
     date: string; receipt_no: string; advance_amount: number; note: string | null;
+    created_at: string;
+    reverses_payment_id: string | null;
+    reversed_at: string | null;
+    reversed_by: string | null;
+    reversal_reason: string | null;
     students: { name: string; admission_no: string } | { name: string; admission_no: string }[] | null;
   };
   const payments = ((data ?? []) as unknown as PRow[]).map(p => ({
@@ -217,6 +277,11 @@ async function _loadPaymentHistory(schoolId: string): Promise<void> {
       })),
       advanceAmount: Number(p.advance_amount),
       note: p.note ?? undefined,
+      createdAt: p.created_at,
+      reversedAt: p.reversed_at ?? undefined,
+      reversedBy: p.reversed_by ?? undefined,
+      reversalReason: p.reversal_reason ?? undefined,
+      reversesPaymentId: p.reverses_payment_id ?? undefined,
     };
   });
 }
@@ -413,7 +478,7 @@ export const feeService = {
     });
     if (outstanding.length === 0) return [];
 
-    const yearIds = Array.from(new Set(outstanding.map(i => i.academicYearId).filter((s): s is string => !!s)));
+    const yearIds: string[] = Array.from(new Set(outstanding.map(i => i.academicYearId).filter((s): s is string => !!s)));
     const yearMetaMap = new Map<string, string>();
 
     yearIds.forEach(yearId => {
@@ -501,6 +566,20 @@ export const feeService = {
     await logAudit('fee_writeoff', 'fee_installment', installmentId, { amount: writeOff, reason });
     await this.refreshAll();
     return true;
+  },
+
+  /** Reverse a previously-recorded payment. All guards (Editor Mode flag,
+   *  same-day IST, daily cap, ownership) are enforced server-side. The
+   *  `editorMode` argument is sent only because the server demands it
+   *  explicitly — UI is the single source of truth for whether the
+   *  principal toggled it on. */
+  async reversePayment(paymentId: string, reason: string, editorMode: boolean): Promise<{ reversalId: string }> {
+    const result = await apiFees.reversePayment({ paymentId, reason, editorMode });
+    await logAudit('fee_payment_reversed', 'payment_record', paymentId, {
+      reason, reversalId: result.reversalId,
+    });
+    await this.refreshAll();
+    return result;
   },
 
   /**

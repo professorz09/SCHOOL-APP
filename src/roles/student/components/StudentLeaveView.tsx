@@ -62,6 +62,7 @@ export const StudentLeaveView: React.FC<Props> = ({ onBack, studentId }) => {
   const studentName = session?.name ?? 'Student';
 
   const [leaveApps, setLeaveApps] = useState<Approval[]>([]);
+  const [loading, setLoading]     = useState(true);
   const [showForm, setShowForm]   = useState(false);
   const [title, setTitle]         = useState('');
   const [fromDate, setFromDate]   = useState('');
@@ -69,24 +70,38 @@ export const StudentLeaveView: React.FC<Props> = ({ onBack, studentId }) => {
   const [reason, setReason]       = useState('');
   const [submitting, setSubmitting] = useState(false);
 
-  const refresh = () => {
-    principalService.getStudentLeaves(studentId)
-      .then(setLeaveApps)
-      .catch(e => showToast(e.message ?? 'Failed to load leaves', 'error'));
+  const refresh = async () => {
+    setLoading(true);
+    try {
+      const list = await principalService.getStudentLeaves(studentId);
+      setLeaveApps(list);
+    } catch (e) {
+      showToast(e instanceof Error ? e.message : 'Failed to load leaves', 'error');
+    } finally {
+      setLoading(false);
+    }
   };
 
-  useEffect(() => { refresh(); }, []);
+  useEffect(() => { void refresh(); /* eslint-disable-next-line react-hooks/exhaustive-deps */ }, [studentId]);
 
   const handleSubmit = async () => {
     if (!title.trim() || !fromDate || !toDate || !reason.trim()) return;
+    if (new Date(toDate) < new Date(fromDate)) {
+      showToast('"To" date cannot be before "From" date', 'error');
+      return;
+    }
     setSubmitting(true);
     try {
       await principalService.submitStudentLeave(studentId, studentName, title.trim(), fromDate, toDate, reason.trim());
-      refresh();
       setTitle(''); setFromDate(''); setToDate(''); setReason('');
       setShowForm(false);
       showToast('Leave application submitted');
-    } finally { setSubmitting(false); }
+      await refresh();
+    } catch (e) {
+      showToast(e instanceof Error ? e.message : 'Submit failed — try again', 'error');
+    } finally {
+      setSubmitting(false);
+    }
   };
 
   const pending  = leaveApps.filter(l => l.status === 'PENDING').length;
@@ -180,7 +195,12 @@ export const StudentLeaveView: React.FC<Props> = ({ onBack, studentId }) => {
         )}
 
         {/* Leave list */}
-        {leaveApps.length === 0 && !showForm ? (
+        {loading ? (
+          <div className="flex flex-col items-center py-16 text-slate-400">
+            <div className="w-8 h-8 border-2 border-slate-200 border-t-blue-600 rounded-full animate-spin mb-3" />
+            <p className="text-xs font-bold">Loading…</p>
+          </div>
+        ) : leaveApps.length === 0 && !showForm ? (
           <div className="flex flex-col items-center py-16 text-slate-400">
             <FileText size={32} className="mb-3 opacity-40"/>
             <p className="font-bold text-sm">No leave applications yet</p>

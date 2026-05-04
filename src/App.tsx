@@ -132,7 +132,7 @@ export default function App() {
       // For STUDENT, selectedStudentId is fixed (own row); for PARENT it
       // changes when they pick a different child. Keying on it forces a
       // clean remount of every nested view so locally-cached student data
-      // (FeesView, HomeworkView, etc.) reloads for the newly selected child.
+      // (FeesView, NoticesView, etc.) reloads for the newly selected child.
       case 'STUDENT':     return <StudentLayout key={selectedStudentId ?? 'none'} />;
       case 'DRIVER':      return <DriverLayout />;
       default:            return null;
@@ -159,42 +159,19 @@ export default function App() {
   };
 
   // ── Desktop layout ────────────────────────────────────────────────────────
+  // Sidebar shows brand + notification + user. Content fills the rest.
+  // No duplicate top bar; sub-views own their internal header so we don't
+  // pad the main twice.
   if (isDesktop) {
-    const firstName = session.name?.split(' ')[0] ?? 'User';
     return (
-      <div className="flex h-full bg-slate-100 overflow-hidden">
+      <div className="flex h-full bg-slate-50 overflow-hidden">
         <aside className="w-64 xl:w-72 bg-white border-r border-slate-100 shadow-sm shrink-0">
           <SidebarNav role={role} currentTab={tab} setTab={setTab} onLogout={() => logout()} />
         </aside>
 
-        <div className="flex-1 flex flex-col overflow-hidden">
-          <div className="bg-white border-b border-slate-100 px-8 py-4 flex items-center justify-between shrink-0">
-            <div>
-              <p className="text-[10px] font-black uppercase tracking-widest text-slate-400">EduGrow School</p>
-              <h1 className="text-xl font-black text-slate-900 leading-tight">Hi, {firstName}</h1>
-            </div>
-            <div className="flex items-center gap-3">
-              <button className="relative p-2 bg-slate-100 rounded-full text-slate-600 hover:bg-slate-200 transition-colors">
-                <Bell size={20} />
-                <span className="absolute -top-1 -right-1 w-4 h-4 bg-red-500 text-white text-[10px] font-bold flex items-center justify-center rounded-full border-2 border-white">3</span>
-              </button>
-              <div className="flex items-center gap-2 bg-slate-100 px-3 py-2 rounded-xl">
-                <div className="w-6 h-6 rounded-lg bg-indigo-600 flex items-center justify-center text-white text-[10px] font-black">
-                  {firstName.charAt(0).toUpperCase()}
-                </div>
-                <span className="text-sm font-black text-slate-700">{session.name}</span>
-              </div>
-            </div>
-          </div>
-
-          <div className="flex-1 relative overflow-hidden">
-            <main className="absolute inset-0 overflow-y-auto px-8 py-6 hide-scrollbar">
-              <div className="max-w-5xl mx-auto">
-                {renderTabContent()}
-              </div>
-            </main>
-          </div>
-        </div>
+        <main className="flex-1 overflow-y-auto hide-scrollbar">
+          {renderTabContent()}
+        </main>
       </div>
     );
   }
@@ -203,7 +180,10 @@ export default function App() {
   return (
     <div className="h-dvh bg-slate-100 flex flex-col overflow-hidden">
       <div className="w-full h-full bg-slate-50 flex flex-col overflow-hidden">
-        {tab === 'HOME' && !isSubView && <Header role={role} />}
+        {/* Roles whose dashboard renders its own greeting block (with extra
+            context like school name or active-year chip) should suppress the
+            generic Header so the two don't stack. */}
+        {tab === 'HOME' && !isSubView && role !== 'STUDENT' && role !== 'PRINCIPAL' && <Header role={role} />}
 
         <main className="flex-1 overflow-y-auto pb-32 hide-scrollbar">
           {renderTabContent()}

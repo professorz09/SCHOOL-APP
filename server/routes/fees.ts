@@ -214,3 +214,176 @@ feesRouter.post('/writeoff', requireAuth, requireRole('PRINCIPAL'), async (req, 
     ok(res, { installmentId: body.installmentId, writeOffAmount: newWriteOff, status: newStatus });
   } catch (err) { fail(res, err); }
 });
+
+// ─── Payment Reversal ─────────────────────────────────────────────────────
+//
+// POST /api/fees/payment/reverse — controlled "undo" for a wrongly-entered
+// payment. Creates a NEW payment_records row with negative amount, links
+// back to the original via reverses_payment_id, rolls back paid_amount on
+// every linked installment, and stamps reversed_at on the original.
+//
+// Server-enforced guards (UI mirrors them but never trusts the UI):
+//   1. PRINCIPAL only
+//   2. editorMode=true must be passed (matches Editor Mode store on client)
+//   3. Same calendar day in IST — accountant-friendly than 24h sliding
+//   4. Original not already reversed
+//   5. Original not itself a reversal (no double-undo chain)
+//   6. Reason required (≥ 3 chars after trim)
+//   7. Daily cap: 3 reversals per principal per IST day
+const istDate = (d?: string | Date) =>
+  new Date(d ?? Date.now()).toLocaleDateString('en-CA', { timeZone: 'Asia/Kolkata' });
+
+feesRouter.post('/payment/reverse', requireAuth, requireRole('PRINCIPAL'), async (req, res) => {
+  try {
+    const body = requireBody<{ paymentId: string; reason: string; editorMode: boolean }>(
+      req, ['paymentId', 'reason', 'editorMode'],
+    );
+
+    if (!body.editorMode) {
+      throw new ApiError(403, 'Editor Mode must be ON to reverse a payment');
+    }
+    const reason = body.reason.trim();
+    if (reason.length < 3) {
+      throw new ApiError(400, 'Reason is required (min 3 characters)');
+    }
+
+    // Load original payment with its links — single round trip.
+    const { data: origData } = await adminDb
+      .from('payment_records')
+      .select('id, school_id, student_id, amount, method, date, receipt_no, advance_amount, note, created_at, reversed_at, reverses_payment_id, payment_installment_links(installment_id, amount_applied)')
+      .eq('id', body.paymentId).maybeSingle();
+    const orig = origData as {
+      id: string; school_id: string; student_id: string; amount: number;
+      method: string; date: string; receipt_no: string; advance_amount: number;
+      note: string | null; created_at: string;
+      reversed_at: string | null; reverses_payment_id: string | null;
+      payment_installment_links: Array<{ installment_id: string; amount_applied: number }>;
+    } | null;
+
+    if (!orig) throw new ApiError(404, 'Payment not found');
+    if (orig.school_id !== req.user.school_id) throw new ApiError(403, 'Cross-school access denied');
+    if (orig.reversed_at) throw new ApiError(409, 'This payment has already been reversed');
+    if (orig.reverses_payment_id) throw new ApiError(409, 'This row IS a reversal — cannot reverse a reversal');
+    if (Number(orig.amount) <= 0) throw new ApiError(400, 'Cannot reverse a non-positive payment');
+
+    // Same calendar day (IST).
+    if (istDate(orig.created_at) !== istDate()) {
+      throw new ApiError(403, 'Same-day only: payment can be reversed on the day it was recorded (IST)');
+    }
+
+    // Daily cap — 3 reversals per principal per IST day. Count via audit_logs.
+    const startOfTodayIST = `${istDate()}T00:00:00+05:30`;
+    const { count: reversalsToday } = await adminDb
+      .from('audit_logs').select('id', { count: 'exact', head: true })
+      .eq('user_id', req.user.id)
+      .eq('action', 'fee_payment_reversed')
+      .gte('created_at', startOfTodayIST);
+    if ((reversalsToday ?? 0) >= 3) {
+      throw new ApiError(429, 'Daily limit reached: max 3 reversals per principal per day');
+    }
+
+    // ─── Atomic rollback ────────────────────────────────────────────────
+    //  (a) insert reversal row with negative amount
+    //  (b) per-link: subtract amount_applied from each installment.paid_amount
+    //  (c) link the reversal row to the same installments (negative amounts)
+    //  (d) stamp reversed_at on the original
+    // We don't have a single transaction primitive across these supabase-js
+    // calls, so we enforce the constraint AT_MOST_ONCE via the reversed_at
+    // check above + the unique reverses_payment_id (no two reversal rows
+    // can point to the same original because the next attempt's load will
+    // see reversed_at and reject).
+    const reversalAmount = -Math.abs(Number(orig.amount));
+    const reversalDate = istDate();
+
+    const { data: revRow, error: revErr } = await adminDb
+      .from('payment_records').insert({
+        school_id:           orig.school_id,
+        student_id:          orig.student_id,
+        amount:              reversalAmount,
+        method:              orig.method,
+        date:                reversalDate,
+        receipt_no:          `REV-${orig.receipt_no}`,
+        advance_amount:      -Math.abs(Number(orig.advance_amount ?? 0)),
+        note:                `Reversal of ${orig.receipt_no}: ${reason}`,
+        reverses_payment_id: orig.id,
+        reversed_by:         req.user.id,
+        reversal_reason:     reason,
+      })
+      .select('id').single();
+    if (revErr || !revRow) throw new ApiError(500, `Reversal insert failed: ${revErr?.message}`);
+    const reversalId = (revRow as { id: string }).id;
+
+    // Roll back installment paid_amount and re-link with negative amounts.
+    for (const link of orig.payment_installment_links) {
+      const applied = Number(link.amount_applied);
+      // Read current installment row to avoid drift.
+      const { data: instRow } = await adminDb
+        .from('fee_installments')
+        .select('id, amount, paid_amount, write_off_amount')
+        .eq('id', link.installment_id).single();
+      const inst = instRow as { id: string; amount: number; paid_amount: number; write_off_amount: number } | null;
+      if (!inst) continue;
+      const newPaid = Math.max(0, Number(inst.paid_amount) - applied);
+      const totalAmount = Number(inst.amount);
+      const writeOff   = Number(inst.write_off_amount);
+      // Status is computed-on-read on the client, but DB still has a status
+      // column some legacy paths use — keep it sensible.
+      const newStatus =
+        newPaid >= totalAmount - writeOff ? 'PAID' :
+        newPaid > 0                       ? 'PARTIAL' :
+                                            'UNPAID';
+      await adminDb.from('fee_installments').update({
+        paid_amount: newPaid,
+        status:      newStatus,
+        updated_at:  new Date().toISOString(),
+      }).eq('id', inst.id);
+
+      await adminDb.from('payment_installment_links').insert({
+        payment_id:     reversalId,
+        installment_id: inst.id,
+        amount_applied: -applied,
+      });
+    }
+
+    // Refund any advance credit the original generated.
+    if (Number(orig.advance_amount ?? 0) > 0) {
+      const { data: advRow } = await adminDb
+        .from('advance_balances').select('amount')
+        .eq('student_id', orig.student_id).maybeSingle();
+      const cur = (advRow as { amount: number } | null)?.amount ?? 0;
+      const next = Math.max(0, Number(cur) - Number(orig.advance_amount));
+      await adminDb.from('advance_balances').upsert({
+        student_id: orig.student_id, amount: next,
+      }, { onConflict: 'student_id' });
+    }
+
+    // Stamp the original with reversal metadata so the next attempt rejects.
+    await adminDb.from('payment_records').update({
+      reversed_at:     new Date().toISOString(),
+      reversed_by:     req.user.id,
+      reversal_reason: reason,
+    }).eq('id', orig.id);
+
+    // Audit
+    const ip = (req.headers['x-forwarded-for'] as string | undefined)?.split(',')[0].trim()
+      ?? req.socket.remoteAddress
+      ?? null;
+    await adminDb.from('audit_logs').insert({
+      user_id:     req.user.id,
+      school_id:   req.user.school_id,
+      action:      'fee_payment_reversed',
+      entity_type: 'payment_record',
+      entity_id:   orig.id,
+      ip_address:  ip,
+      details: {
+        receipt_no: orig.receipt_no,
+        amount:     orig.amount,
+        student_id: orig.student_id,
+        reason,
+        reversal_id: reversalId,
+      },
+    });
+
+    ok(res, { reversalId, originalId: orig.id });
+  } catch (err) { fail(res, err); }
+});

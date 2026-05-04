@@ -52,7 +52,26 @@ const PRINT_CSS = `
 
   .adm-footer { margin-top: 16px; padding-top: 8px; border-top: 1px solid #e0e0e0;
     font-size: 9px; color: #aaa; text-align: center; }
+
+  /* Documents checklist — printed at end of form, parent ticks what they bring */
+  .adm-doc-list { display: grid; grid-template-columns: 1fr 1fr; gap: 4px 18px; margin-top: 4px; }
+  .adm-doc-item { display: flex; align-items: center; gap: 7px; font-size: 11px; font-weight: 600; color: #333;
+    padding: 3px 0; }
+  .adm-doc-box { width: 12px; height: 12px; border: 1.5px solid #555; flex-shrink: 0; display: inline-block; }
 `;
+
+const REQUIRED_DOCUMENTS = [
+  'Birth Certificate (Original + Photocopy)',
+  'Aadhaar Card (Student)',
+  'Aadhaar Card (Parent / Guardian)',
+  'Previous School TC / Leaving Certificate',
+  'Previous School Marksheet / Report Card',
+  'Caste Certificate (if applicable)',
+  'Income Certificate (if applicable)',
+  'Passport-size Photographs (4 copies)',
+  'Address Proof (Ration Card / Utility Bill)',
+  'Medical / Vaccination Record',
+];
 
 export const AdmissionFormPrint: React.FC<Props> = ({ student, schoolInfo, onClose }) => {
   const printRef = useRef<HTMLDivElement>(null);
@@ -367,6 +386,17 @@ export const AdmissionFormPrint: React.FC<Props> = ({ student, schoolInfo, onClo
                   <span className="adm-lbl">State / Pin Code</span>
                   <span className="adm-val">&nbsp;</span>
                 </div>
+              </div>
+
+              {/* ── DOCUMENTS CHECKLIST ── */}
+              <div className="adm-section">Documents Submitted (Office Use)</div>
+              <div className="adm-doc-list">
+                {REQUIRED_DOCUMENTS.map(doc => (
+                  <div key={doc} className="adm-doc-item">
+                    <span className="adm-doc-box"/>
+                    <span>{doc}</span>
+                  </div>
+                ))}
               </div>
 
               {/* Signature Row */}

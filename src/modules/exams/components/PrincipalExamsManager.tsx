@@ -2,10 +2,14 @@ import React, { useEffect, useState } from 'react';
 import {
   ArrowLeft, BookOpen, CheckCircle, Clock, ChevronRight,
   Users, Filter, Trophy, AlertCircle, Lock, Unlock, FileText,
+  Pencil, Save, ShieldAlert,
 } from 'lucide-react';
 import { examService } from '@/modules/exams/exam.service';
 import { useAcademicYear } from '@/shared/context/AcademicYearContext';
 import { useUIStore } from '@/store/uiStore';
+import { useEditorModeStore } from '@/store/editorModeStore';
+import { apiExams } from '@/lib/apiClient';
+import { logAudit } from '@/lib/audit';
 import { Marksheet } from '@/modules/exams/components/Marksheet';
 
 interface Props { onBack: () => void; }
@@ -50,6 +54,11 @@ export const PrincipalExamsManager: React.FC<Props> = ({ onBack }) => {
   const [passMarksModal, setPassMarksModal] = useState<any | null>(null);
   const [passMarksValue, setPassMarksValue] = useState('');
   const [passMarksConfig, setPassMarksConfig] = useState<Record<string, number>>({});
+  // Editor-mode-gated inline marks editing for already-locked results
+  const editorModeActive = useEditorModeStore(s => s.isActive());
+  const [editing, setEditing]       = useState(false);
+  const [editMarks, setEditMarks]   = useState<Record<string, string>>({}); // resultId -> marks input
+  const [savingEdits, setSavingEdits] = useState(false);
 
   useEffect(() => {
     if (!activeYear) return;
@@ -83,6 +92,51 @@ export const PrincipalExamsManager: React.FC<Props> = ({ onBack }) => {
       showToast(e instanceof Error ? e.message : 'Failed to lock results', 'error');
     } finally {
       setLockingExam(null);
+    }
+  };
+
+  const beginEdit = () => {
+    // Seed input values from current results so inputs aren't empty
+    const seed: Record<string, string> = {};
+    for (const r of results) seed[r.id ?? `${r.test_id}:${r.student_id}`] = String(r.obtained_marks ?? '');
+    setEditMarks(seed);
+    setEditing(true);
+  };
+
+  const cancelEdit = () => { setEditing(false); setEditMarks({}); };
+
+  const saveEdits = async () => {
+    if (!picked || !activeYear) return;
+    const maxMarks = picked.max_marks ?? 100;
+    const payload = results.map(r => {
+      const key = r.id ?? `${r.test_id}:${r.student_id}`;
+      const raw = editMarks[key] ?? String(r.obtained_marks ?? '');
+      return { studentId: r.student_id, marks: Number(raw), remarks: r.remarks ?? null };
+    });
+    if (payload.some(p => Number.isNaN(p.marks) || p.marks < 0 || p.marks > maxMarks)) {
+      showToast(`Marks must be between 0 and ${maxMarks}`, 'error');
+      return;
+    }
+    setSavingEdits(true);
+    try {
+      await apiExams.editResults(picked.id, {
+        academicYearId: activeYear.id,
+        editorMode: editorModeActive,
+        results: payload,
+      });
+      await logAudit('exam_results_edited', 'exam_results', picked.id, {
+        count: payload.length, editorMode: editorModeActive,
+      });
+      // Refresh results
+      const fresh = await examService.getResults(picked.id);
+      setResults((fresh as any[]).sort((a, b) => b.obtained_marks - a.obtained_marks));
+      setEditing(false);
+      setEditMarks({});
+      showToast('Results updated');
+    } catch (e) {
+      showToast(e instanceof Error ? e.message : 'Failed to save edits', 'error');
+    } finally {
+      setSavingEdits(false);
     }
   };
 
@@ -173,6 +227,29 @@ export const PrincipalExamsManager: React.FC<Props> = ({ onBack }) => {
             </div>
           )}
 
+          {/* Editor-mode banner for LOCKED tests */}
+          {!loadingRes && results.length > 0 && picked.result_status === 'LOCKED' && (
+            <div className={`rounded-2xl p-3 flex items-start gap-2 ${editorModeActive ? 'bg-amber-50 border border-amber-200' : 'bg-slate-50 border border-slate-200'}`}>
+              <ShieldAlert size={16} className={`shrink-0 mt-0.5 ${editorModeActive ? 'text-amber-600' : 'text-slate-500'}`}/>
+              <div className="flex-1 min-w-0">
+                <div className={`text-xs font-black ${editorModeActive ? 'text-amber-800' : 'text-slate-700'}`}>
+                  {editorModeActive ? 'Editor Mode is ON — published results editable' : 'Results are published & locked'}
+                </div>
+                <div className={`text-[10px] font-bold mt-0.5 ${editorModeActive ? 'text-amber-700' : 'text-slate-500'}`}>
+                  {editorModeActive
+                    ? 'Changes overwrite published marks. Every save is audit-logged.'
+                    : 'Enable Editor Mode in Settings → Editor Mode to correct marks.'}
+                </div>
+              </div>
+              {editorModeActive && !editing && (
+                <button onClick={beginEdit}
+                  className="shrink-0 flex items-center gap-1 bg-amber-600 text-white text-[10px] font-black uppercase tracking-widest px-3 py-1.5 rounded-xl active:scale-95 transition-transform">
+                  <Pencil size={11}/> Edit
+                </button>
+              )}
+            </div>
+          )}
+
           {/* Results table */}
           {!loadingRes && results.length > 0 && (
             <div className="bg-white rounded-2xl border border-slate-100 shadow-sm overflow-hidden">
@@ -180,7 +257,14 @@ export const PrincipalExamsManager: React.FC<Props> = ({ onBack }) => {
                 <p className="text-[9px] font-black uppercase tracking-widest text-slate-400">
                   Result Board — {results.length} students
                 </p>
-                <p className="text-[9px] font-black text-slate-500">Rank ↑ Marks</p>
+                {editing
+                  ? <div className="flex gap-2">
+                      <button onClick={cancelEdit} className="text-[9px] font-black text-slate-500 uppercase">Cancel</button>
+                      <button onClick={saveEdits} disabled={savingEdits} className="flex items-center gap-1 text-[9px] font-black text-emerald-600 uppercase disabled:opacity-50">
+                        <Save size={10}/> {savingEdits ? 'Saving…' : 'Save'}
+                      </button>
+                    </div>
+                  : <p className="text-[9px] font-black text-slate-500">Rank ↑ Marks</p>}
               </div>
               {results.map((r, i) => {
                 const pct = maxMarks > 0 ? Math.round((r.obtained_marks / maxMarks) * 100) : 0;
@@ -200,10 +284,22 @@ export const PrincipalExamsManager: React.FC<Props> = ({ onBack }) => {
                       </p>
                     </div>
                     <div className="text-right shrink-0">
-                      <p className="text-sm font-black text-slate-900">{r.obtained_marks}<span className="text-[10px] text-slate-400">/{maxMarks}</span></p>
-                      <p className={`text-[10px] font-black ${isPassed ? 'text-emerald-600' : 'text-rose-600'}`}>
-                        {grade} · {pct}%
-                      </p>
+                      {editing ? (
+                        <div className="flex items-center gap-1">
+                          <input type="number" min={0} max={maxMarks}
+                            value={editMarks[r.id ?? `${r.test_id}:${r.student_id}`] ?? ''}
+                            onChange={e => setEditMarks(prev => ({ ...prev, [r.id ?? `${r.test_id}:${r.student_id}`]: e.target.value }))}
+                            className="w-16 border-2 border-amber-300 bg-amber-50/40 rounded-lg px-2 py-1 text-center font-black text-sm outline-none focus:border-amber-500"/>
+                          <span className="text-[10px] font-bold text-slate-400">/{maxMarks}</span>
+                        </div>
+                      ) : (
+                        <>
+                          <p className="text-sm font-black text-slate-900">{r.obtained_marks}<span className="text-[10px] text-slate-400">/{maxMarks}</span></p>
+                          <p className={`text-[10px] font-black ${isPassed ? 'text-emerald-600' : 'text-rose-600'}`}>
+                            {grade} · {pct}%
+                          </p>
+                        </>
+                      )}
                     </div>
                   </div>
                 );

@@ -109,11 +109,17 @@ export const SidebarNav: React.FC<SidebarNavProps> = ({ role, currentTab, setTab
     <div className="flex flex-col h-full select-none overflow-hidden">
 
       {/* ── Brand ── */}
-      <div className="px-6 pt-8 pb-6 border-b border-slate-100 shrink-0">
-        <div className="text-2xl font-black text-blue-600 tracking-tight leading-none">EduGrow</div>
-        <div className="text-[10px] font-black uppercase tracking-[0.2em] text-slate-400 mt-2">
-          {ROLE_LABEL[role]}
+      <div className="px-6 pt-8 pb-6 border-b border-slate-100 shrink-0 flex items-start justify-between gap-2">
+        <div>
+          <div className="text-2xl font-black text-blue-600 tracking-tight leading-none">EduGrow</div>
+          <div className="text-[10px] font-black uppercase tracking-[0.2em] text-slate-400 mt-2">
+            {ROLE_LABEL[role]}
+          </div>
         </div>
+        <button className="relative p-2 -mr-1 rounded-full text-slate-500 hover:bg-slate-100 transition-colors shrink-0" title="Notifications">
+          <Bell size={18} />
+          <span className="absolute top-0.5 right-0.5 w-2.5 h-2.5 bg-red-500 rounded-full border-2 border-white"/>
+        </button>
       </div>
 
       {/* ── Nav items ── */}

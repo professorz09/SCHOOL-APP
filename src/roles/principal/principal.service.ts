@@ -12,6 +12,10 @@ import type {
   LibraryBook, BookIssue, LabEquipment, Vehicle, AcademicYearConfig,
   ClassPermission,
 } from '@/roles/principal/principal.types';
+import type {
+  FeeStructureRecord, FeeStructureType, BillingCycle,
+  FeeUploadStatus, FeePaymentUploadRecord,
+} from '@/modules/fees/fees.types';
 
 export type StaffAttendanceStatus = 'PRESENT' | 'ABSENT' | 'HALF_DAY' | 'LEAVE' | 'LATE' | 'HOLIDAY';
 
@@ -309,15 +313,9 @@ export const principalService = {
   },
 
   async getStudentLeaves(studentId: string): Promise<Approval[]> {
-    const schoolId = getSchoolId();
-    const { data, error } = await supabase
-      .from('approvals').select(APPROVAL_FIELDS)
-      .eq('school_id', schoolId)
-      .eq('request_type', 'LEAVE')
-      .eq('entity_type', 'student')
-      .eq('entity_id', studentId)
-      .order('created_at', { ascending: false });
-    if (error) throw new Error(error.message);
+    // Routed through the server so PARENT/STUDENT roles (RLS-blocked from the
+    // approvals table) can still see their own child's leave history.
+    const data = await apiPrincipal.leaveList(studentId);
     return ((data ?? []) as ApprovalRow[]).map(rowToApproval);
   },
 

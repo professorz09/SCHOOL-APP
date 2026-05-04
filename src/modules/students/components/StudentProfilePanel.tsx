@@ -7,7 +7,7 @@ import {
   CreditCard, TrendingUp, Home as HomeIcon,
   UserCheck, AlertTriangle, Trash2,
   Lock, Edit2, History, Download,
-  UserPlus, BookmarkCheck, Banknote, Truck, TruckIcon, FileX, RotateCcw, ArrowUpCircle,
+  UserPlus, BookmarkCheck, Banknote, Truck, TruckIcon, FileX, RotateCcw, ArrowUpCircle, Eye,
 } from 'lucide-react';
 import { studentService } from '@/modules/students/student.service';
 import { apiStudents, apiFees } from '@/lib/apiClient';
@@ -23,6 +23,7 @@ import { storageService } from '@/shared/utils/storage.service';
 import { StudentClassAssignmentModal } from '@/modules/students/components/StudentClassAssignmentModal';
 import { useAcademicYear } from '@/shared/context/AcademicYearContext';
 import { useEditorModeStore } from '@/store/editorModeStore';
+import { logAudit } from '@/lib/audit';
 import { feeService, FeeInstallment } from '@/modules/fees/fee.service';
 import type { FeeStructureRecord } from '@/modules/fees/fees.types';
 import { StudentAttendanceTab } from '@/modules/attendance/components/StudentAttendanceTab';
@@ -65,7 +66,7 @@ export const StudentProfilePanel: React.FC<Props> = ({ student, onBack, onStuden
   useEffect(() => { setCurrentStudent(student); }, [student]);
 
   const [activeProfileTab, setActiveProfileTab] = useState<
-    'INFO' | 'ALLOTMENT' | 'FAMILY' | 'RESULTS' | 'FEES' | 'ATTENDANCE' | 'CLASS_HISTORY' | 'DOCS'
+    'INFO' | 'ALLOTMENT' | 'FAMILY' | 'RESULTS' | 'FEES' | 'ATTENDANCE' | 'CLASS_HISTORY' | 'TRANSPORT' | 'DOCS'
   >('INFO');
 
   // Profile data
@@ -162,23 +163,21 @@ export const StudentProfilePanel: React.FC<Props> = ({ student, onBack, onStuden
     if (tab === 'DOCS') {
       setDocsLoading(true);
       try {
-        const [docsRes, histRes] = await Promise.allSettled([
-          studentService.listDocuments(s.id),
-          transportService.getTransportHistory(s.id),
-        ]);
-        if (docsRes.status === 'fulfilled') {
-          const docs = docsRes.value;
-          setProfileDocsLive(docs);
-          setProfileDocs(prev => prev.map(d => ({ ...d, uploaded: docs.some(x => x.type === d.type) })));
-        }
-        if (histRes.status === 'fulfilled') {
-          setStudentTransportHistory(histRes.value);
-          setTransportHistoryError(null);
-        } else {
-          setTransportHistoryError(histRes.reason instanceof Error ? histRes.reason.message : 'Could not load transport history');
-        }
+        const docs = await studentService.listDocuments(s.id);
+        setProfileDocsLive(docs);
+        setProfileDocs(prev => prev.map(d => ({ ...d, uploaded: docs.some(x => x.type === d.type) })));
       } finally {
         setDocsLoading(false);
+      }
+    }
+
+    if (tab === 'TRANSPORT') {
+      try {
+        const hist = await transportService.getTransportHistory(s.id);
+        setStudentTransportHistory(hist);
+        setTransportHistoryError(null);
+      } catch (e) {
+        setTransportHistoryError(e instanceof Error ? e.message : 'Could not load transport history');
       }
     }
 
@@ -265,12 +264,28 @@ export const StudentProfilePanel: React.FC<Props> = ({ student, onBack, onStuden
   };
 
   // ── Document upload ───────────────────────────────────────────────────────
+  // Hard limit 1.5 MB per document — schools handle large class rosters and
+  // 5 docs per student × thousands of students gets expensive fast. Tight
+  // limits also keep the app snappy on slow rural connections.
+  const MAX_DOC_BYTES = 1.5 * 1024 * 1024;
   const handleProfileDocUpload = async (
     e: React.ChangeEvent<HTMLInputElement>,
     docType: DocumentUpload['type'],
+    isReplace = false,
   ) => {
     const file = e.target.files?.[0];
     if (!file) return;
+    // Replace requires Editor Mode. Upload (first time) is always allowed.
+    if (isReplace && !editorModeActive) {
+      showToast('Replace requires Editor Mode (Settings → Security)', 'error');
+      e.target.value = '';
+      return;
+    }
+    if (file.size > MAX_DOC_BYTES) {
+      showToast(`File too large — max 1.5 MB (${(file.size / 1024 / 1024).toFixed(1)} MB)`, 'error');
+      e.target.value = '';
+      return;
+    }
     setProfileDocUploading(docType);
     try {
       const { path } = await storageService.uploadStudentDocument(currentStudent.id, docType, file);
@@ -280,7 +295,9 @@ export const StudentProfilePanel: React.FC<Props> = ({ student, onBack, onStuden
         ...prev.filter(d => d.id !== newDoc.id && !(d.type === docType && d.storagePath === newDoc.storagePath)),
       ]);
       setProfileDocs(prev => prev.map(d => d.type === docType ? { ...d, uploaded: true } : d));
-      showToast(`${file.name} uploaded`);
+      await logAudit(isReplace ? 'student_document_replaced' : 'student_document_uploaded',
+        'student_document', newDoc.id, { studentId: currentStudent.id, docType, size: file.size });
+      showToast(`${file.name} ${isReplace ? 'replaced' : 'uploaded'}`);
     } catch (err) {
       showToast(err instanceof Error ? err.message : 'Upload failed', 'error');
     } finally {
@@ -315,7 +332,11 @@ export const StudentProfilePanel: React.FC<Props> = ({ student, onBack, onStuden
   };
 
   const handleProfileDocRemove = async (docId: string) => {
-    if (!confirm('Remove this document?')) return;
+    if (!editorModeActive) {
+      showToast('Delete requires Editor Mode (Settings → Security)', 'error');
+      return;
+    }
+    if (!confirm('Permanently remove this document? This action is logged.')) return;
     try {
       const removed = profileDocsLive.find(d => d.id === docId);
       await studentService.removeDocument(docId);
@@ -326,6 +347,9 @@ export const StudentProfilePanel: React.FC<Props> = ({ student, onBack, onStuden
           d.type === removed.type ? { ...d, uploaded: false } : d,
         ));
       }
+      await logAudit('student_document_deleted', 'student_document', docId, {
+        studentId: currentStudent.id, docType: removed?.type ?? null,
+      });
       showToast('Document removed');
     } catch (err) {
       showToast(err instanceof Error ? err.message : 'Remove failed', 'error');
@@ -362,7 +386,7 @@ export const StudentProfilePanel: React.FC<Props> = ({ student, onBack, onStuden
         newMonthlyAmount: monthly,
         reason: finalReason,
       });
-      await loadStudentData(currentStudent);
+      await loadCore(currentStudent);
       setChangeModalOpen(false);
       showToast('Transport updated');
     } catch (e) {
@@ -381,7 +405,7 @@ export const StudentProfilePanel: React.FC<Props> = ({ student, onBack, onStuden
     setCancelTransportBusy(true);
     try {
       await transportService.removeStudentAssignment(currentStudent.id, cancelTransportReason.trim());
-      await loadStudentData(currentStudent);
+      await loadCore(currentStudent);
       setCancelTransportOpen(false);
       showToast('Transport cancelled');
     } catch (e) {
@@ -447,6 +471,7 @@ export const StudentProfilePanel: React.FC<Props> = ({ student, onBack, onStuden
     { key: 'FEES' as const,          label: 'Fees' },
     { key: 'ATTENDANCE' as const,    label: 'Attendance' },
     { key: 'CLASS_HISTORY' as const, label: 'History' },
+    { key: 'TRANSPORT' as const,     label: 'Transport' },
     { key: 'DOCS' as const,          label: 'Docs' },
   ];
 
@@ -1194,16 +1219,10 @@ export const StudentProfilePanel: React.FC<Props> = ({ student, onBack, onStuden
             );
           })()}
 
-          {/* ── DOCS TAB ─────────────────────────────── */}
-          {activeProfileTab === 'DOCS' && (
+          {/* ── TRANSPORT TAB ─────────────────────────── */}
+          {activeProfileTab === 'TRANSPORT' && (
             <>
-              {docsLoading && (
-                <div className="flex flex-col items-center py-10 text-slate-400">
-                  <div className="w-6 h-6 border-4 border-slate-200 border-t-indigo-500 rounded-full animate-spin" />
-                  <p className="font-bold text-xs mt-3">Loading documents…</p>
-                </div>
-              )}
-              {!docsLoading && <><div className="bg-white rounded-2xl border border-slate-100 shadow-sm p-4">
+              <div className="bg-white rounded-2xl border border-slate-100 shadow-sm p-4">
                 <div className="flex items-center justify-between mb-2">
                   <SectionTitle icon={Bus} title="Transport Assignment" />
                   <button onClick={openChangeTransportModal}
@@ -1291,7 +1310,19 @@ export const StudentProfilePanel: React.FC<Props> = ({ student, onBack, onStuden
                   </div>
                 )}
               </div>
+            </>
+          )}
 
+          {/* ── DOCS TAB ─────────────────────────────── */}
+          {activeProfileTab === 'DOCS' && (
+            <>
+              {docsLoading && (
+                <div className="flex flex-col items-center py-10 text-slate-400">
+                  <div className="w-6 h-6 border-4 border-slate-200 border-t-indigo-500 rounded-full animate-spin" />
+                  <p className="font-bold text-xs mt-3">Loading documents…</p>
+                </div>
+              )}
+              {!docsLoading && (<>
               <div className="bg-white rounded-2xl border border-slate-100 shadow-sm p-4">
                 <SectionTitle icon={FileText} title="Submitted Documents" />
                 {profileDocsLive.length > 0 ? (
@@ -1309,17 +1340,21 @@ export const StudentProfilePanel: React.FC<Props> = ({ student, onBack, onStuden
                           </span>
                         </div>
                         <button onClick={() => openProfileDoc(doc)}
-                          className="text-[9px] font-black text-emerald-700 bg-emerald-100 hover:bg-emerald-200 px-2 py-1 rounded-full shrink-0">
-                          VIEW
+                          className="flex items-center gap-1 text-[9px] font-black text-emerald-700 bg-emerald-100 hover:bg-emerald-200 px-2 py-1 rounded-full shrink-0">
+                          <Eye size={10}/> VIEW
                         </button>
                         <button onClick={() => downloadProfileDoc(doc)} title="Download"
                           className="flex items-center gap-0.5 text-[9px] font-black text-indigo-700 bg-indigo-100 hover:bg-indigo-200 px-2 py-1 rounded-full shrink-0">
                           <Download size={10} /> DL
                         </button>
-                        <button onClick={() => handleProfileDocRemove(doc.id)}
-                          className="p-1 text-rose-500 hover:bg-rose-50 rounded shrink-0" title="Remove">
-                          <Trash2 size={13} />
-                        </button>
+                        {/* Delete only available in Editor Mode (server-side
+                            audit log + same gate as Replace). */}
+                        {editorModeActive && (
+                          <button onClick={() => handleProfileDocRemove(doc.id)}
+                            className="p-1 text-rose-500 hover:bg-rose-50 rounded shrink-0" title="Remove (Editor Mode)">
+                            <Trash2 size={13} />
+                          </button>
+                        )}
                       </div>
                     ))}
                   </div>
@@ -1334,11 +1369,15 @@ export const StudentProfilePanel: React.FC<Props> = ({ student, onBack, onStuden
               <div className="bg-white rounded-2xl border border-slate-100 shadow-sm p-4">
                 <SectionTitle icon={CreditCard} title="Document Checklist" />
                 <p className="text-[10px] font-bold text-slate-400 mb-3">
-                  Upload missing documents · max 5MB · JPG / PNG / WEBP / HEIC / PDF
+                  Upload missing documents · max 1.5 MB · JPG / PNG / WEBP / HEIC / PDF
                 </p>
                 <div className="space-y-2">
                   {profileDocs.map(doc => {
                     const busy = profileDocUploading === doc.type;
+                    // Replace = uploading on a slot that already has a doc.
+                    // Replace requires Editor Mode; Upload (first time) is open.
+                    const isReplace = doc.uploaded;
+                    const replaceBlocked = isReplace && !editorModeActive;
                     return (
                       <div key={doc.type} className="flex items-center justify-between bg-slate-50 rounded-xl p-3 border border-slate-200">
                         <div className="flex items-center gap-3 flex-1">
@@ -1349,25 +1388,33 @@ export const StudentProfilePanel: React.FC<Props> = ({ student, onBack, onStuden
                             {doc.name}
                           </span>
                         </div>
-                        <label className={`cursor-pointer shrink-0 ${busy ? 'pointer-events-none opacity-60' : ''}`}>
-                          <input type="file" onChange={e => handleProfileDocUpload(e, doc.type)}
-                            className="hidden" disabled={busy}
-                            accept="image/jpeg,image/png,image/webp,image/heic,image/heif,application/pdf" />
-                          <span className={`text-[10px] font-black px-3 py-1.5 rounded-full transition-colors ${
-                            busy ? 'bg-slate-200 text-slate-500'
-                            : doc.uploaded
-                              ? 'bg-emerald-100 text-emerald-700 hover:bg-emerald-200'
-                              : 'bg-indigo-100 text-indigo-700 hover:bg-indigo-200'
-                          }`}>
-                            {busy ? 'Uploading…' : doc.uploaded ? 'Replace' : 'Upload'}
+                        {replaceBlocked ? (
+                          <span title="Replace requires Editor Mode (Settings → Security)"
+                            className="text-[10px] font-black px-3 py-1.5 rounded-full bg-slate-100 text-slate-400 shrink-0">
+                            Replace · Editor only
                           </span>
-                        </label>
+                        ) : (
+                          <label className={`cursor-pointer shrink-0 ${busy ? 'pointer-events-none opacity-60' : ''}`}>
+                            <input type="file" onChange={e => handleProfileDocUpload(e, doc.type, isReplace)}
+                              className="hidden" disabled={busy}
+                              accept="image/jpeg,image/png,image/webp,image/heic,image/heif,application/pdf" />
+                            <span className={`text-[10px] font-black px-3 py-1.5 rounded-full transition-colors ${
+                              busy ? 'bg-slate-200 text-slate-500'
+                              : doc.uploaded
+                                ? 'bg-emerald-100 text-emerald-700 hover:bg-emerald-200'
+                                : 'bg-indigo-100 text-indigo-700 hover:bg-indigo-200'
+                            }`}>
+                              {busy ? 'Uploading…' : doc.uploaded ? 'Replace' : 'Upload'}
+                            </span>
+                          </label>
+                        )}
                       </div>
                     );
                   })}
                 </div>
               </div>
-            </>}</>
+              </>)}
+            </>
           )}
 
         </div>
@@ -1591,7 +1638,7 @@ export const StudentProfilePanel: React.FC<Props> = ({ student, onBack, onStuden
             const refreshed = await studentService.getById(currentStudent.id);
             if (refreshed) {
               setCurrentStudent(refreshed);
-              void loadStudentData(refreshed);
+              void loadCore(refreshed);
               onStudentChanged(refreshed);
             }
           }}

@@ -42,11 +42,12 @@ export const TransportView: React.FC<Props> = ({ onBack }) => {
           <button onClick={onBack} className="p-2 -ml-2 bg-slate-100 rounded-full text-slate-600"><ArrowLeft size={20} /></button>
           <h2 className="text-xl font-black text-slate-900 uppercase tracking-tight">Transport Tracker</h2>
         </div>
-        <div className="flex-1 flex items-center justify-center">
-          <div className="text-center">
-            <div className="inline-block w-12 h-12 border-4 border-slate-200 border-t-blue-600 rounded-full animate-spin mb-3" />
-            <p className="text-sm font-bold text-slate-600">Loading...</p>
-          </div>
+        {/* Center the spinner against a meaningful viewport height. flex-1 alone
+            collapses because the parent <main> uses overflow-y, so the empty
+            content area has no implicit height to fill. */}
+        <div className="flex flex-col items-center justify-center min-h-[60vh] px-4">
+          <div className="w-12 h-12 border-4 border-slate-200 border-t-blue-600 rounded-full animate-spin mb-3" />
+          <p className="text-sm font-bold text-slate-600">Loading…</p>
         </div>
       </div>
     );

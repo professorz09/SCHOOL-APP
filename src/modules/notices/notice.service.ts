@@ -11,6 +11,8 @@ interface NoticeRow {
   created_at: string;
   sent_by_name: string | null;
   pinned: boolean;
+  target_student_id?: string | null;
+  target_student_name?: string | null;
 }
 
 function rowToNotice(r: NoticeRow): Notice {
@@ -22,6 +24,8 @@ function rowToNotice(r: NoticeRow): Notice {
     sentAt: (r.created_at ?? '').slice(0, 10),
     sentBy: r.sent_by_name ?? '',
     pinned: r.pinned,
+    targetStudentId: r.target_student_id ?? null,
+    targetStudentName: r.target_student_name ?? null,
   };
 }
 
@@ -40,10 +44,14 @@ export const noticeService = {
     const raw = await apiNotices.create({
       title: input.title, body: input.body, audience: input.audience,
       pinned: input.pinned, sentBy: input.sentBy || session?.name || '',
+      targetStudentId: input.targetStudentId ?? null,
     });
     const notice = rowToNotice(raw as NoticeRow);
     if (cache) cache = [notice, ...cache];
-    await logAudit('notice_sent', 'notice', notice.id, { audience: input.audience, title: input.title });
+    await logAudit('notice_sent', 'notice', notice.id, {
+      audience: input.audience, title: input.title,
+      targetStudentId: input.targetStudentId ?? null,
+    });
     return notice;
   },
 

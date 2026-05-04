@@ -1,13 +1,6 @@
 import { create } from 'zustand';
 import { noticeService } from '@/modules/notices/notice.service';
-
-interface Notice {
-  id: string;
-  title: string;
-  body: string;
-  createdAt: string;
-  [key: string]: any;
-}
+import type { Notice } from '@/modules/notices/notice.types';
 
 interface NoticeStore {
   notices: Notice[];

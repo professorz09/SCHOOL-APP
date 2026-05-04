@@ -229,6 +229,53 @@ examsRouter.post('/:testId/unlock-results', requireAuth, requireRole('PRINCIPAL'
   } catch (err) { fail(res, err); }
 });
 
+// POST /api/exam/:testId/edit-results
+// Principal-only. Upserts marks for an already-uploaded test (including
+// LOCKED ones). The principal must have Editor Mode toggled on for the
+// active year — that's enforced in the UI store, but the server still logs
+// the override flag for audit. Marks above max_marks are rejected.
+examsRouter.post('/:testId/edit-results', requireAuth, requireRole('PRINCIPAL'), async (req, res) => {
+  try {
+    const body = requireBody<{
+      academicYearId: string;
+      editorMode: boolean;
+      results: { studentId: string; marks: number; remarks?: string | null }[];
+    }>(req, ['academicYearId', 'editorMode', 'results']);
+
+    if (!body.editorMode) throw new ApiError(403, 'Editor Mode must be enabled to edit published results');
+
+    const { data: test, error: tErr } = await adminDb
+      .from('test_schedules')
+      .select('id, school_id, max_marks, result_status')
+      .eq('id', req.params.testId)
+      .maybeSingle();
+    if (tErr) throw new ApiError(500, tErr.message);
+    if (!test) throw new ApiError(404, 'Test not found');
+    if ((test as any).school_id !== req.user.school_id) throw new ApiError(403, 'Access denied');
+
+    const maxMarks = (test as any).max_marks ?? 100;
+    for (const r of body.results) {
+      if (r.marks < 0 || r.marks > maxMarks) {
+        throw new ApiError(400, `Marks ${r.marks} for student ${r.studentId} out of range (0..${maxMarks})`);
+      }
+    }
+
+    const rows = body.results.map(r => ({
+      test_id: req.params.testId,
+      student_id: r.studentId,
+      academic_year_id: body.academicYearId,
+      obtained_marks: r.marks,
+      remarks: r.remarks ?? null,
+    }));
+    const { error: uErr } = await adminDb
+      .from('exam_results')
+      .upsert(rows, { onConflict: 'test_id,student_id' });
+    if (uErr) throw new ApiError(500, uErr.message);
+
+    ok(res, { testId: req.params.testId, count: rows.length, status: (test as any).result_status });
+  } catch (err) { fail(res, err); }
+});
+
 // POST /api/exam/:testId/configure-pass-marks
 examsRouter.post('/:testId/configure-pass-marks', requireAuth, requireRole('PRINCIPAL', 'TEACHER'), async (req, res) => {
   try {

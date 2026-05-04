@@ -41,14 +41,15 @@ const statusBadge = (s: string) =>
   s === 'APPROVED' ? 'bg-emerald-100 text-emerald-700' : 'bg-rose-100 text-rose-700';
 
 const instStatusColor = (s: string) =>
-  s === 'PAID'        ? 'bg-emerald-100 text-emerald-700' :
-  s === 'PARTIAL'     ? 'bg-amber-100 text-amber-700' :
-  s === 'WAIVED'      ? 'bg-slate-100 text-slate-500' :
-  s === 'WRITTEN_OFF' ? 'bg-slate-100 text-slate-500' :
+  s === 'PAID'                          ? 'bg-emerald-100 text-emerald-700' :
+  s === 'PARTIAL'                       ? 'bg-amber-100 text-amber-700' :
+  s === 'UPCOMING' || s === 'UNPAID'    ? 'bg-slate-100 text-slate-500' :
+  s === 'WAIVED' || s === 'WRITTEN_OFF' ? 'bg-slate-100 text-slate-500' :
   // CANCELLED rows are frozen historical transport entries — render as
   // neutral/settled, not as an outstanding due item.
-  s === 'CANCELLED'   ? 'bg-slate-100 text-slate-500 line-through' :
-                        'bg-rose-100 text-rose-600';
+  s === 'CANCELLED'                     ? 'bg-slate-100 text-slate-500 line-through' :
+  // DUE / OVERDUE / PARTIAL_DUE → call-to-action rose
+                                          'bg-rose-100 text-rose-600';
 
 const formatDateLong = (iso: string) =>
   new Date(iso).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' });
@@ -222,14 +223,14 @@ export const FeesView: React.FC<Props> = ({ onBack }) => {
   };
 
   if (loading) return (
-    <div className="w-full bg-slate-50 flex flex-col animate-in slide-in-from-right-8 duration-300">
+    <div className="w-full bg-slate-50 flex flex-col animate-in slide-in-from-right-8 duration-300 min-h-[60vh] lg:min-h-[80vh]">
       <div className="sticky top-0 bg-white border-b border-slate-100 px-4 pt-4 pb-4 flex items-center gap-3 shadow-sm z-10">
         <button onClick={onBack} className="p-2 -ml-2 bg-slate-100 rounded-full">
           <ArrowLeft size={20} className="text-slate-600" />
         </button>
         <h2 className="text-xl font-black text-slate-900 uppercase tracking-tight">Fee Payments</h2>
       </div>
-      <div className="flex-1 flex items-center justify-center">
+      <div className="flex-1 flex items-center justify-center py-20">
         <div className="text-center">
           <Loader size={28} className="text-slate-400 animate-spin mx-auto mb-3" />
           <p className="text-sm font-bold text-slate-500">Loading your fees…</p>
@@ -239,14 +240,14 @@ export const FeesView: React.FC<Props> = ({ onBack }) => {
   );
 
   if (loadError) return (
-    <div className="w-full bg-slate-50 flex flex-col animate-in slide-in-from-right-8 duration-300">
+    <div className="w-full bg-slate-50 flex flex-col animate-in slide-in-from-right-8 duration-300 min-h-[60vh] lg:min-h-[80vh]">
       <div className="sticky top-0 bg-white border-b border-slate-100 px-4 pt-4 pb-4 flex items-center gap-3 shadow-sm z-10">
         <button onClick={onBack} className="p-2 -ml-2 bg-slate-100 rounded-full">
           <ArrowLeft size={20} className="text-slate-600" />
         </button>
         <h2 className="text-xl font-black text-slate-900 uppercase tracking-tight">Fee Payments</h2>
       </div>
-      <div className="flex-1 flex items-center justify-center p-6">
+      <div className="flex-1 flex items-center justify-center py-20 p-6">
         <div className="text-center">
           <AlertTriangle size={32} className="text-rose-500 mx-auto mb-3" />
           <p className="text-sm font-black text-slate-700">{loadError}</p>
@@ -366,47 +367,42 @@ export const FeesView: React.FC<Props> = ({ onBack }) => {
           </div>
         )}
 
-        {/* ── Big Fee Card ───────────────────────────────────────────────── */}
+        {/* ── Big Fee Card — centered hero, mirrors the reference design ──── */}
         <div className="mx-4 mt-4">
-          <div className="bg-[#0d1b3e] rounded-3xl p-5 text-white shadow-xl">
-            <p className="text-[10px] font-black uppercase tracking-widest text-blue-300 mb-1">
-              TOTAL OUTSTANDING • ALL YEARS
-            </p>
-            <div className="text-5xl font-black mb-2">
-              ₹{feeSummary.total.toLocaleString('en-IN')}
-            </div>
-            {feeSummary.total > 0 && daysUntilDue !== null && daysUntilDue <= 30 && (
-              <div className="flex items-center gap-1.5 mb-4">
-                <AlertTriangle size={14} className="text-orange-400" />
-                <span className="text-sm font-bold text-orange-400">
+          <div className="relative bg-gradient-to-br from-[#0d1b3e] via-[#0e1f47] to-[#08122d] rounded-3xl p-6 lg:p-8 text-white shadow-xl overflow-hidden">
+            {/* Soft inner glow — subtle depth without competing with the CTA. */}
+            <div className="pointer-events-none absolute -top-20 -right-20 w-64 h-64 rounded-full bg-blue-500/15 blur-3xl" />
+
+            <div className="relative text-center">
+              <p className="text-[10px] lg:text-xs font-black uppercase tracking-[0.25em] text-slate-300 mb-2">
+                Total Due {paidTill.lastClearedMonth ? `· Paid till ${paidTill.lastClearedMonth}` : ''}
+              </p>
+              <div className="text-5xl lg:text-6xl font-black mb-2 tabular-nums">
+                ₹{feeSummary.total.toLocaleString('en-IN')}
+              </div>
+
+              {feeSummary.total === 0 ? (
+                <div className="inline-flex items-center gap-2 text-emerald-300 font-black text-sm mb-5">
+                  <CheckCircle2 size={16} />
+                  {paidTill.allCleared ? `All fees paid till ${paidTill.lastClearedMonth}` : 'All fees paid'}
+                </div>
+              ) : daysUntilDue !== null && daysUntilDue <= 30 ? (
+                <div className="inline-flex items-center gap-1.5 text-rose-400 font-bold text-sm mb-5">
+                  <AlertTriangle size={14} />
                   {daysUntilDue === 0
                     ? 'Due today'
                     : `Due in ${daysUntilDue} Day${daysUntilDue !== 1 ? 's' : ''}`}
-                </span>
-              </div>
-            )}
-            {/* Paid-till status */}
-            {paidTill.lastClearedMonth && (
-              <div className="flex items-center gap-2 mb-3">
-                <CheckCircle2 size={14} className="text-emerald-400 shrink-0" />
-                <span className="text-sm font-bold text-emerald-300">
-                  {paidTill.allCleared ? 'All dues cleared' : `Paid till ${paidTill.lastClearedMonth}`}
-                </span>
-              </div>
-            )}
-            {feeSummary.total === 0 ? (
-              <div className="flex items-center gap-3 mt-2">
-                <CheckCircle2 size={20} className="text-emerald-400" />
-                <span className="font-black text-emerald-300">
-                  {paidTill.allCleared ? `All fees paid till ${paidTill.lastClearedMonth}` : 'All fees paid!'}
-                </span>
-              </div>
-            ) : (
+                </div>
+              ) : (
+                <div className="h-5 mb-5" /> // spacer so layout stays consistent
+              )}
+            </div>
+
+            {feeSummary.total > 0 && (
               <button
                 onClick={() => setView('QR_PAY')}
-                className="w-full bg-blue-500 text-white font-black text-sm uppercase tracking-widest py-4 rounded-2xl active:scale-95 transition-all shadow-lg mt-1"
-              >
-                PAY SECURELY VIA UPI
+                className="relative w-full bg-blue-500 hover:bg-blue-400 text-white font-black text-sm lg:text-base uppercase tracking-widest py-4 lg:py-5 rounded-full active:scale-[0.98] transition-all shadow-lg shadow-blue-500/30">
+                Pay Securely via UPI
               </button>
             )}
           </div>
@@ -433,28 +429,28 @@ export const FeesView: React.FC<Props> = ({ onBack }) => {
 
         {/* ── Fee Breakdown ──────────────────────────────────────────────── */}
         {feeSummary.total > 0 && (
-          <div className="mx-4 mt-5">
-            <h3 className="text-sm font-black text-slate-900 uppercase tracking-wide mb-3">FEE BREAKDOWN</h3>
+          <div className="mx-4 mt-6">
+            <h3 className="text-xl lg:text-2xl font-black text-slate-900 uppercase tracking-tight mb-3">Fee Breakdown</h3>
             <div className="bg-white rounded-2xl border border-slate-100 shadow-sm overflow-hidden">
               {feeSummary.tuition > 0 && (
-                <div className="flex items-center justify-between p-4 border-b border-slate-100">
+                <div className="flex items-center justify-between p-4 lg:p-5 border-b border-slate-100">
                   <div>
-                    <div className="font-black text-slate-900 text-sm">TUITION FEE</div>
+                    <div className="font-black text-slate-900 text-sm lg:text-base uppercase tracking-wide">Tuition Fee</div>
                     {nextDueDate && (
-                      <div className="text-xs font-bold text-slate-400 mt-0.5">
+                      <div className="text-[11px] lg:text-xs font-bold text-slate-400 mt-1">
                         Next due {formatDateLong(nextDueDate)}
                       </div>
                     )}
                   </div>
-                  <div className="font-black text-slate-900">₹{feeSummary.tuition.toLocaleString('en-IN')}</div>
+                  <div className="font-black text-slate-900 text-base lg:text-lg tabular-nums">₹{feeSummary.tuition.toLocaleString('en-IN')}</div>
                 </div>
               )}
               {feeSummary.transport > 0 && (
-                <div className="flex items-center justify-between p-4 border-b border-slate-100 last:border-b-0">
+                <div className="flex items-center justify-between p-4 lg:p-5 border-b border-slate-100 last:border-b-0">
                   <div>
-                    <div className="font-black text-slate-900 text-sm">TRANSPORT FEE</div>
+                    <div className="font-black text-slate-900 text-sm lg:text-base uppercase tracking-wide">Transport Fee</div>
                   </div>
-                  <div className="font-black text-slate-900">₹{feeSummary.transport.toLocaleString('en-IN')}</div>
+                  <div className="font-black text-slate-900 text-base lg:text-lg tabular-nums">₹{feeSummary.transport.toLocaleString('en-IN')}</div>
                 </div>
               )}
               {feeSummary.exam > 0 && (

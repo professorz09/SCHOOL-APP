@@ -244,6 +244,13 @@ export const staffService = {
         .delete().eq('school_id', schoolId).eq('academic_year_id', ayId).eq('staff_id', id);
       await supabase.from('staff_class_assignments')
         .delete().eq('school_id', schoolId).eq('academic_year_id', ayId).eq('staff_id', id);
+      // Clear suspended teacher from timetable entries — keep the slots but
+      // null-out the teacher so the principal can see "Teacher Suspended ·
+      // reassign" in the UI instead of an orphan name. Hard-deleting would
+      // erase the subject + room metadata the principal still needs.
+      await supabase.from('timetable_entries')
+        .update({ teacher_id: null, teacher_name: null })
+        .eq('school_id', schoolId).eq('academic_year_id', ayId).eq('teacher_id', id);
     }
 
     const userId = (row as { user_id: string | null } | null)?.user_id ?? null;

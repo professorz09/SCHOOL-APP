@@ -157,6 +157,8 @@ export const apiFees = {
     post<any>('/fees/govt-pay', body),
   writeoff: (body: { installmentId: string; amount: number; reason: string }) =>
     post<any>('/fees/writeoff', body),
+  reversePayment: (body: { paymentId: string; reason: string; editorMode: boolean }) =>
+    post<{ reversalId: string; originalId: string }>('/fees/payment/reverse', body),
 };
 
 // ─── Staff ───────────────────────────────────────────────────────────────────
@@ -274,6 +276,11 @@ export const apiExams = {
   getResults: (testId: string) => get<any[]>(`/exam/${testId}/results`),
   lockResults: (testId: string) => post<any>(`/exam/${testId}/lock-results`, {}),
   unlockResults: (testId: string) => post<any>(`/exam/${testId}/unlock-results`, {}),
+  editResults: (testId: string, body: {
+    academicYearId: string;
+    editorMode: boolean;
+    results: { studentId: string; marks: number; remarks?: string | null }[];
+  }) => post<{ testId: string; count: number; status: string }>(`/exam/${testId}/edit-results`, body),
   configurePassMarks: (testId: string, body: {
     passMarks?: number;
     passMarksConfig?: Record<string, number>;
@@ -319,6 +326,10 @@ export const apiTeacher = {
     title: string; scheduledDate: string | null; duration: number;
     maxMarks: number; syllabus: string;
   }) => post<any>('/teacher/test/create', body),
+  publishResults: (body: {
+    testId: string; academicYearId: string;
+    results: { studentId: string; obtainedMarks: number; remarks?: string | null }[];
+  }) => post<{ testId: string; count: number }>('/teacher/test/publish-results', body),
   submitComplaint: (body: { subject: string; description: string; fromName: string }) =>
     post<any>('/teacher/complaint/create', body),
 };
@@ -350,8 +361,16 @@ export interface DashboardStats {
 export const apiPrincipal = {
   // Notices
   noticeList: () => get<any[]>('/principal/notice/list'),
-  noticeCreate: (body: { title: string; body: string; audience: string; pinned?: boolean; sentBy?: string }) =>
+  noticeCreate: (body: { title: string; body: string; audience: string; pinned?: boolean; sentBy?: string; targetStudentId?: string | null }) =>
     post<any>('/principal/notice/create', body),
+  // Connected users (Settings → Users)
+  usersList: () => get<Array<{
+    id: string; name: string; mobile_number: string; role: string;
+    email: string | null; is_active: boolean; first_login_changed: boolean;
+    last_login: string | null;
+  }>>('/principal/users/list'),
+  resetUserPassword: (userId: string) =>
+    post<{ ok: true; name: string; mobile: string }>('/principal/users/reset-password', { userId }),
   noticeDelete: (noticeId: string) =>
     post<any>('/principal/notice/delete', { noticeId }),
 
@@ -374,6 +393,8 @@ export const apiPrincipal = {
     studentId: string; studentName: string; title: string;
     fromDate: string; toDate: string; reason: string;
   }) => post<any>('/principal/leave/submit', body),
+  leaveList: (studentId: string) =>
+    get<any[]>(`/principal/leave/list?studentId=${encodeURIComponent(studentId)}`),
 
   // Library — Books
   bookAdd: (body: { title: string; author?: string; isbn?: string; subject?: string; totalCopies: number }) =>
@@ -475,17 +496,6 @@ export const apiAdminSchools = {
     get<SchoolBillingInfo>(`/admin/schools/${schoolId}/payments`),
 };
 
-// ─── Homework ─────────────────────────────────────────────────────────────────
-
-export const apiHomework = {
-  list: (sectionId: string, yearId: string) =>
-    get<any[]>(`/homework?sectionId=${sectionId}&yearId=${yearId}`),
-  create: (body: {
-    sectionId: string; subject: string; title: string;
-    description?: string; dueDate?: string; academicYearId: string;
-  }) => post<any>('/homework/create', body),
-  delete: (id: string) => apiFetch<any>('DELETE', `/homework/${id}`),
-};
 
 // ─── Health check ─────────────────────────────────────────────────────────────
 

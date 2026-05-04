@@ -1,4 +1,5 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useState, useRef } from 'react';
+import { downloadNodeAsPdf, downloadNodesAsPdf, printCurrentPage } from '@/shared/utils/pdfPrint';
 import {
   ArrowLeft, Sparkles, FileText, IdCard, Award, Ticket,
   FileCheck, Download, Printer, Eye, ChevronRight,
@@ -329,14 +330,22 @@ export const ToolsManager: React.FC<Props> = ({ onBack }) => {
   const TCGenerator = () => {
     const [picked, setPicked] = useState('');
     const [preview, setPreview] = useState(false);
+    const printRef = useRef<HTMLDivElement>(null);
+    const { showToast } = useUIStore();
     const student = students.find(s => s.id === picked);
+
+    const handleDownload = async () => {
+      if (!printRef.current || !student) return;
+      try { await downloadNodeAsPdf(printRef.current, `tc-${student.admissionNo}.pdf`); }
+      catch (e) { showToast(e instanceof Error ? e.message : 'PDF export failed', 'error'); }
+    };
 
     if (preview && student && schoolInfo) {
       return (
         <div className="w-full flex flex-col">
           <ToolHeader title="Transfer Certificate" onBackPress={() => setPreview(false)} />
           <div className="p-5">
-            <div className="bg-white border-2 border-slate-300 rounded-2xl p-6 shadow-sm">
+            <div ref={printRef} className="bg-white border-2 border-slate-300 rounded-2xl p-6 shadow-sm">
               <div className="text-center border-b-2 border-slate-300 pb-5 mb-5">
                 <p className="text-xs font-black text-slate-400 uppercase tracking-widest mb-1">{schoolInfo.name || 'School Name'}</p>
                 <h3 className="text-xl font-black text-slate-900 uppercase tracking-wide">Transfer Certificate</h3>
@@ -381,11 +390,11 @@ export const ToolsManager: React.FC<Props> = ({ onBack }) => {
               </div>
             </div>
             <div className="grid grid-cols-2 gap-3 mt-4">
-              <button className="flex items-center justify-center gap-2 bg-blue-600 text-white font-black text-sm uppercase py-3 rounded-2xl active:scale-95 transition-transform">
+              <button onClick={printCurrentPage} className="flex items-center justify-center gap-2 bg-blue-600 hover:bg-blue-700 text-white font-black text-sm uppercase py-3 rounded-2xl active:scale-95 transition-all">
                 <Printer size={16} /> Print
               </button>
-              <button className="flex items-center justify-center gap-2 bg-slate-100 text-slate-700 font-black text-sm uppercase py-3 rounded-2xl active:scale-95 transition-transform">
-                <Download size={16} /> Download
+              <button onClick={handleDownload} className="flex items-center justify-center gap-2 bg-slate-100 hover:bg-slate-200 text-slate-700 font-black text-sm uppercase py-3 rounded-2xl active:scale-95 transition-all">
+                <Download size={16} /> Download PDF
               </button>
             </div>
           </div>
@@ -421,14 +430,22 @@ export const ToolsManager: React.FC<Props> = ({ onBack }) => {
   const IDCardGenerator = () => {
     const [picked, setPicked] = useState('');
     const [preview, setPreview] = useState(false);
+    const printRef = useRef<HTMLDivElement>(null);
+    const { showToast } = useUIStore();
     const student = students.find(s => s.id === picked);
+
+    const handleDownload = async () => {
+      if (!printRef.current || !student) return;
+      try { await downloadNodeAsPdf(printRef.current, `idcard-${student.admissionNo}.pdf`); }
+      catch (e) { showToast(e instanceof Error ? e.message : 'PDF export failed', 'error'); }
+    };
 
     if (preview && student && schoolInfo) {
       return (
         <div className="w-full flex flex-col">
           <ToolHeader title="ID Card" onBackPress={() => setPreview(false)} />
           <div className="p-5 space-y-4">
-            <div className="bg-gradient-to-br from-indigo-600 to-purple-700 rounded-2xl p-5 text-white max-w-xs mx-auto shadow-lg">
+            <div ref={printRef} className="bg-gradient-to-br from-indigo-600 to-purple-700 rounded-2xl p-5 text-white max-w-xs mx-auto shadow-lg">
               <div className="text-center mb-3">
                 <p className="text-[9px] font-black uppercase tracking-widest text-white/70">{schoolInfo.name || 'School Name'}</p>
                 <p className="text-[8px] font-bold text-white/50 mt-0.5">STUDENT IDENTITY CARD</p>
@@ -452,11 +469,11 @@ export const ToolsManager: React.FC<Props> = ({ onBack }) => {
               )}
             </div>
             <div className="grid grid-cols-2 gap-3">
-              <button className="flex items-center justify-center gap-2 bg-indigo-600 text-white font-black text-sm uppercase py-3 rounded-2xl active:scale-95 transition-transform">
+              <button onClick={printCurrentPage} className="flex items-center justify-center gap-2 bg-indigo-600 hover:bg-indigo-700 text-white font-black text-sm uppercase py-3 rounded-2xl active:scale-95 transition-all">
                 <Printer size={16} /> Print
               </button>
-              <button className="flex items-center justify-center gap-2 bg-slate-100 text-slate-700 font-black text-sm uppercase py-3 rounded-2xl active:scale-95 transition-transform">
-                <Download size={16} /> Download
+              <button onClick={handleDownload} className="flex items-center justify-center gap-2 bg-slate-100 hover:bg-slate-200 text-slate-700 font-black text-sm uppercase py-3 rounded-2xl active:scale-95 transition-all">
+                <Download size={16} /> Download PDF
               </button>
             </div>
           </div>
@@ -493,14 +510,22 @@ export const ToolsManager: React.FC<Props> = ({ onBack }) => {
     const [picked, setPicked] = useState('');
     const [purpose, setPurpose] = useState('');
     const [preview, setPreview] = useState(false);
+    const printRef = useRef<HTMLDivElement>(null);
+    const { showToast } = useUIStore();
     const student = students.find(s => s.id === picked);
+
+    const handleDownload = async () => {
+      if (!printRef.current || !student) return;
+      try { await downloadNodeAsPdf(printRef.current, `bonafide-${student.admissionNo}.pdf`); }
+      catch (e) { showToast(e instanceof Error ? e.message : 'PDF export failed', 'error'); }
+    };
 
     if (preview && student && schoolInfo) {
       return (
         <div className="w-full flex flex-col">
           <ToolHeader title="Bonafide Certificate" onBackPress={() => setPreview(false)} />
           <div className="p-5">
-            <div className="bg-white border-2 border-slate-300 rounded-2xl p-6 shadow-sm">
+            <div ref={printRef} className="bg-white border-2 border-slate-300 rounded-2xl p-6 shadow-sm">
               <div className="text-center pb-5 mb-5 border-b-2 border-slate-200">
                 <p className="text-xs font-black text-slate-500 uppercase tracking-widest">{schoolInfo.name || 'School Name'}</p>
                 <h3 className="text-xl font-black text-slate-900 mt-1 uppercase tracking-wide">Bonafide Certificate</h3>
@@ -519,11 +544,11 @@ export const ToolsManager: React.FC<Props> = ({ onBack }) => {
               </div>
             </div>
             <div className="grid grid-cols-2 gap-3 mt-4">
-              <button className="flex items-center justify-center gap-2 bg-indigo-600 text-white font-black text-sm uppercase py-3 rounded-2xl active:scale-95 transition-transform">
+              <button onClick={printCurrentPage} className="flex items-center justify-center gap-2 bg-indigo-600 hover:bg-indigo-700 text-white font-black text-sm uppercase py-3 rounded-2xl active:scale-95 transition-all">
                 <Printer size={16} /> Print
               </button>
-              <button className="flex items-center justify-center gap-2 bg-slate-100 text-slate-700 font-black text-sm uppercase py-3 rounded-2xl active:scale-95 transition-transform">
-                <Download size={16} /> Download
+              <button onClick={handleDownload} className="flex items-center justify-center gap-2 bg-slate-100 hover:bg-slate-200 text-slate-700 font-black text-sm uppercase py-3 rounded-2xl active:scale-95 transition-all">
+                <Download size={16} /> Download PDF
               </button>
             </div>
           </div>
@@ -571,8 +596,16 @@ export const ToolsManager: React.FC<Props> = ({ onBack }) => {
     const [loadingExams, setLoadingExams] = useState(false);
     const [loadingRes,   setLoadingRes]   = useState(false);
     const [showPrint,    setShowPrint]    = useState(false);
+    const printRef = useRef<HTMLDivElement>(null);
+    const { showToast: msToast } = useUIStore();
 
     const student = students.find(s => s.id === picked) ?? null;
+
+    const handleDownload = async () => {
+      if (!printRef.current || !student) return;
+      try { await downloadNodeAsPdf(printRef.current, `marksheet-${student.admissionNo}.pdf`); }
+      catch (e) { msToast(e instanceof Error ? e.message : 'PDF export failed', 'error'); }
+    };
 
     // Load all completed exams for student's class
     useEffect(() => {
@@ -624,7 +657,7 @@ export const ToolsManager: React.FC<Props> = ({ onBack }) => {
     if (showPrint && student && examTitle && subjectRows.length > 0) {
       return (
         <div className="w-full flex flex-col">
-          <div className="sticky top-0 bg-white px-4 py-3 border-b border-slate-100 flex gap-2 z-10">
+          <div className="sticky top-0 bg-white px-4 py-3 border-b border-slate-100 flex gap-2 z-10 print:hidden">
             <button onClick={() => setShowPrint(false)}
               className="flex-1 py-2.5 bg-slate-100 text-slate-700 font-black text-xs uppercase rounded-xl">
               ← Back
@@ -633,10 +666,14 @@ export const ToolsManager: React.FC<Props> = ({ onBack }) => {
               className="flex-1 py-2.5 bg-slate-900 text-white font-black text-xs uppercase rounded-xl flex items-center justify-center gap-1.5">
               <Printer size={13} /> Print
             </button>
+            <button onClick={handleDownload}
+              className="flex-1 py-2.5 bg-amber-600 text-white font-black text-xs uppercase rounded-xl flex items-center justify-center gap-1.5">
+              <Download size={13} /> PDF
+            </button>
           </div>
 
           {/* ── Printable marksheet ── */}
-          <div className="p-6 bg-white min-h-screen font-sans">
+          <div ref={printRef} className="p-6 bg-white min-h-screen font-sans">
             {/* School header */}
             <div className="text-center border-b-2 border-slate-800 pb-4 mb-4">
               <div className="text-xl font-black text-slate-900 uppercase tracking-wide">
@@ -822,125 +859,201 @@ export const ToolsManager: React.FC<Props> = ({ onBack }) => {
     );
   };
 
-  // ── ADMIT CARD TOOL ───────────────────────────────────────────────────────
+  // ── ADMIT CARD TOOL — single + bulk-by-class ───────────────────────────────
+  const DEFAULT_INSTRUCTIONS = [
+    'Yeh admit card exam hall mein saath lana ZAROOR hai.',
+    'Pehchan patra (school ID card) bhi saath layen.',
+    '10 minute pehle aayein aur apni seat pe baith jayen.',
+    'Mobile phone aur electronic device banned hain.',
+  ];
+
   const AdmitCardTool = () => {
-    const [picked,      setPicked]      = useState('');
-    const [examId,      setExamId]      = useState('');
-    const [exams,       setExams]       = useState<any[]>([]);
-    const [loadingExams,setLoadingExams]= useState(false);
-    const [showPrint,   setShowPrint]   = useState(false);
+    const [mode, setMode]          = useState<'SINGLE' | 'BULK'>('BULK');
+    // examSource = SCHEDULED uses a real test_schedules row; CUSTOM lets the
+    // principal type exam details ad-hoc without creating a scheduled exam.
+    const [examSource, setExamSource] = useState<'SCHEDULED' | 'CUSTOM'>('SCHEDULED');
+    const [picked, setPicked]      = useState('');
+    const [pickedClass, setPickedClass] = useState('');
+    const [examId, setExamId]      = useState('');
+    const [exams, setExams]        = useState<any[]>([]);
+    const [loadingExams, setLoadingExams] = useState(false);
+    const [showPrint, setShowPrint] = useState(false);
+    const [downloadingPdf, setDownloadingPdf] = useState(false);
+    // Editable instructions — comma/newline separated. Persists per-tool-session.
+    const [instructions, setInstructions] = useState<string>(DEFAULT_INSTRUCTIONS.join('\n'));
+    // Custom exam form (used when examSource = CUSTOM)
+    const [customExam, setCustomExam] = useState({
+      title: '', subject: '', testType: 'NORMAL',
+      scheduledDate: '', duration: 60, maxMarks: 100,
+    });
+    // Per-card refs for bulk PDF generation
+    const cardRefs = useRef<Array<HTMLDivElement | null>>([]);
+    const { showToast } = useUIStore();
 
     const student = students.find(s => s.id === picked) ?? null;
 
+    const handleDownloadAllPdf = async () => {
+      setDownloadingPdf(true);
+      try {
+        const nodes = cardRefs.current.filter((n): n is HTMLDivElement => !!n);
+        if (nodes.length === 0) throw new Error('Nothing to export');
+        const filename = nodes.length === 1
+          ? `admit-card-${printList[0]?.admissionNo ?? 'card'}.pdf`
+          : `admit-cards-${(targetClassName ?? 'class').replace(/\s+/g, '-')}-${targetSection ?? ''}.pdf`;
+        await downloadNodesAsPdf(nodes, filename);
+        showToast(`PDF saved · ${nodes.length} card${nodes.length > 1 ? 's' : ''}`);
+      } catch (e) {
+        // Surface the real cause in the console so we can diagnose
+        // html2canvas/jspdf failures (CORS, OOM, unsupported CSS, etc.).
+        console.error('[admit-card] PDF export failed:', e);
+        showToast(e instanceof Error ? e.message : 'PDF export failed', 'error');
+      } finally {
+        setDownloadingPdf(false);
+      }
+    };
+
+    // Unique class+section pairs from the student roster
+    const classes = React.useMemo(() => {
+      const set = new Map<string, { className: string; section: string }>();
+      for (const s of students) set.set(`${s.className}|${s.section}`, { className: s.className, section: s.section });
+      return Array.from(set.entries()).map(([k, v]) => ({ id: k, ...v }))
+        .sort((a, b) => `${a.className}-${a.section}`.localeCompare(`${b.className}-${b.section}`));
+    }, []);
+
+    const targetClassName = mode === 'SINGLE' ? student?.className : pickedClass.split('|')[0];
+    const targetSection   = mode === 'SINGLE' ? student?.section   : pickedClass.split('|')[1];
+
     useEffect(() => {
-      if (!student) { setExams([]); setExamId(''); return; }
+      if (!targetClassName || examSource !== 'SCHEDULED') { setExams([]); setExamId(''); return; }
       setLoadingExams(true);
-      apiExams.list({ className: student.className })
-        .then((list: any[]) => setExams(list))
+      apiExams.list({ className: targetClassName })
+        // Admit cards are only meaningful for upcoming exams — exclude any
+        // whose results have already been published (= done/locked).
+        .then((list: any[]) => setExams(list.filter(e => !e.results_uploaded)))
         .catch(() => setExams([]))
         .finally(() => setLoadingExams(false));
-    }, [student?.id]);
+    }, [targetClassName, examSource]);
 
-    const pickedExam = exams.find(e => e.id === examId);
+    // Resolved exam to render — either the picked scheduled exam or the
+    // custom one typed by the principal. Shape matches what the card needs.
+    const scheduledExam = exams.find(e => e.id === examId);
+    const customExamShape = customExam.title.trim() ? {
+      id: 'custom',
+      title: customExam.title,
+      subject: customExam.subject || '—',
+      test_type: customExam.testType,
+      scheduled_date: customExam.scheduledDate || null,
+      duration: customExam.duration || null,
+      max_marks: customExam.maxMarks || null,
+    } : null;
+    const pickedExam = examSource === 'SCHEDULED' ? scheduledExam : customExamShape;
+    const canGenerate = examSource === 'SCHEDULED' ? !!scheduledExam : !!customExamShape && !!targetClassName;
 
-    if (showPrint && student && pickedExam) {
+    const cleanInstructions = instructions.split(/\r?\n/).map(s => s.trim()).filter(Boolean);
+
+    // Students to print admit cards for
+    const printList: Student[] = mode === 'SINGLE'
+      ? (student ? [student] : [])
+      : students.filter(s => s.className === targetClassName && s.section === targetSection);
+
+    if (showPrint && pickedExam && printList.length > 0) {
+      // Make sure the refs array is the right size for current printList
+      cardRefs.current = cardRefs.current.slice(0, printList.length);
       return (
         <div className="w-full flex flex-col">
-          <div className="sticky top-0 bg-white px-4 py-3 border-b border-slate-100 flex gap-2 z-10">
+          <div className="no-print sticky top-0 bg-white px-4 py-3 border-b border-slate-100 flex gap-2 z-10">
             <button onClick={() => setShowPrint(false)}
-              className="flex-1 py-2.5 bg-slate-100 text-slate-700 font-black text-xs uppercase rounded-xl">
+              className="py-2.5 px-4 bg-slate-100 text-slate-700 font-black text-xs uppercase rounded-xl">
               ← Back
             </button>
+            <span className="py-2.5 px-3 bg-rose-50 text-rose-700 border border-rose-200 font-black text-xs uppercase rounded-xl flex items-center justify-center gap-1.5">
+              {printList.length} Card{printList.length > 1 ? 's' : ''}
+            </span>
+            <button onClick={handleDownloadAllPdf} disabled={downloadingPdf}
+              className="flex-1 py-2.5 bg-emerald-600 hover:bg-emerald-700 text-white font-black text-xs uppercase rounded-xl flex items-center justify-center gap-1.5 disabled:opacity-60">
+              <Download size={13} /> {downloadingPdf ? 'Saving…' : 'Download PDF'}
+            </button>
             <button onClick={() => window.print()}
-              className="flex-1 py-2.5 bg-rose-600 text-white font-black text-xs uppercase rounded-xl flex items-center justify-center gap-1.5">
+              className="flex-1 py-2.5 bg-rose-600 hover:bg-rose-700 text-white font-black text-xs uppercase rounded-xl flex items-center justify-center gap-1.5">
               <Printer size={13} /> Print
             </button>
           </div>
 
-          {/* Printable admit card */}
-          <div className="p-6 bg-white min-h-screen font-sans">
-            {/* Border frame */}
-            <div className="border-4 border-double border-slate-800 rounded-2xl p-5 max-w-md mx-auto space-y-4">
-              {/* School header */}
-              <div className="text-center border-b-2 border-slate-200 pb-3">
-                <div className="text-base font-black text-slate-900 uppercase tracking-wide">
-                  {schoolInfo?.name ?? 'EduGrow School'}
-                </div>
-                {schoolInfo?.address && (
-                  <div className="text-[10px] font-bold text-slate-500 mt-0.5">{schoolInfo.address}</div>
-                )}
-                <div className="text-sm font-black text-rose-700 mt-2 uppercase tracking-widest">
-                  Admit Card / प्रवेश पत्र
-                </div>
-              </div>
-
-              {/* Exam info */}
-              <div className="bg-rose-50 border border-rose-200 rounded-xl p-3 text-center">
-                <div className="text-sm font-black text-rose-900 uppercase">{pickedExam.title}</div>
-                <div className="text-[10px] font-bold text-rose-600 mt-0.5">
-                  {pickedExam.test_type} · {pickedExam.subject}
-                </div>
-              </div>
-
-              {/* Student info */}
-              <div className="space-y-1.5 text-xs font-bold text-slate-700">
-                {[
-                  ['Student Name', student.name],
-                  ['Admission No.', student.admissionNo],
-                  ['Class / Section', `${student.className}-${student.section}`],
-                  ['Roll No.', student.rollNo ?? '—'],
-                  ['Father\'s Name', student.fatherName ?? '—'],
-                ].map(([label, val]) => (
-                  <div key={label} className="flex items-center gap-2 border-b border-slate-100 pb-1.5">
-                    <span className="w-28 text-slate-400 shrink-0">{label}:</span>
-                    <span className="font-black text-slate-900">{val}</span>
+          {/* Printable admit cards — one per page (printable class hides app shell) */}
+          <div className="printable bg-white">
+            {printList.map((s, idx) => (
+              <div key={s.id} className="print-page p-6 font-sans">
+                <div ref={el => { cardRefs.current[idx] = el; }}
+                  className="border-4 border-double border-slate-800 rounded-2xl p-5 max-w-md mx-auto space-y-4">
+                  <div className="text-center border-b-2 border-slate-200 pb-3">
+                    <div className="text-base font-black text-slate-900 uppercase tracking-wide">
+                      {schoolInfo?.name ?? 'EduGrow School'}
+                    </div>
+                    {schoolInfo?.address && (
+                      <div className="text-[10px] font-bold text-slate-500 mt-0.5">{schoolInfo.address}</div>
+                    )}
+                    <div className="text-sm font-black text-rose-700 mt-2 uppercase tracking-widest">
+                      Admit Card / प्रवेश पत्र
+                    </div>
                   </div>
-                ))}
-              </div>
 
-              {/* Exam details */}
-              <div className="bg-slate-50 border border-slate-200 rounded-xl p-3 space-y-1.5 text-xs font-bold">
-                <div className="flex justify-between">
-                  <span className="text-slate-400">Date:</span>
-                  <span className="font-black text-slate-900">{pickedExam.scheduled_date ?? '—'}</span>
-                </div>
-                <div className="flex justify-between">
-                  <span className="text-slate-400">Duration:</span>
-                  <span className="font-black text-slate-900">
-                    {pickedExam.duration ? `${pickedExam.duration} min` : '—'}
-                  </span>
-                </div>
-                <div className="flex justify-between">
-                  <span className="text-slate-400">Max Marks:</span>
-                  <span className="font-black text-slate-900">{pickedExam.max_marks ?? '—'}</span>
-                </div>
-              </div>
-
-              {/* Instructions */}
-              <div className="text-[10px] font-bold text-slate-600 leading-relaxed border-t border-slate-100 pt-3">
-                <p className="font-black text-slate-800 mb-1">Instructions / निर्देश:</p>
-                <ul className="list-disc list-inside space-y-0.5">
-                  <li>Yeh admit card exam hall mein saath lana ZAROOR hai.</li>
-                  <li>Pehchan patra (school ID card) bhi saath layen.</li>
-                  <li>10 minute pehle aayein aur apni seat pe baith jayen.</li>
-                  <li>Mobile phone aur electronic device banned hain.</li>
-                </ul>
-              </div>
-
-              {/* Signature strip */}
-              <div className="grid grid-cols-2 gap-4 pt-3 border-t border-slate-200">
-                <div className="text-center">
-                  <div className="border-t-2 border-slate-300 pt-2 text-[9px] font-bold text-slate-400 uppercase">
-                    Student Signature
+                  <div className="bg-rose-50 border border-rose-200 rounded-xl p-3 text-center">
+                    <div className="text-sm font-black text-rose-900 uppercase">{pickedExam.title}</div>
+                    <div className="text-[10px] font-bold text-rose-600 mt-0.5">
+                      {pickedExam.test_type} · {pickedExam.subject}
+                    </div>
                   </div>
-                </div>
-                <div className="text-center">
-                  <div className="border-t-2 border-slate-300 pt-2 text-[9px] font-bold text-slate-400 uppercase">
-                    Principal Seal &amp; Sign
+
+                  <div className="space-y-1.5 text-xs font-bold text-slate-700">
+                    {[
+                      ['Student Name', s.name],
+                      ['Admission No.', s.admissionNo],
+                      ['Class / Section', `${s.className}-${s.section}`],
+                      ['Roll No.', s.rollNo ?? '—'],
+                      ["Father's Name", s.fatherName ?? '—'],
+                    ].map(([label, val]) => (
+                      <div key={label} className="flex items-center gap-2 border-b border-slate-100 pb-1.5">
+                        <span className="w-28 text-slate-400 shrink-0">{label}:</span>
+                        <span className="font-black text-slate-900">{val}</span>
+                      </div>
+                    ))}
+                  </div>
+
+                  <div className="bg-slate-50 border border-slate-200 rounded-xl p-3 space-y-1.5 text-xs font-bold">
+                    <div className="flex justify-between">
+                      <span className="text-slate-400">Date:</span>
+                      <span className="font-black text-slate-900">{pickedExam.scheduled_date ?? '—'}</span>
+                    </div>
+                    <div className="flex justify-between">
+                      <span className="text-slate-400">Duration:</span>
+                      <span className="font-black text-slate-900">{pickedExam.duration ? `${pickedExam.duration} min` : '—'}</span>
+                    </div>
+                    <div className="flex justify-between">
+                      <span className="text-slate-400">Max Marks:</span>
+                      <span className="font-black text-slate-900">{pickedExam.max_marks ?? '—'}</span>
+                    </div>
+                  </div>
+
+                  {cleanInstructions.length > 0 && (
+                    <div className="text-[10px] font-bold text-slate-600 leading-relaxed border-t border-slate-100 pt-3">
+                      <p className="font-black text-slate-800 mb-1">Instructions / निर्देश:</p>
+                      <ul className="list-disc list-inside space-y-0.5">
+                        {cleanInstructions.map((line, i) => <li key={i}>{line}</li>)}
+                      </ul>
+                    </div>
+                  )}
+
+                  <div className="grid grid-cols-2 gap-4 pt-3 border-t border-slate-200">
+                    <div className="text-center">
+                      <div className="border-t-2 border-slate-300 pt-2 text-[9px] font-bold text-slate-400 uppercase">Student Signature</div>
+                    </div>
+                    <div className="text-center">
+                      <div className="border-t-2 border-slate-300 pt-2 text-[9px] font-bold text-slate-400 uppercase">Principal Seal &amp; Sign</div>
+                    </div>
                   </div>
                 </div>
               </div>
-            </div>
+            ))}
           </div>
         </div>
       );
@@ -949,49 +1062,166 @@ export const ToolsManager: React.FC<Props> = ({ onBack }) => {
     return (
       <div className="w-full flex flex-col">
         <ToolHeader title="Admit Card" onBackPress={() => setView('DASHBOARD')} />
-        <div className="p-5 space-y-4">
+        <div className="p-5 space-y-4 lg:max-w-2xl lg:mx-auto lg:w-full">
           <div className="bg-rose-50 border border-rose-200 rounded-2xl p-4 flex items-start gap-3">
             <Ticket size={20} className="text-rose-600 shrink-0 mt-0.5" />
             <div>
               <p className="font-black text-rose-900 text-sm">Exam Admit Card Generator</p>
               <p className="text-xs font-bold text-rose-700 mt-0.5">
-                Student chunein → Exam chunein → Admit card print karein
+                Class chunein (poori class ke liye) ya single student — fir exam pick karke ek saath print karein.
               </p>
             </div>
           </div>
 
-          <StudentPicker value={picked} onChange={v => { setPicked(v); setExamId(''); }} />
+          {/* Mode toggle */}
+          <div className="flex gap-2 bg-slate-100 p-1 rounded-2xl">
+            <button onClick={() => { setMode('BULK'); setPicked(''); setExamId(''); }}
+              className={`flex-1 py-2.5 rounded-xl text-xs font-black uppercase tracking-widest transition-colors ${mode === 'BULK' ? 'bg-white text-rose-700 shadow-sm' : 'text-slate-500'}`}>
+              Bulk by Class
+            </button>
+            <button onClick={() => { setMode('SINGLE'); setPickedClass(''); setExamId(''); }}
+              className={`flex-1 py-2.5 rounded-xl text-xs font-black uppercase tracking-widest transition-colors ${mode === 'SINGLE' ? 'bg-white text-rose-700 shadow-sm' : 'text-slate-500'}`}>
+              Single Student
+            </button>
+          </div>
 
-          {student && (
+          {/* Selectors */}
+          {mode === 'BULK' ? (
+            <div>
+              <label className="text-xs font-black uppercase tracking-widest text-slate-400 mb-2 block">Select Class</label>
+              <select value={pickedClass} onChange={e => { setPickedClass(e.target.value); setExamId(''); }}
+                className="w-full border border-slate-200 bg-white rounded-xl px-4 py-3 font-bold text-sm outline-none focus:border-rose-400">
+                <option value="">Class chunein…</option>
+                {classes.map(c => {
+                  const count = students.filter(s => s.className === c.className && s.section === c.section).length;
+                  return <option key={c.id} value={c.id}>{c.className}-{c.section} · {count} students</option>;
+                })}
+              </select>
+              {pickedClass && printList.length > 0 && (
+                <p className="text-[10px] font-bold text-slate-500 mt-1.5">{printList.length} students will get an admit card</p>
+              )}
+            </div>
+          ) : (
             <>
-              <SelectedCard student={student} />
-              <div>
-                <label className="text-xs font-black uppercase tracking-widest text-slate-400 mb-2 block">
-                  Select Exam {loadingExams && <span className="text-[9px] text-slate-300">Loading…</span>}
-                </label>
-                <select value={examId} onChange={e => setExamId(e.target.value)}
-                  className="w-full border border-slate-200 bg-white rounded-xl px-4 py-3 font-bold text-sm outline-none focus:border-rose-400">
-                  <option value="">Exam chunein…</option>
-                  {exams.map(e => (
-                    <option key={e.id} value={e.id}>
-                      {e.title} · {e.subject} · {e.scheduled_date}
-                    </option>
-                  ))}
-                </select>
-                {!loadingExams && exams.length === 0 && (
-                  <p className="text-[9px] font-bold text-rose-500 mt-1">
-                    {student.className} ke liye koi exam nahi mila
-                  </p>
-                )}
-              </div>
+              <StudentPicker value={picked} onChange={v => { setPicked(v); setExamId(''); }} />
+              {student && <SelectedCard student={student} />}
             </>
           )}
 
-          {student && examId && (
-            <button
-              onClick={() => setShowPrint(true)}
-              className="w-full flex items-center justify-center gap-2 bg-rose-600 text-white font-black text-sm uppercase py-4 rounded-2xl active:scale-95 transition-transform shadow-md">
-              <Ticket size={16} /> Generate Admit Card
+          {/* Exam source toggle: scheduled exam OR custom-typed details */}
+          {targetClassName && (
+            <div>
+              <label className="text-xs font-black uppercase tracking-widest text-slate-400 mb-2 block">Exam Details</label>
+              <div className="flex gap-2 bg-slate-100 p-1 rounded-2xl mb-3">
+                <button onClick={() => setExamSource('SCHEDULED')}
+                  className={`flex-1 py-2 rounded-xl text-[10px] font-black uppercase tracking-widest transition-colors ${examSource === 'SCHEDULED' ? 'bg-white text-rose-700 shadow-sm' : 'text-slate-500'}`}>
+                  By Scheduled Exam
+                </button>
+                <button onClick={() => setExamSource('CUSTOM')}
+                  className={`flex-1 py-2 rounded-xl text-[10px] font-black uppercase tracking-widest transition-colors ${examSource === 'CUSTOM' ? 'bg-white text-rose-700 shadow-sm' : 'text-slate-500'}`}>
+                  Custom (Type Manually)
+                </button>
+              </div>
+
+              {examSource === 'SCHEDULED' ? (
+                <>
+                  <select value={examId} onChange={e => setExamId(e.target.value)}
+                    className="w-full border border-slate-200 bg-white rounded-xl px-4 py-3 font-bold text-sm outline-none focus:border-rose-400">
+                    <option value="">{loadingExams ? 'Loading…' : 'Exam chunein…'}</option>
+                    {exams.map(e => (
+                      <option key={e.id} value={e.id}>
+                        {e.title} · {e.subject} · {e.scheduled_date}
+                      </option>
+                    ))}
+                  </select>
+                  {!loadingExams && exams.length === 0 && (
+                    <p className="text-[10px] font-bold text-rose-500 mt-1">
+                      {targetClassName} ke liye koi scheduled exam nahi mila — Custom mode use karein.
+                    </p>
+                  )}
+                </>
+              ) : (
+                /* Custom exam form */
+                <div className="space-y-2.5 bg-rose-50/30 border border-rose-100 rounded-xl p-3">
+                  <div>
+                    <label className="text-[10px] font-black uppercase tracking-widest text-slate-500 mb-1 block">Exam Title *</label>
+                    <input value={customExam.title} onChange={e => setCustomExam(c => ({ ...c, title: e.target.value }))}
+                      placeholder="e.g. Final Examination 2026"
+                      className="w-full border border-slate-200 bg-white rounded-xl px-3 py-2.5 font-bold text-sm outline-none focus:border-rose-400"/>
+                  </div>
+                  <div className="grid grid-cols-2 gap-2">
+                    <div>
+                      <label className="text-[10px] font-black uppercase tracking-widest text-slate-500 mb-1 block">Subject</label>
+                      <input value={customExam.subject} onChange={e => setCustomExam(c => ({ ...c, subject: e.target.value }))}
+                        placeholder="All / Math / etc."
+                        className="w-full border border-slate-200 bg-white rounded-xl px-3 py-2.5 font-bold text-sm outline-none focus:border-rose-400"/>
+                    </div>
+                    <div>
+                      <label className="text-[10px] font-black uppercase tracking-widest text-slate-500 mb-1 block">Type</label>
+                      <select value={customExam.testType} onChange={e => setCustomExam(c => ({ ...c, testType: e.target.value }))}
+                        className="w-full border border-slate-200 bg-white rounded-xl px-3 py-2.5 font-bold text-sm outline-none focus:border-rose-400">
+                        <option value="NORMAL">Normal Test</option>
+                        <option value="FINAL">Final Exam</option>
+                      </select>
+                    </div>
+                  </div>
+                  <div className="grid grid-cols-3 gap-2">
+                    <div>
+                      <label className="text-[10px] font-black uppercase tracking-widest text-slate-500 mb-1 block">Date</label>
+                      <input type="date" value={customExam.scheduledDate} onChange={e => setCustomExam(c => ({ ...c, scheduledDate: e.target.value }))}
+                        className="w-full border border-slate-200 bg-white rounded-xl px-2 py-2.5 font-bold text-sm outline-none focus:border-rose-400"/>
+                    </div>
+                    <div>
+                      <label className="text-[10px] font-black uppercase tracking-widest text-slate-500 mb-1 block">Duration</label>
+                      <input type="number" min={1} value={customExam.duration} onChange={e => setCustomExam(c => ({ ...c, duration: +e.target.value }))}
+                        className="w-full border border-slate-200 bg-white rounded-xl px-2 py-2.5 font-bold text-sm outline-none focus:border-rose-400"/>
+                    </div>
+                    <div>
+                      <label className="text-[10px] font-black uppercase tracking-widest text-slate-500 mb-1 block">Max Marks</label>
+                      <input type="number" min={1} value={customExam.maxMarks} onChange={e => setCustomExam(c => ({ ...c, maxMarks: +e.target.value }))}
+                        className="w-full border border-slate-200 bg-white rounded-xl px-2 py-2.5 font-bold text-sm outline-none focus:border-rose-400"/>
+                    </div>
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* Optional extra exam fields — quick override before printing */}
+          {pickedExam && (
+            <div className="bg-white border border-slate-200 rounded-2xl p-4 space-y-2">
+              <p className="text-[10px] font-black uppercase tracking-widest text-slate-400">Exam Summary</p>
+              <div className="grid grid-cols-2 gap-2 text-xs font-bold">
+                <div><span className="text-slate-400">Date:</span> <span className="text-slate-800">{pickedExam.scheduled_date ?? '—'}</span></div>
+                <div><span className="text-slate-400">Duration:</span> <span className="text-slate-800">{pickedExam.duration ?? '—'} min</span></div>
+                <div><span className="text-slate-400">Max Marks:</span> <span className="text-slate-800">{pickedExam.max_marks ?? '—'}</span></div>
+                <div><span className="text-slate-400">Subject:</span> <span className="text-slate-800 truncate">{pickedExam.subject}</span></div>
+              </div>
+            </div>
+          )}
+
+          {/* Editable instructions */}
+          {pickedExam && (
+            <div>
+              <div className="flex items-center justify-between mb-2">
+                <label className="text-xs font-black uppercase tracking-widest text-slate-400">Instructions</label>
+                <button onClick={() => setInstructions(DEFAULT_INSTRUCTIONS.join('\n'))}
+                  className="text-[10px] font-black text-slate-400 hover:text-slate-600 uppercase tracking-widest">
+                  Reset
+                </button>
+              </div>
+              <textarea value={instructions} onChange={e => setInstructions(e.target.value)}
+                rows={5}
+                placeholder="Ek line per ek instruction…"
+                className="w-full border border-slate-200 bg-white rounded-xl px-4 py-3 font-bold text-sm outline-none focus:border-rose-400 resize-none"/>
+              <p className="text-[10px] font-bold text-slate-400 mt-1">Har line ek bullet ban jayegi. Khali line skip ho jayegi.</p>
+            </div>
+          )}
+
+          {canGenerate && printList.length > 0 && (
+            <button onClick={() => setShowPrint(true)}
+              className="w-full flex items-center justify-center gap-2 bg-rose-600 text-white font-black text-sm uppercase py-4 rounded-2xl active:scale-95 hover:bg-rose-700 transition-all shadow-md">
+              <Ticket size={16} /> Generate {printList.length === 1 ? 'Admit Card' : `${printList.length} Admit Cards`}
             </button>
           )}
         </div>
@@ -1123,50 +1353,50 @@ export const ToolsManager: React.FC<Props> = ({ onBack }) => {
   ];
 
   return (
-    <div className="w-full flex flex-col">
+    <div className="w-full flex flex-col lg:max-w-6xl lg:mx-auto">
 
       {/* Sticky header + school info */}
       <div className="sticky top-0 bg-white z-10 border-b border-slate-100 shadow-sm">
-        <div className="px-4 pt-4 pb-3 flex items-center gap-3">
-          <button onClick={onBack} className="p-2 -ml-2 bg-slate-100 rounded-full">
+        <div className="px-4 lg:px-6 pt-4 lg:pt-6 pb-3 lg:pb-4 flex items-center gap-3">
+          <button onClick={onBack} className="p-2 -ml-2 bg-slate-100 rounded-full hover:bg-slate-200 transition-colors">
             <ArrowLeft size={20} className="text-slate-600" />
           </button>
-          <h2 className="text-xl font-black text-slate-900 uppercase tracking-tight">Tools & Generators</h2>
+          <h2 className="text-xl lg:text-2xl font-black text-slate-900 uppercase tracking-tight">Tools & Generators</h2>
         </div>
 
         {/* School info banner */}
         {schoolInfo?.name ? (
-          <div className="mx-4 mb-4 bg-gradient-to-r from-slate-800 to-slate-900 rounded-2xl p-4 text-white">
-            <div className="flex items-start gap-3">
-              <div className="w-10 h-10 rounded-xl bg-white/10 flex items-center justify-center shrink-0">
+          <div className="mx-4 lg:mx-6 mb-4 lg:mb-5 bg-gradient-to-r from-slate-800 to-slate-900 rounded-2xl p-4 lg:p-5 text-white">
+            <div className="flex items-start gap-3 lg:gap-4">
+              <div className="w-10 h-10 lg:w-12 lg:h-12 rounded-xl bg-white/10 flex items-center justify-center shrink-0">
                 <GraduationCap size={22} className="text-white/80" />
               </div>
               <div className="min-w-0 flex-1">
-                <h3 className="font-black text-sm leading-snug text-white">{schoolInfo.name}</h3>
+                <h3 className="font-black text-sm lg:text-lg leading-snug text-white">{schoolInfo.name}</h3>
                 {schoolInfo.address && (
-                  <p className="text-[10px] font-medium text-white/60 mt-1 leading-snug">
+                  <p className="text-[10px] lg:text-xs font-medium text-white/60 mt-1 leading-snug">
                     {schoolInfo.address}{schoolInfo.city ? `, ${schoolInfo.city}` : ''}
                     {schoolInfo.state ? `, ${schoolInfo.state}` : ''}
                   </p>
                 )}
                 <div className="flex flex-wrap gap-x-3 gap-y-0.5 mt-1.5">
                   {schoolInfo.phone && (
-                    <span className="text-[10px] font-bold text-white/50">📞 {schoolInfo.phone}</span>
+                    <span className="text-[10px] lg:text-[11px] font-bold text-white/50">📞 {schoolInfo.phone}</span>
                   )}
                   {schoolInfo.email && (
-                    <span className="text-[10px] font-bold text-white/50">✉ {schoolInfo.email}</span>
+                    <span className="text-[10px] lg:text-[11px] font-bold text-white/50">✉ {schoolInfo.email}</span>
                   )}
                   {schoolInfo.affiliationBoard && (
-                    <span className="text-[10px] font-bold text-white/40">{schoolInfo.affiliationBoard}</span>
+                    <span className="text-[10px] lg:text-[11px] font-bold text-white/40">{schoolInfo.affiliationBoard}</span>
                   )}
                 </div>
               </div>
             </div>
           </div>
         ) : (
-          <div className="mx-4 mb-4 bg-amber-50 border border-amber-200 rounded-2xl p-3 flex items-start gap-2">
+          <div className="mx-4 lg:mx-6 mb-4 lg:mb-5 bg-amber-50 border border-amber-200 rounded-2xl p-3 lg:p-4 flex items-start gap-2">
             <span className="text-amber-500 text-sm">⚠</span>
-            <p className="text-xs font-bold text-amber-700">
+            <p className="text-xs lg:text-sm font-bold text-amber-700">
               School info not set — go to Settings to add your school name and details.
             </p>
           </div>
@@ -1174,21 +1404,22 @@ export const ToolsManager: React.FC<Props> = ({ onBack }) => {
       </div>
 
       {/* Tool cards grid */}
-      <div className="p-4 space-y-3">
-        <p className="text-[10px] font-black uppercase tracking-widest text-slate-400 px-1">Document Tools</p>
+      <div className="p-4 lg:p-6 space-y-3 lg:space-y-4">
+        <p className="text-[10px] lg:text-xs font-black uppercase tracking-widest text-slate-400 px-1">Document Tools</p>
 
-        <div className="grid grid-cols-2 gap-3">
+        <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 lg:gap-4">
           {TOOLS.map(tool => {
             const Icon = tool.icon;
             return (
               <button key={tool.label} onClick={() => setView(tool.view)}
-                className={`flex flex-col items-start gap-3 p-4 rounded-2xl border-2 active:scale-95 transition-all ${tool.card}`}>
-                <div className={`w-10 h-10 rounded-xl flex items-center justify-center ${tool.icon_}`}>
-                  <Icon size={20} />
+                className={`flex flex-col items-start gap-3 lg:gap-4 p-4 lg:p-5 rounded-2xl border-2 active:scale-95 hover:scale-[1.02] hover:shadow-md transition-all ${tool.card}`}>
+                <div className={`w-10 h-10 lg:w-12 lg:h-12 rounded-xl flex items-center justify-center ${tool.icon_}`}>
+                  <Icon size={20} className="lg:hidden"/>
+                  <Icon size={24} className="hidden lg:block"/>
                 </div>
                 <div className="min-w-0 w-full">
-                  <p className="text-xs font-black text-slate-900 leading-tight">{tool.label}</p>
-                  <p className="text-[9px] font-bold text-slate-500 mt-0.5 leading-snug">{tool.desc}</p>
+                  <p className="text-xs lg:text-sm font-black text-slate-900 leading-tight">{tool.label}</p>
+                  <p className="text-[9px] lg:text-[11px] font-bold text-slate-500 mt-0.5 leading-snug">{tool.desc}</p>
                 </div>
                 <div className="self-end">
                   <ChevronRight size={14} className="text-slate-400" />
@@ -1198,9 +1429,9 @@ export const ToolsManager: React.FC<Props> = ({ onBack }) => {
           })}
         </div>
 
-        <div className="bg-slate-100 rounded-2xl p-3 text-center mt-2">
-          <p className="text-[9px] font-black text-slate-400 uppercase tracking-widest">More tools coming soon</p>
-          <p className="text-[9px] font-bold text-slate-300 mt-0.5">Hall passes, attendance reports & more</p>
+        <div className="bg-slate-100 rounded-2xl p-3 lg:p-4 text-center mt-2">
+          <p className="text-[9px] lg:text-[11px] font-black text-slate-400 uppercase tracking-widest">More tools coming soon</p>
+          <p className="text-[9px] lg:text-[11px] font-bold text-slate-300 mt-0.5">Hall passes, attendance reports & more</p>
         </div>
       </div>
     </div>

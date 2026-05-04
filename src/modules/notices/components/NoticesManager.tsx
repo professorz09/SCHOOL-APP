@@ -1,13 +1,20 @@
 import React, { useCallback, useEffect, useState } from 'react';
-import { ArrowLeft, Plus, Bell, Trash2, Pin } from 'lucide-react';
+import { ArrowLeft, Plus, Bell, Trash2, Pin, User, Search } from 'lucide-react';
 import { noticeService } from '@/modules/notices/notice.service';
 import type { Notice, NoticeAudience } from '@/modules/notices/notice.types';
 import { useUIStore } from '@/store/uiStore';
 import { useRealtimeTable } from '@/shared/hooks/useRealtimeTable';
+import { studentService } from '@/modules/students/student.service';
+import type { Student } from '@/modules/students/student.types';
 
 type View = 'LIST' | 'COMPOSE';
 
-const AUDIENCES: NoticeAudience[] = ['ALL', 'STUDENTS', 'TEACHERS', 'STAFF', 'PARENTS'];
+const AUDIENCES: NoticeAudience[] = ['ALL', 'STUDENTS', 'TEACHERS', 'STAFF', 'PARENTS', 'SPECIFIC_STUDENT'];
+
+const AUDIENCE_LABEL: Record<NoticeAudience, string> = {
+  ALL: 'All', STUDENTS: 'Students', TEACHERS: 'Teachers',
+  STAFF: 'Staff', PARENTS: 'Parents', SPECIFIC_STUDENT: 'Specific Student',
+};
 
 const audienceColor = (a: NoticeAudience) => {
   const map: Record<NoticeAudience, string> = {
@@ -16,6 +23,7 @@ const audienceColor = (a: NoticeAudience) => {
     TEACHERS: 'bg-blue-50 text-blue-700',
     STAFF: 'bg-emerald-50 text-emerald-700',
     PARENTS: 'bg-violet-50 text-violet-700',
+    SPECIFIC_STUDENT: 'bg-rose-50 text-rose-700',
   };
   return map[a];
 };
@@ -26,11 +34,20 @@ export const NoticesManager: React.FC<Props> = ({ onBack }) => {
   const { showToast } = useUIStore();
   const [view, setView] = useState<View>('LIST');
   const [notices, setNotices] = useState<Notice[]>([]);
-  const [form, setForm] = useState<{ title: string; body: string; audience: NoticeAudience; pinned: boolean }>({
+  const [form, setForm] = useState<{
+    title: string; body: string; audience: NoticeAudience; pinned: boolean;
+    targetStudentId: string | null; targetStudentName: string;
+  }>({
     title: '', body: '', audience: 'ALL', pinned: false,
+    targetStudentId: null, targetStudentName: '',
   });
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState<Notice | null>(null);
+
+  // Lazy student list — only fetched when the principal picks SPECIFIC_STUDENT.
+  // Kept in component state to avoid a fresh fetch every keystroke.
+  const [students, setStudents] = useState<Student[] | null>(null);
+  const [studentSearch, setStudentSearch] = useState('');
 
   const loadNotices = useCallback(() => {
     noticeService.invalidate();
@@ -40,14 +57,31 @@ export const NoticesManager: React.FC<Props> = ({ onBack }) => {
   useEffect(() => { loadNotices(); }, [loadNotices]);
   useRealtimeTable('notices', loadNotices);
 
+  // Fetch students the first time the principal switches to SPECIFIC_STUDENT.
+  useEffect(() => {
+    if (form.audience !== 'SPECIFIC_STUDENT' || students !== null) return;
+    studentService.getAll().then(setStudents).catch(() => setStudents([]));
+  }, [form.audience, students]);
+
   const handleSend = async () => {
     if (!form.title || !form.body) { showToast('Title and body required', 'error'); return; }
+    if (form.audience === 'SPECIFIC_STUDENT' && !form.targetStudentId) {
+      showToast('Pick a student to send to', 'error'); return;
+    }
     setIsSubmitting(true);
     try {
-      const notice = await noticeService.create({ ...form, sentBy: '' });
+      const notice = await noticeService.create({
+        title: form.title, body: form.body, audience: form.audience,
+        pinned: form.pinned, sentBy: '',
+        targetStudentId: form.audience === 'SPECIFIC_STUDENT' ? form.targetStudentId : null,
+      });
       setNotices(prev => [notice, ...prev]);
-      showToast(`Notice sent to ${form.audience}`);
-      setForm({ title: '', body: '', audience: 'ALL', pinned: false });
+      const dest = form.audience === 'SPECIFIC_STUDENT' && form.targetStudentName
+        ? `to ${form.targetStudentName}`
+        : `to ${AUDIENCE_LABEL[form.audience]}`;
+      showToast(`Notice sent ${dest}`);
+      setForm({ title: '', body: '', audience: 'ALL', pinned: false, targetStudentId: null, targetStudentName: '' });
+      setStudentSearch('');
       setView('LIST');
     } finally { setIsSubmitting(false); }
   };
@@ -78,16 +112,74 @@ export const NoticesManager: React.FC<Props> = ({ onBack }) => {
             <label className="block text-[10px] font-black uppercase tracking-widest text-slate-500 mb-1.5">Send To</label>
             <div className="grid grid-cols-3 gap-2">
               {AUDIENCES.map(a => (
-                <button key={a} onClick={() => setForm(f => ({ ...f, audience: a }))}
-                  className={`py-2 rounded-xl text-[10px] font-black uppercase tracking-widest transition-colors ${form.audience === a ? audienceColor(a) : 'bg-slate-50 border border-slate-200 text-slate-400'}`}>
-                  {a}
+                <button key={a} onClick={() => setForm(f => ({ ...f, audience: a, targetStudentId: null, targetStudentName: '' }))}
+                  className={`py-2 px-1 rounded-xl text-[10px] font-black uppercase tracking-widest transition-colors ${form.audience === a ? audienceColor(a) : 'bg-slate-50 border border-slate-200 text-slate-400'}`}>
+                  {AUDIENCE_LABEL[a]}
                 </button>
               ))}
             </div>
             <p className="text-[10px] font-bold text-slate-400 mt-1.5">
-              STAFF reaches all teachers and non-teaching staff (drivers, peons, accountants, etc.).
+              STAFF reaches all teachers and non-teaching staff. SPECIFIC STUDENT delivers a personal notice to one student only.
             </p>
           </div>
+
+          {/* Student picker — only when audience = SPECIFIC_STUDENT */}
+          {form.audience === 'SPECIFIC_STUDENT' && (
+            <div>
+              <label className="block text-[10px] font-black uppercase tracking-widest text-slate-500 mb-1.5">Pick Student *</label>
+              {form.targetStudentId ? (
+                <div className="flex items-center justify-between bg-rose-50 border border-rose-200 rounded-xl px-3 py-2.5">
+                  <div className="flex items-center gap-2 min-w-0">
+                    <div className="w-8 h-8 rounded-full bg-rose-200 text-rose-700 flex items-center justify-center font-black text-xs shrink-0">
+                      {form.targetStudentName.split(' ').map(w => w[0]).join('').slice(0,2).toUpperCase()}
+                    </div>
+                    <div className="font-black text-sm text-slate-900 truncate">{form.targetStudentName}</div>
+                  </div>
+                  <button onClick={() => setForm(f => ({ ...f, targetStudentId: null, targetStudentName: '' }))}
+                    className="text-[10px] font-black text-rose-600 px-2 py-1 hover:bg-rose-100 rounded">
+                    Change
+                  </button>
+                </div>
+              ) : (
+                <div className="space-y-2">
+                  <div className="relative">
+                    <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400"/>
+                    <input value={studentSearch} onChange={e => setStudentSearch(e.target.value)}
+                      placeholder="Search by name, roll, admission no…"
+                      className="w-full pl-9 pr-3 py-2.5 border border-slate-200 bg-slate-50 rounded-xl text-sm font-bold text-slate-800 outline-none focus:border-rose-400"/>
+                  </div>
+                  <div className="max-h-56 overflow-y-auto border border-slate-100 rounded-xl bg-white">
+                    {students === null ? (
+                      <p className="text-center py-4 text-xs font-bold text-slate-400">Loading students…</p>
+                    ) : (() => {
+                      const q = studentSearch.trim().toLowerCase();
+                      const matches = students.filter(s =>
+                        !q || s.name.toLowerCase().includes(q)
+                          || s.admissionNo.toLowerCase().includes(q)
+                          || (s.rollNo ?? '').includes(studentSearch)
+                      ).slice(0, 30);
+                      if (matches.length === 0) return (
+                        <p className="text-center py-4 text-xs font-bold text-slate-400">No matches</p>
+                      );
+                      return matches.map(s => (
+                        <button key={s.id}
+                          onClick={() => setForm(f => ({ ...f, targetStudentId: s.id, targetStudentName: s.name }))}
+                          className="w-full flex items-center gap-3 px-3 py-2.5 hover:bg-rose-50 active:bg-rose-100 transition-colors text-left border-b border-slate-50 last:border-0">
+                          <div className="w-8 h-8 rounded-full bg-slate-100 text-slate-600 flex items-center justify-center shrink-0">
+                            <User size={14}/>
+                          </div>
+                          <div className="flex-1 min-w-0">
+                            <div className="font-black text-sm text-slate-900 truncate">{s.name}</div>
+                            <div className="text-[10px] font-bold text-slate-400">{s.className ? `${s.className}-${s.section} · ` : ''}{s.admissionNo}</div>
+                          </div>
+                        </button>
+                      ));
+                    })()}
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
           <div>
             <label className="block text-[10px] font-black uppercase tracking-widest text-slate-500 mb-1.5">Title *</label>
             <input value={form.title} onChange={e => setForm(f => ({ ...f, title: e.target.value }))}
@@ -138,9 +230,16 @@ export const NoticesManager: React.FC<Props> = ({ onBack }) => {
         {notices.map(notice => (
           <div key={notice.id} className={`bg-white rounded-2xl border shadow-sm p-4 ${notice.pinned ? 'border-violet-200 bg-violet-50/30' : 'border-slate-100'}`}>
             <div className="flex items-start justify-between gap-2 mb-2">
-              <div className="flex items-center gap-2">
+              <div className="flex items-center gap-2 min-w-0 flex-wrap">
                 {notice.pinned && <Pin size={12} className="text-violet-500" />}
-                <span className={`text-[9px] font-black px-2 py-0.5 rounded-full uppercase ${audienceColor(notice.audience)}`}>{notice.audience}</span>
+                <span className={`text-[9px] font-black px-2 py-0.5 rounded-full uppercase ${audienceColor(notice.audience)}`}>
+                  {AUDIENCE_LABEL[notice.audience]}
+                </span>
+                {notice.audience === 'SPECIFIC_STUDENT' && notice.targetStudentName && (
+                  <span className="flex items-center gap-1 text-[9px] font-black text-rose-700 bg-rose-50 border border-rose-200 px-2 py-0.5 rounded-full">
+                    <User size={9}/> {notice.targetStudentName}
+                  </span>
+                )}
               </div>
               <div className="flex items-center gap-2">
                 <span className="text-[10px] font-bold text-slate-400">{notice.sentAt}</span>

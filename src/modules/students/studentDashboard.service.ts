@@ -15,23 +15,11 @@
 import { supabase } from '@/lib/supabase';
 import { useAuthStore } from '@/store/authStore';
 import { logAudit } from '@/lib/audit';
-import { apiHomework } from '@/lib/apiClient';
 import {
   TimetableDay, TimetablePeriod, PeriodType,
   StudentExamResult, FeePaymentUpload, TransportStop,
   StudentNotice, StudentComplaint,
 } from '@/roles/student/student-role.types';
-
-export interface HomeworkItem {
-  id: string;
-  subject: string;
-  title: string;
-  description: string;
-  assignedDate: string;
-  dueDate: string;
-  status: 'PENDING' | 'SUBMITTED' | 'OVERDUE';
-  teacher: string;
-}
 
 export interface UpcomingExam {
   id: string;
@@ -278,14 +266,6 @@ function mapComplaintStatus(raw: string | null): StudentComplaint['status'] {
     return v as StudentComplaint['status'];
   }
   return 'PENDING';
-}
-
-// ─── Homework status derivation ─────────────────────────────────────────────
-function deriveHwStatus(dueDate: string | null): HomeworkItem['status'] {
-  if (!dueDate) return 'PENDING';
-  const today = new Date(); today.setHours(0, 0, 0, 0);
-  const due = new Date(dueDate); due.setHours(0, 0, 0, 0);
-  return due < today ? 'OVERDUE' : 'PENDING';
 }
 
 // ─── Public API ─────────────────────────────────────────────────────────────
@@ -539,26 +519,49 @@ export const studentDashboardService = {
 
   async getNotices(): Promise<StudentNotice[]> {
     const ctx = await getStudentContext();
-    const { data, error } = await supabase
-      .from('notices')
-      .select('id, title, body, audience, sent_at, pinned')
-      .eq('school_id', ctx.schoolId).eq('is_active', true)
-      .in('audience', ['ALL', 'STUDENTS', 'STUDENTS_PARENTS', 'PARENTS_STUDENTS'])
-      .order('pinned', { ascending: false })
-      .order('sent_at', { ascending: false });
-    if (error) throw new Error(error.message);
+    // Two queries fan-out:
+    //   • Broadcast notices for this school where audience matches.
+    //   • Personal notices targeting THIS student (audience=SPECIFIC_STUDENT).
+    // Run in parallel and merge — RLS already filters cross-school rows.
+    const [broadcastRes, personalRes] = await Promise.all([
+      supabase
+        .from('notices')
+        .select('id, title, body, audience, sent_at, pinned, target_student_id')
+        .eq('school_id', ctx.schoolId).eq('is_active', true)
+        .in('audience', ['ALL', 'STUDENTS', 'STUDENTS_PARENTS', 'PARENTS_STUDENTS', 'PARENTS'])
+        .order('pinned', { ascending: false })
+        .order('sent_at', { ascending: false }),
+      supabase
+        .from('notices')
+        .select('id, title, body, audience, sent_at, pinned, target_student_id')
+        .eq('school_id', ctx.schoolId).eq('is_active', true)
+        .eq('target_student_id', ctx.studentId)
+        .order('pinned', { ascending: false })
+        .order('sent_at', { ascending: false }),
+    ]);
+    if (broadcastRes.error) throw new Error(broadcastRes.error.message);
+    if (personalRes.error)  throw new Error(personalRes.error.message);
 
-    return ((data ?? []) as Array<{
-      id: string; title: string; body: string; audience: string;
-      sent_at: string; pinned: boolean;
-    }>).map(n => ({
-      id: n.id,
-      title: n.title,
-      body: n.body,
-      sentAt: n.sent_at.slice(0, 10),
-      category: inferNoticeCategory(n.title, n.body),
-      pinned: n.pinned,
-    }));
+    type NRow = { id: string; title: string; body: string; audience: string;
+      sent_at: string; pinned: boolean; target_student_id: string | null };
+    // De-dupe by id (broadcast + personal can theoretically overlap on edge cases)
+    const merged = new Map<string, NRow>();
+    for (const r of [...(broadcastRes.data ?? []), ...(personalRes.data ?? [])] as NRow[]) {
+      merged.set(r.id, r);
+    }
+    return [...merged.values()]
+      .sort((a, b) =>
+        Number(b.pinned) - Number(a.pinned) ||
+        new Date(b.sent_at).getTime() - new Date(a.sent_at).getTime(),
+      )
+      .map(n => ({
+        id: n.id,
+        title: n.title,
+        body: n.body,
+        sentAt: n.sent_at.slice(0, 10),
+        category: n.target_student_id ? 'PERSONAL' : inferNoticeCategory(n.title, n.body),
+        pinned: n.pinned,
+      }));
   },
 
   async getComplaints(): Promise<StudentComplaint[]> {
@@ -622,22 +625,6 @@ export const studentDashboardService = {
       createdAt: r.created_at.slice(0, 10),
       response: r.response,
     };
-  },
-
-  async getHomework(): Promise<HomeworkItem[]> {
-    const ctx = await getStudentContext();
-    if (!ctx.sectionId) return [];
-    const rows = await apiHomework.list(ctx.sectionId, ctx.yearId);
-    return rows.map((r: any) => ({
-      id: r.id,
-      subject: r.subject ?? '',
-      title: r.title,
-      description: r.description ?? '',
-      assignedDate: r.assignedDate,
-      dueDate: r.dueDate,
-      status: deriveHwStatus(r.dueDate),
-      teacher: r.teacher ?? '',
-    }));
   },
 
   async getMyAttendance(): Promise<{ weekDays: AttendanceWeekDay[]; months: AttendanceMonth[] }> {

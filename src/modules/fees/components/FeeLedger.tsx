@@ -3,9 +3,10 @@ import {
   ArrowLeft, IndianRupee, CheckCircle2, AlertTriangle, Clock, X,
   ShieldCheck, Search, Printer, Banknote, Smartphone, CreditCard,
   Building2, FileCheck, ChevronRight, Receipt, TrendingDown, Users, Filter,
-  RefreshCw, Download, ChevronDown,
+  RefreshCw, Download, ChevronDown, Calendar, RotateCcw,
 } from 'lucide-react';
 import { feeService, FeeInstallment, FeeStatus, FeeType, PaymentRecord, GovernmentPaymentRecord } from '@/modules/fees/fee.service';
+import { exportCsv } from '@/shared/utils/csv';
 import { studentService } from '@/modules/students/student.service';
 import type { FeeStructureRecord } from '@/modules/fees/fees.types';
 import { useUIStore } from '@/store/uiStore';
@@ -43,26 +44,35 @@ interface StudentFeeProfile {
 // `undefined` lookup if a new status enum value lands before the UI ships).
 const STATUS_COLOR_FALLBACK = 'bg-slate-100 text-slate-500 border-slate-200';
 const STATUS_BAR_FALLBACK = 'bg-slate-300';
+// Status palette:
+//   UPCOMING → slate (info), DUE → rose (action), PAID → emerald,
+//   PARTIAL  → amber (on-track partial), PARTIAL_DUE → rose (overdue partial)
+// UNPAID / OVERDUE legacy values mirror UPCOMING / DUE.
 const STATUS_COLOR: Record<FeeStatus, string> = {
   PAID:        'bg-emerald-50 text-emerald-700 border-emerald-200',
   PARTIAL:     'bg-amber-50 text-amber-700 border-amber-200',
-  UNPAID:      'bg-rose-50 text-rose-700 border-rose-200',
-  OVERDUE:     'bg-red-100 text-red-700 border-red-300',
+  PARTIAL_DUE: 'bg-rose-50 text-rose-700 border-rose-200',
+  UPCOMING:    'bg-slate-50 text-slate-600 border-slate-200',
+  DUE:         'bg-rose-50 text-rose-700 border-rose-200',
+  UNPAID:      'bg-slate-50 text-slate-600 border-slate-200',
+  OVERDUE:     'bg-rose-50 text-rose-700 border-rose-200',
   WAIVED:      'bg-slate-100 text-slate-500 border-slate-200',
   WRITTEN_OFF: 'bg-slate-100 text-slate-500 border-slate-200',
   CANCELLED:   'bg-slate-100 text-slate-500 border-slate-200 line-through',
 };
 const STATUS_BAR: Record<FeeStatus, string> = {
-  PAID: 'bg-emerald-500', PARTIAL: 'bg-amber-400', UNPAID: 'bg-rose-400',
-  OVERDUE: 'bg-red-500',
+  PAID: 'bg-emerald-500', PARTIAL: 'bg-amber-400', PARTIAL_DUE: 'bg-rose-500',
+  UPCOMING: 'bg-slate-300', DUE: 'bg-rose-500',
+  UNPAID: 'bg-slate-300', OVERDUE: 'bg-rose-500',
   WAIVED: 'bg-slate-300', WRITTEN_OFF: 'bg-slate-300',
   CANCELLED: 'bg-slate-300',
 };
 const STATUS_ICON = (s: FeeStatus) => {
-  if (s === 'PAID')    return <CheckCircle2 size={11} className="text-emerald-500" />;
-  if (s === 'PARTIAL') return <AlertTriangle size={11} className="text-amber-500" />;
-  if (s === 'UNPAID')  return <Clock size={11} className="text-rose-500" />;
-  if (s === 'OVERDUE') return <AlertTriangle size={11} className="text-red-600" />;
+  if (s === 'PAID')                              return <CheckCircle2 size={11} className="text-emerald-500" />;
+  if (s === 'PARTIAL')                           return <AlertTriangle size={11} className="text-amber-500" />;
+  if (s === 'PARTIAL_DUE')                       return <AlertTriangle size={11} className="text-rose-600" />;
+  if (s === 'UPCOMING' || s === 'UNPAID')        return <Clock size={11} className="text-slate-500" />;
+  if (s === 'DUE' || s === 'OVERDUE')            return <AlertTriangle size={11} className="text-rose-600" />;
   return <X size={11} className="text-slate-400" />;
 };
 
@@ -104,6 +114,11 @@ export const FeeLedger: React.FC<Props> = ({ onBack }) => {
   const [writeOffModal, setWriteOffModal]   = useState<FeeInstallment | null>(null);
   const [govtPayModal, setGovtPayModal]     = useState(false);
   const [receiptModal, setReceiptModal]     = useState<PaymentRecord | null>(null);
+  // Payment reversal — only set while the confirm modal is open. The list
+  // refresh + receipt close happen on success.
+  const [reverseTarget, setReverseTarget]   = useState<PaymentRecord | null>(null);
+  const [reverseReason, setReverseReason]   = useState('');
+  const [reversing, setReversing]           = useState(false);
   const [regenModal, setRegenModal]         = useState(false);
 
   // Form states
@@ -275,6 +290,52 @@ export const FeeLedger: React.FC<Props> = ({ onBack }) => {
     }
   };
 
+  // Payment reversal — UI mirrors the server guards so the button only shows
+  // when the action will actually succeed. createdAt drives same-day check
+  // because `date` may be back-dated when the principal records a delayed
+  // entry, but createdAt is when the row was actually inserted.
+  const istToday = (): string =>
+    new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Kolkata' });
+  const istDateOf = (iso?: string): string | null => {
+    if (!iso) return null;
+    return new Date(iso).toLocaleDateString('en-CA', { timeZone: 'Asia/Kolkata' });
+  };
+  const canReverse = (p: PaymentRecord): boolean => {
+    if (!editorMode.isActive())          return false;
+    if (p.amount <= 0)                   return false; // already a reversal
+    if (p.reversedAt || p.reversesPaymentId) return false;
+    return istDateOf(p.createdAt) === istToday();
+  };
+  const handleReverseConfirm = async () => {
+    if (!reverseTarget) return;
+    const reason = reverseReason.trim();
+    if (reason.length < 3) { showToast('Reason required (min 3 chars)', 'error'); return; }
+    setReversing(true);
+    try {
+      await feeService.reversePayment(reverseTarget.id, reason, editorMode.isActive());
+      setPaymentTransactions(feeService.getPaymentHistory());
+      // Re-resolve the selected student's profile so installment statuses
+      // (and the schedule's "Paid / Due" totals) reflect the rolled-back state.
+      if (selected) {
+        const updated = feeService.getStudentFeeProfile(
+          selected.studentId, selected.name, selected.className,
+          selected.admissionNo, selected.isRte,
+        );
+        updateStudent(updated);
+        setSelected(updated);
+        await reloadYearGroups(selected.studentId);
+      }
+      setReverseTarget(null);
+      setReverseReason('');
+      setReceiptModal(null);
+      showToast('Payment reversed');
+    } catch (e) {
+      showToast(e instanceof Error ? e.message : 'Reversal failed', 'error');
+    } finally {
+      setReversing(false);
+    }
+  };
+
   const handleDownloadPdf = async (r: PaymentRecord) => {
     const node = receiptCardRef.current;
     if (!node) { showToast('Receipt not ready', 'error'); return; }
@@ -370,15 +431,13 @@ export const FeeLedger: React.FC<Props> = ({ onBack }) => {
 
   const handlePrintReceipt = (r: PaymentRecord) => {
     const breakdown = r.installmentDetails.length > 0
-      ? `<table style="width:100%;border-collapse:collapse;margin:12px 0;">
-          <thead><tr><th style="text-align:left;font-size:10px;color:#64748b;padding:4px 0;border-bottom:1px solid #e2e8f0;">Month / Type</th><th style="text-align:right;font-size:10px;color:#64748b;padding:4px 0;border-bottom:1px solid #e2e8f0;">Amount</th></tr></thead>
-          <tbody>
-            ${r.installmentDetails.map(d => `<tr><td style="font-size:12px;padding:5px 0;border-bottom:1px solid #f1f5f9;">${d.month} · ${FEE_TYPE_LABEL[d.feeType] ?? d.feeType}</td><td style="text-align:right;font-size:12px;font-weight:700;padding:5px 0;border-bottom:1px solid #f1f5f9;">₹${d.amount.toLocaleString('en-IN')}</td></tr>`).join('')}
-            ${r.advanceAmount > 0 ? `<tr><td style="font-size:12px;color:#7c3aed;padding:5px 0;">Advance Credit</td><td style="text-align:right;font-size:12px;color:#7c3aed;font-weight:700;padding:5px 0;">₹${r.advanceAmount.toLocaleString('en-IN')}</td></tr>` : ''}
-          </tbody>
-        </table>`
+      ? `<div class="section-label">Particulars</div>
+         <div class="items">
+           ${r.installmentDetails.map(d => `<div class="item"><span>${d.month} · ${FEE_TYPE_LABEL[d.feeType] ?? d.feeType}</span><span>₹${d.amount.toLocaleString('en-IN')}</span></div>`).join('')}
+           ${r.advanceAmount > 0 ? `<div class="item advance"><span>Advance Credit Added</span><span>₹${r.advanceAmount.toLocaleString('en-IN')}</span></div>` : ''}
+         </div>`
       : '';
-    const note = r.note ? `<div style="margin-top:12px;padding:10px 12px;background:#f8fafc;border:1px solid #e2e8f0;border-radius:8px;"><p style="font-size:10px;color:#94a3b8;font-weight:700;text-transform:uppercase;letter-spacing:.06em;margin:0 0 4px;">Note</p><p style="font-size:13px;color:#475569;margin:0;">${r.note}</p></div>` : '';
+    // Note is internal-only — never rendered on the printed receipt.
     const html = `<!DOCTYPE html>
 <html>
 <head>
@@ -386,36 +445,58 @@ export const FeeLedger: React.FC<Props> = ({ onBack }) => {
   <title>Fee Receipt – ${r.receiptNo}</title>
   <style>
     * { box-sizing: border-box; margin: 0; padding: 0; font-family: 'Segoe UI', Arial, sans-serif; }
-    body { background: #fff; padding: 32px; max-width: 420px; margin: auto; color: #1e293b; }
-    .school { text-align: center; margin-bottom: 20px; padding-bottom: 16px; border-bottom: 2px dashed #e2e8f0; }
-    .school h1 { font-size: 18px; font-weight: 900; letter-spacing: .04em; text-transform: uppercase; }
-    .school p { font-size: 10px; color: #94a3b8; font-weight: 700; letter-spacing: .1em; text-transform: uppercase; margin-top: 4px; }
-    .badge { display: inline-block; margin-top: 8px; background: #d1fae5; color: #065f46; font-size: 11px; font-weight: 900; padding: 3px 14px; border-radius: 999px; }
-    .row { display: flex; justify-content: space-between; align-items: center; padding: 5px 0; border-bottom: 1px solid #f1f5f9; }
-    .row span:first-child { font-size: 11px; color: #64748b; font-weight: 600; }
-    .row span:last-child { font-size: 12px; font-weight: 800; color: #1e293b; }
-    .total { display: flex; justify-content: space-between; align-items: center; background: #1e293b; color: #fff; padding: 12px 16px; border-radius: 10px; margin-top: 14px; }
-    .total span:first-child { font-size: 12px; font-weight: 900; text-transform: uppercase; letter-spacing: .06em; }
-    .total span:last-child { font-size: 20px; font-weight: 900; }
-    .footer { margin-top: 24px; text-align: center; font-size: 10px; color: #94a3b8; border-top: 1px dashed #e2e8f0; padding-top: 12px; }
+    body { background: #fff; padding: 28px; max-width: 460px; margin: auto; color: #1e293b; }
+    .card { border: 1px solid #e2e8f0; border-radius: 14px; overflow: hidden; }
+    .header { background: linear-gradient(90deg, #4f46e5, #2563eb); color: #fff; padding: 16px 20px; }
+    .header-row { display: flex; justify-content: space-between; align-items: center; }
+    .header h1 { font-size: 18px; font-weight: 900; letter-spacing: .04em; text-transform: uppercase; }
+    .header .sub { font-size: 9px; opacity: .85; letter-spacing: .15em; text-transform: uppercase; margin-top: 2px; }
+    .badge { background: rgba(255,255,255,.22); color: #fff; font-size: 10px; font-weight: 900; padding: 3px 10px; border-radius: 999px; border: 1px solid rgba(255,255,255,.3); }
+    .ribbon { text-align: center; font-size: 10px; font-weight: 900; letter-spacing: .25em; text-transform: uppercase; margin-top: 10px; padding-top: 8px; border-top: 1px solid rgba(255,255,255,.25); opacity: .95; }
+    .body { padding: 18px 20px; }
+    .meta { display: grid; grid-template-columns: 1fr 1fr; gap: 8px 16px; padding-bottom: 14px; margin-bottom: 14px; border-bottom: 1px dashed #e2e8f0; }
+    .meta .label { font-size: 9px; color: #94a3b8; font-weight: 800; text-transform: uppercase; letter-spacing: .15em; }
+    .meta .val { font-size: 12px; color: #1e293b; font-weight: 800; }
+    .section-label { font-size: 9px; color: #94a3b8; font-weight: 800; text-transform: uppercase; letter-spacing: .15em; margin-bottom: 6px; }
+    .items { background: #f8fafc; border: 1px solid #f1f5f9; border-radius: 10px; overflow: hidden; margin-bottom: 12px; }
+    .item { display: flex; justify-content: space-between; padding: 8px 12px; border-bottom: 1px solid #f1f5f9; }
+    .item:last-child { border-bottom: 0; }
+    .item span:first-child { font-size: 11px; color: #475569; font-weight: 700; }
+    .item span:last-child { font-size: 11px; color: #0f172a; font-weight: 900; }
+    .item.advance { background: #f5f3ff; border-top: 1px solid #ddd6fe; }
+    .item.advance span { color: #6d28d9 !important; }
+    .total { display: flex; justify-content: space-between; align-items: center; background: #0f172a; color: #fff; padding: 14px 18px; border-radius: 12px; }
+    .total span:first-child { font-size: 11px; font-weight: 900; text-transform: uppercase; letter-spacing: .15em; }
+    .total span:last-child { font-size: 22px; font-weight: 900; }
+    .footer { text-align: center; font-size: 9px; color: #94a3b8; font-style: italic; margin-top: 14px; padding-top: 10px; border-top: 1px dashed #e2e8f0; }
   </style>
 </head>
 <body>
-  <div class="school">
-    <h1>EduGrow School</h1>
-    <p>Fee Receipt</p>
-    <div class="badge">PAID ✓</div>
+  <div class="card">
+    <div class="header">
+      <div class="header-row">
+        <div>
+          <h1>EduGrow School</h1>
+          <div class="sub">School Management System</div>
+        </div>
+        <div class="badge">PAID ✓</div>
+      </div>
+      <div class="ribbon">Fee Receipt</div>
+    </div>
+    <div class="body">
+      <div class="meta">
+        <div><div class="label">Receipt No.</div><div class="val">${r.receiptNo}</div></div>
+        <div><div class="label">Date</div><div class="val">${r.date}</div></div>
+        <div><div class="label">Student</div><div class="val">${r.studentName}</div></div>
+        <div><div class="label">Adm. No.</div><div class="val">${r.admissionNo}</div></div>
+        <div><div class="label">Class</div><div class="val">${r.className}</div></div>
+        <div><div class="label">Method</div><div class="val">${r.method}</div></div>
+      </div>
+      ${breakdown}
+      <div class="total"><span>Total Paid</span><span>₹${r.amount.toLocaleString('en-IN')}</span></div>
+      <div class="footer">This is a computer-generated receipt</div>
+    </div>
   </div>
-  <div class="row"><span>Receipt No.</span><span>${r.receiptNo}</span></div>
-  <div class="row"><span>Date</span><span>${r.date}</span></div>
-  <div class="row"><span>Student</span><span>${r.studentName}</span></div>
-  <div class="row"><span>Class</span><span>${r.className}</span></div>
-  <div class="row"><span>Adm. No.</span><span>${r.admissionNo}</span></div>
-  <div class="row"><span>Method</span><span>${r.method}</span></div>
-  ${breakdown}
-  <div class="total"><span>Total Paid</span><span>₹${r.amount.toLocaleString('en-IN')}</span></div>
-  ${note}
-  <div class="footer">EduGrow School Management System · Thank you</div>
 </body>
 </html>`;
     const popup = window.open('', '_blank', 'width=500,height=700');
@@ -497,87 +578,117 @@ export const FeeLedger: React.FC<Props> = ({ onBack }) => {
     const pct           = totalDue > 0 ? Math.round((totalPaid / totalDue) * 100) : 100;
 
     return (
-      <div className="w-full bg-slate-50 flex flex-col animate-in slide-in-from-right-8 duration-300">
+      <div className="w-full bg-slate-50 flex flex-col animate-in slide-in-from-right-8 duration-300 lg:max-w-6xl lg:mx-auto">
         {/* Header */}
-        <div className="bg-white border-b border-slate-100 px-4 pt-4 pb-4 shadow-sm sticky top-0 z-10">
-          <div className="flex items-center gap-3 mb-4">
-            <button onClick={() => setSelected(null)} className="p-2 -ml-2 bg-slate-100 rounded-full text-slate-600">
+        <div className="bg-white border-b border-slate-100 px-4 lg:px-6 pt-4 lg:pt-6 pb-4 lg:pb-5 shadow-sm sticky top-0 z-10">
+          <div className="flex items-center gap-3 mb-4 lg:mb-5">
+            <button onClick={() => setSelected(null)} className="p-2 -ml-2 bg-slate-100 rounded-full text-slate-600 hover:bg-slate-200 transition-colors">
               <ArrowLeft size={20} />
             </button>
             <div className="flex-1 min-w-0">
               <div className="flex items-center gap-2">
-                <span className="font-black text-slate-900 text-lg truncate">{selected.name}</span>
-                {selected.isRte && <span className="flex items-center gap-0.5 text-[9px] font-black bg-emerald-100 text-emerald-700 px-2 py-0.5 rounded-full"><ShieldCheck size={9} /> RTE</span>}
+                <span className="font-black text-slate-900 text-lg lg:text-2xl truncate">{selected.name}</span>
+                {selected.isRte && <span className="flex items-center gap-0.5 text-[9px] lg:text-[10px] font-black bg-emerald-100 text-emerald-700 px-2 py-0.5 rounded-full"><ShieldCheck size={9} /> RTE</span>}
               </div>
-              <p className="text-[10px] font-bold text-slate-400">{selected.className} · {selected.admissionNo}</p>
+              <p className="text-[10px] lg:text-xs font-bold text-slate-400">{selected.className} · {selected.admissionNo}</p>
             </div>
           </div>
 
-          {/* Summary tiles */}
-          <div className="grid grid-cols-3 gap-2 mb-3">
-            <div className="bg-slate-50 rounded-xl p-2.5 text-center">
-              <div className="text-base font-black text-slate-900">₹{totalPaid.toLocaleString('en-IN')}</div>
-              <div className="text-[9px] font-black text-slate-400 uppercase tracking-widest mt-0.5">Collected</div>
+          {/* Summary tiles — bigger on desktop */}
+          <div className="grid grid-cols-3 gap-2 lg:gap-3 mb-3 lg:mb-4">
+            <div className="bg-slate-50 rounded-xl p-2.5 lg:p-4 text-center">
+              <div className="text-base lg:text-2xl font-black text-slate-900 tabular-nums">₹{totalPaid.toLocaleString('en-IN')}</div>
+              <div className="text-[9px] lg:text-[11px] font-black text-slate-400 uppercase tracking-widest mt-0.5 lg:mt-1">Collected</div>
             </div>
-            <div className="bg-rose-50 rounded-xl p-2.5 text-center">
-              <div className="text-base font-black text-rose-600">₹{parentSummary.total.toLocaleString('en-IN')}</div>
-              <div className="text-[9px] font-black text-slate-400 uppercase tracking-widest mt-0.5">Parent Due</div>
+            <div className="bg-rose-50 rounded-xl p-2.5 lg:p-4 text-center">
+              <div className="text-base lg:text-2xl font-black text-rose-600 tabular-nums">₹{parentSummary.total.toLocaleString('en-IN')}</div>
+              <div className="text-[9px] lg:text-[11px] font-black text-slate-400 uppercase tracking-widest mt-0.5 lg:mt-1">Parent Due</div>
             </div>
             {selected.isRte ? (
-              <div className="bg-emerald-50 rounded-xl p-2.5 text-center">
-                <div className="text-base font-black text-emerald-600">₹{govtSummary.total.toLocaleString('en-IN')}</div>
-                <div className="text-[9px] font-black text-slate-400 uppercase tracking-widest mt-0.5">Govt Due</div>
+              <div className="bg-emerald-50 rounded-xl p-2.5 lg:p-4 text-center">
+                <div className="text-base lg:text-2xl font-black text-emerald-600 tabular-nums">₹{govtSummary.total.toLocaleString('en-IN')}</div>
+                <div className="text-[9px] lg:text-[11px] font-black text-slate-400 uppercase tracking-widest mt-0.5 lg:mt-1">Govt Due</div>
               </div>
             ) : (
-              <div className="bg-indigo-50 rounded-xl p-2.5 text-center">
-                <div className="text-base font-black text-indigo-600">{pct}%</div>
-                <div className="text-[9px] font-black text-slate-400 uppercase tracking-widest mt-0.5">Paid</div>
+              <div className="bg-indigo-50 rounded-xl p-2.5 lg:p-4 text-center">
+                <div className="text-base lg:text-2xl font-black text-indigo-600 tabular-nums">{pct}%</div>
+                <div className="text-[9px] lg:text-[11px] font-black text-slate-400 uppercase tracking-widest mt-0.5 lg:mt-1">Paid</div>
               </div>
             )}
           </div>
 
           {/* Progress bar */}
-          <div className="h-2 bg-slate-100 rounded-full overflow-hidden">
+          <div className="h-2 lg:h-2.5 bg-slate-100 rounded-full overflow-hidden">
             <div className={`h-full rounded-full transition-all ${pct === 100 ? 'bg-emerald-500' : 'bg-blue-500'}`} style={{ width: `${pct}%` }} />
           </div>
 
           {/* Advance credit */}
           {advance > 0 && (
-            <div className="mt-2 flex items-center justify-between bg-violet-50 border border-violet-200 rounded-xl px-3 py-2">
-              <span className="text-[10px] font-black text-violet-600">Advance Credit</span>
-              <span className="text-sm font-black text-violet-700">₹{advance.toLocaleString('en-IN')}</span>
+            <div className="mt-2 lg:mt-3 flex items-center justify-between bg-violet-50 border border-violet-200 rounded-xl px-3 lg:px-4 py-2 lg:py-3">
+              <span className="text-[10px] lg:text-xs font-black text-violet-600">Advance Credit</span>
+              <span className="text-sm lg:text-base font-black text-violet-700 tabular-nums">₹{advance.toLocaleString('en-IN')}</span>
             </div>
           )}
         </div>
 
         {/* Tab bar */}
-        <div className="bg-white border-b border-slate-100 px-4 flex gap-5">
+        <div className="bg-white border-b border-slate-100 px-4 lg:px-6 flex gap-5 lg:gap-7 items-center">
           {(['SCHEDULE', 'HISTORY'] as const).map(t => (
             <button key={t} onClick={() => setDetailTab(t)}
-              className={`py-3 text-[10px] font-black uppercase tracking-widest border-b-2 transition-colors ${detailTab === t ? 'border-blue-600 text-blue-600' : 'border-transparent text-slate-400'}`}>
+              className={`py-3 lg:py-3.5 text-[10px] lg:text-xs font-black uppercase tracking-widest border-b-2 transition-colors ${detailTab === t ? 'border-blue-600 text-blue-600' : 'border-transparent text-slate-400 hover:text-slate-600'}`}>
               {t === 'SCHEDULE' ? 'Fee Schedule' : 'Payment History'}
             </button>
           ))}
           {editorMode.isActive() && (
             <button onClick={openRegenModal}
-              className={`${selected.isRte ? '' : 'ml-auto'} my-2 flex items-center gap-1 bg-amber-50 text-amber-700 text-[10px] font-black px-3 py-1.5 rounded-xl border border-amber-200 active:scale-95 transition-transform`}>
+              className={`${selected.isRte ? '' : 'ml-auto'} my-2 flex items-center gap-1 bg-amber-50 hover:bg-amber-100 text-amber-700 text-[10px] lg:text-[11px] font-black px-3 py-1.5 rounded-xl border border-amber-200 active:scale-95 transition-all`}>
               <RefreshCw size={11} /> Regenerate
             </button>
           )}
           {selected.isRte && (
             <button onClick={() => setGovtPayModal(true)}
-              className="ml-auto my-2 flex items-center gap-1 bg-blue-50 text-blue-700 text-[10px] font-black px-3 py-1.5 rounded-xl border border-blue-200 active:scale-95 transition-transform">
+              className="ml-auto my-2 flex items-center gap-1 bg-blue-50 hover:bg-blue-100 text-blue-700 text-[10px] lg:text-[11px] font-black px-3 py-1.5 rounded-xl border border-blue-200 active:scale-95 transition-all">
               <ShieldCheck size={11} /> Govt Pay
             </button>
           )}
+          <button
+            onClick={() => {
+              const scheduleRows = selected.installments.map(i => ({
+                kind: 'SCHEDULE',
+                month: i.month,
+                fee_type: i.feeType,
+                due_date: i.dueDate,
+                amount: i.amount,
+                paid: i.paidAmount,
+                discount: i.writeOffAmount,
+                status: i.status,
+                payer_type: i.payerType,
+              }));
+              const txnRows = paymentTransactions.filter(t => t.studentId === selected.studentId).map(t => ({
+                kind: 'PAYMENT',
+                date: t.date,
+                receipt_no: t.receiptNo,
+                method: t.method,
+                amount: t.amount,
+                discount: (t as { discountAmount?: number }).discountAmount ?? 0,
+                advance: t.advanceAmount,
+                installments: t.installmentDetails.map(d => `${d.month}:${d.feeType}=${d.amount}`).join(' | '),
+              }));
+              const safeName = selected.name.replace(/\s+/g, '_');
+              exportCsv(`fees_${safeName}_${selected.admissionNo}_${new Date().toISOString().slice(0, 10)}`,
+                [...scheduleRows, ...txnRows]);
+            }}
+            className={`${selected.isRte || editorMode.isActive() ? '' : 'ml-auto'} my-2 flex items-center gap-1 bg-slate-100 hover:bg-slate-200 text-slate-700 text-[10px] lg:text-[11px] font-black px-3 py-1.5 rounded-xl border border-slate-200 active:scale-95 transition-all`}>
+            <Download size={11} /> CSV
+          </button>
         </div>
 
-        <div className="flex-1 overflow-y-auto p-4  space-y-3">
+        <div className="flex-1 overflow-y-auto p-4 lg:p-6 space-y-3 lg:space-y-4">
 
           {/* ── COLLECT BUTTON (inside schedule tab) ──────────────────────── */}
           {detailTab === 'SCHEDULE' && (
             <button onClick={() => setPayModal(true)}
-              className="w-full flex items-center justify-center gap-2 bg-emerald-600 text-white font-black text-sm py-3.5 rounded-2xl shadow-md active:scale-[0.98] transition-transform">
+              className="w-full lg:w-auto lg:px-8 lg:self-start flex items-center justify-center gap-2 bg-emerald-600 hover:bg-emerald-700 text-white font-black text-sm lg:text-base py-3.5 lg:py-4 rounded-2xl shadow-md active:scale-[0.98] transition-all">
               <IndianRupee size={16} /> Collect Payment
             </button>
           )}
@@ -612,82 +723,155 @@ export const FeeLedger: React.FC<Props> = ({ onBack }) => {
               <div key={group.academicYearId} className="space-y-3">
                 <button
                   onClick={() => setCollapsedYears(prev => ({ ...prev, [group.academicYearId]: !prev[group.academicYearId] }))}
-                  className="w-full flex items-center justify-between bg-white border border-slate-200 rounded-2xl px-4 py-3 active:scale-[0.99] transition-transform">
-                  <div className="flex items-center gap-2 min-w-0">
-                    <span className="font-black text-slate-900 text-sm truncate">{group.yearLabel}</span>
-                    {group.isActive && <span className="text-[8px] font-black bg-emerald-100 text-emerald-700 px-2 py-0.5 rounded-full">ACTIVE</span>}
-                    <span className="text-[10px] font-bold text-slate-400">· {group.installments.length} items</span>
+                  className={`w-full flex items-center justify-between border rounded-2xl px-4 lg:px-5 py-3 lg:py-3.5 active:scale-[0.99] transition-all ${group.isActive ? 'bg-gradient-to-r from-blue-50 to-white border-blue-200 hover:border-blue-300' : 'bg-white border-slate-200 hover:border-slate-300'}`}>
+                  <div className="flex items-center gap-2.5 min-w-0">
+                    <div className={`w-9 h-9 rounded-xl flex items-center justify-center shrink-0 ${group.isActive ? 'bg-blue-600 text-white' : 'bg-slate-100 text-slate-400'}`}>
+                      <Calendar size={15} />
+                    </div>
+                    <div className="min-w-0 text-left">
+                      <div className="flex items-center gap-1.5">
+                        <span className="font-black text-slate-900 text-sm lg:text-base truncate">{group.yearLabel}</span>
+                        {group.isActive && <span className="text-[8px] font-black bg-emerald-100 text-emerald-700 px-1.5 py-0.5 rounded-full">ACTIVE</span>}
+                      </div>
+                      <div className="text-[10px] font-bold text-slate-400">{group.installments.length} installments · Total ₹{yearTotal.toLocaleString('en-IN')}</div>
+                    </div>
                   </div>
                   <div className="flex items-center gap-3 shrink-0">
                     <div className="text-right">
-                      <div className="text-[10px] font-black text-emerald-600">Paid ₹{yearPaid.toLocaleString('en-IN')}</div>
-                      {yearDue > 0 && <div className="text-[10px] font-black text-rose-500">Due ₹{yearDue.toLocaleString('en-IN')}</div>}
-                      {yearDue === 0 && <div className="text-[10px] font-black text-slate-400">of ₹{yearTotal.toLocaleString('en-IN')}</div>}
+                      <div className="text-[11px] font-black text-emerald-600 tabular-nums">₹{yearPaid.toLocaleString('en-IN')} <span className="text-slate-400 font-bold">paid</span></div>
+                      {yearDue > 0 && <div className="text-[11px] font-black text-rose-500 tabular-nums">₹{yearDue.toLocaleString('en-IN')} <span className="text-slate-400 font-bold">due</span></div>}
+                      {yearDue === 0 && yearTotal > 0 && <div className="text-[11px] font-black text-emerald-500">All clear</div>}
                     </div>
                     <ChevronDown size={16} className={`text-slate-400 transition-transform ${collapsed ? '-rotate-90' : ''}`} />
                   </div>
                 </button>
 
-                {!collapsed && group.installments
-                  .slice()
-                  .sort((a, b) => new Date(a.dueDate).getTime() - new Date(b.dueDate).getTime())
-                  .map(inst => {
+                {!collapsed && (() => {
+                  const sorted = group.installments.slice()
+                    .sort((a, b) => new Date(a.dueDate).getTime() - new Date(b.dueDate).getTime());
+                  // Split payable items from govt-covered ₹0 placeholders so each
+                  // section can render with its own header + uniform card heights.
+                  const realInsts = sorted.filter(i => !(i.amount === 0 && i.payerType === 'GOVERNMENT'));
+                  const govtZeros = sorted.filter(i => i.amount === 0 && i.payerType === 'GOVERNMENT');
+                  return (
+                  <div className="space-y-4">
+                  {realInsts.length > 0 && (
+                  <div>
+                  <div className="flex items-center gap-2 mb-2 px-1">
+                    <span className="text-[10px] font-black text-slate-500 uppercase tracking-widest">Payable Installments</span>
+                    <span className="text-[10px] font-bold text-slate-400">· {realInsts.length}</span>
+                  </div>
+                  <div className="grid grid-cols-1 lg:grid-cols-2 gap-3">
+                  {realInsts.map(inst => {
               const due = inst.amount - inst.paidAmount - inst.writeOffAmount;
               const receipt = feeService.getPaymentRecordByInstallmentId(inst.id);
+
               return (
-                <div key={inst.id} className="bg-white rounded-2xl border border-slate-100 shadow-sm overflow-hidden">
-                  {/* Status left strip */}
+                <div key={inst.id} className="bg-white rounded-2xl border border-slate-100 shadow-sm overflow-hidden hover:shadow-md hover:border-slate-200 transition-all">
                   <div className="flex">
-                    <div className={`w-1 shrink-0 ${STATUS_BAR[inst.status] ?? STATUS_BAR_FALLBACK}`} />
-                    <div className="flex-1 p-4">
-                      <div className="flex items-start justify-between gap-2">
-                        <div className="flex-1">
-                          <div className="flex items-center gap-2 mb-1 flex-wrap">
-                            <span className="font-extrabold text-slate-900 text-sm">{inst.month}</span>
-                            <span className={`text-[8px] font-black px-2 py-0.5 rounded-full ${FEE_TYPE_COLOR[inst.feeType] ?? 'bg-slate-100 text-slate-600'}`}>
+                    {/* Status accent strip */}
+                    <div className={`w-1.5 shrink-0 ${STATUS_BAR[inst.status] ?? STATUS_BAR_FALLBACK}`} />
+                    <div className="flex-1 p-3.5 lg:p-4">
+                      {/* Top row — month + amount on opposite ends */}
+                      <div className="flex items-start justify-between gap-3 mb-2">
+                        <div className="min-w-0">
+                          <div className="flex items-center gap-1.5 flex-wrap">
+                            <span className="font-black text-slate-900 text-base lg:text-lg leading-none">{inst.month}</span>
+                            <span className={`text-[9px] font-black px-1.5 py-0.5 rounded-md ${FEE_TYPE_COLOR[inst.feeType] ?? 'bg-slate-100 text-slate-600'}`}>
                               {FEE_TYPE_LABEL[inst.feeType] ?? inst.feeType}
                             </span>
                             {inst.payerType === 'GOVERNMENT' && (
-                              <span className="text-[8px] font-black px-2 py-0.5 rounded-full bg-emerald-50 text-emerald-700">
-                                RTE
-                              </span>
+                              <span className="text-[9px] font-black px-1.5 py-0.5 rounded-md bg-emerald-50 text-emerald-700">RTE</span>
                             )}
                           </div>
-                          <div className="text-[10px] font-bold text-slate-400">Due: {inst.dueDate}</div>
-                          {inst.writeOffReason && (
-                            <div className="text-[9px] font-bold text-indigo-500 mt-0.5 italic">Discount: {inst.writeOffReason}</div>
-                          )}
+                          <div className="text-[10px] lg:text-[11px] font-bold text-slate-400 mt-1">Due: {inst.dueDate}</div>
                         </div>
                         <div className="text-right shrink-0">
-                          <div className="font-black text-slate-900">₹{inst.amount.toLocaleString('en-IN')}</div>
-                          {inst.paidAmount > 0 && <div className="text-[10px] font-bold text-emerald-600">Paid ₹{inst.paidAmount.toLocaleString('en-IN')}</div>}
-                          {inst.writeOffAmount > 0 && <div className="text-[10px] font-bold text-indigo-500">Discount ₹{inst.writeOffAmount.toLocaleString('en-IN')}</div>}
-                          {due > 0 && <div className="text-[10px] font-bold text-rose-500">Due ₹{due.toLocaleString('en-IN')}</div>}
+                          <div className="font-black text-slate-900 text-base lg:text-lg tabular-nums leading-none">₹{inst.amount.toLocaleString('en-IN')}</div>
+                          <span className={`inline-flex items-center gap-1 mt-1.5 text-[9px] lg:text-[10px] font-black px-2 py-0.5 rounded-full border ${STATUS_COLOR[inst.status] ?? STATUS_COLOR_FALLBACK}`}>
+                            {STATUS_ICON(inst.status)} {inst.status}
+                          </span>
                         </div>
                       </div>
 
-                      <div className="flex items-center gap-2 mt-2 flex-wrap">
-                        <span className={`flex items-center gap-1 text-[9px] font-black px-2 py-0.5 rounded-full border ${STATUS_COLOR[inst.status] ?? STATUS_COLOR_FALLBACK}`}>
-                          {STATUS_ICON(inst.status)} {inst.status}
-                        </span>
-                        {receipt && (
-                          <button onClick={() => setReceiptModal(receipt)}
-                            className="flex items-center gap-1 text-[9px] font-black text-indigo-600 px-2 py-0.5 rounded-full border border-indigo-200 bg-indigo-50">
-                            <Printer size={9} /> Receipt
-                          </button>
-                        )}
-                        {(inst.status === 'UNPAID' || inst.status === 'PARTIAL' || inst.status === 'OVERDUE') && due > 0 && (
-                          <button onClick={() => setWriteOffModal(inst)}
-                            className="flex items-center gap-1 text-[9px] font-black text-indigo-500 px-2 py-0.5 rounded-full border border-indigo-200 bg-indigo-50">
-                            <TrendingDown size={9} /> Discount
-                          </button>
-                        )}
-                      </div>
+                      {/* Payment breakdown — only when there's something to break down */}
+                      {(inst.paidAmount > 0 || inst.writeOffAmount > 0 || due > 0) && (
+                        <div className="flex items-center gap-3 flex-wrap text-[10px] lg:text-[11px] font-bold pb-2 border-b border-slate-100">
+                          {inst.paidAmount > 0 && (
+                            <span className="text-emerald-600">Paid <span className="tabular-nums">₹{inst.paidAmount.toLocaleString('en-IN')}</span></span>
+                          )}
+                          {inst.writeOffAmount > 0 && (
+                            <span className="text-indigo-500">Discount <span className="tabular-nums">₹{inst.writeOffAmount.toLocaleString('en-IN')}</span></span>
+                          )}
+                          {due > 0 && (
+                            <span className="text-rose-500">Due <span className="tabular-nums">₹{due.toLocaleString('en-IN')}</span></span>
+                          )}
+                        </div>
+                      )}
+
+                      {inst.writeOffReason && (
+                        <div className="text-[10px] font-bold text-indigo-500 mt-1.5 italic">Reason: {inst.writeOffReason}</div>
+                      )}
+
+                      {/* Actions — only when relevant. Anything not yet PAID
+                          and with a remaining balance is actionable
+                          (UPCOMING / DUE / PARTIAL plus the legacy
+                          UNPAID / OVERDUE values). */}
+                      {(receipt || (due > 0 && inst.status !== 'PAID' && inst.status !== 'WAIVED' && inst.status !== 'WRITTEN_OFF' && inst.status !== 'CANCELLED')) && (
+                        <div className="flex items-center gap-2 mt-2">
+                          {receipt && (
+                            <button onClick={() => setReceiptModal(receipt)}
+                              className="flex items-center gap-1 text-[10px] font-black text-indigo-600 px-2.5 py-1 rounded-full border border-indigo-200 bg-indigo-50 hover:bg-indigo-100 transition-colors">
+                              <Printer size={10} /> Receipt
+                            </button>
+                          )}
+                          {due > 0 && inst.status !== 'PAID' && inst.status !== 'WAIVED' && inst.status !== 'WRITTEN_OFF' && inst.status !== 'CANCELLED' && (
+                            <button onClick={() => setWriteOffModal(inst)}
+                              className="flex items-center gap-1 text-[10px] font-black text-indigo-500 px-2.5 py-1 rounded-full border border-indigo-200 bg-indigo-50 hover:bg-indigo-100 transition-colors">
+                              <TrendingDown size={10} /> Discount
+                            </button>
+                          )}
+                        </div>
+                      )}
                     </div>
                   </div>
                 </div>
               );
                   })}
+                  </div>
+                  </div>
+                  )}
+                  {govtZeros.length > 0 && (
+                    <div>
+                      <div className="flex items-center gap-2 mb-2 px-1">
+                        <ShieldCheck size={12} className="text-emerald-600" />
+                        <span className="text-[10px] font-black text-emerald-700 uppercase tracking-widest">Government Covered (RTE)</span>
+                        <span className="text-[10px] font-bold text-slate-400">· {govtZeros.length}</span>
+                      </div>
+                      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-2.5">
+                        {govtZeros.map(inst => (
+                          <div key={inst.id} className="bg-emerald-50/40 border border-emerald-100 rounded-xl p-3 flex items-center justify-between gap-2 hover:border-emerald-200 transition-colors">
+                            <div className="min-w-0 flex items-center gap-2">
+                              <div className="w-8 h-8 rounded-lg bg-emerald-100 flex items-center justify-center shrink-0">
+                                <ShieldCheck size={14} className="text-emerald-600" />
+                              </div>
+                              <div className="min-w-0">
+                                <div className="font-black text-slate-700 text-sm leading-tight truncate">{inst.month}</div>
+                                <div className="text-[10px] font-bold text-slate-400 truncate">{FEE_TYPE_LABEL[inst.feeType] ?? inst.feeType}</div>
+                              </div>
+                            </div>
+                            <div className="text-right shrink-0">
+                              <div className="text-[10px] font-black text-emerald-700">Govt Paid</div>
+                              <div className="text-[10px] font-bold text-slate-400">₹0 due</div>
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+                  </div>
+                  );
+                })()}
               </div>
             );
           })}
@@ -706,52 +890,78 @@ export const FeeLedger: React.FC<Props> = ({ onBack }) => {
               </div>
             );
             return (
-              <>
-                {txns.map(txn => (
-                  <button key={txn.id} onClick={() => setReceiptModal(txn)}
-                    className="w-full text-left bg-white rounded-2xl border border-slate-100 shadow-sm p-4 active:scale-[0.98] transition-transform">
-                    <div className="flex items-center justify-between mb-1">
-                      <div>
-                        <div className="font-extrabold text-slate-900 text-sm">{txn.date}</div>
-                        <div className="text-[10px] font-bold text-slate-400">{txn.method} · #{txn.receiptNo}</div>
+              <div className="grid grid-cols-1 lg:grid-cols-2 gap-3 lg:gap-4">
+                {txns.map(txn => {
+                  // Card style depends on row kind:
+                  //   reversal entry  → amber tint (it's a correction)
+                  //   reversed entry  → muted + line-through amount (cancelled)
+                  //   normal payment  → default white
+                  const isReversal       = !!txn.reversesPaymentId;
+                  const isReversedOrig   = !!txn.reversedAt && !isReversal;
+                  return (
+                  <div key={txn.id}
+                    className={`bg-white rounded-2xl border shadow-sm p-4 lg:p-5 transition-all ${
+                      isReversal     ? 'border-amber-200 bg-amber-50/40' :
+                      isReversedOrig ? 'border-slate-200 opacity-70' :
+                                       'border-slate-100 hover:shadow-md hover:border-slate-200'
+                    }`}>
+                    <div className="flex items-center justify-between mb-2">
+                      <div className="min-w-0">
+                        <div className="flex items-center gap-1.5 flex-wrap">
+                          <span className={`font-extrabold text-sm lg:text-base ${isReversedOrig ? 'text-slate-500' : 'text-slate-900'}`}>{txn.date}</span>
+                          {isReversal && (
+                            <span className="text-[8px] lg:text-[9px] font-black bg-amber-100 text-amber-700 border border-amber-200 px-1.5 py-0.5 rounded-full uppercase">Reversal</span>
+                          )}
+                          {isReversedOrig && (
+                            <span className="text-[8px] lg:text-[9px] font-black bg-rose-100 text-rose-700 border border-rose-200 px-1.5 py-0.5 rounded-full uppercase">Reversed 🔁</span>
+                          )}
+                        </div>
+                        <div className="text-[10px] lg:text-[11px] font-bold text-slate-400">{txn.method} · #{txn.receiptNo}</div>
                       </div>
-                      <div className="text-right">
-                        <div className="font-black text-emerald-600 text-base">₹{txn.amount.toLocaleString('en-IN')}</div>
-                        {txn.note && <div className="text-[9px] font-bold text-slate-400 truncate max-w-[120px]">{txn.note}</div>}
-                      </div>
+                      <div className={`font-black text-base lg:text-lg tabular-nums shrink-0 ${
+                        isReversal ? 'text-rose-600' : isReversedOrig ? 'text-slate-400 line-through' : 'text-emerald-600'
+                      }`}>{txn.amount < 0 ? '-' : ''}₹{Math.abs(txn.amount).toLocaleString('en-IN')}</div>
                     </div>
                     {txn.installmentDetails.length > 0 && (
-                      <div className="text-[9px] font-bold text-slate-400 mt-1.5">
+                      <div className="text-[9px] lg:text-[10px] font-bold text-slate-400 mb-2.5 line-clamp-2">
                         → {txn.installmentDetails.map(d => d.month).join(', ')}
                       </div>
                     )}
-                  </button>
-                ))}
+                    {isReversedOrig && txn.reversalReason && (
+                      <div className="text-[10px] font-bold text-rose-600 italic mb-2.5 line-clamp-2">"{txn.reversalReason}"</div>
+                    )}
+                    <button onClick={() => setReceiptModal(txn)}
+                      className="w-full flex items-center justify-center gap-1.5 text-[11px] font-black px-3 py-2 rounded-xl bg-indigo-50 text-indigo-700 hover:bg-indigo-100 transition-colors active:scale-[0.98]">
+                      <Receipt size={12} /> View Receipt
+                    </button>
+                  </div>
+                  );
+                })}
 
                 {govtTxns.map(g => (
                   <div key={g.id}
-                    className="bg-white rounded-2xl border border-emerald-100 shadow-sm p-4">
+                    className="bg-white rounded-2xl border border-emerald-100 shadow-sm p-4 lg:p-5">
                     <div className="flex items-center justify-between mb-1">
                       <div>
                         <div className="flex items-center gap-2 mb-0.5">
-                          <span className="font-extrabold text-slate-900 text-sm">{g.date}</span>
-                          <span className="flex items-center gap-0.5 text-[8px] font-black bg-emerald-100 text-emerald-700 px-2 py-0.5 rounded-full">
+                          <span className="font-extrabold text-slate-900 text-sm lg:text-base">{g.date}</span>
+                          <span className="flex items-center gap-0.5 text-[8px] lg:text-[9px] font-black bg-emerald-100 text-emerald-700 px-2 py-0.5 rounded-full">
                             <ShieldCheck size={8} /> Govt Transfer
                           </span>
                         </div>
-                        <div className="text-[10px] font-bold text-slate-400">Ref: {g.referenceNo}</div>
+                        <div className="text-[10px] lg:text-[11px] font-bold text-slate-400">Ref: {g.referenceNo}</div>
                       </div>
                       <div className="text-right">
-                        <div className="font-black text-emerald-600 text-base">₹{g.amount.toLocaleString('en-IN')}</div>
-                        <div className="text-[9px] font-bold text-slate-400">RTE / Total batch</div>
+                        <div className="font-black text-emerald-600 text-base lg:text-lg tabular-nums">₹{g.amount.toLocaleString('en-IN')}</div>
+                        <div className="text-[9px] lg:text-[10px] font-bold text-slate-400">RTE / Total batch</div>
                       </div>
                     </div>
                     {g.note && (
-                      <div className="text-[9px] font-bold text-slate-400 mt-1.5 italic">{g.note}</div>
+                      <div className="text-[9px] lg:text-[10px] font-bold text-slate-400 mt-1.5 italic">{g.note}</div>
                     )}
                   </div>
                 ))}
-              </>
+              </div>
             );
           })()}
         </div>
@@ -959,69 +1169,171 @@ export const FeeLedger: React.FC<Props> = ({ onBack }) => {
                 </button>
               </div>
 
-              <div ref={receiptCardRef} className="border-2 border-dashed border-slate-200 rounded-2xl p-5 mb-4 bg-white">
-                <div className="text-center mb-4 pb-4 border-b border-slate-100">
-                  <div className="font-black text-slate-900 text-lg uppercase tracking-wide">EduGrow School</div>
-                  <div className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">Fee Receipt</div>
-                  <div className="mt-2 inline-block bg-emerald-100 text-emerald-700 text-[10px] font-black px-3 py-1 rounded-full">PAID ✓</div>
-                </div>
-
-                <div className="space-y-2 mb-4">
-                  {[
-                    { label: 'Receipt No.', val: receiptModal.receiptNo },
-                    { label: 'Date',        val: receiptModal.date },
-                    { label: 'Student',     val: receiptModal.studentName },
-                    { label: 'Class',       val: receiptModal.className },
-                    { label: 'Adm. No.',    val: receiptModal.admissionNo },
-                    { label: 'Method',      val: receiptModal.method },
-                  ].map(({ label, val }) => (
-                    <div key={label} className="flex justify-between gap-2">
-                      <span className="text-[10px] font-bold text-slate-400">{label}</span>
-                      <span className="text-[11px] font-black text-slate-800">{val}</span>
+              <div ref={receiptCardRef} className="rounded-2xl mb-4 bg-white border border-slate-200 overflow-hidden shadow-sm">
+                {/* Header with brand bar */}
+                <div className="bg-gradient-to-r from-indigo-600 to-blue-600 px-5 py-4 text-white">
+                  <div className="flex items-center justify-between">
+                    <div>
+                      <div className="font-black text-base lg:text-lg uppercase tracking-wide">EduGrow School</div>
+                      <div className="text-[9px] font-bold opacity-80 mt-0.5 uppercase tracking-widest">School Management System</div>
                     </div>
-                  ))}
-                </div>
-
-                {receiptModal.installmentDetails.length > 0 && (
-                  <div className="border-t border-slate-100 pt-3 mb-3">
-                    <p className="text-[9px] font-black uppercase tracking-widest text-slate-400 mb-2">Breakdown</p>
-                    {receiptModal.installmentDetails.map((d, i) => (
-                      <div key={i} className="flex justify-between py-1.5 border-b border-slate-50 last:border-0">
-                        <span className="text-[11px] font-bold text-slate-600">{d.month} · {FEE_TYPE_LABEL[d.feeType]}</span>
-                        <span className="text-[11px] font-black text-slate-900">₹{d.amount.toLocaleString('en-IN')}</span>
+                    {receiptModal.reversedAt ? (
+                      <div className="bg-rose-500/30 backdrop-blur-sm text-white text-[9px] font-black px-2.5 py-1 rounded-full border border-rose-300/60">
+                        REVERSED 🔁
                       </div>
-                    ))}
-                    {receiptModal.advanceAmount > 0 && (
-                      <div className="flex justify-between py-1.5 mt-1 bg-violet-50 rounded-lg px-2">
-                        <span className="text-[11px] font-bold text-violet-600">Advance Credit Added</span>
-                        <span className="text-[11px] font-black text-violet-700">₹{receiptModal.advanceAmount.toLocaleString('en-IN')}</span>
+                    ) : receiptModal.reversesPaymentId ? (
+                      <div className="bg-amber-500/30 backdrop-blur-sm text-white text-[9px] font-black px-2.5 py-1 rounded-full border border-amber-300/60">
+                        REVERSAL
+                      </div>
+                    ) : (
+                      <div className="bg-white/20 backdrop-blur-sm text-white text-[9px] font-black px-2.5 py-1 rounded-full border border-white/30">
+                        PAID ✓
                       </div>
                     )}
                   </div>
-                )}
-
-                {(receiptModal as any).discountAmount > 0 && (
-                  <div className="flex justify-between items-center bg-indigo-50 border border-indigo-200 rounded-xl px-4 py-2 mb-2">
-                    <span className="text-xs font-black text-indigo-700">Discount Applied</span>
-                    <span className="text-sm font-black text-indigo-700">₹{((receiptModal as any).discountAmount as number).toLocaleString('en-IN')}</span>
-                  </div>
-                )}
-                <div className="flex justify-between items-center bg-slate-900 rounded-xl px-4 py-3 mb-3">
-                  <span className="text-xs font-black text-white uppercase">Amount Paid</span>
-                  <span className="text-lg font-black text-white">₹{receiptModal.amount.toLocaleString('en-IN')}</span>
+                  <div className="text-center text-[10px] font-black uppercase tracking-[0.2em] opacity-90 mt-2 pt-2 border-t border-white/20">Fee Receipt</div>
                 </div>
-                {receiptModal.note && (
-                  <div className="bg-slate-50 rounded-xl px-4 py-3 border border-slate-200">
-                    <p className="text-[9px] font-black uppercase tracking-widest text-slate-400 mb-1">Note</p>
-                    <p className="text-sm font-bold text-slate-700">{receiptModal.note}</p>
+
+                <div className="p-5">
+                  {/* Receipt meta — two columns */}
+                  <div className="grid grid-cols-2 gap-x-4 gap-y-2.5 mb-4 pb-4 border-b border-dashed border-slate-200">
+                    {[
+                      { label: 'Receipt No.', val: receiptModal.receiptNo },
+                      { label: 'Date',        val: receiptModal.date },
+                      { label: 'Student',     val: receiptModal.studentName },
+                      { label: 'Adm. No.',    val: receiptModal.admissionNo },
+                      { label: 'Class',       val: receiptModal.className },
+                      { label: 'Method',      val: receiptModal.method },
+                    ].map(({ label, val }) => (
+                      <div key={label}>
+                        <div className="text-[9px] font-black uppercase tracking-widest text-slate-400">{label}</div>
+                        <div className="text-[12px] font-black text-slate-800 truncate">{val}</div>
+                      </div>
+                    ))}
                   </div>
-                )}
+
+                  {receiptModal.installmentDetails.length > 0 && (
+                    <div className="mb-3">
+                      <p className="text-[9px] font-black uppercase tracking-widest text-slate-400 mb-2">Particulars</p>
+                      <div className="rounded-xl bg-slate-50 border border-slate-100 overflow-hidden">
+                        {receiptModal.installmentDetails.map((d, i) => (
+                          <div key={i} className="flex justify-between items-center px-3 py-2 border-b border-slate-100 last:border-0">
+                            <span className="text-[11px] font-bold text-slate-700">{d.month} · {FEE_TYPE_LABEL[d.feeType]}</span>
+                            <span className="text-[11px] font-black text-slate-900 tabular-nums">₹{d.amount.toLocaleString('en-IN')}</span>
+                          </div>
+                        ))}
+                        {receiptModal.advanceAmount > 0 && (
+                          <div className="flex justify-between items-center px-3 py-2 bg-violet-50 border-t border-violet-200">
+                            <span className="text-[11px] font-bold text-violet-700">Advance Credit Added</span>
+                            <span className="text-[11px] font-black text-violet-800 tabular-nums">₹{receiptModal.advanceAmount.toLocaleString('en-IN')}</span>
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  )}
+
+                  {(receiptModal as any).discountAmount > 0 && (
+                    <div className="flex justify-between items-center bg-indigo-50 border border-indigo-200 rounded-xl px-4 py-2 mb-2">
+                      <span className="text-[11px] font-black text-indigo-700 uppercase tracking-wide">Discount</span>
+                      <span className="text-[12px] font-black text-indigo-700 tabular-nums">-₹{((receiptModal as any).discountAmount as number).toLocaleString('en-IN')}</span>
+                    </div>
+                  )}
+                  <div className="flex justify-between items-center bg-slate-900 rounded-xl px-4 py-3.5">
+                    <span className="text-xs font-black text-white uppercase tracking-widest">Total Paid</span>
+                    <span className="text-xl font-black text-white tabular-nums">₹{receiptModal.amount.toLocaleString('en-IN')}</span>
+                  </div>
+
+                  <div className="text-center mt-4 pt-3 border-t border-dashed border-slate-200">
+                    <p className="text-[9px] font-bold text-slate-400 italic">This is a computer-generated receipt</p>
+                  </div>
+                </div>
               </div>
+
+              {/* Reversal context banner — shows on already-reversed rows so
+                  the principal can see why it was reversed without scrolling. */}
+              {receiptModal.reversedAt && (
+                <div className="bg-rose-50 border border-rose-200 rounded-xl px-3 py-2 mb-3 text-[11px] font-bold text-rose-700">
+                  <div className="font-black uppercase tracking-widest text-[9px] mb-0.5">Reversed on {istDateOf(receiptModal.reversedAt)}</div>
+                  {receiptModal.reversalReason && <div className="text-rose-600 italic">"{receiptModal.reversalReason}"</div>}
+                </div>
+              )}
 
               <div className="grid grid-cols-3 gap-2">
                 <button onClick={() => handleDownloadPdf(receiptModal)} className="py-3 bg-emerald-600 text-white font-black rounded-xl flex items-center justify-center gap-1.5 text-sm"><Download size={14} /> PDF</button>
                 <button onClick={() => handlePrintReceipt(receiptModal)} className="py-3 bg-slate-100 text-slate-900 font-black rounded-xl flex items-center justify-center gap-1.5 text-sm"><Printer size={14} /> Print</button>
                 <button onClick={() => setReceiptModal(null)} className="py-3 bg-indigo-600 text-white font-black rounded-xl text-sm">Close</button>
+              </div>
+
+              {/* Reverse button — gated by Editor Mode + same-day + not-reversed
+                  + positive amount. UI guards mirror the server. */}
+              {canReverse(receiptModal) && (
+                <button
+                  onClick={() => { setReverseTarget(receiptModal); setReverseReason(''); }}
+                  className="w-full mt-2 py-3 bg-rose-50 border border-rose-200 text-rose-700 hover:bg-rose-100 font-black rounded-xl flex items-center justify-center gap-1.5 text-sm active:scale-[0.98] transition-all">
+                  <RotateCcw size={14} /> Reverse Payment
+                </button>
+              )}
+              {!canReverse(receiptModal) && !receiptModal.reversedAt && !receiptModal.reversesPaymentId && receiptModal.amount > 0 && (
+                <p className="text-[10px] font-bold text-slate-400 text-center mt-2">
+                  {!editorMode.isActive()
+                    ? 'Reversal needs Editor Mode (Settings → Security)'
+                    : istDateOf(receiptModal.createdAt) !== istToday()
+                      ? 'Reversal allowed only on the same day (IST)'
+                      : ''}
+                </p>
+              )}
+            </div>
+          </div>
+        )}
+
+        {/* ── REVERSE CONFIRMATION MODAL ──────────────────────────────────── */}
+        {reverseTarget && (
+          <div className="absolute inset-0 bg-slate-900/70 backdrop-blur-sm z-[60] flex items-center justify-center p-4">
+            <div className="w-full max-w-md bg-white rounded-2xl p-5 shadow-2xl animate-in zoom-in-95 duration-200">
+              <div className="flex items-start gap-3 mb-4">
+                <div className="w-10 h-10 rounded-xl bg-rose-100 text-rose-600 flex items-center justify-center shrink-0">
+                  <RotateCcw size={18} />
+                </div>
+                <div className="min-w-0 flex-1">
+                  <h3 className="text-base font-black text-slate-900">Reverse Payment</h3>
+                  <p className="text-[11px] font-bold text-slate-500 mt-0.5">
+                    {reverseTarget.studentName} · #{reverseTarget.receiptNo} · ₹{reverseTarget.amount.toLocaleString('en-IN')}
+                  </p>
+                </div>
+                <button onClick={() => { setReverseTarget(null); setReverseReason(''); }}
+                  className="w-8 h-8 bg-slate-100 rounded-full flex items-center justify-center text-slate-500 shrink-0">
+                  <X size={14} />
+                </button>
+              </div>
+
+              <div className="bg-amber-50 border border-amber-200 rounded-xl p-3 mb-4">
+                <p className="text-[11px] font-bold text-amber-800 leading-relaxed">
+                  Ek negative ledger entry banegi (-₹{reverseTarget.amount.toLocaleString('en-IN')})
+                  aur installment balances roll back honge. Action audit log me jayega.
+                </p>
+              </div>
+
+              <label className="block text-[10px] font-black uppercase tracking-widest text-slate-500 mb-1.5">
+                Reason <span className="text-rose-500">*</span>
+              </label>
+              <textarea value={reverseReason}
+                onChange={e => setReverseReason(e.target.value)}
+                placeholder="Why is this payment being reversed? (e.g. wrong amount, duplicate entry)"
+                rows={3}
+                disabled={reversing}
+                className="w-full border border-slate-200 bg-slate-50 rounded-xl px-3 py-2.5 text-sm font-bold text-slate-800 placeholder:text-slate-400 focus:outline-none focus:border-rose-400 resize-none" />
+
+              <div className="flex gap-2 mt-4">
+                <button onClick={() => { setReverseTarget(null); setReverseReason(''); }}
+                  disabled={reversing}
+                  className="flex-1 py-3 bg-slate-100 text-slate-700 font-black rounded-xl text-sm">
+                  Cancel
+                </button>
+                <button onClick={handleReverseConfirm}
+                  disabled={reversing || reverseReason.trim().length < 3}
+                  className="flex-1 py-3 bg-rose-600 hover:bg-rose-700 text-white font-black rounded-xl text-sm disabled:opacity-50 active:scale-[0.98] transition-all">
+                  {reversing ? 'Reversing…' : 'Confirm Reversal'}
+                </button>
               </div>
             </div>
           </div>
@@ -1108,56 +1420,56 @@ export const FeeLedger: React.FC<Props> = ({ onBack }) => {
 
   // ─── LIST VIEW ────────────────────────────────────────────────────────────────
   return (
-    <div className="w-full bg-slate-50 flex flex-col animate-in slide-in-from-right-8 duration-300">
+    <div className="w-full bg-slate-50 flex flex-col animate-in slide-in-from-right-8 duration-300 lg:max-w-6xl lg:mx-auto">
 
       {/* Header */}
       <div className="bg-white border-b border-slate-100 shadow-sm">
-        <div className="px-4 pt-4 pb-3 flex items-center gap-3">
-          <button onClick={onBack} className="p-2 -ml-2 bg-slate-100 rounded-full text-slate-600">
+        <div className="px-4 lg:px-6 pt-4 lg:pt-6 pb-3 lg:pb-4 flex items-center gap-3">
+          <button onClick={onBack} className="p-2 -ml-2 bg-slate-100 rounded-full text-slate-600 hover:bg-slate-200 transition-colors">
             <ArrowLeft size={20} />
           </button>
           <div className="flex-1">
-            <h2 className="text-xl font-black text-slate-900 uppercase tracking-tight">Fee Collection</h2>
-            <p className="text-[10px] font-bold text-slate-400">{students.length} students · {dueStudents.length} with dues</p>
+            <h2 className="text-xl lg:text-2xl font-black text-slate-900 uppercase tracking-tight">Fee Collection</h2>
+            <p className="text-[10px] lg:text-xs font-bold text-slate-400">{students.length} students · {dueStudents.length} with dues</p>
           </div>
         </div>
 
-        {/* Stats row */}
+        {/* Stats row — bigger and bolder on desktop */}
         <div className="flex border-t border-slate-100">
-          <div className="flex-1 px-4 py-3 text-center">
-            <div className="text-lg font-black text-emerald-600">₹{totalCollected.toLocaleString('en-IN')}</div>
-            <div className="text-[9px] font-black text-slate-400 uppercase tracking-widest">Collected</div>
+          <div className="flex-1 px-4 lg:px-6 py-3 lg:py-5 text-center">
+            <div className="text-lg lg:text-3xl font-black text-emerald-600 tabular-nums">₹{totalCollected.toLocaleString('en-IN')}</div>
+            <div className="text-[9px] lg:text-[11px] font-black text-slate-400 uppercase tracking-widest mt-0.5 lg:mt-1">Collected</div>
           </div>
           <div className="w-px bg-slate-100" />
-          <div className="flex-1 px-4 py-3 text-center">
-            <div className="text-lg font-black text-rose-600">₹{totalParentDue.toLocaleString('en-IN')}</div>
-            <div className="text-[9px] font-black text-slate-400 uppercase tracking-widest">Parent Due</div>
+          <div className="flex-1 px-4 lg:px-6 py-3 lg:py-5 text-center">
+            <div className="text-lg lg:text-3xl font-black text-rose-600 tabular-nums">₹{totalParentDue.toLocaleString('en-IN')}</div>
+            <div className="text-[9px] lg:text-[11px] font-black text-slate-400 uppercase tracking-widest mt-0.5 lg:mt-1">Parent Due</div>
           </div>
           {totalGovtDue > 0 && (
             <>
               <div className="w-px bg-slate-100" />
-              <div className="flex-1 px-4 py-3 text-center">
-                <div className="text-lg font-black text-blue-600">₹{totalGovtDue.toLocaleString('en-IN')}</div>
-                <div className="text-[9px] font-black text-slate-400 uppercase tracking-widest">Govt Due</div>
+              <div className="flex-1 px-4 lg:px-6 py-3 lg:py-5 text-center">
+                <div className="text-lg lg:text-3xl font-black text-blue-600 tabular-nums">₹{totalGovtDue.toLocaleString('en-IN')}</div>
+                <div className="text-[9px] lg:text-[11px] font-black text-slate-400 uppercase tracking-widest mt-0.5 lg:mt-1">Govt Due</div>
               </div>
             </>
           )}
         </div>
 
-        {/* Search + tabs */}
-        <div className="px-4 pb-3 space-y-2">
-          <div className="relative">
+        {/* Search + tabs — stacked mobile, single row desktop */}
+        <div className="px-4 lg:px-6 pb-3 lg:pb-4 space-y-2 lg:space-y-0 lg:flex lg:items-center lg:gap-3 border-t border-slate-100 pt-3 lg:pt-4">
+          <div className="relative lg:flex-1">
             <Search size={14} className="absolute left-3.5 top-1/2 -translate-y-1/2 text-slate-400" />
             <input value={search} onChange={e => setSearch(e.target.value)}
               placeholder="Search by name, class, admission no…"
-              className="w-full bg-slate-50 border border-slate-200 rounded-2xl pl-10 pr-4 py-2.5 text-sm font-bold outline-none focus:border-blue-500 transition-colors" />
+              className="w-full bg-slate-50 border border-slate-200 rounded-2xl pl-10 pr-4 py-2.5 lg:py-3 text-sm font-bold outline-none focus:border-blue-500 transition-colors" />
           </div>
-          <div className="flex gap-2">
+          <div className="flex gap-2 shrink-0">
             {(['ALL', 'DUE', 'CLEARED'] as ListTab[]).map(t => (
               <button key={t} onClick={() => setListTab(t)}
-                className={`px-4 py-1.5 rounded-xl text-[10px] font-black uppercase tracking-widest transition-colors ${listTab === t
+                className={`px-4 lg:px-5 py-1.5 lg:py-2.5 rounded-xl text-[10px] lg:text-xs font-black uppercase tracking-widest transition-colors ${listTab === t
                   ? t === 'DUE' ? 'bg-rose-600 text-white' : t === 'CLEARED' ? 'bg-emerald-600 text-white' : 'bg-slate-900 text-white'
-                  : 'bg-slate-100 text-slate-500'}`}>
+                  : 'bg-slate-100 text-slate-500 hover:bg-slate-200'}`}>
                 {t === 'ALL' ? `All (${students.length})` : t === 'DUE' ? `Due (${dueStudents.length})` : `Cleared (${clearedStudents.length})`}
               </button>
             ))}
@@ -1166,82 +1478,86 @@ export const FeeLedger: React.FC<Props> = ({ onBack }) => {
       </div>
 
       {/* List */}
-      <div className="flex-1 overflow-y-auto p-4  space-y-2.5">
+      <div className="flex-1 overflow-y-auto p-4 lg:p-6">
         {/* Parent/student-submitted payment screenshots awaiting principal review. */}
-        <FeePaymentSubmissionsQueue />
+        <div className="mb-3 lg:mb-4">
+          <FeePaymentSubmissionsQueue />
+        </div>
 
         {visibleStudents.length === 0 && (
-          <div className="flex flex-col items-center py-16 text-slate-400">
+          <div className="flex flex-col items-center py-16 lg:py-24 text-slate-400">
             <Users size={32} className="mb-3 opacity-30" />
             <p className="font-bold text-sm">No students</p>
           </div>
         )}
 
-        {pagedStudents.map(student => {
-          const pd = getParentDue(student.studentId);
-          const gd = student.isRte ? getGovtDue(student.studentId) : { tuition: 0, total: 0 };
-          const isDue = pd.total > 0 || gd.total > 0;
-          const totalD = student.installments.reduce((a, i) => a + i.amount, 0);
-          const totalP = student.installments.reduce((a, i) => a + i.paidAmount, 0);
-          const pct = totalD > 0 ? Math.round((totalP / totalD) * 100) : 100;
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-2.5 lg:gap-3">
+          {pagedStudents.map(student => {
+            const pd = getParentDue(student.studentId);
+            const gd = student.isRte ? getGovtDue(student.studentId) : { tuition: 0, total: 0 };
+            const isDue = pd.total > 0 || gd.total > 0;
+            const totalD = student.installments.reduce((a, i) => a + i.amount, 0);
+            const totalP = student.installments.reduce((a, i) => a + i.paidAmount, 0);
+            const pct = totalD > 0 ? Math.round((totalP / totalD) * 100) : 100;
 
-          return (
-            <button key={student.studentId}
-              onClick={() => { setSelected(student); setDetailTab('SCHEDULE'); }}
-              className={`w-full text-left bg-white rounded-2xl shadow-sm border p-4 active:scale-[0.99] transition-transform ${isDue ? 'border-rose-200' : 'border-slate-100'}`}>
-              <div className="flex items-center gap-3">
-                {/* Avatar */}
-                <div className={`w-10 h-10 rounded-xl flex items-center justify-center font-black text-sm shrink-0 ${isDue ? 'bg-rose-100 text-rose-700' : 'bg-emerald-100 text-emerald-700'}`}>
-                  {getInitials(student.name)}
-                </div>
-
-                <div className="flex-1 min-w-0">
-                  <div className="flex items-center gap-1.5 mb-0.5">
-                    <span className="font-extrabold text-slate-900 text-sm truncate">{student.name}</span>
-                    {student.isRte && <ShieldCheck size={11} className="text-emerald-600 shrink-0" />}
+            return (
+              <button key={student.studentId}
+                onClick={() => { setSelected(student); setDetailTab('SCHEDULE'); }}
+                className={`w-full text-left bg-white rounded-2xl shadow-sm border p-4 lg:p-5 active:scale-[0.99] hover:shadow-md hover:border-slate-300 transition-all ${isDue ? 'border-rose-200' : 'border-slate-100'}`}>
+                <div className="flex items-center gap-3 lg:gap-4">
+                  {/* Avatar */}
+                  <div className={`w-10 h-10 lg:w-12 lg:h-12 rounded-xl flex items-center justify-center font-black text-sm lg:text-base shrink-0 ${isDue ? 'bg-rose-100 text-rose-700' : 'bg-emerald-100 text-emerald-700'}`}>
+                    {getInitials(student.name)}
                   </div>
-                  <div className="text-[10px] font-bold text-slate-400">{student.className} · {student.admissionNo}</div>
 
-                  {/* Mini progress bar */}
-                  <div className="mt-2 h-1 bg-slate-100 rounded-full overflow-hidden">
-                    <div className={`h-full rounded-full ${pct === 100 ? 'bg-emerald-500' : 'bg-blue-400'}`} style={{ width: `${pct}%` }} />
+                  <div className="flex-1 min-w-0">
+                    <div className="flex items-center gap-1.5 mb-0.5">
+                      <span className="font-extrabold text-slate-900 text-sm lg:text-base truncate">{student.name}</span>
+                      {student.isRte && <ShieldCheck size={11} className="text-emerald-600 shrink-0" />}
+                    </div>
+                    <div className="text-[10px] lg:text-[11px] font-bold text-slate-400">{student.className} · {student.admissionNo}</div>
+
+                    {/* Mini progress bar */}
+                    <div className="mt-2 h-1 lg:h-1.5 bg-slate-100 rounded-full overflow-hidden">
+                      <div className={`h-full rounded-full ${pct === 100 ? 'bg-emerald-500' : 'bg-blue-400'}`} style={{ width: `${pct}%` }} />
+                    </div>
+                    <div className="text-[9px] lg:text-[10px] font-bold text-slate-400 mt-0.5">{pct}% collected</div>
                   </div>
-                  <div className="text-[9px] font-bold text-slate-400 mt-0.5">{pct}% collected</div>
-                </div>
 
-                {/* Right: due amount or cleared badge */}
-                <div className="shrink-0 text-right">
-                  {isDue ? (
-                    <>
-                      {pd.total > 0 && <div className="font-black text-rose-600 text-sm">₹{pd.total.toLocaleString('en-IN')}</div>}
-                      {gd.total > 0 && <div className="font-black text-blue-600 text-sm">₹{gd.total.toLocaleString('en-IN')}</div>}
-                      <div className="flex gap-1 mt-1 justify-end flex-wrap">
-                        {pd.tuition > 0 && <span className="text-[8px] font-black bg-indigo-50 text-indigo-700 px-1.5 py-0.5 rounded-full">Tuition</span>}
-                        {pd.transport > 0 && <span className="text-[8px] font-black bg-orange-50 text-orange-700 px-1.5 py-0.5 rounded-full">Transport</span>}
-                      </div>
-                    </>
-                  ) : (
-                    <span className="flex items-center gap-0.5 text-[9px] font-black text-emerald-600 bg-emerald-50 px-2 py-1 rounded-full">
-                      <CheckCircle2 size={10} /> Cleared
-                    </span>
-                  )}
+                  {/* Right: due amount or cleared badge */}
+                  <div className="shrink-0 text-right">
+                    {isDue ? (
+                      <>
+                        {pd.total > 0 && <div className="font-black text-rose-600 text-sm lg:text-base">₹{pd.total.toLocaleString('en-IN')}</div>}
+                        {gd.total > 0 && <div className="font-black text-blue-600 text-sm lg:text-base">₹{gd.total.toLocaleString('en-IN')}</div>}
+                        <div className="flex gap-1 mt-1 justify-end flex-wrap">
+                          {pd.tuition > 0 && <span className="text-[8px] lg:text-[9px] font-black bg-indigo-50 text-indigo-700 px-1.5 py-0.5 rounded-full">Tuition</span>}
+                          {pd.transport > 0 && <span className="text-[8px] lg:text-[9px] font-black bg-orange-50 text-orange-700 px-1.5 py-0.5 rounded-full">Transport</span>}
+                        </div>
+                      </>
+                    ) : (
+                      <span className="flex items-center gap-0.5 text-[9px] lg:text-[10px] font-black text-emerald-600 bg-emerald-50 px-2 py-1 rounded-full">
+                        <CheckCircle2 size={10} /> Cleared
+                      </span>
+                    )}
+                  </div>
+                  <ChevronRight size={15} className="text-slate-300 shrink-0" />
                 </div>
-                <ChevronRight size={15} className="text-slate-300 shrink-0" />
-              </div>
-            </button>
-          );
-        })}
+              </button>
+            );
+          })}
+        </div>
 
         {hasMore && (
           <button
             onClick={() => setShowCount(c => c + PAGE_SIZE)}
-            className="w-full py-3 mt-2 bg-white border border-slate-200 rounded-2xl text-xs font-black text-slate-500 uppercase tracking-widest active:scale-95 transition-transform">
+            className="w-full py-3 lg:py-4 mt-3 lg:mt-4 bg-white border border-slate-200 rounded-2xl text-xs font-black text-slate-500 uppercase tracking-widest active:scale-95 hover:bg-slate-50 transition-all">
             Load More ({visibleStudents.length - showCount} remaining)
           </button>
         )}
 
         {!hasMore && visibleStudents.length > PAGE_SIZE && (
-          <p className="text-center text-[9px] font-bold text-slate-300 py-3">
+          <p className="text-center text-[9px] font-bold text-slate-300 py-3 lg:py-4">
             All {visibleStudents.length} students shown
           </p>
         )}

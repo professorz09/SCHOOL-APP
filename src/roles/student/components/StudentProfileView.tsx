@@ -133,6 +133,36 @@ export const StudentProfileView: React.FC<Props> = ({ onBack }) => {
   const initials = displayName.split(' ').map(w => w[0]).join('').slice(0, 2).toUpperCase();
   const classLabel = ctx?.classLabel ?? (ctx?.className ?? '—');
 
+  // Multi-child parent: show a switcher when the parent's session lists more
+  // than one linked student. Switching just flips selectedStudentId in the
+  // auth store; App.tsx already keys StudentLayout on it so every nested view
+  // remounts and reloads for the newly-picked child. Pure UI — no DB writes.
+  const linkedIds = session?.linkedStudentIds ?? [];
+  const isParentWithMultiKids = session?.role === 'PARENT' && linkedIds.length > 1;
+  const selectedStudentId = useAuthStore(s => s.selectedStudentId);
+  const setSelectedStudentId = useAuthStore(s => s.setSelectedStudentId);
+  const [linkedChildren, setLinkedChildren] = useState<Array<{ id: string; name: string; className: string | null; section: string | null }>>([]);
+
+  useEffect(() => {
+    if (!isParentWithMultiKids) { setLinkedChildren([]); return; }
+    let cancelled = false;
+    (async () => {
+      const { data } = await supabase
+        .from('students')
+        .select('id, name, student_academic_records(class_name, section, academic_year_id)')
+        .in('id', linkedIds);
+      if (cancelled) return;
+      type Row = { id: string; name: string; student_academic_records: Array<{ class_name: string | null; section: string | null; academic_year_id: string }> };
+      const list = ((data ?? []) as unknown as Row[]).map(r => {
+        // Use the AR row matching the school's active year if available, else the first one.
+        const ar = r.student_academic_records[0] ?? { class_name: null, section: null };
+        return { id: r.id, name: r.name, className: ar.class_name, section: ar.section };
+      });
+      setLinkedChildren(list);
+    })();
+    return () => { cancelled = true; };
+  }, [isParentWithMultiKids, linkedIds.join(',')]); // eslint-disable-line react-hooks/exhaustive-deps
+
   return (
     <div className="w-full bg-slate-50 flex flex-col animate-in slide-in-from-right-8 duration-300">
       <div className="bg-white border-b border-slate-100 px-4 pt-4 pb-4 flex items-center gap-3 sticky top-0 z-10 shadow-sm">
@@ -168,6 +198,50 @@ export const StudentProfileView: React.FC<Props> = ({ onBack }) => {
             </div>
           </div>
         </div>
+
+        {/* ── Child switcher — only when parent has multiple linked kids ─── */}
+        {isParentWithMultiKids && linkedChildren.length > 1 && (
+          <div className="bg-white rounded-2xl border border-slate-100 shadow-sm overflow-hidden">
+            <p className="text-[9px] font-black uppercase tracking-widest text-slate-400 px-4 pt-4 pb-2">Switch Child</p>
+            <div className="px-4 pb-4 space-y-2">
+              {linkedChildren.map(child => {
+                const isActive = (selectedStudentId ?? linkedIds[0]) === child.id;
+                const childInitials = child.name.split(' ').map(w => w[0]).join('').slice(0, 2).toUpperCase();
+                return (
+                  <button key={child.id}
+                    onClick={() => {
+                      if (isActive) return;
+                      setSelectedStudentId(child.id);
+                      // App.tsx remounts StudentLayout on selectedStudentId change,
+                      // which re-fetches the context for the new child.
+                    }}
+                    className={`w-full flex items-center gap-3 p-3 rounded-xl border transition-all text-left ${
+                      isActive
+                        ? 'bg-emerald-50 border-emerald-300 shadow-sm'
+                        : 'bg-slate-50 border-slate-200 hover:border-emerald-200 active:scale-[0.98]'
+                    }`}>
+                    <div className={`w-10 h-10 rounded-xl flex items-center justify-center font-black text-sm shrink-0 ${
+                      isActive ? 'bg-emerald-500 text-white' : 'bg-slate-200 text-slate-600'
+                    }`}>
+                      {childInitials}
+                    </div>
+                    <div className="flex-1 min-w-0">
+                      <div className="font-black text-sm text-slate-900 truncate">{child.name}</div>
+                      <div className="text-[10px] font-bold text-slate-400">
+                        {child.className ? `${child.className}-${child.section ?? ''}` : 'Unassigned'}
+                      </div>
+                    </div>
+                    {isActive && (
+                      <span className="text-[9px] font-black text-emerald-700 bg-emerald-100 border border-emerald-200 px-2 py-0.5 rounded-full uppercase shrink-0">
+                        Viewing
+                      </span>
+                    )}
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+        )}
 
         {loading ? (
           <div className="bg-white rounded-2xl border border-slate-100 p-6 text-center text-sm font-bold text-slate-400">

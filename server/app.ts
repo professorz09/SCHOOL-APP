@@ -9,11 +9,11 @@ import { examsRouter }        from './routes/exams';
 import { promotionRouter }    from './routes/promotion';
 import { teacherRouter }      from './routes/teacher';
 import { settingsRouter }     from './routes/settings';
+// homework router removed — feature deprecated; use notices with HOMEWORK category instead
 import { staffRouter }        from './routes/staff';
 import { timetableRouter }    from './routes/timetable';
 import { principalRouter }     from './routes/principal';
 import { adminSchoolsRouter }  from './routes/admin-schools';
-import { homeworkRouter }       from './routes/homework';
 
 export const app = express();
 
@@ -34,11 +34,11 @@ app.use('/api/exam',          examsRouter);
 app.use('/api/promotion',     promotionRouter);
 app.use('/api/teacher',       teacherRouter);
 app.use('/api/settings',      settingsRouter);
+// /api/homework removed — feature deprecated; use notices with HOMEWORK category instead
 app.use('/api/staff',         staffRouter);
 app.use('/api/timetable',     timetableRouter);
 app.use('/api/principal',     principalRouter);
 app.use('/api/admin/schools', adminSchoolsRouter);
-app.use('/api/homework',     homeworkRouter);
 
 app.use((_req, res) => {
   res.status(404).json({ ok: false, error: 'API route not found' });

@@ -68,7 +68,8 @@ export interface StudentNotice {
   title: string;
   body: string;
   sentAt: string;
-  category: 'EXAM' | 'FEE' | 'EVENT' | 'GENERAL';
+  // PERSONAL = sent directly to this student (audience=SPECIFIC_STUDENT).
+  category: 'EXAM' | 'FEE' | 'EVENT' | 'GENERAL' | 'PERSONAL';
   pinned: boolean;
 }
 

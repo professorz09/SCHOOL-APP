@@ -31,7 +31,6 @@ import type {
   AttendanceRecord,
   TestSchedule,
   TestType,
-  HomeworkItem,
   TeacherComplaint,
   ExamPaperRequest,
   GeneratedExamPaper,
@@ -251,9 +250,11 @@ interface TestRow {
   max_marks: number | null;
   syllabus: string | null;
   results_uploaded: boolean;
+  result_status?: string | null;
 }
 
 function rowToTest(r: TestRow): TestSchedule {
+  const status = (r.result_status as TestSchedule['resultStatus']) ?? 'DRAFT';
   return {
     id: r.id,
     classId: r.section_id ?? '',
@@ -267,36 +268,7 @@ function rowToTest(r: TestRow): TestSchedule {
     maxMarks: r.max_marks ?? 0,
     syllabus: r.syllabus ?? '',
     resultsUploaded: r.results_uploaded,
-  };
-}
-
-interface HomeworkRow {
-  id: string;
-  section_id: string | null;
-  class_name: string | null;
-  section: string | null;
-  subject: string | null;
-  title: string;
-  description: string | null;
-  assigned_date: string;
-  due_date: string | null;
-  submitted_count: number;
-  total_students: number;
-}
-
-function rowToHomework(r: HomeworkRow): HomeworkItem {
-  return {
-    id: r.id,
-    classId: r.section_id ?? '',
-    className: r.class_name ?? '',
-    section: r.section ?? '',
-    subject: r.subject ?? '',
-    title: r.title,
-    description: r.description ?? '',
-    assignedDate: r.assigned_date,
-    dueDate: r.due_date ?? '',
-    submittedCount: r.submitted_count,
-    totalStudents: r.total_students,
+    resultStatus: status,
   };
 }
 
@@ -540,7 +512,7 @@ export const teacherService = {
     const { staffId } = await getMyStaff();
     const { data, error } = await supabase
       .from('test_schedules')
-      .select('id, section_id, class_name, section, subject, test_type, title, scheduled_date, duration, max_marks, syllabus, results_uploaded')
+      .select('id, section_id, class_name, section, subject, test_type, title, scheduled_date, duration, max_marks, syllabus, results_uploaded, result_status')
       .eq('school_id', schoolId).eq('academic_year_id', yearId)
       .eq('teacher_id', staffId)
       .order('scheduled_date', { ascending: false });
@@ -549,7 +521,7 @@ export const teacherService = {
     return tests;
   },
 
-  async createTest(input: Omit<TestSchedule, 'id' | 'resultsUploaded'>): Promise<TestSchedule> {
+  async createTest(input: Omit<TestSchedule, 'id' | 'resultsUploaded' | 'resultStatus'>): Promise<TestSchedule> {
     const yearId = await getActiveYearId();
     const { staffId } = await getMyStaff();
     const sectionIds = await resolveMySectionIds();
@@ -576,30 +548,38 @@ export const teacherService = {
     return test;
   },
 
+  /** Fetch already-uploaded exam results for a test so the teacher can review
+   *  what they submitted. RLS allows teachers SELECT on exam_results within
+   *  their school. Returns a map of studentId -> { obtainedMarks, remarks }. */
+  async getResultsByTest(testId: string): Promise<Record<string, { obtainedMarks: number; remarks: string | null }>> {
+    const { data, error } = await supabase
+      .from('exam_results')
+      .select('student_id, obtained_marks, remarks')
+      .eq('test_id', testId);
+    if (error) throw new Error(error.message);
+    const map: Record<string, { obtainedMarks: number; remarks: string | null }> = {};
+    for (const r of (data ?? []) as { student_id: string; obtained_marks: number; remarks: string | null }[]) {
+      map[r.student_id] = { obtainedMarks: r.obtained_marks, remarks: r.remarks };
+    }
+    return map;
+  },
+
   async publishResults(payload: PublishResultsInput): Promise<void> {
     const yearId = await getActiveYearId();
-    // Bulk upsert exam_results
-    const rows = payload.studentResults.map(r => ({
-      test_id: payload.testId,
-      student_id: r.studentId,
-      academic_year_id: yearId,
-      obtained_marks: r.obtainedMarks,
-      remarks: r.note || null,
-    }));
-    if (rows.length) {
-      const { error } = await supabase
-        .from('exam_results')
-        .upsert(rows, { onConflict: 'test_id,student_id' });
-      if (error) throw new Error(error.message);
-    }
-    // Flip results_uploaded flag
-    const { error: uErr } = await supabase
-      .from('test_schedules')
-      .update({ results_uploaded: true })
-      .eq('id', payload.testId);
-    if (uErr) throw new Error(uErr.message);
-
-    await logAudit('test_results_published', 'test_schedules', payload.testId, { count: rows.length });
+    // Goes through the server because RLS blocks direct teacher writes to
+    // exam_results / test_schedules. Server uses adminDb after verifying the
+    // test belongs to the caller's school.
+    const { apiTeacher } = await import('@/lib/apiClient');
+    await apiTeacher.publishResults({
+      testId: payload.testId,
+      academicYearId: yearId,
+      results: payload.studentResults.map(r => ({
+        studentId: r.studentId,
+        obtainedMarks: r.obtainedMarks,
+        remarks: r.note || null,
+      })),
+    });
+    await logAudit('test_results_published', 'test_schedules', payload.testId, { count: payload.studentResults.length });
   },
 
   // ── Final exams (delegated to shared bridge — no DB table yet) ───────────
@@ -617,83 +597,6 @@ export const teacherService = {
 
   async publishFinalExamResults(_payload: FinalExamPublishInput): Promise<void> {
     // No-op: dedicated final-exam table not yet provisioned.
-  },
-
-  // ── Homework ──────────────────────────────────────────────────────────────
-
-  async getHomework(): Promise<HomeworkItem[]> {
-    const schoolId = getSchoolId();
-    const yearId = await getActiveYearId();
-    const { staffId } = await getMyStaff();
-    const { data, error } = await supabase
-      .from('homework_assignments')
-      .select('id, section_id, class_name, section, subject, title, description, assigned_date, due_date, submitted_count, total_students')
-      .eq('school_id', schoolId).eq('academic_year_id', yearId)
-      .eq('teacher_id', staffId)
-      .order('assigned_date', { ascending: false });
-    if (error) throw new Error(error.message);
-    const rows = (data ?? []) as HomeworkRow[];
-    if (rows.length === 0) return [];
-
-    // Reconcile total_students against the live section roster for the active year.
-    // No submissions table exists yet, so submitted_count stays as persisted but is
-    // clamped to roster size to prevent stale "10 / 5" displays.
-    const sectionIds = Array.from(new Set(rows.map(r => r.section_id).filter((x): x is string => !!x)));
-    const rosterBySection = new Map<string, number>();
-    if (sectionIds.length > 0) {
-      const { data: rosterRows, error: rErr } = await supabase
-        .from('student_academic_records')
-        .select('section_id')
-        .eq('academic_year_id', yearId)
-        .in('section_id', sectionIds);
-      if (rErr) throw new Error(rErr.message);
-      for (const r of (rosterRows ?? []) as { section_id: string | null }[]) {
-        if (!r.section_id) continue;
-        rosterBySection.set(r.section_id, (rosterBySection.get(r.section_id) ?? 0) + 1);
-      }
-    }
-    return rows.map(r => {
-      const liveTotal = r.section_id ? (rosterBySection.get(r.section_id) ?? r.total_students) : r.total_students;
-      const item = rowToHomework({
-        ...r,
-        total_students: liveTotal,
-        submitted_count: Math.min(r.submitted_count ?? 0, liveTotal),
-      });
-      return item;
-    });
-  },
-
-  async createHomework(input: Omit<HomeworkItem, 'id' | 'submittedCount'>): Promise<HomeworkItem> {
-    const schoolId = getSchoolId();
-    const yearId = await getActiveYearId();
-    const { staffId } = await getMyStaff();
-    const sectionIds = await resolveMySectionIds();
-    if (input.classId && !sectionIds.includes(input.classId)) {
-      throw new Error('You are not assigned to this class');
-    }
-    const { data, error } = await supabase
-      .from('homework_assignments')
-      .insert({
-        school_id: schoolId,
-        academic_year_id: yearId,
-        section_id: input.classId || null,
-        teacher_id: staffId,
-        class_name: input.className,
-        section: input.section,
-        subject: input.subject,
-        title: input.title,
-        description: input.description,
-        assigned_date: input.assignedDate || new Date().toISOString().slice(0, 10),
-        due_date: input.dueDate || null,
-        total_students: input.totalStudents,
-        submitted_count: 0,
-      })
-      .select('id, section_id, class_name, section, subject, title, description, assigned_date, due_date, submitted_count, total_students')
-      .single();
-    if (error) throw new Error(error.message);
-    const hw = rowToHomework(data as HomeworkRow);
-    await logAudit('homework_assigned', 'homework_assignments', hw.id, { title: hw.title });
-    return hw;
   },
 
   // ── Complaints (mine only) ────────────────────────────────────────────────

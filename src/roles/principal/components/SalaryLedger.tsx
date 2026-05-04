@@ -1,5 +1,6 @@
 import React, { useEffect, useState } from 'react';
-import { ArrowLeft, IndianRupee, CheckCircle2, Clock, AlertTriangle, Loader2 } from 'lucide-react';
+import { ArrowLeft, IndianRupee, CheckCircle2, Clock, AlertTriangle, Loader2, Download } from 'lucide-react';
+import { exportCsv } from '@/shared/utils/csv';
 import { staffService } from '@/modules/staff/staff.service';
 import { StaffMember, SalaryPaymentMethod } from '@/modules/staff/staff.types';
 import { useUIStore } from '@/store/uiStore';
@@ -224,14 +225,36 @@ export const SalaryLedger: React.FC<Props> = ({ onBack }) => {
   return (
     <div className="w-full bg-slate-50 flex flex-col animate-in slide-in-from-right-8 duration-300">
       <div className="bg-white border-b border-slate-100 px-4 pt-4 pb-4 shadow-sm">
-        <div className="flex items-center gap-3 mb-4">
-          <button onClick={onBack} className="p-2 -ml-2 bg-slate-100 rounded-full">
-            <ArrowLeft size={20} className="text-slate-600" />
-          </button>
-          <div>
-            <h2 className="text-xl font-black text-slate-900 uppercase tracking-tight">Salary Ledger</h2>
-            <p className="text-[10px] font-bold text-slate-400">Schedule · Payments · History</p>
+        <div className="flex items-center justify-between gap-3 mb-4">
+          <div className="flex items-center gap-3">
+            <button onClick={onBack} className="p-2 -ml-2 bg-slate-100 rounded-full">
+              <ArrowLeft size={20} className="text-slate-600" />
+            </button>
+            <div>
+              <h2 className="text-xl font-black text-slate-900 uppercase tracking-tight">Salary Ledger</h2>
+              <p className="text-[10px] font-bold text-slate-400">Schedule · Payments · History</p>
+            </div>
           </div>
+          <button
+            onClick={() => {
+              const rows = filtered.flatMap(p => p.schedule.map(s => ({
+                staff_name: p.staff.name,
+                role:       p.staff.role,
+                staff_status: p.staff.status,
+                month:      s.month,
+                due:        s.amount,
+                paid:       s.paid,
+                pending:    Math.max(0, s.amount - s.paid),
+                status:     s.status,
+                paid_at:    s.paidAt ?? '',
+                note:       s.note ?? '',
+              })));
+              exportCsv(`salary_ledger_${new Date().toISOString().slice(0, 10)}`, rows);
+            }}
+            disabled={filtered.length === 0}
+            className="flex items-center gap-1.5 px-3 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 font-black text-xs rounded-xl active:scale-95 transition-all disabled:opacity-40">
+            <Download size={13} /> CSV
+          </button>
         </div>
         <input value={search} onChange={e => setSearch(e.target.value)}
           placeholder="Search staff name or role..."

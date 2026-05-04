@@ -1,16 +1,9 @@
 import { create } from 'zustand';
 import { feeService } from '@/modules/fees/fee.service';
-
-interface FeeStructure {
-  id: string;
-  classId: string;
-  feeType: string;
-  amount: number;
-  [key: string]: any;
-}
+import type { FeeStructureRecord } from '@/modules/fees/fees.types';
 
 interface FeeStore {
-  structures: FeeStructure[];
+  structures: FeeStructureRecord[];
   loading: boolean;
   fetchStructures: (yearId: string) => Promise<void>;
   invalidate: () => void;

@@ -1,13 +1,13 @@
 import React, { useState, useCallback, useEffect } from 'react';
-import { ArrowLeft, Plus, Trash2, ChevronDown, AlertTriangle, CheckCircle2, Edit3, Clock } from 'lucide-react';
+import { ArrowLeft, Plus, Trash2, ChevronDown, AlertTriangle, CheckCircle2, Edit3, Clock, BookOpen } from 'lucide-react';
 import {
   timetableService, PERIOD_SLOTS, DAYS, TimetableEntry, TDay, TimetableTeacher,
 } from '@/modules/timetable/timetable.service';
 import { useUIStore } from '@/store/uiStore';
 import { useAcademicYear } from '@/shared/context/AcademicYearContext';
+import { useAuthStore } from '@/store/authStore';
 import { useEditGuard } from '@/store/correctionStore';
-
-const CLASSES = ['8-A', '8-B', '9-A', '9-B', '10-A', '10-B'];
+import { supabase } from '@/lib/supabase';
 
 const slotBg: Record<string, string> = {
   CLASS: 'bg-blue-50 border-blue-200 text-blue-800',
@@ -37,9 +37,17 @@ interface Props { onBack: () => void; }
 export const TimetableManager: React.FC<Props> = ({ onBack }) => {
   const { showToast } = useUIStore();
   const { currentYear } = useAcademicYear();
+  const session = useAuthStore(s => s.session);
   const isYearClosed = !!currentYear && currentYear.status === 'LOCKED';
   const editGuard = useEditGuard(currentYear?.id, isYearClosed);
-  const [selectedClass, setSelectedClass] = useState('10-A');
+  // Real class list — fetched from `sections` for the active year. We keep
+  // the original DB className alongside the stripped display label so the
+  // save path can resolve the section_id correctly even when the DB stores
+  // "Class 8" but the UI shows "8-A".
+  type ClassRow = { label: string; className: string; section: string };
+  const [classes, setClasses] = useState<ClassRow[]>([]);
+  const [classesLoading, setClassesLoading] = useState(true);
+  const [selectedClass, setSelectedClass] = useState<ClassRow | null>(null);
   const [activeDay, setActiveDay] = useState<TDay>('Monday');
   const [entries, setEntries] = useState<TimetableEntry[]>([]);
   const [slots, setSlots] = useState(() => [...PERIOD_SLOTS]);
@@ -50,10 +58,11 @@ export const TimetableManager: React.FC<Props> = ({ onBack }) => {
   const [slotTimeModal, setSlotTimeModal] = useState<SlotTimeModal | null>(null);
   const [teachers, setTeachers] = useState<TimetableTeacher[]>([]);
 
-  const subjects = timetableService.getSubjectsForClass(selectedClass);
+  const subjects = timetableService.getSubjectsForClass(selectedClass?.label ?? '');
 
-  const reload = useCallback((cls: string) => {
-    setEntries(timetableService.getClassTimetable(cls));
+  const reload = useCallback((cls: ClassRow) => {
+    // Service indexes entries by classId which is the "label" (e.g. "8-A")
+    setEntries(timetableService.getClassTimetable(cls.label));
     setSlots([...PERIOD_SLOTS]);
   }, []);
 
@@ -62,15 +71,39 @@ export const TimetableManager: React.FC<Props> = ({ onBack }) => {
       try {
         await timetableService.refreshAll();
         setTeachers(timetableService.getTeachers());
-        reload(selectedClass);
+
+        // Pull real sections for the active year + school
+        if (session?.schoolId && currentYear?.id) {
+          const { data, error } = await supabase
+            .from('sections')
+            .select('class_name, section')
+            .eq('school_id', session.schoolId)
+            .eq('academic_year_id', currentYear.id)
+            .order('class_name')
+            .order('section');
+          if (error) throw error;
+          const list: ClassRow[] = ((data ?? []) as { class_name: string; section: string }[])
+            .map(r => ({
+              label:     `${r.class_name.replace(/^Class\s*/i, '')}-${r.section}`,
+              className: r.class_name,
+              section:   r.section,
+            }));
+          setClasses(list);
+          if (list.length > 0) {
+            setSelectedClass(list[0]);
+            reload(list[0]);
+          }
+        }
       } catch (e) {
         showToast(e instanceof Error ? e.message : 'Failed to load timetable', 'error');
+      } finally {
+        setClassesLoading(false);
       }
     })();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [session?.schoolId, currentYear?.id]);
 
-  const handleClassChange = (cls: string) => {
+  const handleClassChange = (cls: ClassRow) => {
     setSelectedClass(cls);
     reload(cls);
     setEditModal(null);
@@ -96,15 +129,15 @@ export const TimetableManager: React.FC<Props> = ({ onBack }) => {
   };
 
   const handleSave = async () => {
+    if (!selectedClass) return;
     if (!form.subject || !form.teacherId) return;
     if (!editGuard.canEdit) {
       showToast('Year closed — pehle Correction Mode enable karein', 'error');
       return;
     }
     const teacher = teachers.find(t => t.id === form.teacherId)!;
-    const [className, section] = selectedClass.split('-');
 
-    // Update slot time if changed
+    // Update slot time if changed (apply BEFORE save so overlap check uses the new time)
     const slot = PERIOD_SLOTS.find(s => s.slotId === editModal!.slotId)!;
     if (form.startTime !== slot.startTime || form.endTime !== slot.endTime) {
       timetableService.updateSlotTime(editModal!.slotId, form.startTime, form.endTime);
@@ -113,9 +146,9 @@ export const TimetableManager: React.FC<Props> = ({ onBack }) => {
     const r = await editGuard.gate(
       () => timetableService.saveEntry({
         id: editModal?.existing?.id,
-        classId: selectedClass,
-        className,
-        section,
+        classId: selectedClass.label,
+        className: selectedClass.className, // use the original DB class_name
+        section: selectedClass.section,
         day: activeDay,
         slotId: editModal!.slotId,
         subject: form.subject,
@@ -130,13 +163,15 @@ export const TimetableManager: React.FC<Props> = ({ onBack }) => {
       }),
       {
         entityType: 'timetable_entry',
-        entityId: editModal?.existing?.id ?? `${selectedClass}/${activeDay}/${editModal!.slotId}`,
+        entityId: editModal?.existing?.id ?? `${selectedClass.label}/${activeDay}/${editModal!.slotId}`,
       },
     );
 
     if (r === undefined) return; // user cancelled correction prompt
     if (!r.ok) {
-      setConflictMsg(`Conflict! ${r.conflict?.teacherName ?? r.reason ?? ''} is already assigned at this time.`);
+      const c = r.conflict;
+      const where = c ? `${c.className}-${c.section} · ${c.subject}` : '';
+      setConflictMsg(r.reason ? `${r.reason}${where ? ` (${where})` : ''}` : 'Conflict detected');
       return;
     }
     reload(selectedClass);
@@ -146,7 +181,7 @@ export const TimetableManager: React.FC<Props> = ({ onBack }) => {
   };
 
   const handleDelete = async () => {
-    if (editModal?.existing) {
+    if (editModal?.existing && selectedClass) {
       if (!editGuard.canEdit) {
         showToast('Year closed — pehle Correction Mode enable karein', 'error');
         return;
@@ -194,56 +229,76 @@ export const TimetableManager: React.FC<Props> = ({ onBack }) => {
   return (
     <div className="w-full bg-slate-50 flex flex-col animate-in slide-in-from-right-8 duration-300">
       {/* Header */}
-      <div className="bg-white border-b border-slate-100 px-4 pt-4 pb-0 sticky top-0 z-10 shadow-sm">
-        <div className="flex items-center gap-3 pb-3">
-          <button onClick={onBack} className="p-2 -ml-2 bg-slate-100 rounded-full text-slate-600">
+      <div className="bg-white border-b border-slate-100 px-4 lg:px-6 pt-4 lg:pt-6 pb-0 sticky top-0 z-10 shadow-sm">
+        <div className="flex items-center gap-3 pb-3 lg:pb-4">
+          <button onClick={onBack} className="p-2 -ml-2 bg-slate-100 rounded-full text-slate-600 hover:bg-slate-200 transition-colors">
             <ArrowLeft size={20} />
           </button>
           <div className="flex-1">
-            <h2 className="text-xl font-black text-slate-900 uppercase tracking-tight">Timetable Manager</h2>
-            <p className="text-[10px] font-bold text-slate-400">Tap a period to assign · Tap Assembly/Break to change time</p>
+            <h2 className="text-xl lg:text-2xl font-black text-slate-900 uppercase tracking-tight">Timetable Manager</h2>
+            <p className="text-[10px] lg:text-xs font-bold text-slate-400">Tap a period to assign · Tap Assembly/Break to change time</p>
           </div>
           {successMsg && (
-            <div className="flex items-center gap-1 text-emerald-600 text-[10px] font-black">
+            <div className="flex items-center gap-1 text-emerald-600 text-[10px] lg:text-xs font-black bg-emerald-50 border border-emerald-200 px-2.5 py-1 rounded-full">
               <CheckCircle2 size={14} /> {successMsg}
             </div>
           )}
         </div>
 
-        {/* Class selector */}
-        <div className="flex gap-2 overflow-x-auto hide-scrollbar pb-3">
-          {CLASSES.map(cls => (
-            <button key={cls} onClick={() => handleClassChange(cls)}
-              className={`shrink-0 px-4 py-1.5 rounded-full text-[10px] font-black uppercase tracking-widest border transition-colors ${
-                selectedClass === cls
-                  ? 'bg-slate-900 text-white border-slate-900'
-                  : 'bg-white text-slate-500 border-slate-200'
-              }`}>
-              {cls}
-            </button>
-          ))}
-        </div>
+        {/* Class selector — show when classes load */}
+        {classesLoading ? (
+          <div className="pb-3 text-[10px] font-bold text-slate-400">Loading classes…</div>
+        ) : classes.length === 0 ? (
+          <div className="pb-3 flex items-center gap-2 text-[10px] font-bold text-amber-600 bg-amber-50 border border-amber-200 rounded-xl px-3 py-2">
+            <AlertTriangle size={12}/>
+            No classes set up for the active year. Create classes from Settings → Classes first.
+          </div>
+        ) : (
+          <div className="flex gap-2 overflow-x-auto hide-scrollbar pb-3 lg:pb-4">
+            {classes.map(cls => (
+              <button key={cls.label} onClick={() => handleClassChange(cls)}
+                className={`shrink-0 px-4 py-1.5 lg:py-2 rounded-full text-[10px] lg:text-xs font-black uppercase tracking-widest border transition-colors ${
+                  selectedClass?.label === cls.label
+                    ? 'bg-slate-900 text-white border-slate-900'
+                    : 'bg-white text-slate-500 border-slate-200 hover:border-slate-300'
+                }`}>
+                {cls.label}
+              </button>
+            ))}
+          </div>
+        )}
 
         {/* Day tabs */}
-        <div className="flex border-t border-slate-100 overflow-x-auto hide-scrollbar">
-          {DAYS.map(day => (
-            <button key={day} onClick={() => setActiveDay(day)}
-              className={`shrink-0 px-3 py-3 text-[10px] font-black uppercase tracking-widest border-b-2 transition-colors ${
-                activeDay === day ? 'border-blue-600 text-blue-600' : 'border-transparent text-slate-400'
-              }`}>
-              {day.slice(0, 3)}
-            </button>
-          ))}
-        </div>
+        {classes.length > 0 && (
+          <div className="flex border-t border-slate-100 overflow-x-auto hide-scrollbar">
+            {DAYS.map(day => (
+              <button key={day} onClick={() => setActiveDay(day)}
+                className={`shrink-0 px-3 lg:px-5 py-3 lg:py-3.5 text-[10px] lg:text-xs font-black uppercase tracking-widest border-b-2 transition-colors ${
+                  activeDay === day ? 'border-blue-600 text-blue-600' : 'border-transparent text-slate-400 hover:text-slate-600'
+                }`}>
+                <span className="lg:hidden">{day.slice(0, 3)}</span>
+                <span className="hidden lg:inline">{day}</span>
+              </button>
+            ))}
+          </div>
+        )}
       </div>
 
       {/* Timetable grid */}
-      <div className="flex-1 overflow-y-auto p-4  space-y-2">
-        <p className="text-[9px] font-black uppercase tracking-widest text-slate-400 mb-1">
-          {selectedClass} · {activeDay} — tap a period to assign
-        </p>
+      <div className="flex-1 overflow-y-auto p-4 lg:p-6 space-y-2 lg:space-y-2.5 lg:max-w-4xl lg:mx-auto lg:w-full">
+        {classes.length === 0 && !classesLoading ? (
+          <div className="flex flex-col items-center justify-center py-20 text-slate-400">
+            <BookOpen size={40} className="mb-3 opacity-40"/>
+            <p className="text-sm font-bold text-center">No classes available.</p>
+            <p className="text-[11px] font-bold text-slate-300 mt-1 text-center">Set up classes for the active year first.</p>
+          </div>
+        ) : (
+          <p className="text-[9px] lg:text-[11px] font-black uppercase tracking-widest text-slate-400 mb-1">
+            {selectedClass?.label} · {activeDay} — tap a period to assign
+          </p>
+        )}
 
-        {slots.map(slot => {
+        {classes.length > 0 && slots.map(slot => {
           const entry = getEntry(slot.slotId);
           const isFixed = slot.isFixed;
 
@@ -276,7 +331,13 @@ export const TimetableManager: React.FC<Props> = ({ onBack }) => {
                 ) : entry ? (
                   <>
                     <div className="font-extrabold text-slate-900 text-sm">{entry.subject}</div>
-                    <div className="text-[10px] font-bold text-slate-400 mt-0.5">{entry.teacherName}</div>
+                    {entry.teacherId && entry.teacherName ? (
+                      <div className="text-[10px] font-bold text-slate-400 mt-0.5">{entry.teacherName}</div>
+                    ) : (
+                      <div className="flex items-center gap-1 text-[10px] font-black text-rose-600 mt-0.5">
+                        <AlertTriangle size={10} /> Teacher suspended · reassign
+                      </div>
+                    )}
                     {entry.room && <div className="text-[9px] font-bold text-slate-300 mt-0.5">{entry.room}</div>}
                   </>
                 ) : (
@@ -345,7 +406,7 @@ export const TimetableManager: React.FC<Props> = ({ onBack }) => {
             <div className="flex justify-between items-center mb-5">
               <div>
                 <p className="text-[9px] font-black uppercase tracking-widest text-slate-400">
-                  {selectedClass} · {activeDay}
+                  {selectedClass?.label} · {activeDay}
                 </p>
                 <h3 className="text-lg font-black text-slate-900 mt-0.5">
                   {slots.find(s => s.slotId === editModal.slotId)?.label}
