@@ -186,24 +186,6 @@ export const apiStaff = {
     post<{ documentId: string; docUrl: string }>('/staff/document/delete', { documentId }),
 };
 
-// ─── Teacher writes (bypass RLS via server) ───────────────────────────────────
-
-export const apiTeacher = {
-  createNotice: (body: {
-    title: string; body: string; audience: string; sentByName: string;
-  }) => post<{ id: string }>('/teacher/notice/create', body),
-
-  createTest: (body: {
-    academicYearId: string; sectionId: string | null; teacherId: string;
-    className: string; section: string; subject: string; testType: string;
-    title: string; scheduledDate: string | null; duration: number;
-    maxMarks: number; syllabus: string;
-  }) => post<any>('/teacher/test/create', body),
-
-  submitComplaint: (body: { subject: string; description: string; fromName: string }) =>
-    post<any>('/teacher/complaint/create', body),
-};
-
 // ─── Transport ───────────────────────────────────────────────────────────────
 
 export const apiTransport = {
@@ -328,6 +310,17 @@ export const apiTeacher = {
     const q = new URLSearchParams(params as any).toString();
     return get<any[]>(`/teacher/attendance${q ? '?' + q : ''}`);
   },
+  createNotice: (body: {
+    title: string; body: string; audience: string; sentByName: string;
+  }) => post<{ id: string }>('/teacher/notice/create', body),
+  createTest: (body: {
+    academicYearId: string; sectionId: string | null; teacherId: string;
+    className: string; section: string; subject: string; testType: string;
+    title: string; scheduledDate: string | null; duration: number;
+    maxMarks: number; syllabus: string;
+  }) => post<any>('/teacher/test/create', body),
+  submitComplaint: (body: { subject: string; description: string; fromName: string }) =>
+    post<any>('/teacher/complaint/create', body),
 };
 
 // ─── Settings ────────────────────────────────────────────────────────────────
