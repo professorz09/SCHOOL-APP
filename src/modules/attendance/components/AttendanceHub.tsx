@@ -1,17 +1,18 @@
 import React, { useState } from 'react';
-import { ArrowLeft, GraduationCap, Users } from 'lucide-react';
+import { ArrowLeft, GraduationCap, Users, History } from 'lucide-react';
 import { StudentAttendanceManager } from '@/modules/attendance/components/StudentAttendanceManager';
 import { StaffAttendanceManager } from '@/modules/attendance/components/StaffAttendanceManager';
 
 interface Props { onBack: () => void; }
 
-type View = 'MENU' | 'STUDENT' | 'STAFF';
+type View = 'MENU' | 'STUDENT' | 'STAFF' | 'STAFF_HISTORY';
 
 export const AttendanceHub: React.FC<Props> = ({ onBack }) => {
   const [view, setView] = useState<View>('MENU');
 
-  if (view === 'STUDENT') return <StudentAttendanceManager onBack={() => setView('MENU')} />;
-  if (view === 'STAFF')   return <StaffAttendanceManager   onBack={() => setView('MENU')} />;
+  if (view === 'STUDENT')      return <StudentAttendanceManager onBack={() => setView('MENU')} />;
+  if (view === 'STAFF')        return <StaffAttendanceManager   onBack={() => setView('MENU')} />;
+  if (view === 'STAFF_HISTORY') return <StaffAttendanceManager  onBack={() => setView('MENU')} startTab="HISTORY" />;
 
   return (
     <div className="w-full bg-slate-50 flex flex-col animate-in slide-in-from-right-8 duration-300">
@@ -22,7 +23,7 @@ export const AttendanceHub: React.FC<Props> = ({ onBack }) => {
         <h2 className="text-xl font-black text-slate-900 uppercase tracking-tight">Attendance</h2>
       </div>
 
-      <div className="flex-1 overflow-y-auto p-4  space-y-3">
+      <div className="flex-1 overflow-y-auto p-4 space-y-3">
         {[
           {
             icon: GraduationCap,
@@ -35,10 +36,18 @@ export const AttendanceHub: React.FC<Props> = ({ onBack }) => {
           {
             icon: Users,
             label: 'Staff Attendance',
-            desc: 'Mark & manage daily staff attendance',
+            desc: 'Mark & save daily staff attendance',
             color: 'bg-cyan-50 text-cyan-600',
             border: 'border-cyan-100',
             action: () => setView('STAFF'),
+          },
+          {
+            icon: History,
+            label: 'Staff Attendance History',
+            desc: 'Month-wise staff attendance records',
+            color: 'bg-violet-50 text-violet-600',
+            border: 'border-violet-100',
+            action: () => setView('STAFF_HISTORY'),
           },
         ].map(({ icon: Icon, label, desc, color, border, action }) => (
           <button key={label} onClick={action}

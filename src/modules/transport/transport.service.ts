@@ -291,11 +291,47 @@ export const transportService = {
 
   // ── Driver assignment ───────────────────────────────────────────────────
   async assignDriver(vehicleId: string, driverId: string, driverName: string, driverPhone: string): Promise<void> {
+    const prev = this.getVehicleById(vehicleId);
     await this.updateVehicle(vehicleId, { driverId, driverName, driverPhone });
+    await logAudit('driver_vehicle_assigned', 'driver', driverId, {
+      vehicleId,
+      vehicleNo: prev?.vehicleNo ?? null,
+      previousDriverId: prev?.driverId ?? null,
+      previousDriverName: prev?.driverName ?? null,
+    });
   },
 
   async removeDriver(vehicleId: string): Promise<void> {
+    const prev = this.getVehicleById(vehicleId);
     await this.updateVehicle(vehicleId, { driverId: null, driverName: '—', driverPhone: '—' });
+    if (prev?.driverId) {
+      await logAudit('driver_vehicle_removed', 'driver', prev.driverId, {
+        vehicleId,
+        vehicleNo: prev.vehicleNo ?? null,
+      });
+    }
+  },
+
+  /**
+   * Driver assignment / suspension / reinstatement timeline.
+   * Queries audit_logs for events where entity_id = driverId.
+   */
+  async getDriverHistory(driverId: string): Promise<{
+    id: string;
+    action: string;
+    details: Record<string, unknown>;
+    createdAt: string;
+  }[]> {
+    const { data, error } = await supabase
+      .from('audit_logs')
+      .select('id, action, details, created_at')
+      .eq('entity_id', driverId)
+      .in('action', ['driver_vehicle_assigned', 'driver_vehicle_removed', 'staff_suspended', 'staff_reinstated'])
+      .order('created_at', { ascending: false })
+      .limit(50);
+    if (error) throw new Error(error.message);
+    return ((data ?? []) as { id: string; action: string; details: Record<string, unknown>; created_at: string }[])
+      .map(r => ({ id: r.id, action: r.action, details: r.details ?? {}, createdAt: r.created_at }));
   },
 
   // ── Routes / stops ──────────────────────────────────────────────────────

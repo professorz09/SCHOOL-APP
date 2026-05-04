@@ -75,6 +75,18 @@ export const AttendanceManager: React.FC<Props> = ({ onBack }) => {
   const [editBuffer,    setEditBuffer]   = useState<Record<string, Record<string, AttendanceCellStatus>>>({});
   const [isSubmitting,  setIsSubmitting] = useState(false);
 
+  // Clamp gridYM to academic year bounds so we don't start on a month with no dates
+  useEffect(() => {
+    if (!currentYear) return;
+    const endYM   = currentYear.endDate   ? currentYear.endDate.slice(0, 7)   : currentYearMonth();
+    const startYM = currentYear.startDate ? currentYear.startDate.slice(0, 7) : currentYearMonth();
+    setGridYM(prev => {
+      if (prev > endYM)   return endYM;
+      if (prev < startYM) return startYM;
+      return prev;
+    });
+  }, [currentYear?.id]); // eslint-disable-line react-hooks/exhaustive-deps
+
   // Load class list once
   useEffect(() => {
     teacherService.getClasses().then(async cs => {

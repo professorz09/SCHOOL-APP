@@ -55,6 +55,18 @@ export const StudentAttendanceTab: React.FC<Props> = ({ studentId }) => {
   const [allRecords, setAllRecords] = useState<SharedAttendanceRecord[]>([]);
   const [gridLoading, setGridLoading] = useState(false);
 
+  // Clamp gridYM to academic year bounds
+  useEffect(() => {
+    if (!currentYear) return;
+    const endYM   = currentYear.endDate   ? currentYear.endDate.slice(0, 7)   : currentYearMonth();
+    const startYM = currentYear.startDate ? currentYear.startDate.slice(0, 7) : currentYearMonth();
+    setGridYM(prev => {
+      if (prev > endYM)   return endYM;
+      if (prev < startYM) return startYM;
+      return prev;
+    });
+  }, [currentYear?.id]); // eslint-disable-line react-hooks/exhaustive-deps
+
   const loadMonth = async (ym: string) => {
     if (!currentYear) return;
     setGridLoading(true);

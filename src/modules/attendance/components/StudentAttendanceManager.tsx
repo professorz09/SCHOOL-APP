@@ -104,6 +104,18 @@ export const StudentAttendanceManager: React.FC<Props> = ({ onBack }) => {
 
   const session = useAuthStore(s => s.session);
 
+  // Clamp gridYM to academic year bounds so we don't start on a month with no dates
+  useEffect(() => {
+    if (!currentYear) return;
+    const endYM   = currentYear.endDate   ? currentYear.endDate.slice(0, 7)   : currentYearMonth();
+    const startYM = currentYear.startDate ? currentYear.startDate.slice(0, 7) : currentYearMonth();
+    setGridYM(prev => {
+      if (prev > endYM)   return endYM;
+      if (prev < startYM) return startYM;
+      return prev;
+    });
+  }, [currentYear?.id]); // eslint-disable-line react-hooks/exhaustive-deps
+
   useEffect(() => {
     let cancelled = false;
     (async () => {
