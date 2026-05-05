@@ -3,6 +3,7 @@ import { ChevronLeft, ChevronRight } from 'lucide-react';
 import { sharedAttendance, SharedAttendanceRecord, AttendanceCellStatus } from '@/modules/attendance/attendance.service';
 import { useUIStore } from '@/store/uiStore';
 import { useAcademicYear } from '@/shared/context/AcademicYearContext';
+import { todayIST } from '@/shared/utils/date';
 
 interface Props {
   studentId: string;
@@ -22,7 +23,8 @@ const CELL_BG: Record<AttendanceCellStatus, string> = {
   half: 'bg-emerald-500 text-white',
 };
 
-const todayStr = () => new Date().toISOString().split('T')[0];
+// IST-aware today; UTC-based was rolling forward late evening.
+const todayStr = () => todayIST();
 function currentYearMonth(): string {
   const d = new Date();
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
@@ -106,7 +108,11 @@ export const StudentAttendanceTab: React.FC<Props> = ({ studentId }) => {
   // Filter records for this student in this month
   const monthRecords = useMemo(() => {
     const monthStart = gridYM + '-01';
-    const monthEnd = gridYM + '-31';
+    // Real last-day for the month; previously hardcoded '-31' silently
+    // included invalid dates and disagreed with the grid on 30-day months.
+    const [y, m] = gridYM.split('-').map(Number);
+    const lastDay = new Date(y, m, 0).getDate();
+    const monthEnd = `${gridYM}-${String(lastDay).padStart(2, '0')}`;
     return allRecords.filter(r => {
       const match = r.students.find(s => s.id === studentId);
       return match && r.date >= monthStart && r.date <= monthEnd;

@@ -54,8 +54,8 @@ export const apiAuth = {
     post<LoginResponse>('/auth/login', { mobile, password }),
   logout:         () => post<void>('/auth/logout'),
   me:             () => get<any>('/auth/me'),
-  changePassword: (password: string) =>
-    post<void>('/auth/change-password', { password }),
+  changePassword: (currentPassword: string, newPassword: string) =>
+    post<void>('/auth/change-password', { currentPassword, newPassword }),
   enableEditorMode:  () => post<{ until: string }>('/auth/editor-mode/enable'),
   disableEditorMode: () => post<{ until: null }>('/auth/editor-mode/disable'),
 };
@@ -404,6 +404,31 @@ export const apiPrincipal = {
   }) => post<any>('/principal/leave/submit', body),
   leaveList: (studentId: string) =>
     get<any[]>(`/principal/leave/list?studentId=${encodeURIComponent(studentId)}`),
+
+  // Unified Inventory — flat school-wide asset list (no per-student loans).
+  inventoryList: () =>
+    get<Array<{
+      id: string; category: 'BOOK' | 'LAB_EQUIPMENT' | 'OTHER';
+      title: string; description: string; note: string;
+      quantity: number; addedOn: string; createdAt: string;
+    }>>('/principal/inventory/list'),
+  inventoryAdd: (body: {
+    title: string; category: 'BOOK' | 'LAB_EQUIPMENT' | 'OTHER';
+    quantity: number; description?: string; note?: string; addedOn?: string;
+  }) => post<{ id: string }>('/principal/inventory/add', body),
+  inventoryDelete: (id: string) =>
+    post<{ id: string }>('/principal/inventory/delete', { id }),
+  inventoryUpdate: (body: {
+    id: string; title?: string; quantity?: number;
+    description?: string; note?: string;
+  }) => post<{ id: string }>('/principal/inventory/update', body),
+  inventoryHistory: () =>
+    get<Array<{
+      id: string; action: 'ADD' | 'DELETE' | 'UPDATE';
+      title: string; category: 'BOOK' | 'LAB_EQUIPMENT' | 'OTHER';
+      quantity: number; description: string | null; note: string | null;
+      done_by_name: string | null; done_at: string;
+    }>>('/principal/inventory/history'),
 
   // Library — Books
   bookAdd: (body: { title: string; author?: string; isbn?: string; subject?: string; totalCopies: number }) =>

@@ -210,6 +210,26 @@ const [mainView, setMainView] = useState<MainView>(initialView ?? 'CLASSES');
       showToast('Parent mobile number required', 'error');
       return;
     }
+    // DOB sanity: reject future / unrealistically old dates and a sane age band.
+    if (form.dob) {
+      const dob = new Date(form.dob);
+      const today = new Date();
+      if (Number.isNaN(dob.getTime())) {
+        showToast('Invalid date of birth', 'error'); return;
+      }
+      if (dob > today) { showToast('Date of birth cannot be in the future', 'error'); return; }
+      const ageYrs = (today.getTime() - dob.getTime()) / (365.25 * 24 * 60 * 60 * 1000);
+      if (ageYrs < 2 || ageYrs > 25) {
+        showToast('Date of birth looks wrong (age must be 2–25 years)', 'error');
+        return;
+      }
+    }
+    // Mobile sanity — must be 10 digits.
+    const cleanedMobile = (form.parentMobileNumber || '').replace(/\D/g, '');
+    if (cleanedMobile.length !== 10) {
+      showToast('Parent mobile must be 10 digits', 'error');
+      return;
+    }
     // Class/section/stream are NOT collected at admission anymore — the
     // student lands in the UNASSIGNED bucket and the principal places
     // them via the "Assign to Class" modal. So no stream guard here.
@@ -603,7 +623,10 @@ const [mainView, setMainView] = useState<MainView>(initialView ?? 'CLASSES');
             <div className="grid grid-cols-2 gap-3">
               <div>
                 <label className="block text-[10px] font-black uppercase tracking-widest text-slate-500 mb-1.5">Date of Birth</label>
-                <input type="date" value={form.dob} onChange={e => setForm(f => ({ ...f, dob: e.target.value }))}
+                <input type="date" value={form.dob}
+                  max={new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Kolkata' })}
+                  min="1950-01-01"
+                  onChange={e => setForm(f => ({ ...f, dob: e.target.value }))}
                   className="w-full border border-slate-200 bg-slate-50 rounded-xl px-3 py-3 font-bold text-sm outline-none focus:border-indigo-500" />
               </div>
               <div>

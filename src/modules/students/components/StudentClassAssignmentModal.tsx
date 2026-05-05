@@ -186,10 +186,14 @@ export const StudentClassAssignmentModal: React.FC<Props> = ({ student, onClose,
       .reduce((sum, h) => sum + h.amount, 0);
     const months = selectedStructure.monthlyDueDates.length || 12;
     const grossYear = monthlyTotal * months + annualTotal;
-    const discount = Math.max(
+    // Cap the effective discount at grossYear so a typo of 999999 doesn't
+    // silently zero the fee. The clamp + grossYear floor of 0 made the bug
+    // invisible — now we still floor at 0 but warn elsewhere on submit.
+    const requestedDiscount = Math.max(
       discountAmount * months,
       Math.floor(grossYear * (discountPct / 100)),
     );
+    const discount = Math.min(Math.max(0, requestedDiscount), grossYear);
     setTotalFee(Math.max(0, grossYear - discount));
   }, [selectedStructure, discountAmount, discountPct]);
 

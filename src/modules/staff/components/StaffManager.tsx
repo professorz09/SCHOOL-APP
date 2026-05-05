@@ -5,6 +5,7 @@ import {
   Loader2, BadgeAlert, BookOpen, AlertTriangle, CheckCircle2, Clock,
 } from 'lucide-react';
 import { staffService } from '@/modules/staff/staff.service';
+import { staffAttendanceService } from '@/modules/attendance/attendance.service';
 import { exportCsv } from '@/shared/utils/csv';
 import {
   StaffMember, StaffRole, StaffStatus, SalaryPaymentMethod,
@@ -335,6 +336,11 @@ export const StaffManager: React.FC<Props> = ({ onBack }) => {
   const [statusHistory, setStatusHistory] = useState<StaffStatusHistoryEntry[]>([]);
   const [docs, setDocs] = useState<StaffDocument[]>([]);
   const [tabLoading, setTabLoading] = useState(false);
+  const [staffAttendance, setStaffAttendance] = useState<{
+    days: Array<{ date: string; status: string }>;
+    counts: Record<string, number>;
+  } | null>(null);
+  const [staffAttLoading, setStaffAttLoading] = useState(false);
 
   // Modals
   const [editSalaryOpen, setEditSalaryOpen] = useState(false);
@@ -387,8 +393,27 @@ export const StaffManager: React.FC<Props> = ({ onBack }) => {
   useEffect(() => {
     if (view === 'PROFILE' && selected) {
       loadProfileTabs(selected.id);
+      // Reset stale attendance data so the next staff opened shows their own,
+      // not the previous selection's summary.
+      setStaffAttendance(null);
     }
   }, [view, selected, loadProfileTabs]);
+
+  // Load attendance for the selected staff when their Attendance tab is
+  // opened. Pulls a 90-day window — enough to feel like "recent activity"
+  // without hammering the wire on every profile open. Re-fetched per
+  // selected.id change so swapping staff in PROFILE shows fresh data.
+  useEffect(() => {
+    if (view !== 'PROFILE' || tab !== 'ATTENDANCE' || !selected || staffAttendance) return;
+    setStaffAttLoading(true);
+    const today = new Date();
+    const start = new Date(today); start.setDate(today.getDate() - 89);
+    const fmt = (d: Date) => d.toISOString().slice(0, 10);
+    staffAttendanceService.getStaffAttendanceForRange(selected.id, fmt(start), fmt(today))
+      .then(r => setStaffAttendance(r))
+      .catch(e => showToast(e instanceof Error ? e.message : 'Failed to load attendance', 'error'))
+      .finally(() => setStaffAttLoading(false));
+  }, [view, tab, selected, staffAttendance, showToast]);
 
   const filtered = staff.filter(s => {
     const matchSearch = s.name.toLowerCase().includes(search.toLowerCase()) || s.subject.toLowerCase().includes(search.toLowerCase());
@@ -398,8 +423,11 @@ export const StaffManager: React.FC<Props> = ({ onBack }) => {
 
   const handleCreate = async () => {
     if (!form.name.trim()) { showToast('Staff name required', 'error'); return; }
-    if (!Number.isFinite(form.salary) || form.salary <= 0) {
-      showToast('Monthly salary must be greater than 0', 'error'); return;
+    if (!Number.isFinite(form.salary) || form.salary <= 0 || form.salary > 10_000_000) {
+      showToast('Monthly salary must be between ₹1 and ₹1,00,00,000', 'error'); return;
+    }
+    if (!Number.isInteger(form.salary)) {
+      showToast('Salary must be a whole rupee value', 'error'); return;
     }
     if (!form.joiningDate) {
       showToast('Joining date required', 'error'); return;
@@ -1073,13 +1101,71 @@ export const StaffManager: React.FC<Props> = ({ onBack }) => {
             />
           )}
 
-          {tab === 'ATTENDANCE' && !tabLoading && (
-            <div className="bg-white rounded-2xl border border-slate-100 shadow-sm p-6 text-center text-slate-400">
-              <Calendar size={28} className="mx-auto mb-2 opacity-40" />
-              <p className="font-bold text-sm">Mark attendance from the Staff Attendance screen on the dashboard.</p>
-              <p className="text-[10px] font-bold text-slate-300 mt-1">Attendance is shown for visibility only — salary is fixed monthly per the simple model.</p>
-            </div>
-          )}
+          {tab === 'ATTENDANCE' && !tabLoading && (() => {
+            if (staffAttLoading) return (
+              <div className="bg-white rounded-2xl border border-slate-100 shadow-sm p-6 text-center text-slate-400">
+                <Loader2 size={20} className="mx-auto animate-spin opacity-60"/>
+              </div>
+            );
+            if (!staffAttendance) return (
+              <div className="bg-white rounded-2xl border border-slate-100 shadow-sm p-6 text-center text-slate-400">
+                <Calendar size={28} className="mx-auto mb-2 opacity-40"/>
+                <p className="font-bold text-sm">No attendance recorded in the last 90 days.</p>
+              </div>
+            );
+            const c = staffAttendance.counts;
+            const workDays = (c.PRESENT ?? 0) + (c.ABSENT ?? 0) + (c.HALF_DAY ?? 0) + (c.LATE ?? 0);
+            const pct = workDays > 0
+              ? Math.round((((c.PRESENT ?? 0) + (c.LATE ?? 0) + (c.HALF_DAY ?? 0) * 0.5) / workDays) * 100)
+              : null;
+            const STATUS_TINT: Record<string, string> = {
+              PRESENT: 'bg-emerald-500', ABSENT: 'bg-rose-500',
+              HALF_DAY: 'bg-amber-400', LEAVE: 'bg-blue-400',
+              LATE: 'bg-violet-400', HOLIDAY: 'bg-slate-300',
+            };
+            return (
+              <div className="space-y-3">
+                {/* Headline % + 90-day window note */}
+                <div className="bg-white rounded-2xl border border-slate-100 shadow-sm p-4 flex items-center justify-between">
+                  <div>
+                    <p className="text-[10px] font-black uppercase tracking-widest text-slate-400">Last 90 Days</p>
+                    <p className="text-2xl font-black text-slate-900 mt-0.5">{pct === null ? '—' : `${pct}%`}</p>
+                    <p className="text-[10px] font-bold text-slate-400">attendance rate · {workDays} working days</p>
+                  </div>
+                  <div className="w-12 h-12 rounded-2xl bg-emerald-50 text-emerald-600 flex items-center justify-center">
+                    <Calendar size={20}/>
+                  </div>
+                </div>
+
+                {/* Status breakdown */}
+                <div className="grid grid-cols-3 gap-2">
+                  {(['PRESENT', 'ABSENT', 'HALF_DAY', 'LEAVE', 'LATE', 'HOLIDAY'] as const).map(k => (
+                    <div key={k} className="bg-white border border-slate-100 rounded-xl p-2.5 text-center">
+                      <div className="text-base font-black text-slate-900">{c[k] ?? 0}</div>
+                      <div className="text-[9px] font-black text-slate-400 uppercase tracking-wide mt-0.5">{k.replace('_', ' ')}</div>
+                    </div>
+                  ))}
+                </div>
+
+                {/* Recent days strip */}
+                <div className="bg-white rounded-2xl border border-slate-100 shadow-sm p-4">
+                  <p className="text-[10px] font-black uppercase tracking-widest text-slate-400 mb-3">Recent</p>
+                  <div className="flex flex-wrap gap-1.5">
+                    {staffAttendance.days.slice(-30).reverse().map(d => (
+                      <div key={d.date} className="flex flex-col items-center" title={`${d.date} · ${d.status}`}>
+                        <div className={`w-7 h-7 rounded-md ${STATUS_TINT[d.status] ?? 'bg-slate-200'}`}/>
+                        <div className="text-[8px] font-bold text-slate-400 mt-0.5">{new Date(d.date).getDate()}</div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+
+                <p className="text-[10px] font-bold text-slate-400 text-center">
+                  Attendance is shown for visibility only — salary is fixed monthly per the simple model.
+                </p>
+              </div>
+            );
+          })()}
 
           {tab === 'CLASSES' && !tabLoading && (
             <div className="bg-white rounded-2xl border border-slate-100 shadow-sm p-4">

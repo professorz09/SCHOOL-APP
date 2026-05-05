@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import {
-  ArrowLeft, ChevronLeft, ChevronRight, ShieldCheck, Hourglass,
+  ArrowLeft, ChevronLeft, ChevronRight, ShieldCheck,
   Save, Download, RefreshCw, Search, Lock,
   AlertCircle, LayoutGrid,
 } from 'lucide-react';
@@ -12,6 +12,7 @@ import { useAcademicYear } from '@/shared/context/AcademicYearContext';
 import { useEditGuard } from '@/store/correctionStore';
 import { useEditorModeStore } from '@/store/editorModeStore';
 import { apiAttendance } from '@/lib/apiClient';
+import { todayIST, istDateOf } from '@/shared/utils/date';
 import { supabase } from '@/lib/supabase';
 import { useAuthStore } from '@/store/authStore';
 import { exportCsv } from '@/shared/utils/csv';
@@ -47,7 +48,9 @@ const STATUS_HDR: Record<string, string> = {
   REJECTED: 'bg-rose-50/30',
 };
 
-const todayStr = () => new Date().toISOString().split('T')[0];
+// IST-aware "today" — `toISOString()` returns the UTC date, which flips to
+// the next day after 18:30 IST and showed tomorrow's grid late at night.
+const todayStr = () => todayIST();
 const ATT_COLOR = (pct: number) => pct >= 90 ? 'bg-emerald-500' : pct >= 75 ? 'bg-amber-400' : 'bg-rose-500';
 const ATT_TEXT  = (pct: number) => pct >= 90 ? 'text-emerald-600' : pct >= 75 ? 'text-amber-600' : 'text-rose-600';
 const avg       = (nums: number[]) => nums.length ? Math.round(nums.reduce((a, b) => a + b, 0) / nums.length) : 0;
@@ -117,7 +120,10 @@ export const StudentAttendanceManager: React.FC<Props> = ({ onBack }) => {
 
   const session = useAuthStore(s => s.session);
 
-  // Clamp gridYM to academic year bounds so we don't start on a month with no dates
+  // Clamp only the grid month picker to the active-year window so the
+  // grid never opens on a month with no dates. markDate is no longer
+  // clamped — the AY-window restriction was removed because it kept
+  // resetting the date out from under the user when AY ranges drifted.
   useEffect(() => {
     if (!currentYear) return;
     const endYM   = currentYear.endDate   ? currentYear.endDate.slice(0, 7)   : currentYearMonth();
@@ -346,34 +352,94 @@ export const StudentAttendanceManager: React.FC<Props> = ({ onBack }) => {
   };
 
   // ── Mark / Edit record flows ───────────────────────────────────────────────
+  // checkConflict was earlier "if a record exists, hide everything and show
+  // a banner". That left the principal stranded — they couldn't see who's
+  // marked, couldn't fix a typo without navigating to Records. Now we
+  // ALWAYS hydrate the markStudents list:
+  //   * No existing record → fresh roster, all-present default.
+  //   * Existing record   → load that record's actual rows so they appear
+  //                          on screen. Editing them is gated by Editor
+  //                          Mode (the locked record has is_locked=true,
+  //                          enforced server-side in /update-students).
   const checkConflict = async (className: string, section: string, date: string) => {
+    if (!className || !section) { setMarkConflict(null); setMarkStudents([]); return; }
     try {
       const existing = await sharedAttendance.getByClassNameSectionDate(className, section, date);
       setMarkConflict(existing);
-      if (!existing && className && section) {
+      if (existing) {
+        const stus = await sharedAttendance.getStudents(existing.id);
+        setMarkStudents(stus);
+      } else {
         const ss = students.filter(s => s.className === className && s.section === section)
           .sort((a, b) => parseInt(a.rollNo) - parseInt(b.rollNo));
         setMarkStudents(ss.map(s => ({ id: s.id, name: s.name, rollNo: s.rollNo, isPresent: true, status: 'present' as AttendanceCellStatus })));
-      } else { setMarkStudents([]); }
+      }
     } catch (e) { showToast((e as Error).message || 'Failed to check', 'error'); }
   };
 
+  // Locked rows can only be flipped when Editor Mode is on. The banner
+  // above the list already explains that, so we silently no-op here
+  // instead of stacking a toast on every tap (the earlier behaviour
+  // produced 4-5 identical "Locked" toasts when the principal kept
+  // probing the rows).
   const toggleMarkStudent = (id: string) => {
+    if (markConflict && !editorModeActive) return;
     setMarkStudents(prev => prev.map(s => s.id === id ? { ...s, isPresent: !s.isPresent, status: s.status === 'absent' ? 'present' : 'absent' } : s));
   };
 
+  // Two paths: fresh mark (no existing record) or edit-of-locked
+  // (existing record, requires Editor Mode + reason). The save button label
+  // and the underlying API call switch based on which path applies.
   const submitMark = async () => {
     if (!markClass || !markSection || !markDate || markStudents.length === 0) return;
     if (!editGuard.canEdit) { showToast('Year closed — enable Correction Mode', 'error'); return; }
+    // Only temporal guard left: future dates are blocked. AY-window check
+    // was removed because it caused false negatives whenever the active
+    // year wasn't aligned with today (rollover gap, dev environments).
+    if (markDate > todayStr()) {
+      showToast('Future date — not allowed', 'error'); return;
+    }
+    if (markConflict && !editorModeActive) {
+      showToast('Already marked. Enable Editor Mode to edit.', 'error');
+      return;
+    }
+    if (markConflict) {
+      const reason = window.prompt('Reason for editing this locked record:')?.trim();
+      if (!reason) return;
+      setIsSubmitting(true);
+      try {
+        await editGuard.gate(
+          () => sharedAttendance.updateStudents(markConflict.id, markStudents, reason),
+          { entityType: 'student_attendance', entityId: markConflict.id },
+        );
+        await refreshRecords();
+        showToast('Attendance updated');
+        setView('GRID');
+        setGridClass(markClass); setGridSection(markSection);
+      } catch (e) {
+        showToast((e as Error).message || 'Failed to update', 'error');
+      } finally { setIsSubmitting(false); }
+      return;
+    }
     setIsSubmitting(true);
     try {
+      // Re-check immediately before submit to close the TOCTOU window where
+      // another user marked this class+date between the form opening and
+      // this click. Without this, a concurrent submit silently overwrites
+      // the other user's record.
+      const reCheck = await sharedAttendance.getByClassNameSectionDate(markClass, markSection, markDate);
+      if (reCheck) {
+        setMarkConflict(reCheck);
+        showToast('This class+date was just marked by someone else — review before saving.', 'error');
+        return;
+      }
       const result = await editGuard.gate(
         () => sharedAttendance.submitPrincipal(markClass, markSection, markDate, markStudents),
         { entityType: 'student_attendance', entityId: `${markClass}/${markSection}/${markDate}` },
       );
       if (result === undefined) return;
       await refreshRecords();
-      showToast('Attendance marked & approved');
+      showToast('Attendance saved');
       setView('GRID');
       setGridClass(markClass); setGridSection(markSection);
     } catch (e) {
@@ -700,18 +766,24 @@ export const StudentAttendanceManager: React.FC<Props> = ({ onBack }) => {
                       const rec = recordMap[d];
                       const dow = new Date(d).getDay();
                       const isSun = dow === 0;
+                      // Records are always APPROVED+locked at save time now,
+                      // so we collapse the old per-status colour matrix to:
+                      //   marked → emerald tint, unmarked → blank, sundays → slate.
                       let colBg = 'bg-white';
-                      if (rec?.approvalStatus === 'APPROVED') colBg = 'bg-emerald-50/60';
-                      else if (rec?.approvalStatus === 'PENDING') colBg = 'bg-amber-50/60';
+                      if (rec) colBg = 'bg-emerald-50/60';
                       else if (isSun) colBg = 'bg-slate-50';
                       return (
-                        <th key={d} className={`border-r border-slate-100 px-0.5 py-1 text-center min-w-[36px] ${colBg}`}>
+                        <th key={d}
+                          // Header tooltip carries "marked by" so the principal
+                          // can audit who locked this column at a glance.
+                          title={rec?.markedByName ? `Marked by ${rec.markedByName}` : undefined}
+                          className={`border-r border-slate-100 px-0.5 py-1 text-center min-w-[36px] ${colBg}`}>
                           <div className={`text-[8px] font-bold ${isSun ? 'text-rose-400' : 'text-slate-400'}`}>{fmtDayShort(d)}</div>
                           <div className={`font-black text-[10px] tabular-nums ${isSun ? 'text-rose-400' : 'text-slate-700'}`}>{fmtDay(d)}</div>
                           <div className="flex items-center justify-center gap-0.5 mt-0.5">
-                            {rec?.approvalStatus === 'APPROVED' && <ShieldCheck size={7} className="text-emerald-500"/>}
-                            {rec?.approvalStatus === 'PENDING'  && <Hourglass size={7} className="text-amber-500"/>}
-                            {!rec && <div className="w-1.5 h-1.5 rounded-full bg-slate-200"/>}
+                            {rec
+                              ? <ShieldCheck size={7} className="text-emerald-500"/>
+                              : <div className="w-1.5 h-1.5 rounded-full bg-slate-200"/>}
                           </div>
                         </th>
                       );
@@ -785,8 +857,9 @@ export const StudentAttendanceManager: React.FC<Props> = ({ onBack }) => {
                               onClick={() => toggleCell(d, stu.id)}
                               title={
                                 isFuture ? 'Future date — not editable' :
-                                locked ? 'Locked — edit via Records (Editor Mode required)' :
-                                undefined
+                                locked
+                                  ? `Locked${rec?.markedByName ? ` · marked by ${rec.markedByName}` : ''} · enable Editor Mode to edit`
+                                  : rec?.markedByName ? `Marked by ${rec.markedByName}` : undefined
                               }>
                               <span className={`inline-flex items-center justify-center w-7 h-7 rounded-lg text-[9px] font-black transition-colors ${bg} ${locked || isFuture ? 'opacity-30' : ''}`}>
                                 {st ? CELL_LABEL[st] : isFuture ? '·' : '—'}
@@ -830,10 +903,18 @@ export const StudentAttendanceManager: React.FC<Props> = ({ onBack }) => {
   /* ── MARK ATTENDANCE ─────────────────────────────────────────────────────── */
   if (view === 'MARK') {
     const markPresent = markStudents.filter(s => s.isPresent).length;
-    const canSubmit   = markClass && markSection && markDate && markStudents.length > 0 && !markConflict;
-    const dateStrip   = Array.from({ length: 14 }, (_, i) => {
+    // Two states: fresh-mark (no conflict) → always submittable.
+    // Edit-locked (conflict) → submittable only when Editor Mode is on.
+    const canSubmit = !!(markClass && markSection && markDate && markStudents.length > 0
+                        && (!markConflict || editorModeActive));
+    // Date strip: always render the last 14 days. The AY-window guard was
+    // removed — it was greying out the entire strip whenever the active
+    // year didn't perfectly cover today, which surfaced as "Outside the
+    // active academic year" on every button. The only remaining temporal
+    // restriction is "no future dates" (enforced in toggleCell / submit).
+    const dateStrip = Array.from({ length: 14 }, (_, i) => {
       const d = new Date(); d.setDate(d.getDate() - (13 - i));
-      return d.toISOString().split('T')[0];
+      return istDateOf(d) ?? d.toISOString().split('T')[0];
     });
     return (
       <div className="w-full bg-slate-50 flex flex-col animate-in slide-in-from-right-8 duration-300">
@@ -876,7 +957,11 @@ export const StudentAttendanceManager: React.FC<Props> = ({ onBack }) => {
                   const sel = markDate === d;
                   const t   = d === todayStr();
                   return (
-                    <button key={d} onClick={() => { setMarkDate(d); if (markClass && markSection) checkConflict(markClass, markSection, d); }}
+                    <button key={d}
+                      onClick={() => {
+                        setMarkDate(d);
+                        if (markClass && markSection) checkConflict(markClass, markSection, d);
+                      }}
                       className={`shrink-0 flex flex-col items-center mx-0.5 px-2.5 py-1.5 rounded-xl border-2 transition-colors ${
                         sel
                           ? t ? 'bg-blue-600 border-blue-600 text-white' : 'bg-slate-800 border-slate-800 text-white'
@@ -892,24 +977,50 @@ export const StudentAttendanceManager: React.FC<Props> = ({ onBack }) => {
             </div>
           </div>
           {markConflict && (
-            <div className="bg-amber-50 border border-amber-200 rounded-2xl p-4">
+            <div className={`rounded-2xl p-4 border ${
+              editorModeActive ? 'bg-amber-50 border-amber-200' : 'bg-slate-50 border-slate-200'
+            }`}>
               <div className="flex items-start gap-2">
-                <AlertCircle size={16} className="text-amber-600 shrink-0 mt-0.5"/>
+                {editorModeActive
+                  ? <AlertCircle size={16} className="text-amber-600 shrink-0 mt-0.5"/>
+                  : <Lock size={14} className="text-slate-500 shrink-0 mt-0.5"/>}
                 <div>
-                  <div className="font-black text-amber-800 text-sm">Attendance Already Marked</div>
-                  <div className="text-[10px] font-bold text-amber-600 mt-1">Status: {markConflict.status}</div>
+                  <div className={`font-black text-sm ${editorModeActive ? 'text-amber-800' : 'text-slate-700'}`}>
+                    Already marked · {markConflict.totalPresent}P / {markConflict.totalAbsent}A
+                  </div>
+                  {/* Audit line — who locked this date and when. The
+                      timestamp is the most recent server write, so an
+                      edited record reads "by Suresh · 12:04 today" rather
+                      than the stale original time. */}
+                  {(markConflict.markedBy || markConflict.markedAt) && (
+                    <div className={`text-[10px] font-bold mt-1 ${editorModeActive ? 'text-amber-700' : 'text-slate-600'}`}>
+                      Locked by {markConflict.markedBy || 'Unknown'}
+                      {markConflict.markedAt && ` · ${new Date(markConflict.markedAt).toLocaleString('en-IN', {
+                        day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit',
+                      })}`}
+                    </div>
+                  )}
+                  <div className={`text-[10px] font-bold mt-1 ${editorModeActive ? 'text-amber-600' : 'text-slate-500'}`}>
+                    {editorModeActive
+                      ? 'Editor Mode on — tap a row to flip status. Saving will ask for a reason.'
+                      : 'Enable Editor Mode in Settings to make corrections.'}
+                  </div>
                 </div>
               </div>
             </div>
           )}
-          {markStudents.length > 0 && !markConflict && (
+          {markStudents.length > 0 && (
             <>
-              <div className="flex gap-2">
-                <button onClick={() => setMarkStudents(prev => prev.map(s => ({ ...s, isPresent: true, status: 'present' as AttendanceCellStatus })))}
-                  className="flex-1 py-2 bg-emerald-500 text-white text-[10px] font-black rounded-xl">All Present</button>
-                <button onClick={() => setMarkStudents(prev => prev.map(s => ({ ...s, isPresent: false, status: 'absent' as AttendanceCellStatus })))}
-                  className="flex-1 py-2 bg-rose-500 text-white text-[10px] font-black rounded-xl">All Absent</button>
-              </div>
+              {/* Bulk shortcuts hidden when the record is locked + no editor
+                  mode — the principal can only review, not flip statuses. */}
+              {(!markConflict || editorModeActive) && (
+                <div className="flex gap-2">
+                  <button onClick={() => setMarkStudents(prev => prev.map(s => ({ ...s, isPresent: true, status: 'present' as AttendanceCellStatus })))}
+                    className="flex-1 py-2 bg-emerald-500 text-white text-[10px] font-black rounded-xl">All Present</button>
+                  <button onClick={() => setMarkStudents(prev => prev.map(s => ({ ...s, isPresent: false, status: 'absent' as AttendanceCellStatus })))}
+                    className="flex-1 py-2 bg-rose-500 text-white text-[10px] font-black rounded-xl">All Absent</button>
+                </div>
+              )}
               <div className="bg-white rounded-2xl border border-slate-100 shadow-sm overflow-hidden">
                 {markStudents.map((s, idx) => (
                   <button key={s.id} onClick={() => toggleMarkStudent(s.id)}
@@ -928,61 +1039,21 @@ export const StudentAttendanceManager: React.FC<Props> = ({ onBack }) => {
             </>
           )}
         </div>
-        <div className="fixed bottom-16 left-0 right-0 p-4 bg-white border-t border-slate-100 z-30">
+        <div className="fixed bottom-16 left-0 right-0 lg:sticky lg:left-auto lg:right-auto lg:bottom-0 p-4 lg:p-6 bg-white border-t border-slate-100 z-30 lg:rounded-t-2xl lg:shadow-lg">
           <button onClick={submitMark} disabled={!canSubmit || isSubmitting}
             className="w-full flex items-center justify-center gap-2 bg-blue-600 text-white font-black text-sm uppercase tracking-widest py-4 rounded-2xl active:scale-95 transition-transform shadow-lg disabled:opacity-50">
-            {isSubmitting ? 'Submitting…' : <><Save size={16}/> Mark &amp; Approve</>}
+            {isSubmitting
+              ? 'Saving…'
+              : markConflict
+                ? <><Save size={16}/> Save Changes</>
+                : <><Save size={16}/> Save Attendance</>}
           </button>
         </div>
       </div>
     );
   }
 
-  /* ── RECORDS ────────────────────────────────────────────────────────────── */
-  if (view === 'RECORDS') {
-    return (
-      <div className="w-full bg-slate-50 flex flex-col animate-in slide-in-from-right-8 duration-300">
-        <div className="bg-white border-b border-slate-100 px-4 pt-4 pb-4 sticky top-0 z-10 shadow-sm flex items-center gap-3">
-          <button onClick={() => setView('OVERVIEW')} className="p-2 -ml-2 bg-slate-100 rounded-full text-slate-600">
-            <ArrowLeft size={20} />
-          </button>
-          <div className="flex-1">
-            <h2 className="text-xl font-black text-slate-900 uppercase tracking-tight">All Records</h2>
-            <p className="text-[10px] font-bold text-slate-400">{records.length} total · all locked at save time</p>
-          </div>
-          <button onClick={refreshRecords} className="p-2 bg-slate-100 rounded-full text-slate-600">
-            <RefreshCw size={16} />
-          </button>
-        </div>
-        <div className="flex-1 overflow-y-auto p-4 pb-4">
-          {records.length === 0 && (
-            <div className="bg-white rounded-2xl border border-slate-100 p-8 text-center">
-              <p className="text-xs font-bold text-slate-400">No attendance records yet.</p>
-            </div>
-          )}
-          <div className="bg-white rounded-2xl border border-slate-100 shadow-sm overflow-hidden">
-            {records.map((r, idx) => (
-              <div key={r.id} className={`${idx < records.length - 1 ? 'border-b border-slate-100' : ''}`}>
-                <div className="flex items-center gap-3 px-4 py-3.5">
-                  <div className="flex-1 min-w-0">
-                    <div className="font-bold text-slate-900 text-sm">{r.className}-{r.section}</div>
-                    <div className="text-[10px] font-bold text-slate-400">{r.date} · {r.totalPresent}P / {r.totalAbsent}A / {r.totalHoliday}H · {r.markedBy}</div>
-                  </div>
-                  {/* No status chip — every record is locked-on-save now and
-                      the user prefers the cleanest possible row. The chevron
-                      stays as the affordance to open per-student edits via
-                      Editor Mode. */}
-                  <button onClick={() => openEdit(r)} className="p-1.5 bg-slate-100 rounded-xl text-slate-600 active:scale-95">
-                    <ChevronRight size={14} />
-                  </button>
-                </div>
-              </div>
-            ))}
-          </div>
-        </div>
-      </div>
-    );
-  }
+  /* RECORDS view removed — corrections happen in Mark or Grid directly. */
 
   /* ── OVERVIEW ────────────────────────────────────────────────────────────── */
   return (
@@ -1036,27 +1107,12 @@ export const StudentAttendanceManager: React.FC<Props> = ({ onBack }) => {
           </button>
         </div>
 
-        {/* Recent records */}
-        {records.slice(0, 5).length > 0 && (
-          <div>
-            <div className="flex items-center justify-between mb-2">
-              <p className="text-[10px] font-black uppercase tracking-widest text-slate-400">Recent Records</p>
-              <button onClick={() => setView('RECORDS')} className="text-[10px] font-black text-blue-600">View all</button>
-            </div>
-            <div className="bg-white rounded-2xl border border-slate-100 shadow-sm overflow-hidden">
-              {records.slice(0, 5).map((r, idx) => (
-                <button key={r.id} onClick={() => openEdit(r)}
-                  className={`w-full flex items-center gap-3 px-4 py-3 text-left active:bg-slate-50 ${idx < Math.min(records.length, 5) - 1 ? 'border-b border-slate-100' : ''}`}>
-                  <div className="flex-1 min-w-0">
-                    <div className="font-bold text-slate-900 text-sm">{r.className}-{r.section}</div>
-                    <div className="text-[10px] font-bold text-slate-400">{r.date} · {r.totalPresent}P / {r.totalAbsent}A</div>
-                  </div>
-                  <ChevronRight size={14} className="text-slate-300 shrink-0"/>
-                </button>
-              ))}
-            </div>
-          </div>
-        )}
+        {/* Recent Records section + Records page were both removed.
+            Mark + Grid is the entire surface — corrections happen inline
+            in the Mark flow (locked records load with Editor Mode reason
+            prompt) or in the Grid (cell tap with reason). "Kisne mark
+            kiya" is surfaced as the marker name in cell tooltips on the
+            grid. */}
       </div>
     </div>
   );

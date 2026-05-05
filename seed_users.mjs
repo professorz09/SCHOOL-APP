@@ -1,10 +1,31 @@
 // Wipes auth + reseeds: 1 school + 6 test users (one per role) + scaffolding.
 import { createClient } from '@supabase/supabase-js';
+import { randomBytes } from 'node:crypto';
+import { writeFileSync, mkdirSync } from 'node:fs';
 import 'dotenv/config';
 
 const url     = process.env.SUPABASE_URL;
 const service = process.env.SUPABASE_SERVICE_ROLE_KEY;
 if (!url || !service) { console.error('missing env'); process.exit(1); }
+
+// Refuse to run against anything that smells like production. The script
+// destroys all auth users and schools, and (formerly) seeded with mobile-as-
+// password credentials — extremely unsafe to run against a live database.
+const ALLOW_SEED = process.env.ALLOW_SEED === 'true';
+const PROD_HINTS = /(^|\.)prod|production|live/i;
+if (!ALLOW_SEED && PROD_HINTS.test(url)) {
+  console.error(`refusing to seed: SUPABASE_URL "${url}" looks like production. Set ALLOW_SEED=true to override.`);
+  process.exit(1);
+}
+if (process.env.NODE_ENV === 'production' && !ALLOW_SEED) {
+  console.error('refusing to seed in NODE_ENV=production. Set ALLOW_SEED=true to override.');
+  process.exit(1);
+}
+
+// Strong random temp passwords — not the mobile number. Written to a local
+// gitignored file so the dev who ran the script can copy them; never logged
+// to console (which can leak via CI).
+const genPassword = () => randomBytes(12).toString('base64url') + 'A1';
 
 const admin = createClient(url, service, { auth: { autoRefreshToken: false, persistSession: false } });
 
@@ -45,15 +66,23 @@ const seeds = [
 ];
 
 const created = [];
+const credentials = [];
 for (const s of seeds) {
+  const password = genPassword();
   const { data, error } = await admin.auth.admin.createUser({
-    email: `${s.mobile}@edugrow.local`, password: s.mobile, email_confirm: true,
+    email: `${s.mobile}@edugrow.local`, password, email_confirm: true,
     user_metadata: { mobile: s.mobile, name: s.name, role: s.role },
   });
   if (error) { console.error(`auth fail for ${s.mobile}:`, error.message); process.exit(1); }
   console.log(`auth ✓ ${s.role.padEnd(12)} ${s.mobile}  id=${data.user.id}`);
   created.push({ ...s, id: data.user.id });
+  credentials.push({ role: s.role, mobile: s.mobile, password });
 }
+
+// Persist credentials to a gitignored local file so the dev can read them.
+try { mkdirSync('.local', { recursive: true }); } catch {}
+writeFileSync('.local/seeded-credentials.json', JSON.stringify(credentials, null, 2));
+console.log('\ncredentials written to .local/seeded-credentials.json (do NOT commit)');
 
 const { error: uErr } = await admin.from('users').insert(created.map(u => ({
   id: u.id, mobile_number: u.mobile, role: u.role, name: u.name, email: u.email,
@@ -106,9 +135,10 @@ await admin.from('parent_student_links').insert({
 });
 
 console.log('\nLogin probe:');
+const principalCred = credentials.find(c => c.role === 'PRINCIPAL');
 const probe = createClient(url, process.env.SUPABASE_ANON_KEY);
-const { data, error } = await probe.auth.signInWithPassword({
-  email: '9999900002@edugrow.local', password: '9999900002',
+const { error } = await probe.auth.signInWithPassword({
+  email: '9999900002@edugrow.local', password: principalCred.password,
 });
 if (error) console.error('  ✗ login failed:', error.message);
-else console.log('  ✓ principal login works · token issued');
+else console.log('  ✓ principal login works');

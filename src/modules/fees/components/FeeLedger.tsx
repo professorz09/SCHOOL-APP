@@ -347,9 +347,13 @@ export const FeeLedger: React.FC<Props> = ({ onBack }) => {
     setReversing(true);
     try {
       await feeService.reversePayment(reverseTarget.id, reason);
-      // Step 2 — re-collect the kept portion. If this fails, the original
-      // is already reversed; we surface a clear error so the principal can
-      // re-record manually instead of leaving a confusing half-state.
+      // Step 2 — re-collect the kept portion. KNOWN LIMITATION: this is not
+      // atomic with the reversal above. If the re-record fails, the original
+      // payment is already gone *and* the kept portion was never persisted.
+      // Long-term fix: a SECURITY DEFINER RPC reverse_payment_partial that
+      // wraps both ops. For now, make the failure mode loud + actionable by
+      // surfacing the exact amount the principal must re-collect manually
+      // and persisting it as a sticky toast (not a disappearing one).
       if (reverseMode === 'CUSTOM' && keepAmount > 0 && selected) {
         try {
           await feeService.recordPayment(
@@ -358,8 +362,9 @@ export const FeeLedger: React.FC<Props> = ({ onBack }) => {
             false, false, 0,
           );
         } catch (e) {
+          // Use error toast so the message stays visible until dismissed.
           showToast(
-            `Reversed in full, but couldn't record the ₹${keepAmount} kept portion: ${e instanceof Error ? e.message : 'error'}. Please collect manually.`,
+            `URGENT: full reversal succeeded but the ₹${keepAmount} kept portion was NOT recorded — please re-collect manually. Cause: ${e instanceof Error ? e.message : 'unknown error'}`,
             'error',
           );
         }
@@ -405,12 +410,26 @@ export const FeeLedger: React.FC<Props> = ({ onBack }) => {
     if (paySubmitting) return; // guard against double-click
     const amount = Number(payAmount) || 0;
     const discount = Number(paymentDiscount) || 0;
+    if (!Number.isFinite(amount) || !Number.isFinite(discount)) {
+      showToast('Invalid amount', 'error');
+      return;
+    }
     if (amount <= 0 && discount <= 0) {
       showToast('Enter a cash amount or a discount', 'error');
       return;
     }
     if (amount < 0 || discount < 0) {
       showToast('Amounts must be positive', 'error');
+      return;
+    }
+    // Money is integer rupees end-to-end — reject decimals at the form layer
+    // so we don't silently shave the parent's ledger by Math.round.
+    if (!Number.isInteger(amount) || !Number.isInteger(discount)) {
+      showToast('Amount must be a whole rupee value (no decimals)', 'error');
+      return;
+    }
+    if (amount > 10_000_000 || discount > 10_000_000) {
+      showToast('Amount looks too large — please re-check', 'error');
       return;
     }
     const today = new Date().toISOString().split('T')[0];

@@ -25,12 +25,33 @@ export const app = express();
 // number of proxies.
 app.set('trust proxy', 1);
 
+// Build a strict-but-workable CSP. Tailwind ships utility classes in the
+// bundle, so style-src needs 'unsafe-inline' for runtime <style> tags from
+// frameworks; script-src does NOT include 'unsafe-inline' so a stored XSS
+// payload cannot execute via injected <script>. connect-src includes the
+// Supabase host (env-driven) so the SDK can reach the REST/realtime endpoints.
+const supabaseHost = (() => {
+  try { return new URL(process.env.SUPABASE_URL ?? '').origin; }
+  catch { return ''; }
+})();
+const cspConnectSrc = ["'self'", supabaseHost, 'https://*.supabase.co', 'wss://*.supabase.co']
+  .filter(Boolean);
+
 app.use(helmet({
-  // The frontend is a SPA served from Vite; Helmet's default CSP is too
-  // strict for inline runtime config. Leave CSP off here and rely on Vite
-  // / hosting to set it. All other headers (HSTS, frameguard, no-sniff,
-  // referrer-policy, etc.) stay on.
-  contentSecurityPolicy: false,
+  contentSecurityPolicy: {
+    useDefaults: true,
+    directives: {
+      'default-src': ["'self'"],
+      'script-src':  ["'self'"],
+      'style-src':   ["'self'", "'unsafe-inline'"],
+      'img-src':     ["'self'", 'data:', 'blob:', 'https:'],
+      'font-src':    ["'self'", 'data:'],
+      'connect-src': cspConnectSrc,
+      'frame-ancestors': ["'none'"],
+      'object-src':  ["'none'"],
+      'base-uri':    ["'self'"],
+    },
+  },
 }));
 
 // CORS allowlist. Pulls from env so prod can lock to known origins. Empty

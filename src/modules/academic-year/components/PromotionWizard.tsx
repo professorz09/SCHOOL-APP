@@ -99,7 +99,15 @@ export const PromotionWizard: React.FC<Props> = ({ onBack }) => {
       const list: StudentPromotion[] = ((data as any).preview ?? []).map((p: any) => {
         const fc: string = p.fromClass ?? '';
         const is12 = isClass12(fc);
-        const suggested: StudentPromotion['decision'] = p.suggestedDecision ?? (is12 ? 'TC' : 'PROMOTE');
+        // Default-safe decision: when exam data exists and the student
+        // failed, default to RETAIN so a principal who never clicks
+        // "Promote All Passed" can't accidentally graduate a failed
+        // student. Server's suggestedDecision wins when present.
+        const safeDefault: StudentPromotion['decision'] =
+          (p.hasExamData && p.examPassed === false)
+            ? 'RETAIN'
+            : (is12 ? 'TC' : 'PROMOTE');
+        const suggested: StudentPromotion['decision'] = p.suggestedDecision ?? safeDefault;
         return {
           studentId:   p.studentId,
           recordId:    p.recordId ?? '',
@@ -143,26 +151,51 @@ export const PromotionWizard: React.FC<Props> = ({ onBack }) => {
   };
 
   const executePromotion = async () => {
-    const pending = students.filter(s => s.status === 'PENDING');
-    if (pending.length === 0) { showToast('Koi pending student nahi hai', 'error'); return; }
-
-    // Validate: PROMOTE without toClass
-    const missingClass = pending.filter(
-      s => s.decision === 'PROMOTE' && !isClass12(s.fromClass) && !s.toClass.trim(),
-    );
-    if (missingClass.length > 0) {
-      showToast(`${missingClass.length} students ka "To Class" missing hai`, 'error');
-      return;
-    }
-    // Validate: TC without date
-    const missingDate = pending.filter(s => s.decision === 'TC' && !s.tcDate);
-    if (missingDate.length > 0) {
-      showToast(`${missingDate.length} students ki TC date missing hai`, 'error');
-      return;
-    }
-
+    // Lock the button BEFORE any awaits — a fast double-click would otherwise
+    // dispatch two execute calls before busy gates the second.
+    if (busy) return;
     setBusy(true);
+
     try {
+      const pending = students.filter(s => s.status === 'PENDING');
+      if (pending.length === 0) {
+        showToast('Koi pending student nahi hai', 'error');
+        return;
+      }
+
+      // Validate: PROMOTE without toClass — apply to ALL classes (previous
+      // Class-10 exemption let students get promoted with empty class/section
+      // and produced NULL-class enrolment rows downstream).
+      const missingClass = pending.filter(
+        s => s.decision === 'PROMOTE' && !isClass12(s.fromClass) && !s.toClass.trim(),
+      );
+      if (missingClass.length > 0) {
+        showToast(`${missingClass.length} students ka "To Class" missing hai`, 'error');
+        return;
+      }
+      // Validate: TC without date
+      const missingDate = pending.filter(s => s.decision === 'TC' && !s.tcDate);
+      if (missingDate.length > 0) {
+        showToast(`${missingDate.length} students ki TC date missing hai`, 'error');
+        return;
+      }
+
+      // Re-fetch the preview to detect cross-tab / parallel-promotion races.
+      // If another principal already promoted some of these rows, the server
+      // will now return them as ALREADY_ASSIGNED — abort so the user can re-decide.
+      const fresh = await apiPromotion.preview(fromYearId, toYearId);
+      const freshById = new Map<string, string>(
+        ((fresh as any).preview ?? []).map((p: any) => [p.studentId, p.status]),
+      );
+      const conflicted = pending.filter(p => freshById.get(p.studentId) === 'ALREADY_ASSIGNED');
+      if (conflicted.length > 0) {
+        showToast(
+          `${conflicted.length} students were promoted in another session. Reload preview & retry.`,
+          'error',
+        );
+        return;
+      }
+
       const res = await apiPromotion.execute({
         fromYearId,
         toYearId,
@@ -591,7 +624,7 @@ export const PromotionWizard: React.FC<Props> = ({ onBack }) => {
             </div>
 
             {/* Validation warning */}
-            {students.filter(s => s.status === 'PENDING' && s.decision === 'PROMOTE' && !isClass12(s.fromClass) && !s.toClass.trim() && !isClass10(s.fromClass)).length > 0 && (
+            {students.filter(s => s.status === 'PENDING' && s.decision === 'PROMOTE' && !isClass12(s.fromClass) && !s.toClass.trim()).length > 0 && (
               <div className="bg-rose-50 border border-rose-200 rounded-xl p-3 flex items-start gap-2">
                 <AlertTriangle size={14} className="text-rose-600 mt-0.5 shrink-0" />
                 <p className="text-[10px] font-bold text-rose-700">
@@ -636,7 +669,7 @@ export const PromotionWizard: React.FC<Props> = ({ onBack }) => {
 
       {/* ── Bottom bar (DECIDE step) ── */}
       {step === 'DECIDE' && (
-        <div className="fixed bottom-0 left-0 right-0 p-4 bg-white border-t border-slate-100 flex gap-2">
+        <div className="fixed bottom-0 left-0 right-0 lg:sticky lg:left-auto lg:right-auto lg:bottom-0 p-4 lg:p-6 bg-white border-t border-slate-100 flex gap-2 z-30 lg:rounded-t-2xl lg:shadow-lg">
           <button onClick={() => setStep('SELECT_YEARS')}
             className="flex-shrink-0 px-4 py-3 bg-slate-100 text-slate-700 font-black text-xs uppercase rounded-xl active:scale-95">
             Back

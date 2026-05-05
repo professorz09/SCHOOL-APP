@@ -37,6 +37,11 @@ export interface SharedAttendanceRecord {
   totalHoliday: number;
   totalHalf: number;
   markedBy: string;
+  // Timestamp of when the record was last touched. Surfaced in the Mark
+  // flow's "Already marked" banner so the principal sees both who locked
+  // it and when. Falls back to created_at when nothing has been updated
+  // since the original write.
+  markedAt: string | null;
   status: AttendanceApprovalStatus;
   isLocked: boolean;
   students: AttendanceStudentRecord[];
@@ -52,6 +57,10 @@ export interface GridDateRecord {
   totalHoliday: number;
   totalHalf: number;
   totalStudents: number;
+  // Who marked + locked this date. Surfaced as a tooltip in the grid so
+  // the principal can audit "kisne kiya" at a glance without leaving the
+  // page or opening a separate records list.
+  markedByName: string | null;
 }
 
 // Map: date → { studentId → AttendanceCellStatus }
@@ -98,12 +107,15 @@ interface AttendanceRow {
   total_half?: number;
   approval_status: string;
   is_locked: boolean;
+  created_at?: string | null;
+  updated_at?: string | null;
   users: { name: string } | { name: string }[] | null;
 }
 
 const ATT_FIELDS =
   'id, section_id, class_name, section, date, total_present, total_absent, ' +
-  'total_students, total_holiday, total_half, approval_status, is_locked, users:marked_by(name)';
+  'total_students, total_holiday, total_half, approval_status, is_locked, ' +
+  'created_at, updated_at, users:marked_by(name)';
 
 function mapRow(r: AttendanceRow): SharedAttendanceRecord {
   const u = Array.isArray(r.users) ? r.users[0] : r.users;
@@ -120,6 +132,7 @@ function mapRow(r: AttendanceRow): SharedAttendanceRecord {
     totalHoliday: r.total_holiday ?? 0,
     totalHalf: r.total_half ?? 0,
     markedBy: u?.name ?? 'Unknown',
+    markedAt: r.updated_at ?? r.created_at ?? null,
     status: (r.approval_status as AttendanceApprovalStatus) ?? 'PENDING',
     isLocked: r.is_locked,
     students: [],
@@ -129,16 +142,33 @@ function mapRow(r: AttendanceRow): SharedAttendanceRecord {
 // ─── Public API ─────────────────────────────────────────────────────────────
 
 export const sharedAttendance = {
-  /** All attendance records for the current school + active year (newest first). */
-  async getAll(): Promise<SharedAttendanceRecord[]> {
+  /** Recent attendance records for the current school + active year.
+   *  Default window covers the last 90 days — enough for the records
+   *  list; older corrections can be fetched explicitly via {limit/before}.
+   *  Previously a flat `.limit(500)` silently truncated school-wide history
+   *  for any school with > ~80 school days × multiple sections. */
+  async getAll(opts?: { days?: number; before?: string; limit?: number }): Promise<SharedAttendanceRecord[]> {
     const schoolId = getSchoolId();
     const yearId = await getActiveYearId();
-    const { data, error } = await supabase
+    const days = opts?.days ?? 90;
+    const limit = Math.min(Math.max(opts?.limit ?? 1000, 1), 5000);
+    const before = opts?.before ?? null;
+    // Floor by school days window OR explicit before-cursor.
+    let q = supabase
       .from('attendance_records')
       .select(ATT_FIELDS)
       .eq('school_id', schoolId).eq('academic_year_id', yearId)
       .order('date', { ascending: false })
-      .limit(500);
+      .limit(limit);
+    if (before) {
+      q = q.lt('date', before);
+    } else {
+      const sinceDate = new Date();
+      sinceDate.setDate(sinceDate.getDate() - days);
+      const since = sinceDate.toISOString().slice(0, 10);
+      q = q.gte('date', since);
+    }
+    const { data, error } = await q;
     if (error) throw new Error(error.message);
     return ((data ?? []) as unknown as AttendanceRow[]).map(mapRow);
   },
@@ -153,6 +183,7 @@ export const sharedAttendance = {
       id: string; date: string; approval_status: string; is_locked: boolean;
       total_present: number; total_absent: number; total_holiday: number;
       total_half: number; total_students: number;
+      marked_by_name?: string | null;
     }
     const records: GridDateRecord[] = ((result.records ?? []) as RawGridRecord[]).map(r => ({
       id: r.id,
@@ -164,6 +195,7 @@ export const sharedAttendance = {
       totalHoliday: r.total_holiday ?? 0,
       totalHalf: r.total_half ?? 0,
       totalStudents: r.total_students ?? 0,
+      markedByName: r.marked_by_name ?? null,
     }));
     const studentDetails: GridStudentDetails = {};
     for (const [date, entries] of Object.entries(result.studentDetails ?? {})) {
@@ -407,7 +439,10 @@ export const staffAttendanceService = {
     if (!schoolId) return [];
     const [year, month] = yearMonth.split('-').map(Number);
     const firstDay = `${yearMonth}-01`;
-    const lastDay  = new Date(year, month, 0).toISOString().split('T')[0];
+    // Build YYYY-MM-DD manually rather than via toISOString() — the latter
+    // converts the local Date to UTC and shifts the month boundary by hours.
+    const dim = new Date(year, month, 0).getDate();
+    const lastDay  = `${yearMonth}-${String(dim).padStart(2, '0')}`;
 
     const { data: staff, error: sErr } = await supabase
       .from('staff').select('id, name, role')

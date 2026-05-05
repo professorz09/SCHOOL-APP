@@ -111,9 +111,21 @@ export const PrincipalExamsManager: React.FC<Props> = ({ onBack }) => {
     const payload = results.map(r => {
       const key = r.id ?? `${r.test_id}:${r.student_id}`;
       const raw = editMarks[key] ?? String(r.obtained_marks ?? '');
-      return { studentId: r.student_id, marks: Number(raw), remarks: r.remarks ?? null };
+      return { studentId: r.student_id, raw: String(raw).trim(), remarks: r.remarks ?? null };
     });
-    if (payload.some(p => Number.isNaN(p.marks) || p.marks < 0 || p.marks > maxMarks)) {
+    // Empty-string was being silently coerced to 0 by Number('') — treat it
+    // as "not edited" by reporting an explicit error so the principal sets a
+    // value (or leaves the row alone). Also reject Infinity / negatives.
+    if (payload.some(p => p.raw === '')) {
+      showToast('Some students have no marks — set a value before saving', 'error');
+      return;
+    }
+    const finalPayload = payload.map(p => ({
+      studentId: p.studentId, marks: Number(p.raw), remarks: p.remarks,
+    }));
+    if (finalPayload.some(p =>
+      !Number.isFinite(p.marks) || p.marks < 0 || p.marks > maxMarks
+    )) {
       showToast(`Marks must be between 0 and ${maxMarks}`, 'error');
       return;
     }
@@ -121,7 +133,7 @@ export const PrincipalExamsManager: React.FC<Props> = ({ onBack }) => {
     try {
       await apiExams.editResults(picked.id, {
         academicYearId: activeYear.id,
-        results: payload,
+        results: finalPayload,
       });
       await logAudit('exam_results_edited', 'exam_results', picked.id, {
         count: payload.length, editorMode: editorModeActive,

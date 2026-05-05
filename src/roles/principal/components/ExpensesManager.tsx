@@ -39,14 +39,29 @@ export const ExpensesManager: React.FC<Props> = ({ onBack }) => {
   })).filter(x => x.amount > 0);
 
   const handleAdd = async () => {
-    if (!form.description || form.amount <= 0) { showToast('Description and amount required', 'error'); return; }
+    if (!form.description.trim()) { showToast('Description required', 'error'); return; }
+    if (!form.date) { showToast('Date required', 'error'); return; }
+    if (!form.approvedBy?.trim()) { showToast('Approver name required', 'error'); return; }
+    if (!Number.isFinite(form.amount) || form.amount <= 0) {
+      showToast('Amount must be a positive number', 'error'); return;
+    }
+    if (form.amount > 10_000_000) {
+      showToast('Amount looks too large — max ₹1,00,00,000', 'error'); return;
+    }
+    if (!Number.isInteger(form.amount)) {
+      showToast('Amount must be a whole rupee value', 'error'); return;
+    }
     setIsSubmitting(true);
     try {
       const exp = await principalService.addExpense(form);
       setExpenses(prev => [exp, ...prev]);
       showToast('Expense recorded');
-      setForm({ category: 'MAINTENANCE', description: '', amount: 0, date: new Date().toISOString().split('T')[0], approvedBy: 'Dr. Rajesh Kumar' });
+      // Use IST-anchored today so 18:30+ UTC doesn't default to tomorrow.
+      const istToday = new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Kolkata' });
+      setForm({ category: 'MAINTENANCE', description: '', amount: 0, date: istToday, approvedBy: 'Dr. Rajesh Kumar' });
       setView('LIST');
+    } catch (e) {
+      showToast(e instanceof Error ? e.message : 'Failed to record expense', 'error');
     } finally { setIsSubmitting(false); }
   };
 

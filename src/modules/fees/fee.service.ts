@@ -151,13 +151,17 @@ function todayIST(): string {
  */
 function computeEffectiveStatus(
   amount: number, paidAmount: number, writeOff: number,
-  dueDate: string, dbStatus: string,
+  dueDate: string | null | undefined, dbStatus: string,
 ): FeeStatus {
   if (dbStatus === 'WAIVED' || dbStatus === 'WRITTEN_OFF' || dbStatus === 'CANCELLED') {
     return dbStatus;
   }
   const balance = Math.max(0, amount - paidAmount - writeOff);
   if (balance <= 0) return 'PAID';
+  // Missing due_date — legacy / hand-inserted rows may have null. Treat as
+  // not-yet-due so a freshly-typed row doesn't flip to DUE on first read
+  // (empty string compared against today otherwise satisfied "<=" trivially).
+  if (!dueDate) return paidAmount > 0 ? 'PARTIAL' : 'UPCOMING';
   const today = todayIST();
   const datePassed = dueDate <= today;
   if (paidAmount > 0) return datePassed ? 'PARTIAL_DUE' : 'PARTIAL';
@@ -192,6 +196,10 @@ let _paymentHistoryCache: PaymentRecord[] = [];
 let _govtPaymentsCache: GovernmentPaymentRecord[] = [];
 let _advanceCache = new Map<string, number>();
 let _cacheLoadedFor: string | null = null;
+// In-flight refresh promise — coalesces concurrent refreshAll() calls so
+// rapid writes (back-to-back recordPayment, transport ops, etc.) don't fan
+// out N parallel reads that race against each other.
+let _refreshInFlight: Promise<void> | null = null;
 
 // Drop everything so the next refreshAll() pulls fresh rows. Wired to the
 // cache bus so AcademicYearContext can flush us on year switch.
@@ -201,6 +209,7 @@ function _resetCache(): void {
   _govtPaymentsCache = [];
   _advanceCache = new Map<string, number>();
   _cacheLoadedFor = null;
+  _refreshInFlight = null;
 }
 registerCacheResetter(_resetCache);
 
@@ -328,16 +337,26 @@ async function _loadAdvances(schoolId: string): Promise<void> {
 // ─── Service API ──────────────────────────────────────────────────────────────
 
 export const feeService = {
-  /** Load every fee table for the active school into memory. Call on mount + after writes. */
+  /** Load every fee table for the active school into memory. Call on mount + after writes.
+   *  Concurrent calls coalesce into a single in-flight load so back-to-back writes
+   *  don't fire 4×N parallel reads that can clobber each other. */
   async refreshAll(): Promise<void> {
+    if (_refreshInFlight) return _refreshInFlight;
     const schoolId = getSchoolId();
-    await Promise.all([
-      _loadInstallments(schoolId),
-      _loadPaymentHistory(schoolId),
-      _loadGovtPayments(schoolId),
-      _loadAdvances(schoolId),
-    ]);
-    _cacheLoadedFor = schoolId;
+    _refreshInFlight = (async () => {
+      try {
+        await Promise.all([
+          _loadInstallments(schoolId),
+          _loadPaymentHistory(schoolId),
+          _loadGovtPayments(schoolId),
+          _loadAdvances(schoolId),
+        ]);
+        _cacheLoadedFor = schoolId;
+      } finally {
+        _refreshInFlight = null;
+      }
+    })();
+    return _refreshInFlight;
   },
 
   // ── Sync read accessors (assume refreshAll() was called) ────────────────
@@ -375,9 +394,9 @@ export const feeService = {
     return _paymentHistoryCache.find(r => r.id === paymentId) ?? null;
   },
 
-  nextReceiptNo(): string {
-    return `RCT-${new Date().getFullYear()}-${String(_paymentHistoryCache.length + 1).padStart(4, '0')}`;
-  },
+  // nextReceiptNo() removed — client-side counter would collide across tabs
+  // and races. Receipt numbers must come from the server (apiFees.pay returns
+  // the canonical receipt_no on the persisted payment row).
 
   getAdvanceBalance(studentId: string): number {
     return _advanceCache.get(studentId) ?? 0;
@@ -461,11 +480,19 @@ export const feeService = {
 
   getSchoolRtePending(): { totalGovtPending: number; totalParentPending: number; rteStudentCount: number } {
     const allInsts = _installmentsCache;
+    // Outstanding = amount the school is still owed. The legacy DB statuses
+    // ('UNPAID' / 'OVERDUE') are rewritten by computeEffectiveStatus into the
+    // richer set ('DUE','PARTIAL_DUE','UPCOMING',…). Use a denylist of
+    // settled statuses instead so we don't silently exclude DUE/UPCOMING rows.
+    const isOutstanding = (i: FeeInstallment) =>
+      i.status !== 'PAID' && i.status !== 'WAIVED' &&
+      i.status !== 'WRITTEN_OFF' && i.status !== 'CANCELLED' &&
+      (i.amount - i.paidAmount - i.writeOffAmount) > 0;
     const govtPending = allInsts
-      .filter(i => i.payerType === 'GOVERNMENT' && (i.status === 'UNPAID' || i.status === 'PARTIAL' || i.status === 'OVERDUE'))
+      .filter(i => i.payerType === 'GOVERNMENT' && isOutstanding(i))
       .reduce((s, i) => s + Math.max(0, i.amount - i.paidAmount - i.writeOffAmount), 0);
     const parentPending = allInsts
-      .filter(i => i.payerType === 'PARENT' && (i.status === 'UNPAID' || i.status === 'PARTIAL' || i.status === 'OVERDUE'))
+      .filter(i => i.payerType === 'PARENT' && isOutstanding(i))
       .reduce((s, i) => s + Math.max(0, i.amount - i.paidAmount - i.writeOffAmount), 0);
     const rte = new Set(allInsts.filter(i => i.payerType === 'GOVERNMENT').map(i => i.studentId));
     return { totalGovtPending: govtPending, totalParentPending: parentPending, rteStudentCount: rte.size };
@@ -481,7 +508,12 @@ export const feeService = {
     const insts = this.getStudentInstallments(studentId);
     const outstanding = insts.filter(i => {
       if (currentAcademicYearId && i.academicYearId === currentAcademicYearId) return false;
-      return i.status === 'UNPAID' || i.status === 'PARTIAL' || i.status === 'OVERDUE';
+      // See getSchoolRtePending: legacy statuses are rewritten by
+      // computeEffectiveStatus, so use a settled-status denylist + actual
+      // outstanding amount.
+      return i.status !== 'PAID' && i.status !== 'WAIVED'
+          && i.status !== 'WRITTEN_OFF' && i.status !== 'CANCELLED'
+          && (i.amount - i.paidAmount - i.writeOffAmount) > 0;
     });
     if (outstanding.length === 0) return [];
 
@@ -528,12 +560,23 @@ export const feeService = {
   ): Promise<{ applied: number; advance: number; paymentId: string }> {
     if (amount <= 0) return { applied: 0, advance: 0, paymentId: '' };
 
+    // Money must be integer rupees end-to-end. Math.round() silently shaved
+    // 1500.50 → 1501 (or .49 → 1500), confusing parents whose receipts didn't
+    // match their bank statements. Reject decimals at the boundary so the
+    // form layer is forced to validate user input.
+    if (!Number.isInteger(amount)) {
+      throw new Error('Fee amount must be a whole rupee value (decimals not allowed)');
+    }
+    if (!Number.isInteger(discountAmount)) {
+      throw new Error('Discount must be a whole rupee value');
+    }
+
     const beforeAdv = this.getAdvanceBalance(studentId);
 
     // All fee writes go through the API server (uses auth.uid() context correctly).
     const result = await apiFees.pay({
-      studentId, amount: Math.round(amount), method,
-      date, note, useAdvance, applyLateFee, discountAmount: Math.round(discountAmount),
+      studentId, amount, method,
+      date, note, useAdvance, applyLateFee, discountAmount,
     });
 
     const paymentId = (result as any).paymentId as string;
@@ -556,7 +599,10 @@ export const feeService = {
     studentIds: string[], totalAmount: number, referenceNo: string, note: string,
   ): Promise<boolean> {
     if (totalAmount <= 0 || !studentIds.length) return false;
-    await apiFees.govtPay({ studentIds, totalAmount: Math.round(totalAmount), referenceNo, note });
+    if (!Number.isInteger(totalAmount)) {
+      throw new Error('Government payment amount must be a whole rupee value');
+    }
+    await apiFees.govtPay({ studentIds, totalAmount, referenceNo, note });
     await this.refreshAll();
     return true;
   },
@@ -727,13 +773,25 @@ export const feeService = {
     const yearEnd = new Date(ayRow.end_date);
     const cursor = new Date(Math.max(start.getTime(), yearStart.getTime()));
     cursor.setDate(10);
+    // setDate(10) can rewind cursor to BEFORE the actual start date (e.g.
+    // assignment effective Apr 25 becomes Apr 10) — that creates an extra
+    // installment for time before the bus actually started. Bump forward
+    // one month if we just wound back past the start.
+    if (cursor < start) {
+      cursor.setMonth(cursor.getMonth() + 1);
+    }
+
+    // Build YYYY-MM-DD from local-tz fields directly so IST-vs-UTC
+    // doesn't shift the month boundary back a day for late-month dates.
+    const fmtYmd = (d: Date) =>
+      `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
 
     const rows: Record<string, unknown>[] = [];
     while (cursor <= end && cursor <= yearEnd) {
       rows.push({
         student_id: studentId, school_id: schoolId, academic_year_id: ayRow.id,
         month: cursor.toLocaleString('en-US', { month: 'long', year: 'numeric' }),
-        due_date: cursor.toISOString().slice(0, 10),
+        due_date: fmtYmd(cursor),
         fee_type: 'TRANSPORT',
         amount: monthlyAmount,
         payer_type: 'PARENT',
@@ -742,16 +800,13 @@ export const feeService = {
       cursor.setMonth(cursor.getMonth() + 1);
     }
     if (rows.length) {
-      // Idempotency guard — if a previous attempt already inserted some
-      // rows for this assignment, drop the un-touched ones and re-insert
-      // the full set so a retry cannot leave duplicates behind. Only
-      // unpaid rows are removed, paid receipts stay intact.
-      await supabase.from('fee_installments').delete()
-        .eq('related_id', assignmentId)
-        .eq('fee_type', 'TRANSPORT')
-        .eq('paid_amount', 0)
-        .eq('write_off_amount', 0);
-      const { error } = await supabase.from('fee_installments').insert(rows);
+      // Atomic delete-unpaid + insert-new via SECURITY DEFINER RPC. The
+      // previous two-round-trip approach could lose all unpaid TRANSPORT
+      // installments if the second call failed.
+      const { error } = await supabase.rpc('transport_replace_unpaid_installments', {
+        p_assignment_id: assignmentId,
+        p_rows: rows,
+      });
       if (error) throw new Error(error.message);
       await this.refreshAll();
     }
@@ -774,33 +829,19 @@ export const feeService = {
   async cancelTransportInstallmentsAfter(
     assignmentId: string, fromDate: string,
   ): Promise<{ deleted: number; cancelled: number }> {
-    // Pull the affected rows first so we can split them.
-    const { data: rows, error: rErr } = await supabase
-      .from('fee_installments')
-      .select('id, paid_amount, write_off_amount')
-      .eq('related_id', assignmentId)
-      .eq('fee_type', 'TRANSPORT')
-      .gte('due_date', fromDate);
-    if (rErr) throw new Error(rErr.message);
-
-    const fresh = ((rows ?? []) as { id: string; paid_amount: number; write_off_amount: number }[])
-      .filter(r => Number(r.paid_amount) === 0 && Number(r.write_off_amount) === 0);
-    const partial = ((rows ?? []) as { id: string; paid_amount: number; write_off_amount: number }[])
-      .filter(r => Number(r.paid_amount) > 0 || Number(r.write_off_amount) > 0);
-
-    if (fresh.length) {
-      const { error } = await supabase.from('fee_installments').delete().in('id', fresh.map(r => r.id));
-      if (error) throw new Error(error.message);
-    }
-    for (const r of partial) {
-      const frozen = Number(r.paid_amount) + Number(r.write_off_amount);
-      const { error } = await supabase.from('fee_installments')
-        .update({ status: 'CANCELLED', amount: frozen, updated_at: new Date().toISOString() })
-        .eq('id', r.id);
-      if (error) throw new Error(error.message);
-    }
+    // Atomic via SECURITY DEFINER RPC — previous version did 1 + N round-trips
+    // (one DELETE then UPDATE per partial row), so a network drop mid-loop
+    // would freeze some rows and leave others untouched.
+    const { data, error } = await supabase.rpc('transport_cancel_after', {
+      p_assignment_id: assignmentId,
+      p_from_date: fromDate,
+    });
+    if (error) throw new Error(error.message);
+    const row = Array.isArray(data) ? data[0] : data;
+    const deleted = Number(row?.deleted_count ?? 0);
+    const cancelled = Number(row?.cancelled_count ?? 0);
     await this.refreshAll();
-    return { deleted: fresh.length, cancelled: partial.length };
+    return { deleted, cancelled };
   },
 
   /**
@@ -849,6 +890,9 @@ export const feeService = {
     const cap = end < yearEnd ? end : yearEnd;
     const cursor = new Date(start);
     cursor.setDate(10);
+    // Mirror addTransportFeeSchedule: if setDate(10) winds before the
+    // effective start, advance a month so preview matches actual creation.
+    if (cursor < start) cursor.setMonth(cursor.getMonth() + 1);
     let newCount = 0;
     while (cursor <= cap) {
       newCount += 1;
@@ -863,9 +907,10 @@ export const feeService = {
     // Kept for API compatibility with the older synchronous code path.
   },
 
-  /** Force-load cache for a single student (used by FeesView etc). */
-  async loadForStudent(studentId: string): Promise<void> {
-    if (_cacheLoadedFor === useAuthStore.getState().session?.schoolId && _installmentsCache.some(i => i.studentId === studentId)) return;
+  /** Force-load cache for a single student (used by FeesView etc).
+   *  Always refreshes — the previous early-return on "any cached row for
+   *  this student" silently served stale data after payments/reversals. */
+  async loadForStudent(_studentId: string): Promise<void> {
     await this.refreshAll();
   },
 

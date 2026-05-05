@@ -47,6 +47,13 @@ export const PrincipalDashboard: React.FC<Props> = ({ onNavigate }) => {
     id: string; vehicleNo: string; routeName: string; driverName: string;
     isLive: boolean; lastPing: string | null; currentStop: string;
   }[]>([]);
+  // Inventory snapshot for the Assets widget (library + lab). Kept on the
+  // dashboard so principals see "30 books out, 3 faulty pieces" without
+  // navigating into the Assets page.
+  const [assetsSummary, setAssetsSummary] = useState({
+    totalBooks: 0, issuedBooks: 0, availableBooks: 0,
+    totalEquipment: 0, faultyEquipment: 0,
+  });
   // liveClasses state was removed when the "Live Classes" panel was
   // dropped. The setter call below is preserved as a no-op (variable
   // intentionally unused) so the parallel Promise.all keeps its shape
@@ -62,7 +69,7 @@ export const PrincipalDashboard: React.FC<Props> = ({ onNavigate }) => {
       const monthStart = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-01`;
       const monthEnd   = today;
       await transportService.refreshAll();
-      const [students, staff, complaints, approvals, allVehicles, attRes, dashStats, monthPayRes] = await Promise.all([
+      const [students, staff, complaints, approvals, allVehicles, attRes, dashStats, monthPayRes, books, equipment] = await Promise.all([
         studentService.getAll(),
         staffService.getAll(),
         principalService.getComplaints(),
@@ -83,6 +90,8 @@ export const PrincipalDashboard: React.FC<Props> = ({ onNavigate }) => {
           .select('amount')
           .eq('school_id', session?.schoolId ?? '00000000-0000-0000-0000-000000000000')
           .gte('date', monthStart).lte('date', monthEnd),
+        principalService.getBooks(),
+        principalService.getEquipment(),
       ]);
       const monthlyCollection = ((monthPayRes.data ?? []) as Array<{ amount: number }>)
         .reduce((sum, r) => sum + Number(r.amount || 0), 0);
@@ -91,11 +100,14 @@ export const PrincipalDashboard: React.FC<Props> = ({ onNavigate }) => {
       void attRes;
       setStats({
         totalStudents: students.length,
+        // Guard each numeric field against undefined / NaN — students newly
+        // admitted with no attendance/fee data otherwise propagated NaN to
+        // the displayed "NaN%" / "₹NaN" labels.
         avgAttendance: students.length > 0
-          ? parseFloat((students.reduce((a, s) => a + s.attendancePercent, 0) / students.length).toFixed(1))
+          ? parseFloat((students.reduce((a, s) => a + (Number(s.attendancePercent) || 0), 0) / students.length).toFixed(1))
           : 0,
-        paidFees: students.reduce((a, s) => a + s.paidFee, 0),
-        totalFees: students.reduce((a, s) => a + s.totalFee, 0),
+        paidFees: students.reduce((a, s) => a + (Number(s.paidFee) || 0), 0),
+        totalFees: students.reduce((a, s) => a + (Number(s.totalFee) || 0), 0),
         monthlyCollection,
         totalStaff: staff.length,
         openComplaints: complaints.filter(c => c.status !== 'RESOLVED').length,
@@ -115,25 +127,45 @@ export const PrincipalDashboard: React.FC<Props> = ({ onNavigate }) => {
       const liveVehicles = allVehicles
         .filter(v => v.isActive)
         .map(v => {
-          const pingTs = v.currentLocation?.timestamp
-            ? new Date(v.currentLocation.timestamp).getTime()
-            : null;
-          const isLive = pingTs !== null && (liveNow - pingTs) <= LIVE_WINDOW_MS;
-          return { v, isLive, pingTs };
+          const rawTs = v.currentLocation?.timestamp;
+          // Number.isFinite guards against malformed timestamps (e.g. driver
+          // app pushed "yesterday") which produce NaN — old code treated NaN
+          // as "not live" silently; explicit guard documents intent.
+          const pingTs = rawTs ? new Date(rawTs).getTime() : null;
+          const validPing = pingTs !== null && Number.isFinite(pingTs);
+          const isLive = validPing && (liveNow - (pingTs as number)) <= LIVE_WINDOW_MS;
+          return { v, isLive, pingTs: validPing ? pingTs : null };
         })
         .filter(x => x.isLive)
         .sort((a, b) => (b.pingTs ?? 0) - (a.pingTs ?? 0))
         .slice(0, 2)
-        .map(({ v, isLive, pingTs }) => ({
-          id: v.id,
-          vehicleNo: v.vehicleNo,
-          routeName: v.routeName,
-          driverName: v.driverName,
-          isLive,
-          lastPing: pingTs ? new Date(pingTs).toISOString() : null,
-          currentStop: v.stops[Math.floor(v.stops.length / 2)]?.name ?? 'En Route',
-        }));
+        .map(({ v, isLive, pingTs }) => {
+          const stops = v.stops ?? [];
+          return {
+            id: v.id,
+            vehicleNo: v.vehicleNo,
+            routeName: v.routeName,
+            driverName: v.driverName,
+            isLive,
+            lastPing: pingTs ? new Date(pingTs).toISOString() : null,
+            // Crash-safe: stops can be null/undefined for older records.
+            currentStop: stops[Math.floor(stops.length / 2)]?.name ?? 'En Route',
+          };
+        });
       setVehicles(liveVehicles);
+
+      // Aggregate library + lab inventory for the home Assets widget.
+      const totalBooks = books.reduce((a, b) => a + b.totalCopies, 0);
+      const availableBooks = books.reduce((a, b) => a + b.availableCopies, 0);
+      const totalEquipment = equipment.reduce((a, e) => a + e.quantity, 0);
+      const faultyEquipment = equipment.reduce((a, e) => a + (e.quantity - e.workingCount), 0);
+      setAssetsSummary({
+        totalBooks,
+        issuedBooks: totalBooks - availableBooks,
+        availableBooks,
+        totalEquipment,
+        faultyEquipment,
+      });
     };
     load();
   }, [ayKey, session?.schoolId]);
@@ -325,6 +357,44 @@ export const PrincipalDashboard: React.FC<Props> = ({ onNavigate }) => {
 
       {/* ── Salary Reminder Widget ─────────────────────────────────────── */}
       <SalaryReminderCard onNavigate={onNavigate} />
+
+      {/* ── Assets snapshot — library + lab inventory at a glance.
+            Surfacing this on home so the principal sees inventory pressure
+            (issued books, faulty kit) without diving into the Academics
+            hub. Whole card taps through to ASSETS. */}
+      <button onClick={() => onNavigate('ASSETS')}
+        className="w-full text-left bg-white rounded-2xl border border-slate-100 shadow-sm p-4 lg:p-5 hover:shadow-md hover:border-amber-200 active:scale-[0.99] transition-all">
+        <div className="flex items-center justify-between mb-3">
+          <div className="flex items-center gap-2.5">
+            <div className="w-10 h-10 lg:w-11 lg:h-11 rounded-xl bg-gradient-to-br from-amber-400 to-orange-500 flex items-center justify-center text-white shadow-md">
+              <Library size={18} />
+            </div>
+            <div>
+              <h2 className="text-sm lg:text-base font-black text-slate-900 uppercase tracking-tight">Assets</h2>
+              <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">Library & Lab Inventory</p>
+            </div>
+          </div>
+          <ChevronRight size={16} className="text-slate-300"/>
+        </div>
+        <div className="grid grid-cols-4 gap-2">
+          <div className="bg-slate-50 rounded-xl p-2.5 text-center">
+            <div className="text-base lg:text-lg font-black text-slate-900 tabular-nums">{assetsSummary.totalBooks}</div>
+            <div className="text-[9px] font-black uppercase tracking-widest text-slate-400 mt-0.5">Books</div>
+          </div>
+          <div className="bg-amber-50 rounded-xl p-2.5 text-center">
+            <div className="text-base lg:text-lg font-black text-amber-700 tabular-nums">{assetsSummary.issuedBooks}</div>
+            <div className="text-[9px] font-black uppercase tracking-widest text-amber-600 mt-0.5">Issued</div>
+          </div>
+          <div className="bg-emerald-50 rounded-xl p-2.5 text-center">
+            <div className="text-base lg:text-lg font-black text-emerald-700 tabular-nums">{assetsSummary.totalEquipment}</div>
+            <div className="text-[9px] font-black uppercase tracking-widest text-emerald-600 mt-0.5">Lab Kit</div>
+          </div>
+          <div className={`rounded-xl p-2.5 text-center ${assetsSummary.faultyEquipment > 0 ? 'bg-rose-50' : 'bg-slate-50'}`}>
+            <div className={`text-base lg:text-lg font-black tabular-nums ${assetsSummary.faultyEquipment > 0 ? 'text-rose-600' : 'text-slate-400'}`}>{assetsSummary.faultyEquipment}</div>
+            <div className={`text-[9px] font-black uppercase tracking-widest mt-0.5 ${assetsSummary.faultyEquipment > 0 ? 'text-rose-500' : 'text-slate-400'}`}>Faulty</div>
+          </div>
+        </div>
+      </button>
 
       {/* ── Live Buses — only when a driver is actually pinging GPS now.
             "Live Classes" was removed entirely; it duplicated info already

@@ -72,7 +72,14 @@ export const storageService = {
     if (file.size > cap) {
       throw new Error(`File must be < ${fmtSize(cap)} (got ${fmtSize(file.size)})`);
     }
-    if (file.type && !ALLOWED_MIME.has(file.type)) {
+    // Reject empty MIME outright. The `if (file.type && ...)` guard let any
+    // file with browser-stripped MIME (HEIC on some Linux browsers, blobs,
+    // renamed binaries) bypass the allowlist. Also catches the renamed-.exe
+    // case where browsers may not assign a type.
+    if (!file.type) {
+      throw new Error('Could not detect file type — please re-save as PDF/JPEG/PNG and try again.');
+    }
+    if (!ALLOWED_MIME.has(file.type)) {
       throw new Error(`Unsupported file type: ${file.type}`);
     }
 

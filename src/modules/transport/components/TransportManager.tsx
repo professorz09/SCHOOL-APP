@@ -152,12 +152,19 @@ export const TransportManager: React.FC<Props> = ({ onBack }) => {
   // ─── Handlers ───────────────────────────────────────────────────────────────
   const handleAddVehicle = async () => {
     if (!newVehicleNo.trim()) return;
+    // Validate capacity strictly — `|| 50` was silently masking invalid input
+    // (0, NaN) and accepting negatives/huge values that broke isFull checks.
+    const cap = Number(newVehicleCapacity);
+    if (!Number.isInteger(cap) || cap < 1 || cap > 200) {
+      showToast('Capacity must be a whole number between 1 and 200', 'error');
+      return;
+    }
     setAddingVehicle(true);
     try {
       await transportService.addVehicle({
         vehicleNo: newVehicleNo.trim(),
         type: newVehicleType,
-        capacity: Number(newVehicleCapacity) || 50,
+        capacity: cap,
         routeName: '',
       });
       await reloadCore();

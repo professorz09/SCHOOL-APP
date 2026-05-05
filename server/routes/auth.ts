@@ -1,4 +1,5 @@
 import { Router } from 'express';
+import { createClient } from '@supabase/supabase-js';
 import { adminDb, userDb } from '../lib/db';
 import { ok, fail, ApiError, requireBody } from '../lib/helpers';
 import { requireAuth, requireRole } from '../middleware/auth';
@@ -13,35 +14,39 @@ authRouter.post('/login', async (req, res) => {
   try {
     const { mobile, password } = requireBody<{ mobile: string; password: string }>(req, ['mobile', 'password']);
 
+    // Uniform error surface: distinct internal causes (no user / wrong pwd /
+     // deactivated) all surface to the client as "Invalid mobile number or
+     // password". Distinct messages enable user enumeration and role-targeted
+     // phishing. Real cause is logged server-side for ops debugging.
+    const GENERIC_ERR = 'Invalid mobile number or password';
+
     const { data, error } = await adminDb.auth.signInWithPassword({
       email: toEmail(mobile),
       password,
     });
-    if (error || !data.session) throw new ApiError(401, error?.message ?? 'Login failed');
+    if (error || !data.session) {
+      console.warn('[auth.login] signIn failed', { mobile, reason: error?.message });
+      throw new ApiError(401, GENERIC_ERR);
+    }
 
     const { data: profile, error: profileErr } = await adminDb
       .from('users')
       .select('id, name, role, school_id, first_login_changed, is_active')
       .eq('id', data.user.id)
       .maybeSingle();
-    if (profileErr) throw new ApiError(500, 'Profile lookup failed');
-    if (!profile) throw new ApiError(401, 'Profile not found');
+    if (profileErr) {
+      console.error('[auth.login] profile lookup failed', profileErr.message);
+      throw new ApiError(401, GENERIC_ERR);
+    }
+    if (!profile) {
+      console.warn('[auth.login] no profile row for', data.user.id);
+      throw new ApiError(401, GENERIC_ERR);
+    }
     if (!(profile as { is_active: boolean }).is_active) {
       // Sign the supabase session out so a stale refresh token can't be used.
       try { await adminDb.auth.admin.signOut(data.user.id); } catch { /* ignore */ }
-      // Tailor the message to the role — a deactivated principal needs to
-      // talk to the platform team (super-admin), while a student/parent
-      // needs to talk to their school office. Generic message hides this
-      // distinction and confused users.
-      const role = (profile as { role: string }).role;
-      const message =
-        role === 'PRINCIPAL'
-          ? 'Account is inactive — please contact the EduGrow super-admin / platform support.'
-        : role === 'TEACHER' || role === 'DRIVER' || role === 'PEON'
-          ? 'Account is inactive — please contact your school principal.'
-        : /* PARENT, STUDENT, anything else */
-          'Account is inactive — please contact your school office.';
-      throw new ApiError(403, message);
+      console.warn('[auth.login] inactive account', { mobile, role: (profile as { role: string }).role });
+      throw new ApiError(401, GENERIC_ERR);
     }
 
     ok(res, {
@@ -102,19 +107,43 @@ authRouter.post('/editor-mode/disable', requireAuth, requireRole('PRINCIPAL'), a
 });
 
 // POST /api/auth/change-password
-// Hardened: 8-char minimum, must contain at least one letter and one digit,
-// must differ from the user's mobile number (which is the default temp pwd),
-// and writes an audit log row. The route doesn't re-verify the current
-// password — that's done client-side via signInWithPassword before calling
-// this — so a successful response means the password was rotated.
+// Hardened: requires the current password (verified server-side via a fresh
+// signInWithPassword), 8-char minimum, at least one letter + one digit, must
+// not contain the user's mobile number, and writes an audit row.
 authRouter.post('/change-password', requireAuth, async (req, res) => {
   try {
-    const { password } = requireBody<{ password: string }>(req, ['password']);
-    if (typeof password !== 'string') throw new ApiError(400, 'Password is required');
-    if (password.length < 8) throw new ApiError(400, 'Password must be at least 8 characters');
-    if (!/[A-Za-z]/.test(password) || !/\d/.test(password)) {
+    const { currentPassword, newPassword } = requireBody<{
+      currentPassword: string;
+      newPassword: string;
+    }>(req, ['currentPassword', 'newPassword']);
+    if (typeof currentPassword !== 'string' || typeof newPassword !== 'string') {
+      throw new ApiError(400, 'Current and new password are required');
+    }
+    if (newPassword.length < 8) throw new ApiError(400, 'Password must be at least 8 characters');
+    if (!/[A-Za-z]/.test(newPassword) || !/\d/.test(newPassword)) {
       throw new ApiError(400, 'Password must contain at least one letter and one digit');
     }
+
+    // Look up the caller's email + mobile from the auth user record. The
+    // service-role admin API gives us the canonical email (mobile@edugrow.local).
+    const { data: authUserRes, error: authErr } = await adminDb.auth.admin.getUserById(req.user.id);
+    if (authErr || !authUserRes?.user?.email) throw new ApiError(401, 'User not found');
+    const callerEmail = authUserRes.user.email;
+
+    // Verify current password by attempting a sign-in on a fresh anon client.
+    // Using a per-request client avoids session bleed across requests.
+    const SUPABASE_URL = process.env.SUPABASE_URL ?? '';
+    const ANON_KEY = process.env.SUPABASE_ANON_KEY ?? '';
+    const verifyClient = createClient(SUPABASE_URL, ANON_KEY, {
+      auth: { persistSession: false, autoRefreshToken: false },
+    });
+    const { error: verifyErr } = await verifyClient.auth.signInWithPassword({
+      email: callerEmail,
+      password: currentPassword,
+    });
+    if (verifyErr) throw new ApiError(401, 'Current password is incorrect');
+    // Best-effort: drop the verifier session so its refresh token can't be reused.
+    try { await verifyClient.auth.signOut(); } catch { /* ignore */ }
 
     // Defence-in-depth: reject the user's mobile number as their password
     // (this is the default temp pwd we hand out, and re-using it is a
@@ -125,14 +154,16 @@ authRouter.post('/change-password', requireAuth, async (req, res) => {
       .eq('id', req.user.id)
       .maybeSingle();
     const mobile = (profile as { mobile_number: string | null } | null)?.mobile_number ?? '';
-    if (mobile && password.includes(mobile)) {
+    if (mobile && newPassword.includes(mobile)) {
       throw new ApiError(400, 'Password cannot contain your mobile number');
     }
 
-    const { error } = await adminDb.auth.admin.updateUserById(req.user.id, { password });
+    const { error } = await adminDb.auth.admin.updateUserById(req.user.id, { password: newPassword });
     if (error) throw new ApiError(500, error.message);
 
-    await adminDb.rpc('mark_first_login_complete');
+    // mark_first_login_complete uses auth.uid() server-side, but here we're
+    // using the service-role client where auth.uid() is null. Update directly.
+    await adminDb.from('users').update({ first_login_changed: true }).eq('id', req.user.id);
 
     const ip = (req.headers['x-forwarded-for'] as string | undefined)?.split(',')[0].trim()
       ?? req.socket.remoteAddress ?? null;

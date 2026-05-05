@@ -118,13 +118,22 @@ attendanceRouter.get('/grid', requireAuth, requireRole('TEACHER', 'PRINCIPAL'), 
 
     const { data: recData, error: recErr } = await adminDb
       .from('attendance_records')
-      .select('id, date, approval_status, is_locked, total_present, total_absent, total_holiday, total_half, total_students')
+      // marked_by + nested user name surface "kisne mark kiya" in the UI
+      // tooltip without an extra round-trip per date.
+      .select('id, date, approval_status, is_locked, total_present, total_absent, total_holiday, total_half, total_students, marked_by, marker:marked_by(name)')
       .eq('school_id', req.user.school_id!).eq('section_id', sectionId)
       .gte('date', startDate).lte('date', endDate)
       .order('date', { ascending: true });
     if (recErr) throw new ApiError(500, recErr.message);
 
-    const records = (recData ?? []) as RecordRow[];
+    type RecRow = RecordRow & {
+      marked_by: string | null;
+      marker: { name: string | null } | { name: string | null }[] | null;
+    };
+    const records = ((recData ?? []) as RecRow[]).map(r => {
+      const m = Array.isArray(r.marker) ? r.marker[0] : r.marker;
+      return { ...r, marked_by_name: m?.name ?? null };
+    });
     if (records.length === 0) { ok(res, { records: [], studentDetails: {} }); return; }
 
     const recordIds = records.map(r => r.id);
@@ -307,14 +316,24 @@ attendanceRouter.post('/submit', requireAuth, requireRole('TEACHER', 'PRINCIPAL'
 
     const { data: existData } = await adminDb
       .from('attendance_records')
-      .select('id, is_locked, approval_status')
+      .select('id, is_locked, approval_status, marked_by')
       .eq('school_id', req.user.school_id!)   // tenant isolation
       .eq('section_id', body.sectionId).eq('date', body.date)
       .maybeSingle();
-    const existing = existData as RecordMinRow | null;
+    const existing = existData as (RecordMinRow & { marked_by: string | null }) | null;
 
     if (existing?.is_locked) {
       throw new ApiError(403, 'Attendance is locked and approved — contact the principal for corrections');
+    }
+    // Defence-in-depth: even when not locked, a teacher must not silently
+    // overwrite a record originally marked by a principal. Only the principal
+    // can replace their own record (or use the Editor Mode flow).
+    if (existing && req.user.role === 'TEACHER' && existing.marked_by) {
+      const { data: priorMarker } = await adminDb
+        .from('users').select('role').eq('id', existing.marked_by).maybeSingle();
+      if ((priorMarker as { role: string } | null)?.role === 'PRINCIPAL') {
+        throw new ApiError(403, 'This record was marked by the principal — ask them to update it');
+      }
     }
 
     const normalizedRecords = body.records.map(r => ({
@@ -431,8 +450,17 @@ attendanceRouter.post('/mark-by-principal', requireAuth, requireRole('PRINCIPAL'
     }
 
     let attendanceId: string;
+    // When updating an existing record we must replace its detail rows.
+    // Snapshot them first so we can restore on partial failure (avoids
+    // leaving the record with totals but zero per-student rows).
+    let priorDetails: Array<Record<string, unknown>> = [];
     if (existing) {
       attendanceId = existing.id;
+      const { data: snap } = await adminDb.from('attendance_student_details')
+        .select('attendance_id, student_id, is_present, status')
+        .eq('attendance_id', attendanceId);
+      priorDetails = (snap ?? []) as Array<Record<string, unknown>>;
+
       await adminDb.from('attendance_records').update({
         total_present:   counts.present,
         total_absent:    counts.absent,
@@ -479,7 +507,16 @@ attendanceRouter.post('/mark-by-principal', requireAuth, requireRole('PRINCIPAL'
     }));
     const { error: dErr } = await adminDb.from('attendance_student_details').insert(detail);
     if (dErr) {
-      if (!existing) await adminDb.from('attendance_records').delete().eq('id', attendanceId);
+      if (!existing) {
+        // Brand-new record — drop the orphan parent.
+        await adminDb.from('attendance_records').delete().eq('id', attendanceId);
+      } else if (priorDetails.length) {
+        // Restore the snapshot so the existing record isn't left with totals
+        // but no student rows.
+        try {
+          await adminDb.from('attendance_student_details').insert(priorDetails);
+        } catch { /* best-effort restore */ }
+      }
       throw new ApiError(500, dErr.message);
     }
 
@@ -552,6 +589,19 @@ attendanceRouter.post('/update-students', requireAuth, requireRole('PRINCIPAL'),
     }));
 
     if (normalizedStudents.length) {
+      // Bind every student_id to the attendance record's school. The route
+      // uses adminDb (service role), so RLS won't catch a forged payload
+      // that references students from another tenant. Reject the whole
+      // batch if any studentId doesn't belong to the same school.
+      const stuIds = normalizedStudents.map(s => s.studentId);
+      const { data: validStu } = await adminDb.from('students')
+        .select('id').eq('school_id', ownRecord.school_id).in('id', stuIds);
+      const validSet = new Set(((validStu ?? []) as { id: string }[]).map(r => r.id));
+      const stranger = stuIds.find(id => !validSet.has(id));
+      if (stranger) {
+        throw new ApiError(403, `Student ${stranger} does not belong to this school`);
+      }
+
       const rows = normalizedStudents.map(s => ({
         attendance_id: body.attendanceId,
         student_id:    s.studentId,

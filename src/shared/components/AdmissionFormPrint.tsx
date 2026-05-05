@@ -125,20 +125,30 @@ export const AdmissionFormPrint: React.FC<Props> = ({ student, schoolInfo, onClo
   const handlePrint = () => {
     const printWindow = window.open('', '', 'height=900,width=1100');
     if (!printWindow) return;
-    const content = printRef.current?.innerHTML || '';
-    printWindow.document.write(`
-      <!DOCTYPE html>
-      <html>
-        <head>
-          <title>Admission Form - ${student.name}</title>
-          <style>${PRINT_CSS}</style>
-        </head>
-        <body>
-          <div class="adm-page">${content}</div>
-        </body>
-      </html>
-    `);
-    printWindow.document.close();
+    if (!printRef.current) { printWindow.close(); return; }
+
+    // Build the print document via DOM APIs rather than document.write of an
+    // interpolated HTML string. Interpolating student.name (and copying the
+    // preview's innerHTML wholesale) into a fresh same-origin window was an
+    // XSS sink — anything that landed in the DB as a stored payload would
+    // execute when a user clicked Print. textContent / cloneNode preserves
+    // structure without parsing HTML from strings we built ourselves.
+    const doc = printWindow.document;
+    doc.open();
+    doc.write('<!DOCTYPE html><html><head></head><body></body></html>');
+    doc.close();
+
+    doc.title = `Admission Form - ${student.name}`;
+
+    const styleEl = doc.createElement('style');
+    styleEl.textContent = PRINT_CSS;
+    doc.head.appendChild(styleEl);
+
+    const pageDiv = doc.createElement('div');
+    pageDiv.className = 'adm-page';
+    pageDiv.appendChild(printRef.current.cloneNode(true));
+    doc.body.appendChild(pageDiv);
+
     setTimeout(() => printWindow.print(), 300);
   };
 

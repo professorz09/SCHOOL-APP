@@ -190,19 +190,21 @@ feesRouter.post('/writeoff', requireAuth, requireRole('PRINCIPAL'), async (req, 
     const newWriteOff = Number(r.write_off_amount) + writeOff;
     const paidAmount  = Number(r.paid_amount);
     const totalAmount = Number(r.amount);
+    // Status precedence (was buggy — first two branches were equivalent so
+    // WAIVED was unreachable):
+    //   PAID    — cleared by cash alone (no write-off needed for closure)
+    //   WAIVED  — cash + write-off together close the row
+    //   PARTIAL — some cash paid but row not cleared
+    //   UNPAID  — nothing paid yet
     const newStatus: string =
-      paidAmount >= totalAmount - newWriteOff  ? 'PAID'    :
-      paidAmount + newWriteOff >= totalAmount  ? 'WAIVED'  :
-      paidAmount > 0                           ? 'PARTIAL' : 'UNPAID';
+      paidAmount >= totalAmount                 ? 'PAID'    :
+      paidAmount + newWriteOff >= totalAmount   ? 'WAIVED'  :
+      paidAmount > 0                            ? 'PARTIAL' : 'UNPAID';
 
-    await adminDb.from('fee_installments').update({
-      write_off_amount: newWriteOff,
-      write_off_reason: body.reason,
-      status:           newStatus,
-      updated_at:       new Date().toISOString(),
-    }).eq('id', body.installmentId);
-
-    await adminDb.from('fee_write_offs').insert({
+    // Insert audit row FIRST so a failure here doesn't leave a mutated
+    // installment with no write-off log. If insert succeeds and the
+    // subsequent update fails, the audit row is harmlessly orphan.
+    const { error: woErr } = await adminDb.from('fee_write_offs').insert({
       installment_id: body.installmentId,
       student_id:     r.student_id,
       school_id:      req.user.school_id,
@@ -210,6 +212,15 @@ feesRouter.post('/writeoff', requireAuth, requireRole('PRINCIPAL'), async (req, 
       reason:         body.reason,
       approved_by:    req.user.id,
     });
+    if (woErr) throw new ApiError(500, `write-off log failed: ${woErr.message}`);
+
+    const { error: updErr } = await adminDb.from('fee_installments').update({
+      write_off_amount: newWriteOff,
+      write_off_reason: body.reason,
+      status:           newStatus,
+      updated_at:       new Date().toISOString(),
+    }).eq('id', body.installmentId);
+    if (updErr) throw new ApiError(500, updErr.message);
 
     ok(res, { installmentId: body.installmentId, writeOffAmount: newWriteOff, status: newStatus });
   } catch (err) { fail(res, err); }

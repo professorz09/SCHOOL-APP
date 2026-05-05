@@ -37,8 +37,19 @@ function parseSubjectsFromExam(exam: TestSchedule): Subject[] | null {
     }));
   }
   const names = exam.subject.split(', ').map((s: string) => s.trim()).filter(Boolean);
-  const per = names.length > 0 ? Math.round(exam.maxMarks / names.length) : exam.maxMarks;
-  return names.map((s: string) => ({ subject: s, maxMarks: per, passMarks: Math.ceil(per * 0.33) }));
+  if (names.length === 0) {
+    return [{ subject: exam.subject, maxMarks: exam.maxMarks, passMarks: Math.ceil(exam.maxMarks * 0.33) }];
+  }
+  // Distribute maxMarks evenly; the last subject absorbs the remainder so
+  // sum(subjects) === exam.maxMarks (previously Math.round dropped marks
+  // — 100/3 → 33 each, sum = 99, mismatching the exam total).
+  const base = Math.floor(exam.maxMarks / names.length);
+  return names.map((s: string, i: number) => {
+    const max = i === names.length - 1
+      ? exam.maxMarks - base * (names.length - 1)
+      : base;
+    return { subject: s, maxMarks: max, passMarks: Math.ceil(max * 0.33) };
+  });
 }
 
 function getExamDescription(exam: TestSchedule): string {
@@ -285,11 +296,30 @@ export const TestsManager: React.FC<Props> = ({ onBack }) => {
         showToast('Fill marks for all subjects for all students', 'error');
         return;
       }
+      // HTML min/max only constrains the spinner — paste / programmatic input
+      // can land out-of-range values. Validate numerically before publishing.
+      const subjMax = subj.length > 0 ? Math.round(uploadExam.maxMarks / subj.length) : uploadExam.maxMarks;
+      for (const r of stuRows) {
+        for (const s of subj) {
+          const v = Number(r.subjectMarks[s]);
+          if (!Number.isFinite(v) || v < 0 || v > subjMax) {
+            showToast(`Invalid marks for a student (must be 0–${subjMax})`, 'error');
+            return;
+          }
+        }
+      }
     } else {
       // Single marks
       if (stuRows.some(r => r.marks === '')) {
         showToast(`Fill marks for all students`, 'error');
         return;
+      }
+      for (const r of stuRows) {
+        const v = Number(r.marks);
+        if (!Number.isFinite(v) || v < 0 || v > uploadExam.maxMarks) {
+          showToast(`Marks must be between 0 and ${uploadExam.maxMarks}`, 'error');
+          return;
+        }
       }
     }
     if (!editGuard.canEdit) {
