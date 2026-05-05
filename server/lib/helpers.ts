@@ -12,6 +12,9 @@ export function ok(res: Response, data: unknown, status = 200) {
 
 export function fail(res: Response, err: unknown) {
   if (err instanceof ApiError) {
+    // Log 4xx ApiErrors too — they make user-facing failures (e.g. silent
+    // 400 from missing-field validators) much easier to diagnose.
+    console.warn(`[api ${err.status}] ${err.message}`);
     return res.status(err.status).json({ ok: false, error: err.message });
   }
   const msg = err instanceof Error ? err.message : 'Internal server error';

@@ -1,9 +1,10 @@
 import React, { useCallback, useEffect, useState } from 'react';
-import { ArrowLeft, Plus, Send, Bell } from 'lucide-react';
+import { ArrowLeft, Plus, Send, Bell, Megaphone } from 'lucide-react';
 import { useUIStore } from '@/store/uiStore';
 import { teacherService } from '@/roles/teacher/teacher.service';
 import { TeacherClass } from '@/roles/teacher/teacher.types';
 import { useRealtimeTable } from '@/shared/hooks/useRealtimeTable';
+import { getRelevantBroadcasts, type RelevantBroadcast } from '@/shared/utils/broadcasts.service';
 
 interface TeacherNotice {
   id: string;
@@ -44,8 +45,11 @@ export const TeacherNoticesView: React.FC<Props> = ({ onBack }) => {
     type: 'GENERAL',
   });
 
+  const [broadcasts, setBroadcasts] = useState<RelevantBroadcast[]>([]);
+
   const loadNotices = useCallback(() => {
     teacherService.getMyNotices().catch(() => []).then(setNotices);
+    getRelevantBroadcasts('TEACHER').then(setBroadcasts).catch(() => setBroadcasts([]));
   }, []);
 
   useEffect(() => {
@@ -71,6 +75,7 @@ export const TeacherNoticesView: React.FC<Props> = ({ onBack }) => {
   }, []);
 
   useRealtimeTable('notices', loadNotices);
+  useRealtimeTable('broadcasts', loadNotices, { schoolColumn: false });
 
   const handleCreate = async () => {
     if (!form.title.trim() || !form.body.trim()) { showToast('Title and message required', 'error'); return; }
@@ -179,6 +184,24 @@ export const TeacherNoticesView: React.FC<Props> = ({ onBack }) => {
         </button>
       )}
       <div className="flex-1 overflow-y-auto p-4 space-y-3">
+        {broadcasts.length > 0 && (
+          <div className="space-y-2">
+            <p className="text-[10px] font-black uppercase tracking-widest text-indigo-500">Platform Announcements</p>
+            {broadcasts.map(b => (
+              <div key={b.id} className="bg-gradient-to-br from-indigo-50 to-violet-50 rounded-2xl border border-indigo-200 shadow-sm p-4">
+                <div className="flex items-center gap-2 mb-1.5">
+                  <Megaphone size={11} className="text-indigo-600 shrink-0" />
+                  <span className="text-[9px] font-black px-2 py-0.5 rounded-full border uppercase text-indigo-700 bg-white border-indigo-200">Announcement</span>
+                  <span className="ml-auto text-[10px] font-bold text-indigo-500">
+                    {b.sentAt ? new Date(b.sentAt).toLocaleDateString('en-IN', { day: '2-digit', month: 'short' }) : '—'}
+                  </span>
+                </div>
+                <div className="font-black text-slate-900 text-sm leading-tight mb-1">{b.title}</div>
+                <p className="text-xs font-medium text-slate-700 leading-relaxed whitespace-pre-line">{b.body}</p>
+              </div>
+            ))}
+          </div>
+        )}
         <p className="text-[10px] font-black uppercase tracking-widest text-slate-400">Notices for you and your classes</p>
         {isLoading ? (
           <div className="flex flex-col items-center py-16 text-slate-400">

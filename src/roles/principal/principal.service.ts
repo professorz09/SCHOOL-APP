@@ -919,7 +919,7 @@ export const principalService = {
     const schoolId = getSchoolId();
     let query = supabase
       .from('fee_payment_uploads')
-      .select('id, student_id, submitted_by, amount, description, screenshot_name, screenshot_url, status, reviewed_at, reviewer_note, recorded_payment_id, created_at')
+      .select('id, student_id, submitted_by, amount, description, transaction_id, status, reviewed_at, reviewer_note, recorded_payment_id, created_at')
       .eq('school_id', schoolId)
       .order('created_at', { ascending: false });
     if (status !== 'ALL') query = query.eq('status', status);
@@ -928,7 +928,7 @@ export const principalService = {
     const rows = (data ?? []) as Array<{
       id: string; student_id: string; submitted_by: string;
       amount: number; description: string | null;
-      screenshot_name: string | null; screenshot_url: string | null;
+      transaction_id: string;
       status: FeeUploadStatus; reviewed_at: string | null;
       reviewer_note: string | null; recorded_payment_id: string | null;
       created_at: string;
@@ -953,8 +953,7 @@ export const principalService = {
       submittedBy: r.submitted_by,
       amount: r.amount,
       description: r.description ?? '',
-      screenshotName: r.screenshot_name ?? '',
-      screenshotUrl: r.screenshot_url,
+      transactionId: r.transaction_id,
       status: r.status,
       submittedAt: r.created_at,
       reviewedAt: r.reviewed_at,
@@ -981,26 +980,9 @@ export const principalService = {
     return apiPrincipal.feeUploadReview({ uploadId: id, decision, note });
   },
 
-  /**
-   * Mint a short-lived signed URL for a fee-payment screenshot stored in
-   * the private `fee-screenshots` bucket. RLS on storage.objects (see
-   * migration 0012) restricts access to same-school principals/teachers
-   * and the parent/student linked to that student folder.
-   */
-  async getFeePaymentScreenshotUrl(
-    storagePath: string | null,
-    ttlSeconds = 300,
-  ): Promise<string | null> {
-    if (!storagePath) return null;
-    const { data, error } = await supabase.storage
-      .from('fee-screenshots')
-      .createSignedUrl(storagePath, ttlSeconds);
-    if (error) {
-      console.warn('[fee-uploads] signed URL failed', error.message);
-      return null;
-    }
-    return data?.signedUrl ?? null;
-  },
+  // Screenshot URL helper removed — fee submissions now carry a structured
+  // transaction_id text instead of an uploaded image. The fee-screenshots
+  // bucket and its RLS policies can be cleaned up in a follow-up migration.
 };
 
 export type {

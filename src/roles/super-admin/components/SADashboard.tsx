@@ -1,5 +1,5 @@
 import React, { useEffect } from 'react';
-import { Building2, ShieldCheck, IndianRupee, BarChart3, MailPlus, History, AlertCircle, TrendingUp, Users } from 'lucide-react';
+import { Building2, ShieldCheck, IndianRupee, BarChart3, MailPlus, History, AlertCircle, TrendingUp, Users, Settings as SettingsIcon } from 'lucide-react';
 import { useSchoolStore } from '@/roles/super-admin/schoolStore';
 import { useBillingStore } from '@/roles/super-admin/billingStore';
 import { SchoolStatus } from '@/shared/config/constants';
@@ -40,6 +40,7 @@ export const SADashboard: React.FC<SADashboardProps> = ({ onNavigate }) => {
     { label: 'Reports', icon: BarChart3, color: 'bg-indigo-50 text-indigo-600', view: 'reports' },
     { label: 'Broadcast', icon: MailPlus, color: 'bg-amber-50 text-amber-600', view: 'broadcast' },
     { label: 'Logs', icon: History, color: 'bg-slate-100 text-slate-600', view: 'logs' },
+    { label: 'Settings', icon: SettingsIcon, color: 'bg-violet-50 text-violet-600', view: 'settings' },
   ];
 
   return (

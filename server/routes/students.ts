@@ -1,7 +1,7 @@
 import { Router } from 'express';
 import { adminDb, userDb } from '../lib/db';
 import { ok, fail, ApiError, requireBody } from '../lib/helpers';
-import { requireAuth, requireRole } from '../middleware/auth';
+import { requireAuth, requireRole, requireEditorMode } from '../middleware/auth';
 
 export const studentsRouter = Router();
 
@@ -377,6 +377,12 @@ studentsRouter.post('/fail', requireAuth, requireRole('PRINCIPAL'), async (req, 
       req, ['studentId', 'academicYearId'],
     );
 
+    // Verify student belongs to caller's school before mutating AR.
+    const { data: stu } = await adminDb
+      .from('students').select('id')
+      .eq('id', body.studentId).eq('school_id', req.user.school_id!).maybeSingle();
+    if (!stu) throw new ApiError(404, 'Student not found');
+
     const { error } = await adminDb.from('student_academic_records')
       .update({ status: 'FAILED' })
       .eq('student_id', body.studentId)
@@ -388,20 +394,66 @@ studentsRouter.post('/fail', requireAuth, requireRole('PRINCIPAL'), async (req, 
 });
 
 // POST /api/students/issue-tc — issue Transfer Certificate
+// When TC marks the parent's LAST active kid in this school as inactive, the
+// parent's user account is also deactivated so they can no longer log in
+// here. The next school's admission flow will auto-reactivate the account
+// when transferring it. (See `/create` parent-handling block.)
 studentsRouter.post('/issue-tc', requireAuth, requireRole('PRINCIPAL'), async (req, res) => {
   try {
     const body = requireBody<{ studentId: string; tcNumber: string; reason?: string }>(
       req, ['studentId', 'tcNumber'],
     );
     if (!body.tcNumber.trim()) throw new ApiError(400, 'TC number required');
+    const schoolId = req.user.school_id!;
 
     const { error } = await adminDb.from('students').update({
       is_active: false,
       status:    'TC_ISSUED',
       tc_number: body.tcNumber.trim(),
       updated_at: new Date().toISOString(),
-    }).eq('id', body.studentId).eq('school_id', req.user.school_id!);
+    }).eq('id', body.studentId).eq('school_id', schoolId);
     if (error) throw new ApiError(500, error.message);
+
+    // Parent deactivation cascade. We find the parent linked to this student
+    // (if any) and check whether they have any OTHER active kids in this
+    // same school. If not, we deactivate their user row — this severs login
+    // access to this school cleanly. Best-effort: failures here don't block
+    // the TC issue (the student row is already marked inactive).
+    try {
+      const { data: links } = await adminDb
+        .from('parent_student_links')
+        .select('parent_user_id')
+        .eq('student_id', body.studentId);
+      const parentIds = Array.from(new Set(((links ?? []) as { parent_user_id: string }[]).map(r => r.parent_user_id)));
+
+      for (const pid of parentIds) {
+        // All students this parent is linked to in this school.
+        const { data: theirLinks } = await adminDb
+          .from('parent_student_links')
+          .select('student_id')
+          .eq('parent_user_id', pid);
+        const theirStudentIds = ((theirLinks ?? []) as { student_id: string }[]).map(r => r.student_id);
+        if (!theirStudentIds.length) continue;
+
+        const { count: activeHere } = await adminDb
+          .from('students')
+          .select('id', { count: 'exact', head: true })
+          .in('id', theirStudentIds)
+          .eq('school_id', schoolId)
+          .eq('is_active', true);
+
+        if ((activeHere ?? 0) === 0) {
+          // Parent has no more active kids in this school — block their login.
+          await adminDb.from('users')
+            .update({ is_active: false, updated_at: new Date().toISOString() })
+            .eq('id', pid)
+            .eq('school_id', schoolId)
+            .eq('role', 'PARENT');
+        }
+      }
+    } catch (e) {
+      console.warn('[issue-tc] parent deactivation cascade failed:', (e as Error).message);
+    }
 
     ok(res, { studentId: body.studentId, tcNumber: body.tcNumber.trim() });
   } catch (err) { fail(res, err); }
@@ -491,20 +543,82 @@ studentsRouter.post('/create', requireAuth, requireRole('PRINCIPAL'), async (req
     let parentUserId: string | null = null;
     let parentReused: boolean | null = null;
     if (fatherPhone) {
-      // Check if user already exists in public.users
+      // Check if user already exists in public.users — even inactive ones,
+      // because a TC-deactivated parent should be reactivated on transfer.
       const { data: existing } = await adminDb
         .from('users').select('id, school_id, role, is_active')
         .eq('mobile_number', fatherPhone).maybeSingle();
       if (existing) {
-        const ex = existing as { id: string; school_id: string | null; role: string };
+        const ex = existing as { id: string; school_id: string | null; role: string; is_active: boolean };
         if (ex.role !== 'PARENT') {
           throw new ApiError(409, `mobile ${fatherPhone} already registered as ${ex.role}`);
         }
         if (ex.school_id && ex.school_id !== schoolId) {
-          throw new ApiError(409, `mobile ${fatherPhone} is already registered with another school`);
+          // The parent has an account at a different school. Two cases:
+          //   1. They still have ACTIVE kids in that school → reject.
+          //      Principal must wait for the other school to issue TC first.
+          //   2. All their kids in the old school are inactive (TC issued
+          //      / left) → silently transfer the account to this school.
+          //      Same mobile + same password keep working; the parent now
+          //      sees this school's data via RLS (school_id is the only
+          //      tenant scope they have).
+          const { data: parentLinks } = await adminDb
+            .from('parent_student_links')
+            .select('student_id')
+            .eq('parent_user_id', ex.id);
+          const linkedIds = ((parentLinks ?? []) as { student_id: string }[]).map(r => r.student_id);
+
+          let activeElsewhere = 0;
+          if (linkedIds.length) {
+            const { count } = await adminDb
+              .from('students')
+              .select('id', { count: 'exact', head: true })
+              .in('id', linkedIds)
+              .eq('school_id', ex.school_id)
+              .eq('is_active', true);
+            activeElsewhere = count ?? 0;
+          }
+          if (activeElsewhere > 0) {
+            throw new ApiError(409,
+              `Parent ${fatherPhone} has ${activeElsewhere} active student${activeElsewhere === 1 ? '' : 's'} in another school. ` +
+              `Issue TC for those students first; the account will then transfer here.`,
+            );
+          }
+
+          // Transfer the parent's user row to this school. is_active is
+          // flipped back on too — TC at the previous school may have
+          // deactivated the account; admission here restores login access.
+          const { error: xferErr } = await adminDb.from('users')
+            .update({
+              school_id:  schoolId,
+              name:       body.fatherName || ex.role, // keep latest contact name
+              is_active:  true,
+              updated_at: new Date().toISOString(),
+            })
+            .eq('id', ex.id);
+          if (xferErr) throw new ApiError(500, `Account transfer failed: ${xferErr.message}`);
+
+          // Drop dangling links to the old school's (now-inactive) kids.
+          // RLS would have hidden them anyway, but a clean break is simpler
+          // to reason about and avoids accidental cross-school references
+          // in future audits.
+          if (linkedIds.length) {
+            await adminDb.from('parent_student_links').delete().eq('parent_user_id', ex.id);
+          }
+
+          parentUserId = ex.id;
+          parentReused = true;
+        } else {
+          // Same school: regular reuse. If they were deactivated by a prior
+          // TC (last kid had left, then re-admitted) bring them back online.
+          if (!ex.is_active) {
+            await adminDb.from('users')
+              .update({ is_active: true, updated_at: new Date().toISOString() })
+              .eq('id', ex.id);
+          }
+          parentUserId = ex.id;
+          parentReused = true;
         }
-        parentUserId = ex.id;
-        parentReused = true;
       } else {
         const parentEmail = `${fatherPhone}${MOBILE_EMAIL_DOMAIN}`;
         const parentName = body.fatherName || 'Parent';
@@ -608,8 +722,11 @@ studentsRouter.post('/create', requireAuth, requireRole('PRINCIPAL'), async (req
   } catch (err) { fail(res, err); }
 });
 
-// POST /api/students/document/remove — delete student_documents row
-studentsRouter.post('/document/remove', requireAuth, requireRole('PRINCIPAL'), async (req, res) => {
+// POST /api/students/document/remove — delete student_documents row.
+// Editor Mode required: this is a destructive operation that wipes audit-relevant
+// uploads (TC, Aadhaar, marksheet). Server checks the 30-min window via
+// requireEditorMode rather than trusting any client flag.
+studentsRouter.post('/document/remove', requireAuth, requireRole('PRINCIPAL'), requireEditorMode, async (req, res) => {
   try {
     const { documentId } = requireBody<{ documentId: string }>(req, ['documentId']);
 

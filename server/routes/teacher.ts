@@ -261,6 +261,23 @@ teacherRouter.post('/complaint/create', requireAuth, requireRole('TEACHER'), asy
       req, ['subject', 'description'],
     );
 
+    // Anti-spam: max 3 complaints per teacher per IST day. The DB trigger
+    // (migration 0052) bypasses service-role inserts, so we explicitly check
+    // here. Same rule applies to parent/student complaints — but those go
+    // through the supabase client directly (auth.uid() set), where the
+    // trigger fires natively.
+    const istToday = new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Kolkata' });
+    const dayStartIST = new Date(`${istToday}T00:00:00+05:30`).toISOString();
+    const { count: todayCount } = await adminDb
+      .from('complaints')
+      .select('id', { count: 'exact', head: true })
+      .eq('from_user_id', req.user.id)
+      .gte('created_at', dayStartIST);
+    if ((todayCount ?? 0) >= 3) {
+      throw new ApiError(429,
+        'Daily limit reached — only 3 complaints allowed per day. Please contact the school office for another submission.');
+    }
+
     const { data, error } = await adminDb
       .from('complaints')
       .insert({

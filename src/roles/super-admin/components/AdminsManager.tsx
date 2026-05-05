@@ -26,6 +26,9 @@ export const AdminsManager: React.FC<Props> = ({ onBack }) => {
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState<AdminUser | null>(null);
   const [confirmResetPassword, setConfirmResetPassword] = useState<AdminUser | null>(null);
+  // Suspending a PRINCIPAL locks an entire school's admin out, so an extra
+  // confirm step is required. (Activating doesn't need confirmation.)
+  const [confirmSuspendPrincipal, setConfirmSuspendPrincipal] = useState<AdminUser | null>(null);
 
   const [form, setForm] = useState<CreateAdminInput>({
     name: '', email: '', phone: '', role: 'SUPER_ADMIN', schoolId: '', password: '',
@@ -64,6 +67,16 @@ export const AdminsManager: React.FC<Props> = ({ onBack }) => {
       showToast('You cannot deactivate your own account', 'error');
       return;
     }
+    // Suspending a principal blocks an entire school — require explicit
+    // confirmation. Activation goes through directly.
+    if (admin.role === 'PRINCIPAL' && admin.status === 'ACTIVE') {
+      setConfirmSuspendPrincipal(admin);
+      return;
+    }
+    await doToggleStatus(admin);
+  };
+
+  const doToggleStatus = async (admin: AdminUser) => {
     const next = admin.status === 'ACTIVE' ? 'INACTIVE' : 'ACTIVE';
     try {
       await updateStatus(admin.id, next);
@@ -289,6 +302,51 @@ export const AdminsManager: React.FC<Props> = ({ onBack }) => {
       </div>
     </div>
   );
+
+  // Suspend principal confirmation — destructive enough to warrant a second
+  // tap. Locks the principal out of the school until reactivated.
+  if (confirmSuspendPrincipal) {
+    const a = confirmSuspendPrincipal;
+    return (
+      <div className="absolute inset-0 z-60 bg-slate-900/60 flex items-end justify-center animate-in fade-in">
+        <div className="bg-white w-full rounded-t-3xl p-6 pb-10 animate-in slide-in-from-bottom-4">
+          <div className="w-10 h-10 rounded-2xl bg-rose-100 text-rose-600 flex items-center justify-center mb-4">
+            <XCircle size={20} />
+          </div>
+          <h3 className="font-black text-slate-900 text-lg mb-1">Suspend principal?</h3>
+          <p className="text-sm text-slate-500 mb-3">
+            <span className="font-black text-slate-800">{a.name}</span>{a.schoolName ? ` (${a.schoolName})` : ''} will be locked out until reactivated.
+          </p>
+          <div className="bg-rose-50 rounded-2xl p-3 mb-5 space-y-1">
+            <p className="text-xs font-bold text-rose-700 leading-relaxed">
+              The school's day-to-day operations (admissions, fees, attendance, results, transport)
+              all go through this principal. Suspending them blocks every staff and parent action
+              that requires principal approval.
+            </p>
+            <p className="text-[11px] font-bold text-rose-600 leading-relaxed">
+              Active sessions are NOT auto-killed — the principal can still finish whatever's open
+              in another tab until their JWT expires (~1 hour).
+            </p>
+          </div>
+          <div className="flex gap-3">
+            <button onClick={() => setConfirmSuspendPrincipal(null)}
+              className="flex-1 py-3 rounded-2xl border border-slate-200 font-black text-slate-600 active:scale-95 transition-transform">
+              Cancel
+            </button>
+            <button
+              onClick={async () => {
+                const target = confirmSuspendPrincipal;
+                setConfirmSuspendPrincipal(null);
+                if (target) await doToggleStatus(target);
+              }}
+              className="flex-1 py-3 rounded-2xl bg-rose-600 text-white font-black active:scale-95 transition-transform">
+              Suspend
+            </button>
+          </div>
+        </div>
+      </div>
+    );
+  }
 
   // Reset Password confirmation
   if (confirmResetPassword) {

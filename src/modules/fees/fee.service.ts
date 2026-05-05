@@ -59,6 +59,11 @@ export interface PaymentRecord {
   reversedBy?: string;
   reversalReason?: string;
   reversesPaymentId?: string;
+  // Discount applied at payment time. Stored on payment_records.discount_amount.
+  // Surfaced on PaymentRecord so Payment History can show it as a separate
+  // sub-line under the cash-received row, matching the spec where a
+  // discount is its own ledger entry alongside the payment.
+  discountAmount?: number;
 }
 
 export interface FeeInstallment {
@@ -213,7 +218,7 @@ async function _loadInstallments(schoolId: string): Promise<void> {
 async function _loadPaymentHistory(schoolId: string): Promise<void> {
   const { data, error } = await supabase
     .from('payment_records')
-    .select('id, student_id, amount, method, date, receipt_no, advance_amount, note, created_at, reverses_payment_id, reversed_at, reversed_by, reversal_reason, students(name, admission_no)')
+    .select('id, student_id, amount, method, date, receipt_no, advance_amount, discount_amount, note, created_at, reverses_payment_id, reversed_at, reversed_by, reversal_reason, students(name, admission_no)')
     .eq('school_id', schoolId)
     .order('date', { ascending: false }).order('created_at', { ascending: false })
     .limit(500);
@@ -221,7 +226,8 @@ async function _loadPaymentHistory(schoolId: string): Promise<void> {
 
   type PRow = {
     id: string; student_id: string; amount: number; method: string;
-    date: string; receipt_no: string; advance_amount: number; note: string | null;
+    date: string; receipt_no: string; advance_amount: number; discount_amount: number | null;
+    note: string | null;
     created_at: string;
     reverses_payment_id: string | null;
     reversed_at: string | null;
@@ -276,6 +282,7 @@ async function _loadPaymentHistory(schoolId: string): Promise<void> {
         amount: Number(l.amount_applied),
       })),
       advanceAmount: Number(p.advance_amount),
+      discountAmount: Number(p.discount_amount ?? 0) || undefined,
       note: p.note ?? undefined,
       createdAt: p.created_at,
       reversedAt: p.reversed_at ?? undefined,
@@ -568,13 +575,13 @@ export const feeService = {
     return true;
   },
 
-  /** Reverse a previously-recorded payment. All guards (Editor Mode flag,
-   *  same-day IST, daily cap, ownership) are enforced server-side. The
-   *  `editorMode` argument is sent only because the server demands it
-   *  explicitly — UI is the single source of truth for whether the
-   *  principal toggled it on. */
-  async reversePayment(paymentId: string, reason: string, editorMode: boolean): Promise<{ reversalId: string }> {
-    const result = await apiFees.reversePayment({ paymentId, reason, editorMode });
+  /** Reverse a previously-recorded payment. All guards (Editor Mode session
+   *  on the server, same-day IST, daily cap, ownership) are enforced
+   *  server-side via `users.editor_mode_until`. The client no longer sends an
+   *  Editor-Mode flag — toggling the UI store calls the enable/disable
+   *  RPCs and the server reads the persisted timestamp. */
+  async reversePayment(paymentId: string, reason: string): Promise<{ reversalId: string }> {
+    const result = await apiFees.reversePayment({ paymentId, reason });
     await logAudit('fee_payment_reversed', 'payment_record', paymentId, {
       reason, reversalId: result.reversalId,
     });
@@ -943,7 +950,7 @@ export const feeService = {
     if (!schoolId) return [];
     let query = supabase
       .from('fee_payment_uploads')
-      .select('id, student_id, submitted_by, amount, description, screenshot_name, screenshot_url, status, reviewed_at, reviewer_note, recorded_payment_id, created_at')
+      .select('id, student_id, submitted_by, amount, description, transaction_id, status, reviewed_at, reviewer_note, recorded_payment_id, created_at')
       .eq('school_id', schoolId)
       .order('created_at', { ascending: false });
     if (status !== 'ALL') query = query.eq('status', status);
@@ -969,8 +976,7 @@ export const feeService = {
       submittedBy: r.submitted_by,
       amount: r.amount,
       description: r.description ?? '',
-      screenshotName: r.screenshot_name ?? '',
-      screenshotUrl: r.screenshot_url,
+      transactionId: r.transaction_id ?? '',
       status: r.status as FeeUploadStatus,
       submittedAt: r.created_at,
       reviewedAt: r.reviewed_at,
@@ -987,15 +993,4 @@ export const feeService = {
     return apiPrincipal.feeUploadReview({ uploadId: id, decision, note });
   },
 
-  async getFeePaymentScreenshotUrl(
-    storagePath: string | null,
-    ttlSeconds = 300,
-  ): Promise<string | null> {
-    if (!storagePath) return null;
-    const { data, error } = await supabase.storage
-      .from('fee-screenshots')
-      .createSignedUrl(storagePath, ttlSeconds);
-    if (error) return null;
-    return data?.signedUrl ?? null;
-  },
 };

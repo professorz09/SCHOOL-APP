@@ -13,11 +13,25 @@ import type { StudentDoc } from '@/modules/students/student.types';
 
 export const STUDENT_DOCS_BUCKET = 'student-documents';
 
-// Tight upload ceiling — schools generate thousands of docs across rosters,
-// so we keep individual files small to stay fast on slow connections and
-// limit storage cost. Anything bigger than this would be a scanned full-size
-// PDF that should be downsampled before upload.
-const MAX_BYTES = 1.5 * 1024 * 1024;
+// Per-doc-type upload ceilings. Practical balance between mobile-friendly
+// upload speed and the resolution staff actually need for proof documents:
+//   PHOTO         → 1 MB  (passport headshot — JPG at this size is plenty)
+//   TRANSFER_CERT → 3 MB  (sometimes multi-page scan)
+//   most docs     → 2 MB  (Aadhaar, birth cert — single-page PDFs)
+//   absolute cap  → 5 MB  (anything bigger should be compressed first)
+const MAX_BYTES_PHOTO     = 1 * 1024 * 1024;
+const MAX_BYTES_DOC       = 2 * 1024 * 1024;
+const MAX_BYTES_HIGH_RES  = 3 * 1024 * 1024;
+const ABSOLUTE_MAX_BYTES  = 5 * 1024 * 1024;
+const limitFor = (docType: StudentDoc['type']): number => {
+  if (docType === 'PHOTO')         return MAX_BYTES_PHOTO;
+  if (docType === 'TRANSFER_CERT') return MAX_BYTES_HIGH_RES;
+  return MAX_BYTES_DOC;
+};
+const fmtSize = (bytes: number) =>
+  bytes >= 1024 * 1024
+    ? `${(bytes / 1024 / 1024).toFixed(1)} MB`
+    : `${Math.round(bytes / 1024)} KB`;
 const ALLOWED_MIME = new Set([
   'image/jpeg', 'image/png', 'image/webp', 'image/heic', 'image/heif',
   'application/pdf',
@@ -50,8 +64,13 @@ export const storageService = {
   ): Promise<{ path: string }> {
     if (!studentId) throw new Error('Student id required');
     if (!file) throw new Error('File required');
-    if (file.size > MAX_BYTES) {
-      throw new Error(`File must be < 1.5 MB (got ${(file.size / 1024 / 1024).toFixed(1)} MB)`);
+    // Absolute cap is the floor — anything past 5 MB is rejected outright.
+    if (file.size > ABSOLUTE_MAX_BYTES) {
+      throw new Error(`File too large — absolute max ${fmtSize(ABSOLUTE_MAX_BYTES)}, got ${fmtSize(file.size)}. Please compress before uploading.`);
+    }
+    const cap = limitFor(docType);
+    if (file.size > cap) {
+      throw new Error(`File must be < ${fmtSize(cap)} (got ${fmtSize(file.size)})`);
     }
     if (file.type && !ALLOWED_MIME.has(file.type)) {
       throw new Error(`Unsupported file type: ${file.type}`);

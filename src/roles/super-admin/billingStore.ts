@@ -43,6 +43,11 @@ export const useBillingStore = create<BillingStore>((set) => ({
   fetchAll: async () => {
     set({ isLoading: true, lastError: null });
     try {
+      // Lazy auto-rollover: ensure every school's latest billing year covers
+      // today's date before we read. The RPC is idempotent (no-op when
+      // already current) so calling it on every fetch is cheap.
+      await billingService.ensureBillingYearsUpToDate().catch(() => { /* non-fatal */ });
+
       const [schoolBillings, billingYears] = await Promise.all([
         billingService.getSchoolBillings(),
         billingService.getBillingYears(),

@@ -208,11 +208,15 @@ attendanceRouter.get('/export-excel', requireAuth, requireRole('TEACHER', 'PRINC
       });
 
     // Build ALL calendar dates in range so unmarked dates appear as columns.
+    // Use 'en-CA' formatter pinned to Asia/Kolkata so the column dates match
+    // the school day (was: cur.toISOString() which is UTC and was off-by-one
+    // for any IST-evening export).
+    const istDateOf = (d: Date) => d.toLocaleDateString('en-CA', { timeZone: 'Asia/Kolkata' });
     const allDates: string[] = [];
     const cur = new Date(startDate);
     const last = new Date(endDate);
     while (cur <= last) {
-      allDates.push(cur.toISOString().split('T')[0]);
+      allDates.push(istDateOf(cur));
       cur.setDate(cur.getDate() + 1);
     }
 
@@ -319,6 +323,16 @@ attendanceRouter.post('/submit', requireAuth, requireRole('TEACHER', 'PRINCIPAL'
     }));
     const counts = countsByStatus(normalizedRecords);
 
+    // No more approval workflow. Whoever submits attendance — teacher or
+    // principal — auto-approves and locks the record. Per the schools'
+    // workflow, the marker is the source of truth; making the principal
+    // approve every teacher submission was friction without value (and
+    // it's not how attendance is treated in real registers either).
+    // Corrections after the fact still require Editor Mode.
+    const approvalStatus = 'APPROVED';
+    const isLocked       = true;
+    const approvedBy     = req.user.id;
+
     let attendanceId: string;
     if (existing) {
       attendanceId = existing.id;
@@ -329,7 +343,9 @@ attendanceRouter.post('/submit', requireAuth, requireRole('TEACHER', 'PRINCIPAL'
         total_half:      counts.half,
         total_students:  body.records.length,
         marked_by:       req.user.id,
-        approval_status: 'PENDING',
+        approval_status: approvalStatus,
+        is_locked:       isLocked,
+        approved_by:     approvedBy,
       }).eq('id', attendanceId);
       await adminDb.from('attendance_student_details').delete().eq('attendance_id', attendanceId);
     } else {
@@ -347,8 +363,9 @@ attendanceRouter.post('/submit', requireAuth, requireRole('TEACHER', 'PRINCIPAL'
           total_half:       counts.half,
           total_students:   body.records.length,
           marked_by:        req.user.id,
-          approval_status:  'PENDING',
-          is_locked:        false,
+          approval_status:  approvalStatus,
+          is_locked:        isLocked,
+          approved_by:      approvedBy,
         }).select('id').single();
       if (recErr) throw new ApiError(500, recErr.message);
       attendanceId = (recData as Pick<RecordRow, 'id'>).id;
@@ -507,8 +524,15 @@ attendanceRouter.post('/update-students', requireAuth, requireRole('PRINCIPAL'),
     const body = requireBody<{
       attendanceId: string;
       reason?: string;
+      // 'patch' = upsert only the listed students; existing student rows
+      // not in the payload are left untouched (default — UI sends only the
+      // edited rows). 'full' = treat the payload as the complete roster
+      // for this attendance and delete any existing student rows that
+      // aren't in the payload (used by full-class submit).
+      mode?: 'patch' | 'full';
       students: { studentId: string; isPresent?: boolean; status?: AttendanceStatus }[];
     }>(req, ['attendanceId', 'students']);
+    const mode: 'patch' | 'full' = body.mode === 'full' ? 'full' : 'patch';
 
     const { data: ownData } = await adminDb.from('attendance_records')
       .select('id, school_id, is_locked')
@@ -539,25 +563,46 @@ attendanceRouter.post('/update-students', requireAuth, requireRole('PRINCIPAL'),
       if (uErr) throw new ApiError(500, uErr.message);
     }
 
-    const keepIds = new Set(body.students.map(s => s.studentId));
-    const { data: existData } = await adminDb.from('attendance_student_details')
-      .select('student_id').eq('attendance_id', body.attendanceId);
-    const toDelete = ((existData ?? []) as StuDetailRow[])
-      .map(r => r.student_id).filter(sid => !keepIds.has(sid));
+    // In 'full' mode the payload represents the complete class roster; rows
+    // not in the payload are pruned. In 'patch' mode (default) we never
+    // delete — partial submits used to clobber unchanged students.
+    if (mode === 'full') {
+      const keepIds = new Set(body.students.map(s => s.studentId));
+      const { data: existData } = await adminDb.from('attendance_student_details')
+        .select('student_id').eq('attendance_id', body.attendanceId);
+      const toDelete = ((existData ?? []) as StuDetailRow[])
+        .map(r => r.student_id).filter(sid => !keepIds.has(sid));
 
-    if (toDelete.length) {
-      const { error: dErr } = await adminDb.from('attendance_student_details').delete()
-        .eq('attendance_id', body.attendanceId).in('student_id', toDelete);
-      if (dErr) throw new ApiError(500, dErr.message);
+      if (toDelete.length) {
+        const { error: dErr } = await adminDb.from('attendance_student_details').delete()
+          .eq('attendance_id', body.attendanceId).in('student_id', toDelete);
+        if (dErr) throw new ApiError(500, dErr.message);
+      }
     }
 
-    const counts = countsByStatus(normalizedStudents);
+    // Recompute totals from the canonical row set. In patch mode that means
+    // re-reading the full set after the upsert; in full mode the payload
+    // already represents the complete roster.
+    let counts: ReturnType<typeof countsByStatus>;
+    let totalStudents: number;
+    if (mode === 'patch') {
+      const { data: allRows } = await adminDb.from('attendance_student_details')
+        .select('student_id, status, is_present')
+        .eq('attendance_id', body.attendanceId);
+      const merged = ((allRows ?? []) as Array<{ student_id: string; status: AttendanceStatus | null; is_present: boolean | null }>)
+        .map(r => ({ studentId: r.student_id, status: normalizeStatus(r.status ?? undefined, r.is_present ?? undefined) }));
+      counts = countsByStatus(merged);
+      totalStudents = merged.length;
+    } else {
+      counts = countsByStatus(normalizedStudents);
+      totalStudents = body.students.length;
+    }
     const { error: rErr } = await adminDb.from('attendance_records').update({
       total_present:  counts.present,
       total_absent:   counts.absent,
       total_holiday:  counts.holiday,
       total_half:     counts.half,
-      total_students: body.students.length,
+      total_students: totalStudents,
     }).eq('id', body.attendanceId);
     if (rErr) throw new ApiError(500, rErr.message);
 
@@ -584,16 +629,25 @@ attendanceRouter.post('/approve', requireAuth, requireRole('PRINCIPAL'), async (
     const { data: recData } = await adminDb
       .from('attendance_records')
       .select('id, is_locked, school_id')
-      .eq('id', attendanceId).single();
+      .eq('id', attendanceId).maybeSingle();
     const record = recData as RecordSchool | null;
     if (!record) throw new ApiError(404, 'Attendance record not found');
     if (record.school_id !== req.user.school_id) throw new ApiError(403, 'Access denied');
     if (record.is_locked) throw new ApiError(400, 'Already approved and locked');
 
-    const { error } = await adminDb.from('attendance_records')
+    // Conditional update: matches only when still unlocked. If two principals
+    // click approve simultaneously the second one's update returns 0 rows and
+    // we fail loud instead of double-stamping.
+    const { data: updated, error } = await adminDb.from('attendance_records')
       .update({ is_locked: true, approval_status: 'APPROVED', approved_by: req.user.id })
-      .eq('id', attendanceId);
+      .eq('id', attendanceId)
+      .eq('school_id', req.user.school_id!)
+      .eq('is_locked', false)
+      .select('id');
     if (error) throw new ApiError(500, error.message);
+    if (!updated || updated.length === 0) {
+      throw new ApiError(409, 'Attendance was just approved by someone else — refresh and verify');
+    }
 
     await adminDb.from('attendance_approvals').insert({
       attendance_id: attendanceId,

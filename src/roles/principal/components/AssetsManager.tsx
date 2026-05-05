@@ -173,7 +173,6 @@ export const AssetsManager: React.FC<Props> = ({ onBack }) => {
     const newCount = Math.max(0, Math.min(eq.quantity, eq.workingCount + delta));
     const updated = await principalService.updateEquipment(eq.id, { workingCount: newCount });
     setEquipment(prev => prev.map(e => e.id === updated.id ? updated : e));
-    const status = newCount < eq.quantity ? 'faulty' : 'working';
   };
 
   const tabs = [

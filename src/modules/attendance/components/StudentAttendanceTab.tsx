@@ -8,14 +8,18 @@ interface Props {
   studentId: string;
 }
 
+// Half-day was removed from the student attendance flow (principal can no
+// longer mark a student as half-day). The 'half' key is still part of the
+// shared type because staff attendance uses it. Any legacy 'half' rows for
+// students are rendered as PRESENT here so percentages don't surprise.
 const CELL_LABEL: Record<AttendanceCellStatus, string> = {
-  present: 'P', absent: 'A', holiday: 'H', half: 'HD',
+  present: 'P', absent: 'A', holiday: 'H', half: 'P',
 };
 const CELL_BG: Record<AttendanceCellStatus, string> = {
   present: 'bg-emerald-500 text-white',
   absent: 'bg-rose-500 text-white',
   holiday: 'bg-slate-200 text-slate-600',
-  half: 'bg-amber-400 text-white',
+  half: 'bg-emerald-500 text-white',
 };
 
 const todayStr = () => new Date().toISOString().split('T')[0];
@@ -121,29 +125,27 @@ export const StudentAttendanceTab: React.FC<Props> = ({ studentId }) => {
     return map;
   }, [monthRecords, studentId]);
 
-  // Calculate monthly stats
+  // Calculate monthly stats. Legacy 'half' rows count as PRESENT — see
+  // CELL_LABEL comment above. Half-day is no longer a student concept.
   const monthStats = gridDates.reduce(
     (acc, date) => {
       const status = dateStatusMap[date];
       if (!status) {
         acc.notMarked++;
-      } else if (status === 'present') {
+      } else if (status === 'present' || status === 'half') {
         acc.present++;
       } else if (status === 'absent') {
         acc.absent++;
       } else if (status === 'holiday') {
         acc.holiday++;
-      } else if (status === 'half') {
-        acc.half++;
       }
       return acc;
     },
-    { present: 0, absent: 0, holiday: 0, half: 0, notMarked: 0 }
+    { present: 0, absent: 0, holiday: 0, notMarked: 0 }
   );
 
   const workingDays = gridDates.length - monthStats.holiday;
-  const presentDays = monthStats.present + monthStats.half * 0.5;
-  const attendancePercent = workingDays > 0 ? Math.round((presentDays / workingDays) * 100) : 0;
+  const attendancePercent = workingDays > 0 ? Math.round((monthStats.present / workingDays) * 100) : 0;
 
   if (gridLoading) {
     return (
@@ -166,8 +168,8 @@ export const StudentAttendanceTab: React.FC<Props> = ({ studentId }) => {
         </button>
       </div>
 
-      {/* Stats row */}
-      <div className="grid grid-cols-5 gap-2 px-4">
+      {/* Stats row — Half-day chip removed; students don't get half-day. */}
+      <div className="grid grid-cols-4 gap-2 px-4">
         <div className="bg-white rounded-xl border border-emerald-100 p-3 text-center">
           <div className="text-lg font-black text-emerald-600">{monthStats.present}</div>
           <div className="text-[9px] font-bold text-slate-400">Present</div>
@@ -179,10 +181,6 @@ export const StudentAttendanceTab: React.FC<Props> = ({ studentId }) => {
         <div className="bg-white rounded-xl border border-slate-100 p-3 text-center">
           <div className="text-lg font-black text-slate-600">{monthStats.holiday}</div>
           <div className="text-[9px] font-bold text-slate-400">Holiday</div>
-        </div>
-        <div className="bg-white rounded-xl border border-amber-100 p-3 text-center">
-          <div className="text-lg font-black text-amber-600">{monthStats.half}</div>
-          <div className="text-[9px] font-bold text-slate-400">Half Day</div>
         </div>
         <div className={`bg-white rounded-xl border p-3 text-center ${
           attendancePercent >= 75 ? 'border-emerald-100' : 'border-rose-100'

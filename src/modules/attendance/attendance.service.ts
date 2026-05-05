@@ -248,7 +248,7 @@ export const sharedAttendance = {
   async submitSection(
     sectionId: string, date: string,
     students: AttendanceStudentRecord[],
-  ): Promise<void> {
+  ): Promise<{ attendanceId: string }> {
     const res = await apiAttendance.submit({
       sectionId,
       date,
@@ -259,6 +259,10 @@ export const sharedAttendance = {
       present: res.present, absent: res.absent,
       holiday: res.holiday ?? 0, half: res.half ?? 0, total: res.total,
     });
+    // Returning a value (instead of void) so callers' `if (result ===
+    // undefined) return;` guards (used for editGuard.gate's "user
+    // cancelled" sentinel) don't false-positive on a successful save.
+    return { attendanceId: res.attendanceId };
   },
 
   /** Principal marks attendance directly (auto-approved). */
@@ -297,10 +301,14 @@ export const sharedAttendance = {
 
   /** Replace per-student rows + recompute totals for a record.
    *  `reason` is required by the server when the record is already approved/locked. */
-  async updateStudents(id: string, students: AttendanceStudentRecord[], reason?: string): Promise<void> {
+  async updateStudents(id: string, students: AttendanceStudentRecord[], reason?: string, mode: 'patch' | 'full' = 'full'): Promise<void> {
+    // Default 'full' here preserves the existing component contract — the
+    // student-attendance editor always submits the entire roster. Callers
+    // doing partial edits should pass mode='patch' explicitly.
     await apiAttendance.updateStudents({
       attendanceId: id,
       reason,
+      mode,
       students: students.map(s => ({ studentId: s.id, status: s.status })),
     });
     const present = students.filter(s => s.status === 'present' || s.status === 'half').length;
@@ -429,5 +437,33 @@ export const staffAttendanceService = {
       for (const d of days) counts[d.status]++;
       return { staffId: s.id, name: s.name, role: s.role, days, counts };
     });
+  },
+
+  /**
+   * Summary for a single staff member over a date range. Used by the staff
+   * profile panel's Attendance tab. Returns the per-day rows plus per-status
+   * counts so the UI can show both a quick number ("23 P · 2 A") and a day
+   * strip without re-querying.
+   */
+  async getStaffAttendanceForRange(
+    staffId: string, startDate: string, endDate: string,
+  ): Promise<{
+    days: Array<{ date: string; status: StaffAttendanceStatus }>;
+    counts: Record<StaffAttendanceStatus, number>;
+  }> {
+    const schoolId = useAuthStore.getState().session?.schoolId;
+    if (!schoolId) throw new Error('No school in session');
+    const { data, error } = await supabase
+      .from('staff_attendance').select('date, status')
+      .eq('school_id', schoolId).eq('staff_id', staffId)
+      .gte('date', startDate).lte('date', endDate)
+      .order('date', { ascending: true });
+    if (error) throw new Error(error.message);
+    const days = ((data ?? []) as Array<{ date: string; status: StaffAttendanceStatus }>);
+    const counts: Record<StaffAttendanceStatus, number> = {
+      PRESENT: 0, ABSENT: 0, HALF_DAY: 0, LEAVE: 0, LATE: 0, HOLIDAY: 0,
+    };
+    for (const d of days) counts[d.status]++;
+    return { days, counts };
   },
 };

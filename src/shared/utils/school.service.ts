@@ -161,6 +161,99 @@ export const schoolService = {
     }>;
   },
 
+  // Aggregated, real-time overview for the super-admin school detail page.
+  // Replaces the static `studentCount` / `teacherCount` columns and the
+  // empty `academicYears[]` placeholder with live counts pulled from each
+  // domain table. Uses `head: true` count queries where possible to avoid
+  // pulling rows.
+  async getSchoolOverview(schoolId: string): Promise<{
+    totalStudents: number;
+    rteStudents: number;
+    totalStaff: number;
+    totalTeachers: number;
+    monthlySalaryCost: number;
+    feeCollectedThisMonth: number;
+    feeCollectedThisYear: number;
+    expensesThisMonth: number;
+    expensesThisYear: number;
+    salaryPaidThisMonth: number;
+    classBreakdown: Array<{ className: string; section: string; count: number }>;
+    activeAYLabel: string | null;
+  }> {
+    const now = new Date();
+    const startOfMonth = new Date(now.getFullYear(), now.getMonth(), 1).toISOString().slice(0, 10);
+    const startOfYear  = new Date(now.getFullYear(), 0, 1).toISOString().slice(0, 10);
+
+    const [stuCount, staffRows, ayRow, payMonth, payYear, expMonth, expYear, salMonth] = await Promise.all([
+      supabase.from('students').select('id', { count: 'exact', head: true })
+        .eq('school_id', schoolId).eq('is_active', true),
+      supabase.from('staff').select('role, salary, status')
+        .eq('school_id', schoolId).eq('is_active', true),
+      supabase.from('academic_years').select('id, label')
+        .eq('school_id', schoolId).eq('is_active', true).maybeSingle(),
+      supabase.from('payment_records').select('amount')
+        .eq('school_id', schoolId).is('reversed_at', null).gte('date', startOfMonth),
+      supabase.from('payment_records').select('amount')
+        .eq('school_id', schoolId).is('reversed_at', null).gte('date', startOfYear),
+      supabase.from('expenses').select('amount')
+        .eq('school_id', schoolId).gte('date', startOfMonth),
+      supabase.from('expenses').select('amount')
+        .eq('school_id', schoolId).gte('date', startOfYear),
+      supabase.from('salary_payments').select('amount')
+        .eq('school_id', schoolId).gte('paid_at', startOfMonth),
+    ]);
+
+    const ay = (ayRow.data ?? null) as { id: string; label: string } | null;
+    const totalStudents = stuCount.count ?? 0;
+
+    let rteStudents = 0;
+    let classBreakdown: Array<{ className: string; section: string; count: number }> = [];
+    if (ay?.id) {
+      const { data: arData } = await supabase
+        .from('student_academic_records')
+        .select('class_name, section, is_rte')
+        .eq('academic_year_id', ay.id);
+      const arr = (arData ?? []) as Array<{ class_name: string; section: string; is_rte: boolean }>;
+      rteStudents = arr.filter(r => r.is_rte).length;
+      const map = new Map<string, { className: string; section: string; count: number }>();
+      for (const r of arr) {
+        const key = `${r.class_name}|${r.section}`;
+        const ex = map.get(key);
+        if (ex) ex.count++;
+        else map.set(key, { className: r.class_name, section: r.section, count: 1 });
+      }
+      classBreakdown = [...map.values()].sort((a, b) =>
+        (a.className || '').localeCompare(b.className || '', undefined, { numeric: true })
+        || (a.section || '').localeCompare(b.section || ''),
+      );
+    }
+
+    const staff = (staffRows.data ?? []) as Array<{ role: string; salary: number; status: string }>;
+    const totalStaff = staff.length;
+    const totalTeachers = staff.filter(s => s.role === 'TEACHER').length;
+    const monthlySalaryCost = staff
+      .filter(s => s.status !== 'TERMINATED' && s.status !== 'RELIEVED')
+      .reduce((sum, s) => sum + (Number(s.salary) || 0), 0);
+
+    const sumAmount = (rows: { data: unknown }) =>
+      ((rows.data ?? []) as Array<{ amount: number }>).reduce((s, r) => s + (Number(r.amount) || 0), 0);
+
+    return {
+      totalStudents,
+      rteStudents,
+      totalStaff,
+      totalTeachers,
+      monthlySalaryCost,
+      feeCollectedThisMonth: sumAmount(payMonth),
+      feeCollectedThisYear:  sumAmount(payYear),
+      expensesThisMonth: sumAmount(expMonth),
+      expensesThisYear:  sumAmount(expYear),
+      salaryPaidThisMonth: sumAmount(salMonth),
+      classBreakdown,
+      activeAYLabel: ay?.label ?? null,
+    };
+  },
+
   async getSchoolStudents(schoolId: string): Promise<Array<{
     id: string; name: string; admission_no: string;
     father_name: string | null; mother_name: string | null;

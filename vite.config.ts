@@ -9,11 +9,12 @@ export default defineConfig(({mode}) => {
   const env = loadEnv(mode, '.', '');
   const supabaseUrl = process.env.SUPABASE_URL ?? env.SUPABASE_URL ?? '';
   const supabaseAnonKey = process.env.SUPABASE_ANON_KEY ?? env.SUPABASE_ANON_KEY ?? '';
-  const geminiApiKey = process.env.GEMINI_API_KEY ?? env.GEMINI_API_KEY ?? '';
+  // GEMINI_API_KEY is intentionally NOT exposed to the client bundle. The
+  // browser proxies through /api/ai/generate (server/routes/ai.ts) and the
+  // key stays in the server process env only.
   return {
     plugins: [react(), tailwindcss(), adminApiPlugin(), apiServerPlugin()],
     define: {
-      'process.env.GEMINI_API_KEY': JSON.stringify(geminiApiKey),
       'import.meta.env.VITE_SUPABASE_URL': JSON.stringify(supabaseUrl),
       'import.meta.env.VITE_SUPABASE_ANON_KEY': JSON.stringify(supabaseAnonKey),
     },

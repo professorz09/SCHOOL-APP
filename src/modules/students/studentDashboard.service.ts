@@ -153,17 +153,23 @@ async function getStudentContext(): Promise<StudentContext> {
     .from('schools').select('name').eq('id', schoolId).maybeSingle();
   const schoolName = (sch as { name: string } | null)?.name ?? '';
 
+  // We intentionally do NOT throw if the school has no active academic
+  // year yet — the student should still be able to load their dashboard,
+  // just with empty fee/timetable/attendance sections. Throwing here was
+  // the root cause of "No active academic year" errors blocking the
+  // entire student/parent app whenever a school was between years.
   const { data: yr, error: yErr } = await supabase
     .from('academic_years').select('id')
     .eq('school_id', schoolId).eq('is_active', true).maybeSingle();
   if (yErr) throw new Error(yErr.message);
-  if (!yr) throw new Error('No active academic year');
-  const yearId = (yr as { id: string }).id;
+  const yearId = (yr as { id: string } | null)?.id ?? '';
 
-  const { data: ar } = await supabase
-    .from('student_academic_records')
-    .select('class_name, section')
-    .eq('student_id', studentRow.id).eq('academic_year_id', yearId).maybeSingle();
+  const { data: ar } = yearId
+    ? await supabase
+      .from('student_academic_records')
+      .select('class_name, section')
+      .eq('student_id', studentRow.id).eq('academic_year_id', yearId).maybeSingle()
+    : { data: null };
   const academic = (ar as { class_name: string | null; section: string | null } | null) ?? null;
 
   let sectionId: string | null = null;
@@ -309,7 +315,7 @@ export const studentDashboardService = {
 
   async getTimetable(): Promise<TimetableDay[]> {
     const ctx = await getStudentContext();
-    if (!ctx.sectionId) return [];
+    if (!ctx.sectionId || !ctx.yearId) return [];
 
     const slots = await loadSlots(ctx.schoolId, ctx.yearId);
     const slotByLowerId = new Map(slots.map(s => [s.slotId.toLowerCase(), s]));
@@ -364,7 +370,7 @@ export const studentDashboardService = {
 
   async getScheduledExams(): Promise<UpcomingExam[]> {
     const ctx = await getStudentContext();
-    if (!ctx.sectionId) return [];
+    if (!ctx.sectionId || !ctx.yearId) return [];
     const today = new Date().toISOString().split('T')[0];
 
     const { data, error } = await supabase
@@ -395,6 +401,7 @@ export const studentDashboardService = {
 
   async getResults(): Promise<StudentExamResult[]> {
     const ctx = await getStudentContext();
+    if (!ctx.yearId) return [];
 
     // Pull this student's marks for the active year.
     const { data: myMarks, error: mErr } = await supabase
@@ -482,6 +489,7 @@ export const studentDashboardService = {
 
   async getTransportStops(): Promise<TransportStop[]> {
     const ctx = await getStudentContext();
+    if (!ctx.yearId) return [];
     const { data: assign, error } = await supabase
       .from('student_transport_assignments')
       .select('vehicle_id, stop_id, is_active')
@@ -599,6 +607,9 @@ export const studentDashboardService = {
         from_name: ctx.studentName,
         from_user_id: userId,
         from_class: fromClass,
+        // Per-child cap: trigger 0056 reads student_id so a parent of two
+        // kids gets 3 complaints PER CHILD, not 3 across both.
+        student_id: ctx.studentId,
         subject,
         description,
         status: 'PENDING',
@@ -629,6 +640,7 @@ export const studentDashboardService = {
 
   async getMyAttendance(): Promise<{ weekDays: AttendanceWeekDay[]; months: AttendanceMonth[] }> {
     const ctx = await getStudentContext();
+    if (!ctx.yearId) return { weekDays: [], months: [] };
 
     // Pull this student's APPROVED detail rows for the active year.
     // Phase 6: also read the 4-way status column (present/absent/holiday/half).
@@ -658,11 +670,14 @@ export const studentDashboardService = {
       const rec = Array.isArray(r.attendance_records) ? r.attendance_records[0] : r.attendance_records;
       if (!rec) continue;
       const st: CellSt = r.status ?? (r.is_present ? 'present' : 'absent');
+      // Half-day was removed from the student attendance flow; any legacy
+      // 'half' rows count as PRESENT here so percentages don't penalise
+      // students for a status they can no longer be marked with. Staff
+      // attendance handles half-day separately and is unaffected.
       const dayS: DayStatus =
-        st === 'present' ? 'PRESENT' :
         st === 'absent'  ? 'ABSENT'  :
         st === 'holiday' ? 'HOLIDAY' :
-        /* half */         'HALF_DAY';
+        /* present, half */ 'PRESENT';
       dateStatus.set(rec.date, dayS);
     }
 
@@ -687,7 +702,7 @@ export const studentDashboardService = {
       const key = date.slice(0, 7);
       const b = buckets.get(key) ?? { present: 0, absent: 0, holiday: 0, total: 0 };
       b.total += 1;
-      if (st === 'PRESENT' || st === 'HALF_DAY') b.present += 1;
+      if (st === 'PRESENT') b.present += 1;
       else if (st === 'ABSENT') b.absent += 1;
       else if (st === 'HOLIDAY') b.holiday += 1;
       buckets.set(key, b);
@@ -716,43 +731,22 @@ export const studentDashboardService = {
     const ctx = await getStudentContext();
     const { data, error } = await supabase
       .from('fee_payment_uploads')
-      .select('id, amount, description, screenshot_name, screenshot_url, status, created_at')
+      .select('id, amount, description, transaction_id, status, created_at')
       .eq('student_id', ctx.studentId)
       .order('created_at', { ascending: false });
     if (error) throw new Error(error.message);
     return ((data ?? []) as Array<{
       id: string; amount: number; description: string | null;
-      screenshot_name: string | null; screenshot_url: string | null;
+      transaction_id: string;
       status: string; created_at: string;
     }>).map(r => ({
       id: r.id,
       amount: Number(r.amount),
       description: r.description ?? '',
-      screenshotName: r.screenshot_name ?? '',
-      screenshotPath: r.screenshot_url,
+      transactionId: r.transaction_id,
       submittedAt: r.created_at.slice(0, 10),
       status: (r.status as FeePaymentUpload['status']) ?? 'PENDING',
     }));
-  },
-
-  /**
-   * Mint a short-lived signed URL for a screenshot stored under the
-   * `fee-screenshots` bucket. Returns null when the path is missing or
-   * the storage layer denies access (RLS, bucket misconfig, etc).
-   */
-  async getFeeScreenshotSignedUrl(
-    storagePath: string | null,
-    ttlSeconds = 300,
-  ): Promise<string | null> {
-    if (!storagePath) return null;
-    const { data, error } = await supabase.storage
-      .from(FEE_SCREENSHOTS_BUCKET)
-      .createSignedUrl(storagePath, ttlSeconds);
-    if (error) {
-      console.warn('[fee-screenshots] signed URL failed', error.message);
-      return null;
-    }
-    return data?.signedUrl ?? null;
   },
 
   /**
@@ -772,40 +766,33 @@ export const studentDashboardService = {
    * type are validated client-side as a fast-fail (the bucket itself
    * also enforces these limits server-side).
    */
-  async submitFeeScreenshot(
+  async submitFeePayment(
     amount: number,
+    transactionId: string,
     description: string,
-    screenshotName: string,
-    file: File,
   ): Promise<FeePaymentUpload> {
-    if (!file) throw new Error('Screenshot image is required');
-    if (!(FEE_SCREENSHOT_MIME_TYPES as readonly string[]).includes(file.type)) {
-      throw new Error('Unsupported image type. Use JPG, PNG, WebP, HEIC, or HEIF.');
-    }
-    if (file.size > FEE_SCREENSHOT_MAX_BYTES) {
-      throw new Error(
-        `Image is too large (max ${Math.round(FEE_SCREENSHOT_MAX_BYTES / 1024 / 1024)} MB)`,
-      );
-    }
+    const txn = transactionId.trim();
+    if (!txn) throw new Error('Transaction ID is required');
+    if (txn.length < 4) throw new Error('Transaction ID looks too short');
+    if (!Number.isFinite(amount) || amount <= 0) throw new Error('Enter a valid amount');
 
     const ctx = await getStudentContext();
     const userId = getUserId();
     const role = getRole();
 
-    // crypto.randomUUID() is available in all evergreen browsers and
-    // worker contexts where Vite runs; we use it here so the same
-    // student can upload many screenshots without filename collisions.
-    const ext = inferImageExtension(file);
-    const objectPath = `${ctx.schoolId}/${ctx.studentId}/${Date.now()}-${crypto.randomUUID()}.${ext}`;
-
-    const upload = await supabase.storage
-      .from(FEE_SCREENSHOTS_BUCKET)
-      .upload(objectPath, file, {
-        contentType: file.type,
-        cacheControl: '3600',
-        upsert: false,
-      });
-    if (upload.error) throw new Error(`Upload failed: ${upload.error.message}`);
+    // Friendly client-side pre-check — same 3/day rule the DB trigger
+    // (migration 0051) enforces. Without this the parent only sees a raw
+    // Postgres error; with it they get a clean message before the round-trip.
+    const istToday = new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Kolkata' });
+    const dayStartIST = new Date(`${istToday}T00:00:00+05:30`).toISOString();
+    const { count: todayCount } = await supabase
+      .from('fee_payment_uploads')
+      .select('id', { count: 'exact', head: true })
+      .eq('submitted_by', userId)
+      .gte('created_at', dayStartIST);
+    if ((todayCount ?? 0) >= 3) {
+      throw new Error('Aaj ke 3 submissions ho chuke hain. Misuse rokne ke liye limit hai — please contact the school office for another submission.');
+    }
 
     const { data, error } = await supabase
       .from('fee_payment_uploads')
@@ -815,41 +802,38 @@ export const studentDashboardService = {
         submitted_by: userId,
         amount,
         description,
-        screenshot_name: screenshotName,
-        screenshot_url: objectPath,
+        transaction_id: txn,
         status: 'PENDING',
       })
-      .select('id, amount, description, screenshot_name, screenshot_url, status, created_at')
+      .select('id, amount, description, transaction_id, status, created_at')
       .single();
     if (error) {
-      // Best-effort cleanup so we don't leave orphan objects behind.
-      // Failure here is non-fatal — the row insert error is what the
-      // caller actually needs to see.
-      await supabase.storage
-        .from(FEE_SCREENSHOTS_BUCKET)
-        .remove([objectPath])
-        .catch(() => {});
-      throw new Error(error.message);
+      // The DB trigger raises 'check_violation' (errcode P0001 in plpgsql
+      // RAISE EXCEPTION). Surface its message verbatim — it already says
+      // "contact the school office".
+      const msg = error.message.includes('Daily limit reached')
+        ? 'Daily limit reached — only 3 fee submissions allowed per day. Please contact the school office.'
+        : error.message;
+      throw new Error(msg);
     }
 
     await logAudit(
-      role === 'PARENT' ? 'fee_screenshot_submitted_by_parent' : 'fee_screenshot_submitted_by_student',
+      role === 'PARENT' ? 'fee_payment_submitted_by_parent' : 'fee_payment_submitted_by_student',
       'fee_payment_upload',
       (data as { id: string }).id,
-      { student_id: ctx.studentId, amount, screenshot_path: objectPath },
+      { student_id: ctx.studentId, amount, transaction_id: txn },
     );
 
     const r = data as {
       id: string; amount: number; description: string | null;
-      screenshot_name: string | null; screenshot_url: string | null;
+      transaction_id: string;
       status: string; created_at: string;
     };
     return {
       id: r.id,
       amount: Number(r.amount),
       description: r.description ?? '',
-      screenshotName: r.screenshot_name ?? '',
-      screenshotPath: r.screenshot_url,
+      transactionId: r.transaction_id,
       submittedAt: r.created_at.slice(0, 10),
       status: (r.status as FeePaymentUpload['status']) ?? 'PENDING',
     };
@@ -857,28 +841,7 @@ export const studentDashboardService = {
 };
 
 // ─── Fee-screenshot storage constants ───────────────────────────────────────
-// Kept in sync with supabase/migrations/0012_fee_screenshots_storage.sql so
-// the client-side fast-fails match the server-side bucket limits.
-
-export const FEE_SCREENSHOTS_BUCKET = 'fee-screenshots';
-export const FEE_SCREENSHOT_MAX_BYTES = 5 * 1024 * 1024; // 5 MB
-export const FEE_SCREENSHOT_MIME_TYPES = [
-  'image/jpeg',
-  'image/png',
-  'image/webp',
-  'image/heic',
-  'image/heif',
-] as const;
-
-function inferImageExtension(file: File): string {
-  const fromName = file.name.split('.').pop()?.toLowerCase();
-  if (fromName && /^[a-z0-9]{2,5}$/.test(fromName)) return fromName;
-  switch (file.type) {
-    case 'image/jpeg': return 'jpg';
-    case 'image/png':  return 'png';
-    case 'image/webp': return 'webp';
-    case 'image/heic': return 'heic';
-    case 'image/heif': return 'heif';
-    default:           return 'bin';
-  }
-}
+// Screenshot uploads were dropped (migration 0050) — fee submissions now
+// carry a structured transaction_id only, no file upload, no bucket. The
+// fee-screenshots Storage bucket and its policies can be safely deleted
+// in a follow-up cleanup migration.

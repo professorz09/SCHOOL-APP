@@ -3,12 +3,16 @@ import { ArrowLeft, CheckCircle2, XCircle, MinusCircle, TrendingUp } from 'lucid
 import { studentDashboardService, AttendanceWeekDay, AttendanceMonth } from '@/modules/students/studentDashboard.service';
 import { useUIStore } from '@/store/uiStore';
 
-type DayStatus = AttendanceWeekDay['status'];
+// Half-day was removed from the principal-side mark-attendance flow earlier;
+// the student display now mirrors that — PRESENT / ABSENT / HOLIDAY only.
+// Any legacy 'half' rows in the DB are mapped to PRESENT by the service, so
+// we don't need a HALF_DAY entry here at all. Staff attendance still uses
+// half-day separately and is unaffected.
+type DayStatus = Exclude<AttendanceWeekDay['status'], 'HALF_DAY'>;
 
 const STATUS_CFG: Record<DayStatus, { icon: React.ReactNode; label: string; bg: string; text: string; ring: string }> = {
   PRESENT:  { icon: <CheckCircle2 size={14}/>, label: 'P', bg: 'bg-emerald-500', text: 'text-white',    ring: 'ring-emerald-200' },
   ABSENT:   { icon: <XCircle size={14}/>,      label: 'A', bg: 'bg-rose-500',    text: 'text-white',    ring: 'ring-rose-200' },
-  HALF_DAY: { icon: <MinusCircle size={14}/>,  label: 'H', bg: 'bg-amber-400',   text: 'text-white',    ring: 'ring-amber-200' },
   HOLIDAY:  { icon: <MinusCircle size={14}/>,  label: '—', bg: 'bg-slate-100',   text: 'text-slate-400',ring: 'ring-slate-200' },
 };
 
@@ -40,9 +44,8 @@ export const AttendanceView: React.FC<Props> = ({ onBack }) => {
 
   const weekPresent  = weekDays.filter(d => d.status === 'PRESENT').length;
   const weekAbsent   = weekDays.filter(d => d.status === 'ABSENT').length;
-  const weekHalf     = weekDays.filter(d => d.status === 'HALF_DAY').length;
   const weekWorkDays = weekDays.filter(d => d.status !== 'HOLIDAY').length;
-  const weekPct      = weekWorkDays > 0 ? Math.round(((weekPresent + weekHalf * 0.5) / weekWorkDays) * 100) : 0;
+  const weekPct      = weekWorkDays > 0 ? Math.round((weekPresent / weekWorkDays) * 100) : 0;
 
   const totalPresent  = months.reduce((a, m) => a + m.present, 0);
   const totalAbsent   = months.reduce((a, m) => a + m.absent, 0);
@@ -131,7 +134,9 @@ export const AttendanceView: React.FC<Props> = ({ onBack }) => {
             {/* Day circles */}
             <div className="grid grid-cols-7 gap-1.5 mb-4">
               {weekDays.map(wd => {
-                const cfg     = STATUS_CFG[wd.status];
+                // Treat any legacy HALF_DAY rows as PRESENT for display.
+                const status: DayStatus = wd.status === 'HALF_DAY' ? 'PRESENT' : wd.status;
+                const cfg     = STATUS_CFG[status];
                 const isToday = wd.date === today;
                 return (
                   <div key={wd.day} className="flex flex-col items-center gap-1.5">
@@ -165,7 +170,6 @@ export const AttendanceView: React.FC<Props> = ({ onBack }) => {
               {([
                 { label: 'Present',  bg: 'bg-emerald-500' },
                 { label: 'Absent',   bg: 'bg-rose-500' },
-                { label: 'Half Day', bg: 'bg-amber-400' },
                 { label: 'Holiday',  bg: 'bg-slate-200' },
               ] as const).map(l => (
                 <div key={l.label} className="flex items-center gap-1">
@@ -180,7 +184,6 @@ export const AttendanceView: React.FC<Props> = ({ onBack }) => {
               {[
                 { label: 'Present',  val: weekPresent,  color: 'text-emerald-700 bg-emerald-50 border-emerald-100' },
                 { label: 'Absent',   val: weekAbsent,   color: 'text-rose-700 bg-rose-50 border-rose-100' },
-                { label: 'Half Day', val: weekHalf,     color: 'text-amber-700 bg-amber-50 border-amber-100' },
               ].map(s => (
                 <div key={s.label} className={`flex items-center gap-1.5 px-3 py-1.5 rounded-xl border text-xs font-black ${s.color}`}>
                   <span className="text-base font-black">{s.val}</span>

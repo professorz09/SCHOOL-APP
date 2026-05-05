@@ -1,5 +1,4 @@
 import React, { useState, useMemo, useEffect } from 'react';
-import { ToastContainer } from '@/shared/components/ui/Toast';
 import { useUIStore } from '@/store/uiStore';
 import { TimetableView } from '@/roles/student/components/TimetableView';
 import { ResultsView } from '@/roles/student/components/ResultsView';
@@ -11,29 +10,16 @@ import { AttendanceView } from '@/roles/student/components/AttendanceView';
 import { StudentLeaveView } from '@/roles/student/components/StudentLeaveView';
 import { StudentProfileView } from '@/roles/student/components/StudentProfileView';
 import {
-  Calendar, Trophy, CreditCard, Bus, Bell,
-  UserCheck, HeadphonesIcon, Clock, FileText, User,
+  Calendar, GraduationCap, CreditCard, Bus, Bell, BookOpen,
+  UserCheck, HeadphonesIcon, Clock, FileText,
 } from 'lucide-react';
-import { timetableService, PERIOD_SLOTS } from '@/modules/timetable/timetable.service';
 import { useAuthStore } from '@/store/authStore';
-import { studentDashboardService, type ActiveStudentContext } from '@/modules/students/studentDashboard.service';
+import {
+  studentDashboardService, type ActiveStudentContext, type UpcomingExam,
+} from '@/modules/students/studentDashboard.service';
+import type { TimetablePeriod } from '@/roles/student/student-role.types';
 
 type StudentView = 'DASHBOARD' | 'TIMETABLE' | 'RESULTS' | 'FEES' | 'TRANSPORT' | 'NOTICES' | 'COMPLAINTS' | 'ATTENDANCE' | 'LEAVE' | 'PROFILE';
-
-const getTodaySchedule = (classLabel: string | null) => {
-  if (!classLabel) return [];
-  const days = ['Sunday','Monday','Tuesday','Wednesday','Thursday','Friday','Saturday'];
-  const todayName = days[new Date().getDay()];
-  const weeklyMap = timetableService.getClassWeeklyMap(classLabel);
-  const entries = (weeklyMap as Record<string, typeof weeklyMap[keyof typeof weeklyMap]>)[todayName] ?? [];
-  return entries
-    .map(e => {
-      const slot = PERIOD_SLOTS.find(s => s.slotId === e.slotId);
-      return slot ? { ...e, slot } : null;
-    })
-    .filter(Boolean)
-    .sort((a, b) => a!.slot.startTime.localeCompare(b!.slot.startTime));
-};
 
 const isLive = (startTime: string, endTime: string) => {
   const now = new Date();
@@ -50,6 +36,13 @@ export const StudentLayout: React.FC = () => {
 
   const [view, setView] = useState<StudentView>('DASHBOARD');
   const [ctx, setCtx] = useState<ActiveStudentContext | null>(null);
+  // Today's schedule for the dashboard preview. Loaded via the same RLS-safe
+  // student endpoint as the full Timetable view, so a student/parent always
+  // sees real data here even though the principal/teacher cache is empty.
+  const [todaySchedule, setTodaySchedule] = useState<(TimetablePeriod & { isLive: boolean })[]>([]);
+  // Hero-card stats: overall attendance % + next upcoming exam.
+  const [attendancePct, setAttendancePct] = useState<number | null>(null);
+  const [nextExam, setNextExam] = useState<UpcomingExam | null>(null);
   const { isSubView, setSubView } = useUIStore();
   const goTo = (v: StudentView) => { setView(v); setSubView(true); };
   const goBack = () => { setView('DASHBOARD'); setSubView(false); };
@@ -64,17 +57,52 @@ export const StudentLayout: React.FC = () => {
     return () => { cancelled = true; };
   }, [session?.userId, selectedStudentId]);
 
-  useEffect(() => { setSubView(false); }, []);
+  // Pull today's periods so the dashboard schedule preview is non-empty
+  // when there's actually a schedule. Filters out FREE / non-class slots
+  // for the preview — student wants to see "what's next", not breaks.
+  useEffect(() => {
+    if (!ctx?.studentId) { setTodaySchedule([]); return; }
+    let cancelled = false;
+    const todayName = ['Sunday','Monday','Tuesday','Wednesday','Thursday','Friday','Saturday'][new Date().getDay()];
+    studentDashboardService.getTimetable()
+      .then(days => {
+        if (cancelled) return;
+        const today = days.find(d => d.day === todayName);
+        const periods = (today?.periods ?? [])
+          .filter(p => p.type !== 'FREE' && p.subject)
+          .sort((a, b) => a.startTime.localeCompare(b.startTime))
+          .map(p => ({ ...p, isLive: isLive(p.startTime, p.endTime) }));
+        setTodaySchedule(periods);
+      })
+      .catch(() => { if (!cancelled) setTodaySchedule([]); });
+    return () => { cancelled = true; };
+  }, [ctx?.studentId]);
 
-  // When footer HOME pressed, isSubView becomes false → reset to dashboard
+  // Hero-card stats — attendance % and next exam.
+  useEffect(() => {
+    if (!ctx?.studentId) { setAttendancePct(null); setNextExam(null); return; }
+    let cancelled = false;
+    studentDashboardService.getMyAttendance()
+      .then(d => {
+        if (cancelled) return;
+        const totalPresent  = d.months.reduce((a, m) => a + m.present, 0);
+        const totalWorkDays = d.months.reduce((a, m) => a + m.present + m.absent, 0);
+        setAttendancePct(totalWorkDays > 0 ? Math.round((totalPresent / totalWorkDays) * 100) : null);
+      })
+      .catch(() => { if (!cancelled) setAttendancePct(null); });
+    studentDashboardService.getScheduledExams()
+      .then(list => { if (!cancelled) setNextExam(list[0] ?? null); })
+      .catch(() => { if (!cancelled) setNextExam(null); });
+    return () => { cancelled = true; };
+  }, [ctx?.studentId]);
+
+  useEffect(() => { setSubView(false); }, []);
   useEffect(() => { if (!isSubView) setView('DASHBOARD'); }, [isSubView]);
 
   const displayName = ctx?.studentName ?? STUDENT_FULL;
   const STUDENT_NAME = displayName.split(' ')[0];
   const initials = displayName.split(' ').map((w: string) => w[0]).join('').slice(0, 2).toUpperCase();
-  const schoolName = ctx?.schoolName ?? '';
   const classLabel = ctx?.classLabel ?? null;
-  const todaySchedule = useMemo(() => getTodaySchedule(classLabel), [classLabel]);
 
   if (view === 'TIMETABLE')   return <TimetableView         onBack={goBack} />;
   if (view === 'RESULTS')     return <ResultsView           onBack={goBack} />;
@@ -88,171 +116,181 @@ export const StudentLayout: React.FC = () => {
     : <div className="p-6 text-sm text-slate-400">Loading…</div>;
   if (view === 'PROFILE')     return <StudentProfileView    onBack={goBack} />;
 
-  // 9 tiles in a 4-column grid → 2 full rows + a 9th tile that anchors the
-  // start of the third row. Profile is intentionally placed last because it
-  // is a "settings" affordance rather than a daily-use module.
-  const MODULES: { icon: React.ReactNode; label: string; view: StudentView; iconColor: string }[] = [
-    { icon: <Calendar       size={22} />, label: 'Timetable',  view: 'TIMETABLE',  iconColor: 'text-blue-600' },
-    { icon: <Trophy         size={22} />, label: 'Results',    view: 'RESULTS',    iconColor: 'text-amber-500' },
-    { icon: <CreditCard     size={22} />, label: 'Fees',       view: 'FEES',       iconColor: 'text-blue-500' },
-    { icon: <Bus            size={22} />, label: 'Transport',  view: 'TRANSPORT',  iconColor: 'text-orange-500' },
-    { icon: <Bell           size={22} />, label: 'Notices',    view: 'NOTICES',    iconColor: 'text-blue-500' },
-    { icon: <UserCheck      size={22} />, label: 'Attendance', view: 'ATTENDANCE', iconColor: 'text-emerald-600' },
-    { icon: <FileText       size={22} />, label: 'Leave',      view: 'LEAVE',      iconColor: 'text-violet-500' },
-    { icon: <HeadphonesIcon size={22} />, label: 'Helpdesk',   view: 'COMPLAINTS', iconColor: 'text-rose-500' },
-    { icon: <User           size={22} />, label: 'Profile',    view: 'PROFILE',    iconColor: 'text-slate-700' },
+  // 8 tiles in a 4×2 grid. Profile lives in the bottom-nav YOU tab so it
+  // doesn't take a slot here.
+  const MODULES: Array<{
+    icon: React.ComponentType<{ size?: number; className?: string }>;
+    label: string;
+    view: StudentView;
+    color: string;
+  }> = [
+    { icon: Calendar,       label: 'Timetable',  view: 'TIMETABLE',  color: 'text-blue-600' },
+    { icon: BookOpen,       label: 'Notices',    view: 'NOTICES',    color: 'text-indigo-600' },
+    { icon: CreditCard,     label: 'Fees',       view: 'FEES',       color: 'text-blue-500' },
+    // 'view' stays RESULTS so routing/component identity is unchanged; we
+     // just relabel the tile to "Exam" since that's the user's mental model.
+    { icon: GraduationCap,  label: 'Exam',       view: 'RESULTS',    color: 'text-amber-500' },
+    { icon: Bus,            label: 'Transport',  view: 'TRANSPORT',  color: 'text-orange-500' },
+    { icon: UserCheck,      label: 'Attendance', view: 'ATTENDANCE', color: 'text-emerald-600' },
+    { icon: FileText,       label: 'Leave',      view: 'LEAVE',      color: 'text-violet-600' },
+    { icon: HeadphonesIcon, label: 'Helpdesk',   view: 'COMPLAINTS', color: 'text-rose-500' },
   ];
 
   return (
-    <>
-    <div className="flex flex-col gap-5 lg:gap-7 pb-6 lg:pb-10 pt-3 lg:pt-8 px-5 lg:px-10 xl:px-16 max-w-7xl mx-auto w-full animate-in fade-in duration-300">
+    <div className="flex flex-col gap-6 lg:gap-8 animate-in fade-in duration-300 px-5 lg:px-10 xl:px-16 max-w-7xl mx-auto w-full pt-4 lg:pt-8 pb-8 lg:pb-12">
 
-      {/* ── Header — mobile compact, desktop hero band with class info ─── */}
-      <div className="lg:hidden flex items-center justify-between">
-        <div className="flex items-center gap-3">
-          <div className="w-11 h-11 rounded-full bg-blue-600 text-white flex items-center justify-center font-black text-base shadow-md shrink-0">
-            {initials}
-          </div>
-          <div>
-            <p className="text-[10px] font-black uppercase tracking-widest text-slate-400">
-              {schoolName ? `Welcome to ${schoolName}` : 'Welcome'}
-            </p>
-            <h2 className="text-2xl font-black text-slate-900 leading-tight">Hi, {STUDENT_NAME}</h2>
-          </div>
-        </div>
-        <div className="relative">
-          <div className="w-10 h-10 bg-white rounded-full border border-slate-200 shadow-sm flex items-center justify-center">
-            <Bell size={18} className="text-slate-600" />
-          </div>
-          <div className="absolute -top-1 -right-1 w-5 h-5 bg-blue-600 rounded-full flex items-center justify-center">
-            <span className="text-[9px] font-black text-white">3</span>
-          </div>
-        </div>
-      </div>
-
-      <div className="hidden lg:flex items-center justify-between bg-gradient-to-r from-blue-600 via-indigo-600 to-violet-600 text-white rounded-3xl px-8 py-7 shadow-lg">
-        <div className="flex items-center gap-5 min-w-0">
-          <div className="w-20 h-20 rounded-2xl bg-white/15 backdrop-blur-sm border border-white/30 flex items-center justify-center font-black text-2xl shrink-0">
-            {initials}
-          </div>
-          <div className="min-w-0">
-            <p className="text-[11px] font-black uppercase tracking-[0.2em] text-white/80">
-              {schoolName ? `Welcome to ${schoolName}` : 'Welcome'}
-            </p>
-            <h2 className="text-3xl font-black leading-tight mt-1 truncate">Hi, {STUDENT_NAME}</h2>
-            {classLabel && (
-              <p className="text-sm font-bold text-white/85 mt-1.5">
-                Class <span className="text-white">{classLabel}</span>
-                <span className="opacity-50 mx-2">·</span>
-                <span>{new Date().toLocaleDateString('en-IN', { weekday: 'long', day: 'numeric', month: 'short' })}</span>
+      {/* ── Hero card — name + class + quick stats ─────────────────────── */}
+      <div className="bg-slate-900 text-white rounded-2xl p-5 lg:p-6 shadow-lg">
+        <div className="flex items-center justify-between gap-3">
+          <div className="flex items-center gap-3 min-w-0">
+            <div className="w-12 h-12 rounded-full bg-white/15 border-2 border-white/25 flex items-center justify-center font-black text-base shrink-0">
+              {initials}
+            </div>
+            <div className="min-w-0">
+              <h2 className="text-xl lg:text-2xl font-black uppercase tracking-tight leading-none truncate">
+                Hi, {STUDENT_NAME}
+              </h2>
+              <p className="text-[10px] lg:text-xs font-black uppercase tracking-widest text-white/60 mt-1.5">
+                {classLabel ? `Class ${classLabel}` : 'Welcome to EduGrow'}
               </p>
-            )}
+            </div>
           </div>
-        </div>
-        <div className="flex items-center gap-3 shrink-0">
           <button onClick={() => goTo('NOTICES')}
-            className="relative w-12 h-12 bg-white/15 backdrop-blur-sm rounded-2xl border border-white/30 flex items-center justify-center hover:bg-white/25 transition-colors">
-            <Bell size={20} />
-            <div className="absolute -top-1 -right-1 w-5 h-5 bg-amber-400 rounded-full flex items-center justify-center">
-              <span className="text-[9px] font-black text-slate-900">3</span>
+            className="w-10 h-10 bg-white/10 rounded-full border border-white/20 flex items-center justify-center shrink-0 hover:bg-white/20 transition-colors">
+            <Bell size={16} className="text-white" />
+          </button>
+        </div>
+
+        {/* Stats row — Attendance + Next Exam (when there is one) */}
+        <div className="grid grid-cols-2 gap-3 mt-5">
+          <button onClick={() => goTo('ATTENDANCE')}
+            className="bg-white/10 rounded-xl px-4 py-3 text-left hover:bg-white/15 transition-colors">
+            <div className="text-[9px] font-black uppercase tracking-widest text-white/60">Attendance</div>
+            <div className="text-2xl font-black mt-1">
+              {attendancePct === null ? '—' : `${attendancePct}%`}
             </div>
           </button>
-          <button onClick={() => goTo('PROFILE')}
-            className="w-12 h-12 bg-white/15 backdrop-blur-sm rounded-2xl border border-white/30 flex items-center justify-center hover:bg-white/25 transition-colors">
-            <User size={20} />
+          <button onClick={() => goTo('RESULTS')}
+            className="bg-white/10 rounded-xl px-4 py-3 text-left hover:bg-white/15 transition-colors">
+            <div className="text-[9px] font-black uppercase tracking-widest text-white/60">Next Exam</div>
+            <div className="text-sm font-black mt-1 truncate">
+              {nextExam
+                ? new Date(nextExam.scheduledDate).toLocaleDateString('en-IN', { day: 'numeric', month: 'short' })
+                : 'None'}
+            </div>
           </button>
         </div>
       </div>
 
-      {/* ── Desktop 2-col body: modules left, today's schedule right ─── */}
-      <div className="grid lg:grid-cols-3 gap-5 lg:gap-7">
-        <div className="lg:col-span-2 flex flex-col gap-5 lg:gap-6">
-          {/* Module grid — 4-col mobile, 4-col desktop (so cards stay big) */}
-          <div className="grid grid-cols-4 gap-3 lg:gap-4">
-            {MODULES.map(({ icon, label, view: v, iconColor }) => (
-              <button key={label} onClick={() => goTo(v)}
-                className="flex flex-col items-center justify-center gap-2 lg:gap-3 bg-white border border-slate-200 rounded-2xl py-4 lg:py-6 px-2 shadow-sm active:scale-95 hover:shadow-md hover:border-blue-300 hover:-translate-y-0.5 transition-all">
-                <div className={`${iconColor}`}>{icon}</div>
-                <span className="text-[9px] lg:text-[11px] font-black uppercase tracking-wide text-slate-500 text-center leading-tight">{label}</span>
-              </button>
-            ))}
-          </div>
-
-          {/* Today's Schedule — below modules on mobile, beside on desktop fills col 1+2 row 2 */}
-          <div className="lg:hidden">
-            <ScheduleCard todaySchedule={todaySchedule} onViewAll={() => goTo('TIMETABLE')} />
-          </div>
-        </div>
-
-        {/* Desktop sidebar: today's schedule + quick stats */}
-        <div className="hidden lg:flex flex-col gap-5">
-          <ScheduleCard todaySchedule={todaySchedule} onViewAll={() => goTo('TIMETABLE')} compact />
-        </div>
+      {/* ── Module grid ────────────────────────────────────────────────── */}
+      {/* 4 tiles per row on mobile, 8 per row on desktop. Tiles are slightly
+          taller than square so longer labels like "Attendance" / "Helpdesk"
+          fit on a single line at the small font size. */}
+      <div className="grid grid-cols-4 lg:grid-cols-8 gap-2.5 lg:gap-3">
+        {MODULES.map(({ icon: Icon, label, view: v, color }) => (
+          <button key={label} onClick={() => goTo(v)}
+            className="flex flex-col items-center justify-center gap-2 py-4 px-1 bg-white border border-slate-100 rounded-2xl shadow-sm active:scale-95 hover:shadow-md hover:border-slate-200 hover:-translate-y-0.5 transition-all">
+            <Icon size={26} className={color} strokeWidth={2} />
+            <span className="text-[10px] font-black uppercase tracking-wide text-slate-700 text-center leading-none whitespace-nowrap">
+              {label}
+            </span>
+          </button>
+        ))}
       </div>
 
-    </div>
-    <ToastContainer />
-    </>
-  );
-};
-
-// ─── Schedule card (extracted so mobile + desktop can both render it) ───
-type ScheduleEntry = ReturnType<typeof getTodaySchedule>[number];
-const ScheduleCard: React.FC<{
-  todaySchedule: ScheduleEntry[];
-  onViewAll: () => void;
-  compact?: boolean;
-}> = ({ todaySchedule, onViewAll, compact }) => (
-  <div>
-    <div className="flex items-center justify-between mb-3">
-      <h3 className="text-base lg:text-lg font-black text-slate-900 uppercase tracking-tight">Today's Schedule</h3>
-      <button onClick={onViewAll}
-        className="text-xs font-black text-blue-600 uppercase tracking-wide hover:text-blue-700">
-        View All →
-      </button>
-    </div>
-    <div className="bg-white rounded-2xl border border-slate-100 shadow-sm overflow-hidden">
-      {todaySchedule.length === 0 ? (
-        <div className="p-8 text-center text-slate-400">
-          <Calendar size={32} className="mx-auto mb-2 opacity-30" />
-          <p className="text-sm font-bold">No classes today</p>
-          <p className="text-[10px] font-bold text-slate-300 mt-1">Enjoy your day off!</p>
+      {/* ── Today's schedule (compact preview, top 3 classes) ───────────── */}
+      <section>
+        <div className="flex items-center justify-between mb-3">
+          <h3 className="text-lg lg:text-xl font-black text-slate-900 uppercase tracking-tight">
+            Today's Schedule
+          </h3>
+          <button onClick={() => goTo('TIMETABLE')}
+            className="text-[10px] lg:text-xs font-black text-blue-600 uppercase tracking-widest hover:text-blue-700 transition-colors">
+            View All →
+          </button>
         </div>
-      ) : (
-        todaySchedule.slice(0, compact ? 6 : 4).map((entry, idx, arr) => {
-          const live = isLive(entry!.slot.startTime, entry!.slot.endTime);
-          return (
-            <div key={idx}
-              className={`flex items-center gap-3 px-4 py-3.5 ${idx < arr.length - 1 ? 'border-b border-slate-50' : ''} ${live ? 'bg-indigo-50/50' : ''}`}>
-              <div className={`w-10 h-10 rounded-xl flex items-center justify-center shrink-0 font-black text-sm ${live ? 'bg-indigo-600 text-white shadow-md' : 'bg-slate-100 text-slate-500'}`}>
-                {idx + 1}
-              </div>
-              <div className="flex-1 min-w-0">
-                <div className={`font-extrabold text-sm truncate ${live ? 'text-slate-900' : 'text-slate-700'}`}>
-                  {entry!.subject}
-                </div>
-                <div className="flex items-center gap-1 mt-0.5">
-                  <Clock size={10} className="text-slate-400" />
-                  <span className="text-[10px] font-bold text-slate-400">
-                    {entry!.slot.startTime} – {entry!.slot.endTime}
-                  </span>
-                  {entry!.teacherName && (
-                    <>
-                      <span className="text-slate-300">·</span>
-                      <span className="text-[10px] font-bold text-slate-400 truncate">{entry!.teacherName}</span>
-                    </>
+
+        {todaySchedule.length === 0 ? (
+          <div className="bg-white rounded-2xl border border-slate-100 shadow-sm p-8 text-center">
+            <Calendar size={28} className="mx-auto mb-2 text-slate-300" />
+            <p className="text-sm font-black text-slate-500">No classes today</p>
+            <p className="text-[11px] font-bold text-slate-400 mt-1">Enjoy your day off!</p>
+          </div>
+        ) : (
+          // Cap at 3 — dashboard is a glance preview, not the full timetable.
+          <div className="bg-white rounded-2xl border border-slate-100 shadow-sm divide-y divide-slate-50 overflow-hidden">
+            {todaySchedule.slice(0, 3).map((entry, idx) => {
+              const live = entry.isLive;
+              return (
+                <div key={`${entry.id}-${idx}`}
+                  className="flex items-center gap-3 lg:gap-4 px-4 py-4">
+                  {/* Period badge — violet tint when live, slate otherwise */}
+                  <div className={`w-12 h-12 rounded-xl flex flex-col items-center justify-center shrink-0 ${
+                    live ? 'bg-violet-50 text-violet-700 border border-violet-200' : 'bg-slate-50 text-slate-400 border border-slate-100'
+                  }`}>
+                    <span className="text-[8px] font-black uppercase tracking-widest opacity-70 leading-none">Per</span>
+                    <span className="text-base font-black leading-none mt-0.5">{idx + 1}</span>
+                  </div>
+                  <div className="flex-1 min-w-0">
+                    <div className={`font-black text-sm lg:text-base uppercase tracking-tight truncate ${live ? 'text-slate-900' : 'text-slate-400'}`}>
+                      {entry.subject || 'Free'}
+                    </div>
+                    <div className="flex items-center gap-1.5 mt-1">
+                      <Clock size={11} className="text-slate-400" />
+                      <span className="text-[11px] lg:text-xs font-bold text-slate-500">
+                        {entry.startTime} – {entry.endTime}
+                      </span>
+                    </div>
+                  </div>
+                  {live && (
+                    <span className="text-[9px] font-black text-emerald-700 bg-emerald-50 border border-emerald-200 px-2.5 py-1 rounded-full shrink-0 uppercase tracking-widest">
+                      Live
+                    </span>
                   )}
                 </div>
-              </div>
-              {live && (
-                <span className="text-[9px] font-black text-emerald-600 bg-emerald-100 border border-emerald-200 px-2 py-0.5 rounded-full shrink-0 animate-pulse">
-                  LIVE
-                </span>
-              )}
+              );
+            })}
+          </div>
+        )}
+      </section>
+
+      {/* ── Next exam preview — only shown when there is one ───────────── */}
+      {nextExam && (
+        <section>
+          <div className="flex items-center justify-between mb-3">
+            <h3 className="text-lg lg:text-xl font-black text-slate-900 uppercase tracking-tight">
+              Next Exam
+            </h3>
+            <button onClick={() => goTo('RESULTS')}
+              className="text-[10px] lg:text-xs font-black text-blue-600 uppercase tracking-widest hover:text-blue-700 transition-colors">
+              View All →
+            </button>
+          </div>
+          <button onClick={() => goTo('RESULTS')}
+            className="w-full bg-white rounded-2xl border border-slate-100 shadow-sm p-4 flex items-center gap-3 lg:gap-4 hover:shadow-md transition-all text-left">
+            <div className="w-12 h-12 rounded-xl bg-amber-50 text-amber-600 border border-amber-200 flex items-center justify-center shrink-0">
+              <GraduationCap size={22} />
             </div>
-          );
-        })
+            <div className="flex-1 min-w-0">
+              <div className="font-black text-sm lg:text-base uppercase tracking-tight truncate text-slate-900">
+                {nextExam.subject || nextExam.title}
+              </div>
+              <div className="flex items-center gap-1.5 mt-1">
+                <Calendar size={11} className="text-slate-400" />
+                <span className="text-[11px] lg:text-xs font-bold text-slate-500">
+                  {new Date(nextExam.scheduledDate).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', weekday: 'short' })}
+                  <span className="text-slate-300 mx-1">·</span>
+                  {nextExam.maxMarks} marks
+                </span>
+              </div>
+            </div>
+            <span className="text-[9px] font-black text-amber-700 bg-amber-50 border border-amber-200 px-2.5 py-1 rounded-full shrink-0 uppercase tracking-widest">
+              {nextExam.testType}
+            </span>
+          </button>
+        </section>
       )}
+
     </div>
-  </div>
-);
+  );
+};

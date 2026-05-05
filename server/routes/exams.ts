@@ -1,7 +1,7 @@
 import { Router } from 'express';
 import { adminDb } from '../lib/db';
 import { ok, fail, ApiError, requireBody } from '../lib/helpers';
-import { requireAuth, requireRole } from '../middleware/auth';
+import { requireAuth, requireRole, requireEditorMode } from '../middleware/auth';
 
 export const examsRouter = Router();
 
@@ -180,6 +180,13 @@ examsRouter.post('/result/upload', requireAuth, requireRole('PRINCIPAL', 'TEACHE
 // GET /api/exam/:testId/results
 examsRouter.get('/:testId/results', requireAuth, requireRole('PRINCIPAL', 'TEACHER'), async (req, res) => {
   try {
+    // Verify the test belongs to the caller's school before exposing results.
+    const { data: test } = await adminDb
+      .from('test_schedules').select('id, school_id')
+      .eq('id', req.params.testId).maybeSingle();
+    if (!test) throw new ApiError(404, 'Test not found');
+    if ((test as any).school_id !== req.user.school_id) throw new ApiError(403, 'Access denied');
+
     const { data, error } = await adminDb
       .from('exam_results')
       .select('*, students(name, admission_no)')
@@ -234,15 +241,12 @@ examsRouter.post('/:testId/unlock-results', requireAuth, requireRole('PRINCIPAL'
 // LOCKED ones). The principal must have Editor Mode toggled on for the
 // active year — that's enforced in the UI store, but the server still logs
 // the override flag for audit. Marks above max_marks are rejected.
-examsRouter.post('/:testId/edit-results', requireAuth, requireRole('PRINCIPAL'), async (req, res) => {
+examsRouter.post('/:testId/edit-results', requireAuth, requireRole('PRINCIPAL'), requireEditorMode, async (req, res) => {
   try {
     const body = requireBody<{
       academicYearId: string;
-      editorMode: boolean;
       results: { studentId: string; marks: number; remarks?: string | null }[];
-    }>(req, ['academicYearId', 'editorMode', 'results']);
-
-    if (!body.editorMode) throw new ApiError(403, 'Editor Mode must be enabled to edit published results');
+    }>(req, ['academicYearId', 'results']);
 
     const { data: test, error: tErr } = await adminDb
       .from('test_schedules')

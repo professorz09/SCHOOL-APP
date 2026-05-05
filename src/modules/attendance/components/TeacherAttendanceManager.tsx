@@ -1,13 +1,14 @@
 import React, { useEffect, useMemo, useRef, useState, useCallback } from 'react';
 import {
   ArrowLeft, Save, ChevronRight, Search, Lock,
-  ShieldCheck, Hourglass, AlertCircle, ChevronLeft, RefreshCw,
+  ShieldCheck, AlertCircle, ChevronLeft, RefreshCw,
 } from 'lucide-react';
 import { teacherService } from '@/roles/teacher/teacher.service';
 import { TeacherClass } from '@/roles/teacher/teacher.types';
 import { useUIStore } from '@/store/uiStore';
 import type { DateAttendanceStatus, AttendanceCellStatus, GridDateRecord, GridStudentDetails } from '@/modules/attendance/attendance.service';
 import { useAcademicYear } from '@/shared/context/AcademicYearContext';
+import { stripClassPrefix } from '@/shared/utils/className';
 
 type View = 'CLASSES' | 'GRID';
 
@@ -205,12 +206,12 @@ export const AttendanceManager: React.FC<Props> = ({ onBack }) => {
         status: edits[s.id] ?? 'absent' as AttendanceCellStatus,
       }));
       await teacherService.submitAttendance(selectedClass.id, todayDateStr, students);
-      showToast('Attendance submitted — Pending Principal Approval');
+      showToast('Attendance saved & locked');
       setEditBuffer(prev => { const n = { ...prev }; delete n[todayDateStr]; return n; });
       await loadGrid(selectedClass, gridYM);
       // Refresh today status badge
       const map = await teacherService.getStatusForClass(selectedClass.id, [todayDateStr]);
-      setTodayStatuses(t => ({ ...t, [selectedClass.id]: map[todayDateStr] ?? 'PENDING' }));
+      setTodayStatuses(t => ({ ...t, [selectedClass.id]: map[todayDateStr] ?? 'APPROVED' }));
     } catch (e) {
       showToast((e as Error).message || 'Submit failed', 'error');
     } finally { setIsSubmitting(false); }
@@ -342,7 +343,7 @@ export const AttendanceManager: React.FC<Props> = ({ onBack }) => {
                 onClick={() => { setSelectedClass(cls); setGridYM(targetDate.slice(0, 7)); setView('GRID'); }}
                 className={`w-full flex items-center gap-3 px-4 py-4 text-left active:bg-slate-50 transition-colors ${idx < classes.length - 1 ? 'border-b border-slate-100' : ''}`}>
                 <div className="w-10 h-10 rounded-full bg-indigo-100 text-indigo-700 flex items-center justify-center font-black text-sm shrink-0">
-                  {cls.className.replace('Class ', '')}
+                  {stripClassPrefix(cls.className)}
                 </div>
                 <div className="flex-1 min-w-0">
                   <div className="font-extrabold text-slate-900 text-sm">{cls.className}-{cls.section}</div>
@@ -351,14 +352,9 @@ export const AttendanceManager: React.FC<Props> = ({ onBack }) => {
                 {status === 'NOT_MARKED' && (
                   <span className="text-[9px] font-black text-blue-700 bg-blue-50 border border-blue-100 px-2 py-1 rounded-full uppercase">Mark Today</span>
                 )}
-                {status === 'PENDING' && (
-                  <span className="flex items-center gap-1 text-[9px] font-black text-amber-700 bg-amber-50 border border-amber-200 px-2 py-1 rounded-full uppercase">
-                    <Hourglass size={9}/> Pending
-                  </span>
-                )}
-                {status === 'APPROVED' && (
+                {(status === 'PENDING' || status === 'APPROVED') && (
                   <span className="flex items-center gap-1 text-[9px] font-black text-emerald-700 bg-emerald-50 border border-emerald-200 px-2 py-1 rounded-full uppercase">
-                    <ShieldCheck size={9}/> Approved
+                    <Lock size={9}/> Locked
                   </span>
                 )}
                 <ChevronRight size={16} className="text-slate-300" />
@@ -421,16 +417,10 @@ export const AttendanceManager: React.FC<Props> = ({ onBack }) => {
                   </button>
                 </div>
               )}
-              {todayRec && todayRec.approvalStatus === 'PENDING' && (
-                <div className="flex items-center gap-2 bg-amber-50 border border-amber-100 rounded-xl px-3 py-2">
-                  <Hourglass size={12} className="text-amber-500 shrink-0"/>
-                  <span className="text-[10px] font-bold text-amber-700 flex-1">Submitted — pending principal approval</span>
-                </div>
-              )}
-              {todayRec && todayRec.approvalStatus === 'APPROVED' && (
+              {todayRec && todayRec.approvalStatus !== 'REJECTED' && (
                 <div className="flex items-center gap-2 bg-emerald-50 border border-emerald-100 rounded-xl px-3 py-2">
                   <ShieldCheck size={12} className="text-emerald-500 shrink-0"/>
-                  <span className="text-[10px] font-bold text-emerald-700 flex-1">Approved — locked by principal</span>
+                  <span className="text-[10px] font-bold text-emerald-700 flex-1">Saved &amp; locked. Edits need Editor Mode.</span>
                 </div>
               )}
               {todayRec && todayRec.approvalStatus === 'REJECTED' && (
@@ -571,10 +561,10 @@ export const AttendanceManager: React.FC<Props> = ({ onBack }) => {
             </div>
             <button onClick={handleSubmitToday} disabled={isSubmitting}
               className="w-full flex items-center justify-center gap-2 bg-blue-600 text-white font-black text-sm uppercase tracking-widest py-4 rounded-2xl active:scale-95 transition-transform shadow-lg disabled:opacity-50">
-              {isSubmitting ? 'Submitting…' : <><Save size={16}/> Submit For Review</>}
+              {isSubmitting ? 'Saving…' : <><Save size={16}/> Save &amp; Lock</>}
             </button>
             <p className="text-center text-[10px] font-bold text-slate-400">
-              After submit, attendance becomes <span className="text-amber-600">read-only</span> until principal approves
+              Saving locks attendance instantly. Corrections need <span className="text-indigo-600">Editor Mode</span>.
             </p>
           </div>
         )}

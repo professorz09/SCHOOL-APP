@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useState } from 'react';
-import { ArrowLeft, Plus, CircleAlert } from 'lucide-react';
+import { ArrowLeft, Plus, CircleAlert, AlertTriangle } from 'lucide-react';
 import { studentDashboardService } from '@/modules/students/studentDashboard.service';
 import { StudentComplaint } from '@/roles/student/student-role.types';
 import { useUIStore } from '@/store/uiStore';
@@ -38,8 +38,22 @@ export const StudentComplaintsView: React.FC<Props> = ({ onBack }) => {
   useEffect(() => { loadComplaints(); }, [loadComplaints]);
   useRealtimeTable('complaints', loadComplaints);
 
+  // Anti-spam cap: max 3 complaints PER CHILD per IST day (per migration 0056).
+  // DB trigger enforces it server-side; UI mirrors the budget so the user
+  // sees it before submitting. `complaints` here is already scoped to the
+  // active selected student via studentDashboardService.getComplaints, so
+  // counting them all is correct.
+  const istToday = new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Kolkata' });
+  const todayCount = complaints.filter(c => (c.createdAt ?? '').slice(0, 10) === istToday).length;
+  const DAILY_CAP = 3;
+  const reachedCap = todayCount >= DAILY_CAP;
+
   const handleSubmit = async () => {
     if (!form.subject || !form.description) { showToast('Subject and description required', 'error'); return; }
+    if (reachedCap) {
+      showToast('Daily limit reached — only 3 complaints per day. Contact the school office.', 'error');
+      return;
+    }
     setIsSubmitting(true);
     try {
       const c = await studentDashboardService.submitComplaint(form.subject, form.description);
@@ -47,6 +61,8 @@ export const StudentComplaintsView: React.FC<Props> = ({ onBack }) => {
       showToast('Complaint submitted to principal');
       setForm({ subject: '', description: '' });
       setView('LIST');
+    } catch (e) {
+      showToast(e instanceof Error ? e.message : 'Submit failed — try again', 'error');
     } finally { setIsSubmitting(false); }
   };
 
@@ -64,9 +80,22 @@ export const StudentComplaintsView: React.FC<Props> = ({ onBack }) => {
     <div className="w-full bg-slate-50 flex flex-col animate-in slide-in-from-right-8 duration-300">
       {renderHeader('File Complaint', () => setView('LIST'))}
       <div className="flex-1 overflow-y-auto p-4  space-y-4">
-        <div className="bg-blue-50 border border-blue-100 rounded-2xl p-3">
-          <p className="text-xs font-bold text-blue-700">Your complaint will be reviewed by the principal.</p>
-        </div>
+        {reachedCap ? (
+          <div className="bg-rose-50 border border-rose-200 rounded-2xl p-3 flex gap-2">
+            <AlertTriangle size={14} className="text-rose-500 mt-0.5 shrink-0"/>
+            <p className="text-[11px] font-bold text-rose-700 leading-relaxed">
+              Daily limit reached — only 3 complaints per day. Misuse rokne ke liye limit hai.
+              Please contact the school office for another submission.
+            </p>
+          </div>
+        ) : (
+          <div className="bg-blue-50 border border-blue-100 rounded-2xl p-3 flex items-center justify-between gap-2">
+            <p className="text-xs font-bold text-blue-700">Your complaint will be reviewed by the principal.</p>
+            <span className="text-[10px] font-black bg-white border border-blue-200 text-blue-700 px-2 py-0.5 rounded-full shrink-0">
+              {todayCount}/{DAILY_CAP} today
+            </span>
+          </div>
+        )}
         <div className="bg-white rounded-2xl border border-slate-100 shadow-sm p-4 space-y-4">
           <div>
             <label className="block text-[10px] font-black uppercase tracking-widest text-slate-500 mb-1.5">Subject *</label>
@@ -81,8 +110,8 @@ export const StudentComplaintsView: React.FC<Props> = ({ onBack }) => {
               className="w-full border border-slate-200 bg-slate-50 rounded-xl px-4 py-3 font-bold text-sm outline-none focus:border-rose-500 resize-none" />
           </div>
         </div>
-        <button onClick={handleSubmit} disabled={isSubmitting}
-          className="w-full flex items-center justify-center gap-2 bg-rose-600 text-white font-black text-xs uppercase tracking-widest py-4 rounded-2xl active:scale-95 transition-transform shadow-lg disabled:opacity-60">
+        <button onClick={handleSubmit} disabled={isSubmitting || reachedCap}
+          className="w-full flex items-center justify-center gap-2 bg-rose-600 text-white font-black text-xs uppercase tracking-widest py-4 rounded-2xl active:scale-95 transition-transform shadow-lg disabled:opacity-60 disabled:cursor-not-allowed">
           {isSubmitting ? 'Submitting…' : <><Plus size={16} /> Submit Complaint</>}
         </button>
       </div>
@@ -92,7 +121,24 @@ export const StudentComplaintsView: React.FC<Props> = ({ onBack }) => {
   return (
     <div className="w-full bg-slate-50 flex flex-col animate-in slide-in-from-right-8 duration-300">
       {renderHeader('My Complaints', onBack,
-        <button onClick={() => setView('CREATE')} className="p-2 bg-rose-500 text-white rounded-full shadow-md"><Plus size={18} /></button>
+        <div className="flex items-center gap-2">
+          <span className={`text-[10px] font-black px-2 py-0.5 rounded-full border ${
+            reachedCap
+              ? 'bg-rose-50 text-rose-600 border-rose-200'
+              : todayCount > 0
+                ? 'bg-amber-50 text-amber-700 border-amber-200'
+                : 'bg-slate-50 text-slate-500 border-slate-200'
+          }`}>
+            {todayCount}/{DAILY_CAP} today
+          </span>
+          <button
+            onClick={() => setView('CREATE')}
+            disabled={reachedCap}
+            title={reachedCap ? 'Daily limit reached — contact school office' : 'New complaint'}
+            className="p-2 bg-rose-500 text-white rounded-full shadow-md disabled:opacity-50 disabled:cursor-not-allowed">
+            <Plus size={18} />
+          </button>
+        </div>
       )}
       <div className="flex-1 overflow-y-auto p-4  space-y-3">
         {complaints.map(c => (

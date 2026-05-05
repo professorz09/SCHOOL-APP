@@ -11,6 +11,7 @@ import {
   StaffSalaryHistoryEntry, StaffStatusHistoryEntry, StaffDocument, SalaryPayment,
 } from '@/modules/staff/staff.types';
 import { useUIStore } from '@/store/uiStore';
+import { apiPrincipal, apiStaff } from '@/lib/apiClient';
 
 type View = 'LIST' | 'CREATE' | 'PROFILE' | 'EDIT';
 type Tab = 'INFO' | 'SALARY' | 'ATTENDANCE' | 'CLASSES' | 'DOCS' | 'LOG';
@@ -305,6 +306,17 @@ const fmtDate = (s: string | null | undefined) =>
 
 export const StaffManager: React.FC<Props> = ({ onBack }) => {
   const { showToast } = useUIStore();
+  // Autocomplete suggestions for the "Subject" field — distinct values that
+  // are already used in this school (timetable_entries + staff). No central
+  // list to maintain; the more teachers added, the smarter the dropdown
+  // becomes. First entry is always free-text.
+  const [subjectOptions, setSubjectOptions] = useState<string[]>([]);
+  useEffect(() => {
+    apiPrincipal.subjectSuggestions()
+      .then(setSubjectOptions)
+      .catch(() => setSubjectOptions([]));
+  }, []);
+
   const [view, setView] = useState<View>('LIST');
   const [staff, setStaff] = useState<StaffMember[]>([]);
   const [selected, setSelected] = useState<StaffMember | null>(null);
@@ -314,6 +326,7 @@ export const StaffManager: React.FC<Props> = ({ onBack }) => {
   const [editForm, setEditForm] = useState<Omit<StaffMember, 'id'>>(BLANK);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [confirmSuspend, setConfirmSuspend] = useState<StaffMember | null>(null);
+  const [confirmRejoin, setConfirmRejoin]   = useState<StaffMember | null>(null);
 
   // Profile / tabs
   const [tab, setTab] = useState<Tab>('INFO');
@@ -462,6 +475,24 @@ export const StaffManager: React.FC<Props> = ({ onBack }) => {
     }
   };
 
+  const handleRejoin = async (member: StaffMember) => {
+    if (member.status !== 'RELIEVED') return;
+    try {
+      await apiStaff.rejoin(member.id);
+      // Refetch the row to pick up cleared relieving_date / status flip.
+      const fresh = await staffService.getById(member.id);
+      if (fresh) {
+        setStaff(prev => prev.map(s => s.id === fresh.id ? fresh : s));
+        if (selected?.id === fresh.id) setSelected(fresh);
+      }
+      showToast(`${member.name} re-activated. Re-assign classes & permissions next.`);
+      setConfirmRejoin(null);
+      if (view === 'PROFILE' && selected) await loadProfileTabs(selected.id);
+    } catch (e) {
+      showToast(e instanceof Error ? e.message : 'Rejoin failed', 'error');
+    }
+  };
+
   const handleEditSalary = async () => {
     if (!selected) return;
     const amt = Number(editSalaryAmt);
@@ -595,6 +626,27 @@ export const StaffManager: React.FC<Props> = ({ onBack }) => {
   // Suspend / Reinstate confirmation must render BEFORE the view-specific
   // early returns; otherwise the LIST/PROFILE/etc return-statement below
   // wins and the modal never appears.
+  if (confirmRejoin) return (
+    <div className="absolute inset-0 z-60 bg-slate-900/60 flex items-end justify-center animate-in fade-in">
+      <div className="bg-white w-full rounded-t-3xl p-6 pb-10 animate-in slide-in-from-bottom-4">
+        <h3 className="font-black text-slate-900 text-lg mb-2">Rejoin {confirmRejoin.name}?</h3>
+        <p className="text-sm text-slate-500 mb-2">
+          The relieving date and reason will be cleared, status flips back to <span className="font-black">ACTIVE</span>,
+          and login is re-enabled.
+        </p>
+        <p className="text-xs font-bold text-amber-700 bg-amber-50 border border-amber-200 rounded-xl px-3 py-2 mb-6">
+          You'll need to re-add class assignments &amp; permissions afterwards — those were cleared at relieving time.
+        </p>
+        <div className="flex gap-3">
+          <button onClick={() => setConfirmRejoin(null)} className="flex-1 py-3 rounded-2xl border border-slate-200 font-black text-slate-600">Cancel</button>
+          <button onClick={() => handleRejoin(confirmRejoin)} className="flex-1 py-3 rounded-2xl text-white font-black bg-emerald-600">
+            Rejoin
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+
   if (confirmSuspend) return (
     <div className="absolute inset-0 z-60 bg-slate-900/60 flex items-end justify-center animate-in fade-in">
       <div className="bg-white w-full rounded-t-3xl p-6 pb-10 animate-in slide-in-from-bottom-4">
@@ -720,11 +772,20 @@ export const StaffManager: React.FC<Props> = ({ onBack }) => {
           {STAFF_TEXT_FIELDS.map(({ label, key, placeholder }) => (
             <div key={key}>
               <label className="block text-[10px] font-black uppercase tracking-widest text-slate-500 mb-1.5">{label}</label>
-              <input value={(form[key] ?? '') as string} onChange={e => setForm(f => ({ ...f, [key]: e.target.value }))}
+              <input
+                value={(form[key] ?? '') as string}
+                onChange={e => setForm(f => ({ ...f, [key]: e.target.value }))}
                 placeholder={placeholder}
+                {...(key === 'subject' ? { list: 'staff-subject-suggestions' } : {})}
                 className="w-full border border-slate-200 bg-slate-50 rounded-xl px-4 py-3 font-bold text-sm outline-none focus:border-blue-500 focus:bg-white transition-colors" />
             </div>
           ))}
+          {/* One <datalist> per form, shared by the Subject input above.
+              Suggestions come from existing distinct subject values across
+              the school — populated as teachers are added. */}
+          <datalist id="staff-subject-suggestions">
+            {subjectOptions.map(s => <option key={s} value={s} />)}
+          </datalist>
           <div className="grid grid-cols-2 gap-3">
             <div>
               <label className="block text-[10px] font-black uppercase tracking-widest text-slate-500 mb-1.5">Role</label>
@@ -791,7 +852,7 @@ export const StaffManager: React.FC<Props> = ({ onBack }) => {
             </div>
           )}
 
-          <p className="text-[10px] font-bold text-slate-400">JPG/PNG/WEBP/HEIC/PDF · max 5 MB each</p>
+          <p className="text-[10px] font-bold text-slate-400">JPG/PNG/WEBP/HEIC/PDF · photo 1 MB · others 2 MB</p>
         </div>
 
         <button onClick={handleCreate} disabled={isSubmitting}
@@ -811,11 +872,20 @@ export const StaffManager: React.FC<Props> = ({ onBack }) => {
           {STAFF_TEXT_FIELDS.map(({ label, key, placeholder }) => (
             <div key={key}>
               <label className="block text-[10px] font-black uppercase tracking-widest text-slate-500 mb-1.5">{label}</label>
-              <input value={(editForm[key] ?? '') as string} onChange={e => setEditForm(f => ({ ...f, [key]: e.target.value }))}
+              <input
+                value={(editForm[key] ?? '') as string}
+                onChange={e => setEditForm(f => ({ ...f, [key]: e.target.value }))}
                 placeholder={placeholder}
+                {...(key === 'subject' ? { list: 'staff-subject-suggestions' } : {})}
                 className="w-full border border-slate-200 bg-slate-50 rounded-xl px-4 py-3 font-bold text-sm outline-none focus:border-blue-500 focus:bg-white transition-colors" />
             </div>
           ))}
+          {/* Edit form shares the same datalist id as Create. Re-declared
+              here so the input still has options if the user opens Edit
+              without ever touching Create in the same session. */}
+          <datalist id="staff-subject-suggestions">
+            {subjectOptions.map(s => <option key={s} value={s} />)}
+          </datalist>
           <div className="grid grid-cols-2 gap-3">
             <div>
               <label className="block text-[10px] font-black uppercase tracking-widest text-slate-500 mb-1.5">Role</label>
@@ -966,9 +1036,22 @@ export const StaffManager: React.FC<Props> = ({ onBack }) => {
                   </>
                 )}
                 {selected.status === 'RELIEVED' && (
-                  <p className="text-[10px] font-bold text-slate-400 text-center px-3">
-                    This staff member has been relieved. Lifecycle changes are locked.
-                  </p>
+                  <>
+                    {/* Rejoin — for the genuine "teacher came back next year"
+                        case. Server endpoint clears relieving_date/reason,
+                        flips status to ACTIVE, re-enables the auth user.
+                        Class assignments / permissions still need to be
+                        re-added separately so the lifecycle log reflects
+                        re-onboarding, not "as if nothing happened". */}
+                    <button onClick={() => setConfirmRejoin(selected)}
+                      className="w-full py-3 rounded-2xl font-black text-sm bg-emerald-50 text-emerald-700 border border-emerald-200 active:scale-95 transition-transform">
+                      Rejoin Staff Member
+                    </button>
+                    <p className="text-[10px] font-bold text-slate-400 text-center px-3">
+                      Rejoining clears the relieving date and re-enables login.
+                      You'll need to re-assign their classes & permissions.
+                    </p>
+                  </>
                 )}
               </div>
             </>
@@ -1030,7 +1113,7 @@ export const StaffManager: React.FC<Props> = ({ onBack }) => {
                       onChange={e => { const f = e.target.files?.[0]; if (f) handleUpload(f); e.target.value = ''; }} />
                   </label>
                 </div>
-                <p className="text-[10px] font-bold text-slate-400">JPG/PNG/WEBP/HEIC/PDF · max 5 MB</p>
+                <p className="text-[10px] font-bold text-slate-400">JPG/PNG/WEBP/HEIC/PDF · photo 1 MB · others 2 MB</p>
               </div>
 
               <div className="bg-white rounded-2xl border border-slate-100 shadow-sm p-4">

@@ -1,5 +1,5 @@
 import React, { useState, useCallback, useEffect } from 'react';
-import { ArrowLeft, Plus, Trash2, ChevronDown, AlertTriangle, CheckCircle2, Edit3, Clock, BookOpen } from 'lucide-react';
+import { ArrowLeft, Plus, Trash2, ChevronDown, AlertTriangle, CheckCircle2, Edit3, Clock, BookOpen, Coffee, Sparkles, MapPin } from 'lucide-react';
 import {
   timetableService, PERIOD_SLOTS, DAYS, TimetableEntry, TDay, TimetableTeacher,
 } from '@/modules/timetable/timetable.service';
@@ -8,6 +8,8 @@ import { useAcademicYear } from '@/shared/context/AcademicYearContext';
 import { useAuthStore } from '@/store/authStore';
 import { useEditGuard } from '@/store/correctionStore';
 import { supabase } from '@/lib/supabase';
+import { stripClassPrefix } from '@/shared/utils/className';
+import { apiPrincipal } from '@/lib/apiClient';
 
 const slotBg: Record<string, string> = {
   CLASS: 'bg-blue-50 border-blue-200 text-blue-800',
@@ -55,10 +57,19 @@ export const TimetableManager: React.FC<Props> = ({ onBack }) => {
   const [form, setForm] = useState<EntryFormState>({ subject: '', teacherId: '', room: '', startTime: '', endTime: '' });
   const [conflictMsg, setConflictMsg] = useState('');
   const [successMsg, setSuccessMsg] = useState('');
+  // Loading flags for the modal action buttons. Without these the buttons
+  // looked stuck while the server round-trip was in flight (~half-second on
+  // slow networks) and users would tap multiple times.
+  const [isSaving, setIsSaving] = useState(false);
+  const [isDeleting, setIsDeleting] = useState(false);
   const [slotTimeModal, setSlotTimeModal] = useState<SlotTimeModal | null>(null);
   const [teachers, setTeachers] = useState<TimetableTeacher[]>([]);
-
-  const subjects = timetableService.getSubjectsForClass(selectedClass?.label ?? '');
+  // School-wide subject suggestions (autocomplete). No managed list, no
+  // setup screen — just "what's already been typed before".
+  const [subjectSuggestions, setSubjectSuggestions] = useState<string[]>([]);
+  useEffect(() => {
+    apiPrincipal.subjectSuggestions().then(setSubjectSuggestions).catch(() => setSubjectSuggestions([]));
+  }, []);
 
   const reload = useCallback((cls: ClassRow) => {
     // Service indexes entries by classId which is the "label" (e.g. "8-A")
@@ -84,7 +95,7 @@ export const TimetableManager: React.FC<Props> = ({ onBack }) => {
           if (error) throw error;
           const list: ClassRow[] = ((data ?? []) as { class_name: string; section: string }[])
             .map(r => ({
-              label:     `${r.class_name.replace(/^Class\s*/i, '')}-${r.section}`,
+              label:     `${stripClassPrefix(r.class_name)}-${r.section}`,
               className: r.class_name,
               section:   r.section,
             }));
@@ -118,7 +129,7 @@ export const TimetableManager: React.FC<Props> = ({ onBack }) => {
     }
     const existing = entries.find(e => e.day === activeDay && e.slotId === slotId);
     setForm({
-      subject: existing?.subject ?? subjects[0] ?? '',
+      subject: existing?.subject ?? '',
       teacherId: existing?.teacherId ?? teachers[0]?.id ?? '',
       room: existing?.room ?? '',
       startTime: slot.startTime,
@@ -143,41 +154,46 @@ export const TimetableManager: React.FC<Props> = ({ onBack }) => {
       timetableService.updateSlotTime(editModal!.slotId, form.startTime, form.endTime);
     }
 
-    const r = await editGuard.gate(
-      () => timetableService.saveEntry({
-        id: editModal?.existing?.id,
-        classId: selectedClass.label,
-        className: selectedClass.className, // use the original DB class_name
-        section: selectedClass.section,
-        day: activeDay,
-        slotId: editModal!.slotId,
-        subject: form.subject,
-        teacherId: form.teacherId,
-        teacherName: teacher.name,
-        room: form.room,
-        // academicYearId is resolved server-side by timetable.service from the
-        // active academic_year — passing a placeholder here would be ignored
-        // and misleading. Service-side _activeYearId is the single source of
-        // truth.
-        academicYearId: '',
-      }),
-      {
-        entityType: 'timetable_entry',
-        entityId: editModal?.existing?.id ?? `${selectedClass.label}/${activeDay}/${editModal!.slotId}`,
-      },
-    );
+    setIsSaving(true);
+    try {
+      const r = await editGuard.gate(
+        () => timetableService.saveEntry({
+          id: editModal?.existing?.id,
+          classId: selectedClass.label,
+          className: selectedClass.className, // use the original DB class_name
+          section: selectedClass.section,
+          day: activeDay,
+          slotId: editModal!.slotId,
+          subject: form.subject,
+          teacherId: form.teacherId,
+          teacherName: teacher.name,
+          room: form.room,
+          // academicYearId is resolved server-side by timetable.service from the
+          // active academic_year — passing a placeholder here would be ignored
+          // and misleading. Service-side _activeYearId is the single source of
+          // truth.
+          academicYearId: '',
+        }),
+        {
+          entityType: 'timetable_entry',
+          entityId: editModal?.existing?.id ?? `${selectedClass.label}/${activeDay}/${editModal!.slotId}`,
+        },
+      );
 
-    if (r === undefined) return; // user cancelled correction prompt
-    if (!r.ok) {
-      const c = r.conflict;
-      const where = c ? `${c.className}-${c.section} · ${c.subject}` : '';
-      setConflictMsg(r.reason ? `${r.reason}${where ? ` (${where})` : ''}` : 'Conflict detected');
-      return;
+      if (r === undefined) return; // user cancelled correction prompt
+      if (!r.ok) {
+        const c = r.conflict;
+        const where = c ? `${c.className}-${c.section} · ${c.subject}` : '';
+        setConflictMsg(r.reason ? `${r.reason}${where ? ` (${where})` : ''}` : 'Conflict detected');
+        return;
+      }
+      reload(selectedClass);
+      setEditModal(null);
+      setSuccessMsg('Saved!');
+      setTimeout(() => setSuccessMsg(''), 2000);
+    } finally {
+      setIsSaving(false);
     }
-    reload(selectedClass);
-    setEditModal(null);
-    setSuccessMsg('Saved!');
-    setTimeout(() => setSuccessMsg(''), 2000);
   };
 
   const handleDelete = async () => {
@@ -186,6 +202,7 @@ export const TimetableManager: React.FC<Props> = ({ onBack }) => {
         showToast('Year closed — pehle Correction Mode enable karein', 'error');
         return;
       }
+      setIsDeleting(true);
       try {
         const result = await editGuard.gate(
           () => timetableService.deleteEntry(editModal.existing!.id),
@@ -196,6 +213,8 @@ export const TimetableManager: React.FC<Props> = ({ onBack }) => {
       } catch (e) {
         showToast(e instanceof Error ? e.message : 'Delete failed', 'error');
         return;
+      } finally {
+        setIsDeleting(false);
       }
     }
     setEditModal(null);
@@ -284,8 +303,8 @@ export const TimetableManager: React.FC<Props> = ({ onBack }) => {
         )}
       </div>
 
-      {/* Timetable grid */}
-      <div className="flex-1 overflow-y-auto p-4 lg:p-6 space-y-2 lg:space-y-2.5 lg:max-w-4xl lg:mx-auto lg:w-full">
+      {/* Timeline grid */}
+      <div className="flex-1 overflow-y-auto p-4 lg:p-6 lg:max-w-4xl lg:mx-auto lg:w-full">
         {classes.length === 0 && !classesLoading ? (
           <div className="flex flex-col items-center justify-center py-20 text-slate-400">
             <BookOpen size={40} className="mb-3 opacity-40"/>
@@ -293,69 +312,140 @@ export const TimetableManager: React.FC<Props> = ({ onBack }) => {
             <p className="text-[11px] font-bold text-slate-300 mt-1 text-center">Set up classes for the active year first.</p>
           </div>
         ) : (
-          <p className="text-[9px] lg:text-[11px] font-black uppercase tracking-widest text-slate-400 mb-1">
-            {selectedClass?.label} · {activeDay} — tap a period to assign
-          </p>
-        )}
+          <>
+            <p className="text-[9px] lg:text-[11px] font-black uppercase tracking-widest text-slate-400 mb-3 px-1">
+              {selectedClass?.label} · {activeDay} — tap a period to assign
+            </p>
 
-        {classes.length > 0 && slots.map(slot => {
-          const entry = getEntry(slot.slotId);
-          const isFixed = slot.isFixed;
+            {/* Vertical timeline rail. Same visual language as teacher /
+                student views — dot on rail, card to the right. Empty slots
+                stay tappable so the principal can fill them. */}
+            <div className="relative pl-8 lg:pl-10">
+              <div className="absolute left-3 lg:left-4 top-1.5 bottom-1.5 w-px bg-slate-200" />
 
-          return (
-            <button key={slot.slotId}
-              onClick={() => openEdit(slot.slotId)}
-              className={`w-full flex items-stretch gap-3 p-3.5 rounded-2xl border text-left transition-all active:scale-[0.98] ${
-                isFixed
-                  ? slotBg[slot.type] + ' opacity-90'
-                  : entry
-                    ? 'bg-white border-slate-200 hover:border-blue-300 shadow-sm'
-                    : 'bg-white border-dashed border-slate-300 hover:border-blue-400'
-              }`}>
-              {/* Time column */}
-              <div className="w-16 shrink-0 flex flex-col justify-center">
-                <div className="text-[9px] font-black text-slate-400">{slot.startTime}</div>
-                <div className="w-4 h-px bg-slate-300 my-0.5" />
-                <div className="text-[9px] font-black text-slate-400">{slot.endTime}</div>
-              </div>
+              <div className="space-y-3">
+                {slots.map(slot => {
+                  const entry = getEntry(slot.slotId);
+                  const isFixed = slot.isFixed;
+                  const filled = !!entry;
 
-              {/* Content */}
-              <div className="flex-1 min-w-0 flex flex-col justify-center">
-                {isFixed ? (
-                  <div className="flex items-center justify-between">
-                    <span className="font-extrabold text-xs">{slot.label}</span>
-                    <div className="flex items-center gap-1 text-[9px] font-black opacity-60">
-                      <Clock size={10} /> Edit Time
+                  // Dot color encodes slot status:
+                  //   filled class → blue
+                  //   fixed (break/lunch/assembly) → amber/violet/violet
+                  //   empty class slot → grey (dashed-border card prompts assign)
+                  const dotColor = filled
+                    ? 'bg-blue-500 ring-blue-100'
+                    : isFixed
+                      ? slot.type === 'LUNCH'
+                        ? 'bg-amber-400 ring-amber-100'
+                        : slot.type === 'ASSEMBLY'
+                          ? 'bg-violet-400 ring-violet-100'
+                          : 'bg-amber-300 ring-amber-100'
+                      : 'bg-slate-300 ring-slate-100';
+                  const cardClass = filled
+                    ? 'bg-white border-slate-200 hover:border-blue-300'
+                    : isFixed
+                      ? slotBg[slot.type] + ' border'
+                      : 'bg-white border-dashed border-slate-300 hover:border-blue-400';
+
+                  return (
+                    <div key={slot.slotId} className="relative">
+                      {/* Dot on the rail */}
+                      <div className={`absolute -left-[26px] lg:-left-[28px] top-3 w-4 h-4 rounded-full ring-4 ${dotColor}`} />
+
+                      <button onClick={() => openEdit(slot.slotId)}
+                        className={`w-full text-left rounded-2xl shadow-sm overflow-hidden transition-all active:scale-[0.98] ${cardClass}`}>
+                        <div className="px-3 lg:px-4 py-3 flex items-center gap-3 lg:gap-4">
+                          {/* Time block */}
+                          <div className="shrink-0 w-20 lg:w-24">
+                            <div className="text-[11px] lg:text-xs font-black text-slate-900 leading-none">
+                              {slot.startTime}
+                            </div>
+                            <div className="text-[10px] lg:text-[11px] font-bold text-slate-400 leading-none mt-1">
+                              {slot.endTime}
+                            </div>
+                          </div>
+
+                          <div className="w-px self-stretch bg-slate-100" />
+
+                          {/* Body */}
+                          <div className="flex-1 min-w-0">
+                            {isFixed ? (
+                              <>
+                                <div className="flex items-center gap-2 font-black text-sm lg:text-base uppercase tracking-tight">
+                                  {slot.type === 'LUNCH'
+                                    ? <Coffee size={14} className="text-amber-500" />
+                                    : <Sparkles size={14} className="text-violet-500" />}
+                                  {slot.label}
+                                </div>
+                                <div className="flex items-center gap-1 text-[10px] lg:text-[11px] font-bold text-slate-500 mt-1">
+                                  <Clock size={10} /> Tap to edit time
+                                </div>
+                              </>
+                            ) : entry ? (
+                              <>
+                                <div className="font-black text-sm lg:text-base uppercase tracking-tight truncate text-slate-900">
+                                  {entry.subject}
+                                </div>
+                                <div className="flex items-center gap-2 lg:gap-3 mt-1 flex-wrap">
+                                  {entry.teacherId && entry.teacherName ? (
+                                    <span className="text-[10px] lg:text-[11px] font-bold text-slate-500 truncate">
+                                      {entry.teacherName}
+                                    </span>
+                                  ) : (
+                                    <span className="flex items-center gap-1 text-[10px] lg:text-[11px] font-black text-rose-600">
+                                      <AlertTriangle size={10} /> Teacher suspended · reassign
+                                    </span>
+                                  )}
+                                  {entry.room && (
+                                    <span className="flex items-center gap-1 text-[10px] lg:text-[11px] font-bold text-slate-500">
+                                      <MapPin size={10} /> {entry.room}
+                                    </span>
+                                  )}
+                                </div>
+                              </>
+                            ) : (
+                              <div className="flex items-center gap-2 text-slate-400">
+                                <Plus size={14} />
+                                <span className="text-[11px] lg:text-xs font-black uppercase tracking-widest">
+                                  {slot.label} — assign
+                                </span>
+                              </div>
+                            )}
+                          </div>
+
+                          {/* Edit affordance for filled class slots */}
+                          {!isFixed && entry && (
+                            <div className="shrink-0">
+                              <Edit3 size={14} className="text-slate-300" />
+                            </div>
+                          )}
+                        </div>
+                      </button>
                     </div>
-                  </div>
-                ) : entry ? (
-                  <>
-                    <div className="font-extrabold text-slate-900 text-sm">{entry.subject}</div>
-                    {entry.teacherId && entry.teacherName ? (
-                      <div className="text-[10px] font-bold text-slate-400 mt-0.5">{entry.teacherName}</div>
-                    ) : (
-                      <div className="flex items-center gap-1 text-[10px] font-black text-rose-600 mt-0.5">
-                        <AlertTriangle size={10} /> Teacher suspended · reassign
-                      </div>
-                    )}
-                    {entry.room && <div className="text-[9px] font-bold text-slate-300 mt-0.5">{entry.room}</div>}
-                  </>
-                ) : (
-                  <div className="flex items-center gap-1.5 text-slate-400">
-                    <Plus size={12} />
-                    <span className="text-[10px] font-black uppercase tracking-widest">{slot.label} – Tap to assign</span>
-                  </div>
-                )}
+                  );
+                })}
               </div>
+            </div>
 
-              {!isFixed && entry && (
-                <div className="shrink-0 self-center">
-                  <Edit3 size={14} className="text-slate-300" />
+            {/* Legend */}
+            <div className="flex flex-wrap gap-3 px-1 pt-5 pb-2">
+              {([
+                ['Class', 'bg-blue-500'],
+                ['Empty', 'bg-slate-300'],
+                ['Lunch', 'bg-amber-400'],
+                ['Assembly', 'bg-violet-400'],
+              ] as [string, string][]).map(([label, dot]) => (
+                <div key={label} className="flex items-center gap-1.5">
+                  <span className={`w-2 h-2 rounded-full ${dot}`} />
+                  <span className="text-[9px] lg:text-[10px] font-black uppercase tracking-widest text-slate-400">
+                    {label}
+                  </span>
                 </div>
-              )}
-            </button>
-          );
-        })}
+              ))}
+            </div>
+          </>
+        )}
       </div>
 
       {/* Slot Time Edit Modal (for Assembly / Break / Lunch) */}
@@ -448,16 +538,19 @@ export const TimetableManager: React.FC<Props> = ({ onBack }) => {
                 </div>
               </div>
 
-              {/* Subject */}
+              {/* Subject — free-text with autocomplete from school's existing subjects. */}
               <div>
                 <label className="text-[9px] font-black uppercase tracking-widest text-slate-400 mb-1.5 block">Subject</label>
-                <div className="relative">
-                  <select value={form.subject} onChange={e => setForm(f => ({ ...f, subject: e.target.value }))}
-                    className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-3 text-sm font-bold text-slate-900 outline-none focus:border-blue-500 appearance-none pr-8">
-                    {subjects.map(s => <option key={s}>{s}</option>)}
-                  </select>
-                  <ChevronDown size={14} className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 pointer-events-none" />
-                </div>
+                <input
+                  list="timetable-subject-suggestions"
+                  value={form.subject}
+                  onChange={e => setForm(f => ({ ...f, subject: e.target.value }))}
+                  placeholder="Type or pick (e.g. Mathematics)"
+                  className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-3 text-sm font-bold text-slate-900 outline-none focus:border-blue-500"
+                />
+                <datalist id="timetable-subject-suggestions">
+                  {subjectSuggestions.map(s => <option key={s} value={s} />)}
+                </datalist>
               </div>
 
               {/* Teacher */}
@@ -485,14 +578,15 @@ export const TimetableManager: React.FC<Props> = ({ onBack }) => {
 
             <div className="flex gap-3 mt-5">
               {editModal.existing && (
-                <button onClick={handleDelete}
-                  className="flex items-center gap-2 px-4 py-3 bg-rose-50 text-rose-600 border border-rose-200 rounded-xl text-xs font-black">
-                  <Trash2 size={14} /> Remove
+                <button onClick={handleDelete} disabled={isDeleting || isSaving}
+                  className="flex items-center gap-2 px-4 py-3 bg-rose-50 text-rose-600 border border-rose-200 rounded-xl text-xs font-black disabled:opacity-50 disabled:cursor-not-allowed">
+                  <Trash2 size={14} /> {isDeleting ? 'Removing…' : 'Remove'}
                 </button>
               )}
-              <button onClick={handleSave}
-                className="flex-1 py-3 bg-slate-900 text-white rounded-xl text-sm font-black">
-                Save Period
+              <button onClick={handleSave} disabled={isSaving || isDeleting}
+                className="flex-1 py-3 bg-slate-900 text-white rounded-xl text-sm font-black disabled:opacity-60 disabled:cursor-not-allowed flex items-center justify-center gap-2">
+                {isSaving && <span className="w-3.5 h-3.5 border-2 border-white/40 border-t-white rounded-full animate-spin" />}
+                {isSaving ? 'Saving…' : 'Save Period'}
               </button>
             </div>
           </div>

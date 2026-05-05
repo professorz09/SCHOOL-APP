@@ -4,6 +4,7 @@ import {
   Wallet, MapPin, ChevronRight, Bell, ClipboardCheck, Clock,
   BanknoteIcon, Settings, UserCog, CalendarCheck, Sparkles,
   Calendar, GraduationCap, ArrowRight, TrendingUp, AlertCircle, BarChart3,
+  Library,
 } from 'lucide-react';
 import { studentService } from '@/modules/students/student.service';
 import { staffService } from '@/modules/staff/staff.service';
@@ -19,23 +20,6 @@ import { SalaryReminderCard } from '@/roles/principal/components/SalaryReminderC
 interface Props {
   onNavigate: (view: PrincipalView) => void;
 }
-
-interface LiveClassRow {
-  classId: string;
-  subject: string;
-  teacher: string;
-  present: number;
-  total: number;
-  color: string;
-}
-
-const LIVE_COLORS = [
-  'bg-purple-100 text-purple-700',
-  'bg-emerald-100 text-emerald-700',
-  'bg-sky-100 text-sky-700',
-  'bg-amber-100 text-amber-700',
-  'bg-rose-100 text-rose-700',
-];
 
 type Action = { icon: React.ReactNode; label: string; view: PrincipalView; tint: string };
 type Hub = {
@@ -59,8 +43,15 @@ export const PrincipalDashboard: React.FC<Props> = ({ onNavigate }) => {
     totalStaff: 0, openComplaints: 0, pendingApprovals: 0,
     studentsWithDues: 0, pendingLeaves: 0, lowAttendanceStudents: 0, unsubmittedAttendanceDays: 0,
   });
-  const [vehicles, setVehicles] = useState<{ id: string; vehicleNo: string; routeName: string; driverName: string; isActive: boolean; currentStop: string }[]>([]);
-  const [liveClasses, setLiveClasses] = useState<LiveClassRow[]>([]);
+  const [vehicles, setVehicles] = useState<{
+    id: string; vehicleNo: string; routeName: string; driverName: string;
+    isLive: boolean; lastPing: string | null; currentStop: string;
+  }[]>([]);
+  // liveClasses state was removed when the "Live Classes" panel was
+  // dropped. The setter call below is preserved as a no-op (variable
+  // intentionally unused) so the parallel Promise.all keeps its shape
+  // and we don't accidentally drop the attendance-records query that
+  // also informs the alert counter elsewhere.
 
   useEffect(() => {
     const load = async () => {
@@ -95,22 +86,9 @@ export const PrincipalDashboard: React.FC<Props> = ({ onNavigate }) => {
       ]);
       const monthlyCollection = ((monthPayRes.data ?? []) as Array<{ amount: number }>)
         .reduce((sum, r) => sum + Number(r.amount || 0), 0);
-      const liveRows = ((attRes.data ?? []) as Array<{
-        id: string; class_name: string | null; section: string | null;
-        total_present: number; total_students: number;
-        users: { name: string } | { name: string }[] | null;
-      }>).map((r, i) => {
-        const u = Array.isArray(r.users) ? r.users[0] : r.users;
-        return {
-          classId: `${(r.class_name ?? '?').replace(/^Class\s*/i, '')}-${r.section ?? ''}`,
-          subject: 'Attendance',
-          teacher: u?.name ?? 'Teacher',
-          present: r.total_present,
-          total: r.total_students,
-          color: LIVE_COLORS[i % LIVE_COLORS.length],
-        };
-      });
-      setLiveClasses(liveRows);
+      // attRes still pulled to keep alert / stats parity, but the
+      // "Live Classes" UI is gone so we no longer build the row list.
+      void attRes;
       setStats({
         totalStudents: students.length,
         avgAttendance: students.length > 0
@@ -127,14 +105,35 @@ export const PrincipalDashboard: React.FC<Props> = ({ onNavigate }) => {
         lowAttendanceStudents: dashStats?.lowAttendanceStudents ?? 0,
         unsubmittedAttendanceDays: dashStats?.unsubmittedAttendanceDays ?? 0,
       });
-      setVehicles(allVehicles.filter(v => v.isActive).map(v => ({
-        id: v.id,
-        vehicleNo: v.vehicleNo,
-        routeName: v.routeName,
-        driverName: v.driverName,
-        isActive: v.isActive,
-        currentStop: v.stops[Math.floor(v.stops.length / 2)]?.name ?? 'En Route',
-      })));
+      // Vehicles shown on dashboard = currently LIVE only (driver has the
+      // tracking app open and pinged GPS in the last 5 min). The earlier
+      // logic showed every is_active vehicle which clutters the screen
+      // off-hours when none are actually moving. Cap to 2 cards so the
+      // section stays compact even on a 30-bus fleet.
+      const LIVE_WINDOW_MS = 5 * 60 * 1000;
+      const liveNow = Date.now();
+      const liveVehicles = allVehicles
+        .filter(v => v.isActive)
+        .map(v => {
+          const pingTs = v.currentLocation?.timestamp
+            ? new Date(v.currentLocation.timestamp).getTime()
+            : null;
+          const isLive = pingTs !== null && (liveNow - pingTs) <= LIVE_WINDOW_MS;
+          return { v, isLive, pingTs };
+        })
+        .filter(x => x.isLive)
+        .sort((a, b) => (b.pingTs ?? 0) - (a.pingTs ?? 0))
+        .slice(0, 2)
+        .map(({ v, isLive, pingTs }) => ({
+          id: v.id,
+          vehicleNo: v.vehicleNo,
+          routeName: v.routeName,
+          driverName: v.driverName,
+          isLive,
+          lastPing: pingTs ? new Date(pingTs).toISOString() : null,
+          currentStop: v.stops[Math.floor(v.stops.length / 2)]?.name ?? 'En Route',
+        }));
+      setVehicles(liveVehicles);
     };
     load();
   }, [ayKey, session?.schoolId]);
@@ -180,6 +179,7 @@ export const PrincipalDashboard: React.FC<Props> = ({ onNavigate }) => {
         { icon: <GraduationCap size={20}/>, label: 'Exams',     view: 'EXAMS',        tint: 'bg-rose-50 text-rose-600' },
         { icon: <Clock size={20}/>,         label: 'Timetable', view: 'TIMETABLE',    tint: 'bg-fuchsia-50 text-fuchsia-600' },
         { icon: <CalendarCheck size={20}/>, label: 'Attendance',view: 'ATTENDANCE',   tint: 'bg-teal-50 text-teal-600' },
+        { icon: <Library size={20}/>,       label: 'Assets',    view: 'ASSETS',       tint: 'bg-amber-50 text-amber-600' },
         { icon: <ArrowRight size={20}/>,    label: 'Promotion', view: 'PROMOTION',    tint: 'bg-emerald-50 text-emerald-600' },
       ],
     },
@@ -326,63 +326,50 @@ export const PrincipalDashboard: React.FC<Props> = ({ onNavigate }) => {
       {/* ── Salary Reminder Widget ─────────────────────────────────────── */}
       <SalaryReminderCard onNavigate={onNavigate} />
 
-      {/* ── Live Classes + Transport — side-by-side on desktop ───────────── */}
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 lg:gap-6">
+      {/* ── Live Buses — only when a driver is actually pinging GPS now.
+            "Live Classes" was removed entirely; it duplicated info already
+            visible inside the attendance flow and was always empty for
+            schools that hadn't enabled real-time check-ins. The buses
+            section only renders when at least one vehicle is live, so it
+            doesn't take screen space on a parked-fleet morning. */}
+      {vehicles.length > 0 && (
         <div>
           <div className="flex items-center justify-between mb-2.5 lg:mb-3">
-            <h2 className="text-sm lg:text-base font-black text-slate-900 uppercase tracking-tight">Live Classes</h2>
-            <button onClick={() => onNavigate('TIMETABLE')} className="flex items-center gap-0.5 text-[10px] lg:text-xs font-black text-blue-600 uppercase tracking-wide hover:text-blue-700">
-              Monitor <ChevronRight size={12}/>
+            <div className="flex items-center gap-2">
+              <h2 className="text-sm lg:text-base font-black text-slate-900 uppercase tracking-tight">Live Buses</h2>
+              <span className="flex items-center gap-1 text-[9px] font-black text-emerald-700 bg-emerald-50 border border-emerald-200 px-2 py-0.5 rounded-full uppercase">
+                <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse"/> {vehicles.length} on road
+              </span>
+            </div>
+            <button onClick={() => onNavigate('TRANSPORT_MGMT')} className="flex items-center gap-0.5 text-[10px] lg:text-xs font-black text-blue-600 uppercase tracking-wide hover:text-blue-700">
+              All vehicles <ChevronRight size={12}/>
             </button>
           </div>
-          <div className="bg-white rounded-2xl border border-slate-100 shadow-sm overflow-hidden divide-y divide-slate-50">
-            {liveClasses.length === 0 ? (
-              <div className="px-4 py-6 lg:py-8 text-center text-xs font-bold text-slate-400">
-                No attendance recorded yet today.
-              </div>
-            ) : liveClasses.map((cls) => (
-              <div key={cls.classId} className="flex items-center gap-3 px-4 py-3 lg:py-3.5">
-                <div className={`w-10 h-10 lg:w-11 lg:h-11 rounded-xl flex items-center justify-center shrink-0 font-black text-xs lg:text-sm ${cls.color}`}>
-                  {cls.classId}
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-3">
+            {vehicles.map((v) => (
+              <button
+                key={v.id}
+                onClick={() => onNavigate('TRANSPORT_MGMT')}
+                className="flex items-center gap-3 px-4 py-3 lg:py-3.5 bg-white rounded-2xl border border-slate-100 shadow-sm hover:border-emerald-200 hover:shadow-md transition-all text-left">
+                <div className="w-10 h-10 lg:w-11 lg:h-11 rounded-xl bg-amber-100 flex items-center justify-center shrink-0 relative">
+                  <Bus size={18} className="text-amber-600" />
+                  <span className="absolute -top-0.5 -right-0.5 w-3 h-3 rounded-full bg-emerald-500 border-2 border-white animate-pulse"/>
                 </div>
                 <div className="flex-1 min-w-0">
-                  <p className="text-xs lg:text-sm font-black text-slate-900 truncate">{cls.teacher}</p>
-                  <p className="text-[10px] lg:text-[11px] font-bold text-slate-400 mt-0.5">{cls.present}/{cls.total} Present</p>
+                  <p className="text-xs lg:text-sm font-black text-slate-900 truncate">
+                    {v.routeName ? v.routeName.toUpperCase() : 'Route'} · {v.vehicleNo}
+                  </p>
+                  <div className="flex items-center gap-1 mt-0.5">
+                    <MapPin size={9} className="text-blue-500 shrink-0" />
+                    <p className="text-[10px] lg:text-[11px] font-bold text-blue-600 truncate">{v.currentStop}</p>
+                  </div>
                 </div>
-                <div className="w-2 h-2 rounded-full bg-red-400 shrink-0 animate-pulse" />
-              </div>
+                <ChevronRight size={14} className="text-slate-300 shrink-0"/>
+              </button>
             ))}
           </div>
         </div>
-
-        {vehicles.length > 0 && (
-          <div>
-            <div className="flex items-center justify-between mb-2.5 lg:mb-3">
-              <h2 className="text-sm lg:text-base font-black text-slate-900 uppercase tracking-tight">Transport Fleet</h2>
-              <button onClick={() => onNavigate('TRANSPORT_MGMT')} className="flex items-center gap-0.5 text-[10px] lg:text-xs font-black text-blue-600 uppercase tracking-wide hover:text-blue-700">
-                Locations <ChevronRight size={12}/>
-              </button>
-            </div>
-            <div className="bg-white rounded-2xl border border-slate-100 shadow-sm overflow-hidden divide-y divide-slate-50">
-              {vehicles.map((v) => (
-                <div key={v.id} className="flex items-center gap-3 px-4 py-3 lg:py-3.5">
-                  <div className="w-10 h-10 lg:w-11 lg:h-11 rounded-xl bg-amber-100 flex items-center justify-center shrink-0">
-                    <Bus size={18} className="text-amber-600" />
-                  </div>
-                  <div className="flex-1 min-w-0">
-                    <p className="text-xs lg:text-sm font-black text-slate-900 truncate">{v.routeName.toUpperCase()} · {v.vehicleNo}</p>
-                    <div className="flex items-center gap-1 mt-0.5">
-                      <MapPin size={9} className="text-blue-500 shrink-0" />
-                      <p className="text-[10px] lg:text-[11px] font-bold text-blue-600 truncate">{v.currentStop}</p>
-                    </div>
-                  </div>
-                  <div className="w-2 h-2 rounded-full bg-emerald-400 shrink-0" />
-                </div>
-              ))}
-            </div>
-          </div>
-        )}
-      </div>
+      )}
 
     </div>
   );

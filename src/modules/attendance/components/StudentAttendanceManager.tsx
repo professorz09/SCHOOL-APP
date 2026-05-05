@@ -1,8 +1,8 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   ArrowLeft, ChevronLeft, ChevronRight, ShieldCheck, Hourglass,
-  Save, Users, Download, RefreshCw, Search, Lock, CheckCircle2,
-  XCircle, AlertCircle, LayoutGrid,
+  Save, Download, RefreshCw, Search, Lock,
+  AlertCircle, LayoutGrid,
 } from 'lucide-react';
 import { studentService } from '@/modules/students/student.service';
 import { Student } from '@/modules/students/student.types';
@@ -15,6 +15,7 @@ import { apiAttendance } from '@/lib/apiClient';
 import { supabase } from '@/lib/supabase';
 import { useAuthStore } from '@/store/authStore';
 import { exportCsv } from '@/shared/utils/csv';
+import { stripClassPrefix } from '@/shared/utils/className';
 
 interface Props { onBack: () => void; }
 
@@ -93,6 +94,12 @@ export const StudentAttendanceManager: React.FC<Props> = ({ onBack }) => {
   const [gridLoading, setGridLoading] = useState(false);
   const [gridSearch,  setGridSearch]  = useState('');
   const [editBuffer, setEditBuffer]   = useState<Record<string, Record<string, AttendanceCellStatus>>>({});
+  // Mistouch guard for the mobile grid. Cells only react to taps when
+  // edit mode is explicitly on. Default OFF so casual scrolling /
+  // accidental brushes can't change attendance. The "Edit" toggle in the
+  // grid header flips this; it auto-disables after Save to prevent
+  // lingering edit mode.
+  const [gridEditMode, setGridEditMode] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [sectionId, setSectionId] = useState<string | null>(null);
 
@@ -151,10 +158,9 @@ export const StudentAttendanceManager: React.FC<Props> = ({ onBack }) => {
     }
     return Array.from(map.entries())
       .map(([name, sections]) => ({ name, sections: [...sections].sort() }))
-      .sort((a, b) => parseInt(a.name.replace('Class ', '')) - parseInt(b.name.replace('Class ', '')));
+      .sort((a, b) => parseInt(stripClassPrefix(a.name)) - parseInt(stripClassPrefix(b.name)));
   }, [students]);
 
-  const pendingCount = records.filter(r => r.status === 'PENDING').length;
   const overallAvg   = avg(students.map(s => s.attendancePercent));
   const lowCount     = students.filter(s => s.attendancePercent < 75).length;
 
@@ -220,10 +226,18 @@ export const StudentAttendanceManager: React.FC<Props> = ({ onBack }) => {
   };
 
   const toggleCell = (date: string, stuId: string) => {
+    // Edit-mode gate — see gridEditMode comment. On mobile every accidental
+    // tap was cycling status; this prevents that. The first tap when off
+    // shows a toast nudge instead of cycling.
+    if (!gridEditMode) {
+      showToast('Tap "Edit" at the top to start marking', 'info');
+      return;
+    }
+    if (date > todayStr()) {
+      showToast('Future date — attendance can only be marked for today or past dates', 'error');
+      return;
+    }
     const rec = recordMap[date];
-    // Locked (approved) records can only be corrected via Records → Edit, and
-    // even there it requires Editor Mode. Bounce the user with a clear toast
-    // instead of silently doing nothing — that silent block was confusing.
     if (rec?.isLocked) {
       showToast(
         editorModeActive
@@ -240,6 +254,14 @@ export const StudentAttendanceManager: React.FC<Props> = ({ onBack }) => {
   };
 
   const bulkSetDate = (date: string, status: AttendanceCellStatus) => {
+    if (!gridEditMode) {
+      showToast('Tap "Edit" at the top to start marking', 'info');
+      return;
+    }
+    if (date > todayStr()) {
+      showToast('Future date — not editable', 'error');
+      return;
+    }
     const rec = recordMap[date];
     if (rec?.isLocked) {
       showToast('Locked. Open Records → Edit (Editor Mode required).', 'error');
@@ -273,32 +295,26 @@ export const StudentAttendanceManager: React.FC<Props> = ({ onBack }) => {
         { entityType: 'student_attendance', entityId: `${gridClass}/${gridSection}/${date}` },
       );
       if (result === undefined) return;
-      showToast(`Attendance saved (pending approval) for ${new Date(date).getDate()}/${new Date(date).getMonth() + 1}`);
-      setEditBuffer(prev => { const n = { ...prev }; delete n[date]; return n; });
+      // Server auto-approves & locks when the principal hits this endpoint
+      // directly, so the toast reflects the final state instead of the old
+      // "pending approval" half-truth.
+      showToast(`Attendance saved & approved for ${new Date(date).getDate()}/${new Date(date).getMonth() + 1}`);
+      setEditBuffer(prev => {
+        const n = { ...prev }; delete n[date];
+        // Auto-leave edit mode once nothing is pending — back to the safe
+        // "tap-doesn't-do-anything" view to prevent accidental changes.
+        if (Object.keys(n).length === 0) setGridEditMode(false);
+        return n;
+      });
       await loadGrid(gridClass, gridSection, gridYM);
     } catch (e) {
       showToast((e as Error).message || 'Failed to save', 'error');
     } finally { setIsSubmitting(false); }
   };
 
-  // Approve a pending date
-  const approveDate = async (date: string) => {
-    const rec = recordMap[date];
-    if (!rec || rec.approvalStatus === 'APPROVED') return;
-    if (!editGuard.canEdit) {
-      showToast('Year closed — enable Correction Mode first', 'error'); return;
-    }
-    try {
-      await editGuard.gate(
-        () => sharedAttendance.approve(rec.id),
-        { entityType: 'student_attendance', entityId: rec.id },
-      );
-      showToast('Attendance approved');
-      await loadGrid(gridClass, gridSection, gridYM);
-    } catch (e) {
-      showToast((e as Error).message || 'Failed to approve', 'error');
-    }
-  };
+  // approveDate / handleApprove / handleReject removed — submission auto-locks
+  // and there's no pending state anymore. Corrections go through openEdit() in
+  // the Records list (which still requires Editor Mode for locked rows).
 
   // Excel export — always exports the full academic year for the selected class/section
   const handleExcelExport = async () => {
@@ -411,64 +427,6 @@ export const StudentAttendanceManager: React.FC<Props> = ({ onBack }) => {
     } finally { setIsSubmitting(false); }
   };
 
-  const approveAfterEdit = async () => {
-    if (!editRecord) return;
-    if (!editGuard.canEdit) {
-      showToast('Year closed — enable Correction Mode', 'error'); return;
-    }
-    if (editRecord.isLocked && !isYearClosed && !editorModeActive) {
-      showToast('Enable Editor Mode in Settings to correct approved records', 'error'); return;
-    }
-    if (editRecord.isLocked && !correctionReason.trim()) {
-      showToast('A correction reason is required for approved records', 'error'); return;
-    }
-    setIsSubmitting(true);
-    try {
-      const reason = editRecord.isLocked ? correctionReason.trim() : undefined;
-      const result = await editGuard.gate(
-        async () => {
-          await sharedAttendance.updateStudents(editRecord.id, editStudents, reason);
-          await sharedAttendance.approve(editRecord.id);
-          return true;
-        },
-        { entityType: 'student_attendance', entityId: editRecord.id },
-      );
-      if (result === undefined) return;
-      await refreshRecords();
-      showToast('Attendance approved');
-      setView('RECORDS');
-    } catch (e) {
-      showToast((e as Error).message || 'Failed to approve', 'error');
-    } finally { setIsSubmitting(false); }
-  };
-
-  const handleApprove = async (id: string) => {
-    if (!editGuard.canEdit) { showToast('Year closed — enable Correction Mode', 'error'); return; }
-    try {
-      const result = await editGuard.gate(
-        () => sharedAttendance.approve(id),
-        { entityType: 'student_attendance', entityId: id },
-      );
-      if (result === undefined) return;
-      await refreshRecords();
-      showToast('Attendance approved');
-    } catch (e) { showToast((e as Error).message || 'Failed to approve', 'error'); }
-  };
-
-  const handleReject = async (id: string) => {
-    if (!editGuard.canEdit) { showToast('Year closed — enable Correction Mode', 'error'); return; }
-    const reason = window.prompt('Reason for rejection (optional):') ?? undefined;
-    try {
-      const result = await editGuard.gate(
-        () => sharedAttendance.reject(id, reason || undefined),
-        { entityType: 'student_attendance', entityId: id, field: 'reject_reason', newValue: reason },
-      );
-      if (result === undefined) return;
-      await refreshRecords();
-      showToast('Attendance rejected');
-    } catch (e) { showToast((e as Error).message || 'Failed to reject', 'error'); }
-  };
-
   const filteredGridStudents = useMemo(() =>
     gridStudents.filter(s =>
       s.name.toLowerCase().includes(gridSearch.toLowerCase()) || s.rollNo.includes(gridSearch),
@@ -576,18 +534,6 @@ export const StudentAttendanceManager: React.FC<Props> = ({ onBack }) => {
             className="flex-1 flex items-center justify-center gap-2 bg-slate-700 text-white font-black text-xs uppercase py-3.5 rounded-2xl active:scale-95 transition-transform disabled:opacity-60">
             <Save size={14}/> {isSubmitting ? 'Saving…' : 'Save Changes'}
           </button>
-          {editRecord.status === 'PENDING' && (
-            <button
-              onClick={approveAfterEdit}
-              disabled={
-                isSubmitting || editStudents.length === 0 ||
-                (editRecord.isLocked && !isYearClosed && !editorModeActive) ||
-                (editRecord.isLocked && !correctionReason.trim())
-              }
-              className="flex-1 flex items-center justify-center gap-2 bg-emerald-600 text-white font-black text-xs uppercase py-3.5 rounded-2xl active:scale-95 transition-transform disabled:opacity-60">
-              <ShieldCheck size={14}/> {isSubmitting ? 'Saving…' : 'Save & Approve'}
-            </button>
-          )}
         </div>
       </div>
     );
@@ -598,44 +544,78 @@ export const StudentAttendanceManager: React.FC<Props> = ({ onBack }) => {
     const hasEdits = Object.keys(editBuffer).some(d => Object.keys(editBuffer[d] ?? {}).length > 0);
     return (
       <div className="w-full bg-slate-50 flex flex-col animate-in slide-in-from-right-8 duration-300 h-full">
-        {/* Header */}
-        <div className="bg-white border-b border-slate-100 px-4 pt-4 pb-3 sticky top-0 z-10 shadow-sm">
-          <div className="flex items-center gap-3 mb-3">
-            <button onClick={() => { setView('OVERVIEW'); setEditBuffer({}); }} className="p-2 -ml-2 bg-slate-100 rounded-full text-slate-600">
-              <ArrowLeft size={20} />
+        {/* Header — compact two-row layout that fits a 360 px viewport.
+            Title + Edit toggle on row 1, exports collapsed into a single
+            overflow icon if needed. The previous layout wrapped "ATTENDANCE
+            GRID" to two lines and pushed CSV/Excel buttons off-screen. */}
+        <div className="bg-white border-b border-slate-100 px-3 pt-3 pb-2 sticky top-0 z-10 shadow-sm">
+          <div className="flex items-center gap-2 mb-2">
+            <button onClick={() => { setView('OVERVIEW'); setEditBuffer({}); setGridEditMode(false); }}
+              className="p-2 -ml-1 bg-slate-100 rounded-full text-slate-600 shrink-0">
+              <ArrowLeft size={18} />
             </button>
-            <div className="flex-1">
-              <h2 className="text-xl font-black text-slate-900 uppercase tracking-tight">Attendance Grid</h2>
-              {gridClass && <p className="text-[10px] font-bold text-slate-400">{gridClass}-{gridSection}</p>}
+            <div className="flex-1 min-w-0">
+              <h2 className="text-base font-black text-slate-900 uppercase tracking-tight truncate">Attendance</h2>
+              {gridClass && <p className="text-[10px] font-bold text-slate-400 truncate">{gridClass}-{gridSection}</p>}
             </div>
-            {gridLoading && <RefreshCw size={16} className="text-slate-400 animate-spin"/>}
+            {gridLoading && <RefreshCw size={14} className="text-slate-400 animate-spin shrink-0"/>}
+            {/* Edit toggle — primary mistouch guard. On = cells respond to
+                tap; Off = cells are read-only. Sized like a real button so
+                it's the obvious next action when arriving on this screen. */}
+            {sectionId && gridDates.length > 0 && (
+              <button onClick={() => setGridEditMode(m => !m)}
+                className={`shrink-0 px-3 py-1.5 rounded-xl text-[10px] font-black uppercase tracking-widest transition-colors ${
+                  gridEditMode
+                    ? 'bg-rose-600 text-white'
+                    : 'bg-slate-900 text-white'
+                }`}>
+                {gridEditMode ? 'Done' : 'Edit'}
+              </button>
+            )}
             {sectionId && gridDates.length > 0 && (
               <>
                 <button
                   onClick={() => {
-                    // Export the *currently visible month* as CSV — one row per
-                    // student × date with status. Lets the principal pull a
-                    // month at a time without hitting the full-year Excel.
-                    const rows: Record<string, unknown>[] = [];
-                    for (const s of gridStudents) {
+                    // Wide-grid CSV: rows = students, columns = dates,
+                    // cells = P / A / H / HD. Mirrors the on-screen grid so
+                    // a principal can paste it straight into a printed
+                    // register. Earlier we exported a long list (one row
+                    // per student × date) which wasn't usable as a "register".
+                    type Row = Record<string, string>;
+                    const rows: Row[] = gridStudents.map(s => {
+                      const row: Row = {
+                        Roll: (s.rollNo ?? '').padStart(2, '0'),
+                        Name: s.name,
+                      };
+                      let p = 0, a = 0, h = 0, hd = 0;
                       for (const d of gridDates) {
-                        const cell = gridDetails[s.id]?.[d];
-                        rows.push({
-                          date: d,
-                          roll_no: s.rollNo ?? '',
-                          name: s.name,
-                          status: cell ?? 'NOT_MARKED',
-                        });
+                        const cell = gridDetails[d]?.[s.id];
+                        const day = String(new Date(d).getDate()).padStart(2, '0');
+                        if (cell === 'present') { row[day] = 'P'; p++; }
+                        else if (cell === 'absent') { row[day] = 'A'; a++; }
+                        else if (cell === 'holiday') { row[day] = 'H'; h++; }
+                        else if (cell === 'half') { row[day] = 'HD'; hd++; }
+                        else row[day] = '';
                       }
-                    }
+                      const work = p + a + hd;
+                      const pct = work > 0 ? Math.round(((p + hd * 0.5) / work) * 100) : 0;
+                      row.P = String(p);
+                      row.A = String(a);
+                      row.H = String(h);
+                      row.HD = String(hd);
+                      row['%'] = `${pct}`;
+                      return row;
+                    });
                     exportCsv(`attendance_${gridClass}-${gridSection}_${gridYM}`, rows);
                   }}
-                  className="flex items-center gap-1.5 px-3 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-xl text-[10px] font-black active:scale-95 transition-transform">
-                  <Download size={13}/> CSV
+                  className="shrink-0 p-2 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-xl active:scale-95 transition-transform"
+                  title="Export this month as CSV">
+                  <Download size={14}/>
                 </button>
                 <button onClick={handleExcelExport}
-                  className="flex items-center gap-1.5 px-3 py-2 bg-emerald-600 text-white rounded-xl text-[10px] font-black active:scale-95 transition-transform">
-                  <Download size={13}/> Excel
+                  className="shrink-0 p-2 bg-emerald-600 text-white rounded-xl active:scale-95 transition-transform"
+                  title="Export full year as Excel">
+                  <Download size={14}/>
                 </button>
               </>
             )}
@@ -671,6 +651,16 @@ export const StudentAttendanceManager: React.FC<Props> = ({ onBack }) => {
             </button>
           </div>
         </div>
+
+        {/* Edit-mode banner — explicit cue so the principal knows whether
+            taps will change anything. Without this, the mode toggle was
+            invisible feedback. */}
+        {gridEditMode && (
+          <div className="bg-rose-50 border-b border-rose-200 px-3 py-2 text-[10px] font-black text-rose-700 flex items-center gap-2">
+            <span className="w-1.5 h-1.5 rounded-full bg-rose-500 animate-pulse"/>
+            Edit mode is on — tap a cell to change. Tap "Done" when finished.
+          </div>
+        )}
 
         {/* Search */}
         {gridStudents.length > 0 && (
@@ -736,10 +726,13 @@ export const StudentAttendanceManager: React.FC<Props> = ({ onBack }) => {
                     {gridDates.map(d => {
                       const rec = recordMap[d];
                       const isLocked = !!rec?.isLocked;
+                      const isFuture = d > todayStr();
                       return (
                         <th key={d} className="border-b border-r border-slate-100 px-0.5 py-1 text-center">
-                          {isLocked ? (
-                            <Lock size={8} className="mx-auto text-emerald-400" title="Approved — edit via Records tab"/>
+                          {isFuture ? (
+                            <span className="text-[8px] font-black text-slate-300">·</span>
+                          ) : isLocked ? (
+                            <Lock size={8} className="mx-auto text-emerald-400" title="Locked — edit via Records tab (Editor Mode)"/>
                           ) : (
                             <div className="flex flex-col gap-0.5 items-center">
                               {(['present','absent','holiday'] as AttendanceCellStatus[]).map(s => (
@@ -780,14 +773,23 @@ export const StudentAttendanceManager: React.FC<Props> = ({ onBack }) => {
                           const rec = recordMap[d];
                           const st = cellStatus(d, stu.id);
                           const locked = !!rec?.isLocked;
+                          const isFuture = d > todayStr();
                           const bg = st ? CELL_BG[st] : 'bg-slate-100 text-slate-300';
                           return (
                             <td key={d}
-                              className={`border-b border-r border-slate-100 text-center px-0.5 py-1 ${locked ? 'cursor-not-allowed bg-slate-50/40' : 'cursor-pointer active:scale-90'}`}
+                              className={`border-b border-r border-slate-100 text-center px-0.5 py-1 ${
+                                isFuture ? 'cursor-not-allowed bg-slate-50/60' :
+                                locked ? 'cursor-not-allowed bg-slate-50/40' :
+                                         'cursor-pointer active:scale-90'
+                              }`}
                               onClick={() => toggleCell(d, stu.id)}
-                              title={locked ? 'Locked — edit via Records (Editor Mode required)' : undefined}>
-                              <span className={`inline-flex items-center justify-center w-7 h-7 rounded-lg text-[9px] font-black transition-colors ${bg} ${locked ? 'opacity-40' : ''}`}>
-                                {st ? CELL_LABEL[st] : '—'}
+                              title={
+                                isFuture ? 'Future date — not editable' :
+                                locked ? 'Locked — edit via Records (Editor Mode required)' :
+                                undefined
+                              }>
+                              <span className={`inline-flex items-center justify-center w-7 h-7 rounded-lg text-[9px] font-black transition-colors ${bg} ${locked || isFuture ? 'opacity-30' : ''}`}>
+                                {st ? CELL_LABEL[st] : isFuture ? '·' : '—'}
                               </span>
                             </td>
                           );
@@ -806,10 +808,11 @@ export const StudentAttendanceManager: React.FC<Props> = ({ onBack }) => {
           )}
         </div>
 
-        {/* Date-level actions panel */}
-        {gridClass && gridSection && !gridLoading && gridDates.length > 0 && (
-          <div className="bg-white border-t border-slate-100 px-4 py-3 space-y-2">
-            <p className="text-[9px] font-black uppercase tracking-widest text-slate-400">Date Actions</p>
+        {/* Date-level save panel — only Save buttons remain. Approval was
+            removed; saving locks the record immediately. */}
+        {gridClass && gridSection && !gridLoading && gridDates.length > 0 && hasEdits && (
+          <div className="bg-white border-t border-slate-100 px-3 py-3 space-y-2">
+            <p className="text-[9px] font-black uppercase tracking-widest text-slate-400">Save changes</p>
             <div className="flex flex-wrap gap-2">
               {gridDates.filter(d => editBuffer[d] && Object.keys(editBuffer[d]).length > 0).map(d => (
                 <button key={d} onClick={() => saveDate(d)} disabled={isSubmitting}
@@ -817,16 +820,7 @@ export const StudentAttendanceManager: React.FC<Props> = ({ onBack }) => {
                   <Save size={11}/> Save {new Date(d).getDate()}/{new Date(d).getMonth() + 1}
                 </button>
               ))}
-              {gridDates.filter(d => recordMap[d]?.approvalStatus === 'PENDING').map(d => (
-                <button key={d} onClick={() => approveDate(d)}
-                  className="flex items-center gap-1 px-3 py-1.5 bg-emerald-600 text-white rounded-xl text-[10px] font-black active:scale-95 transition-transform">
-                  <ShieldCheck size={11}/> Approve {new Date(d).getDate()}/{new Date(d).getMonth() + 1}
-                </button>
-              ))}
             </div>
-            {!hasEdits && gridDates.filter(d => recordMap[d]?.approvalStatus === 'PENDING').length === 0 && (
-              <p className="text-[10px] font-bold text-slate-400">Tap cells to edit, then save. Pending dates appear here for quick approval.</p>
-            )}
           </div>
         )}
       </div>
@@ -954,7 +948,7 @@ export const StudentAttendanceManager: React.FC<Props> = ({ onBack }) => {
           </button>
           <div className="flex-1">
             <h2 className="text-xl font-black text-slate-900 uppercase tracking-tight">All Records</h2>
-            <p className="text-[10px] font-bold text-slate-400">{records.length} total · {pendingCount} pending</p>
+            <p className="text-[10px] font-bold text-slate-400">{records.length} total · all locked at save time</p>
           </div>
           <button onClick={refreshRecords} className="p-2 bg-slate-100 rounded-full text-slate-600">
             <RefreshCw size={16} />
@@ -974,42 +968,13 @@ export const StudentAttendanceManager: React.FC<Props> = ({ onBack }) => {
                     <div className="font-bold text-slate-900 text-sm">{r.className}-{r.section}</div>
                     <div className="text-[10px] font-bold text-slate-400">{r.date} · {r.totalPresent}P / {r.totalAbsent}A / {r.totalHoliday}H · {r.markedBy}</div>
                   </div>
-                  {r.status === 'PENDING' && (
-                    <div className="flex gap-1 shrink-0">
-                      <button onClick={() => handleApprove(r.id)}
-                        className="p-1.5 bg-emerald-50 border border-emerald-200 rounded-xl text-emerald-700 active:scale-95">
-                        <CheckCircle2 size={14} />
-                      </button>
-                      <button onClick={() => handleReject(r.id)}
-                        className="p-1.5 bg-rose-50 border border-rose-200 rounded-xl text-rose-700 active:scale-95">
-                        <XCircle size={14} />
-                      </button>
-                      <button onClick={() => openEdit(r)}
-                        className="p-1.5 bg-blue-50 border border-blue-200 rounded-xl text-blue-700 active:scale-95">
-                        <ChevronRight size={14} />
-                      </button>
-                    </div>
-                  )}
-                  {r.status === 'APPROVED' && (
-                    <div className="flex items-center gap-2">
-                      <span className="text-[9px] font-black text-emerald-700 bg-emerald-50 border border-emerald-200 px-2 py-0.5 rounded-full uppercase">
-                        Approved
-                      </span>
-                      <button onClick={() => openEdit(r)} className="p-1.5 bg-slate-100 rounded-xl text-slate-600 active:scale-95">
-                        <ChevronRight size={14} />
-                      </button>
-                    </div>
-                  )}
-                  {r.status === 'REJECTED' && (
-                    <div className="flex items-center gap-2">
-                      <span className="text-[9px] font-black text-rose-700 bg-rose-50 border border-rose-200 px-2 py-0.5 rounded-full uppercase">
-                        Rejected
-                      </span>
-                      <button onClick={() => openEdit(r)} className="p-1.5 bg-slate-100 rounded-xl text-slate-600 active:scale-95">
-                        <ChevronRight size={14} />
-                      </button>
-                    </div>
-                  )}
+                  {/* No status chip — every record is locked-on-save now and
+                      the user prefers the cleanest possible row. The chevron
+                      stays as the affordance to open per-student edits via
+                      Editor Mode. */}
+                  <button onClick={() => openEdit(r)} className="p-1.5 bg-slate-100 rounded-xl text-slate-600 active:scale-95">
+                    <ChevronRight size={14} />
+                  </button>
                 </div>
               </div>
             ))}
@@ -1034,7 +999,7 @@ export const StudentAttendanceManager: React.FC<Props> = ({ onBack }) => {
         <div className="grid grid-cols-3 gap-3">
           {[
             { label: 'Overall Avg', val: `${overallAvg}%`, color: ATT_TEXT(overallAvg), bg: 'bg-white' },
-            { label: 'Pending', val: String(pendingCount), color: 'text-amber-600', bg: 'bg-white' },
+            { label: 'Records',     val: String(records.length), color: 'text-slate-700', bg: 'bg-white' },
             { label: 'Low Attend.', val: String(lowCount), color: 'text-rose-600', bg: 'bg-white' },
           ].map(s => (
             <div key={s.label} className={`${s.bg} border border-slate-100 rounded-2xl p-3 shadow-sm text-center`}>
@@ -1044,44 +1009,32 @@ export const StudentAttendanceManager: React.FC<Props> = ({ onBack }) => {
           ))}
         </div>
 
-        {/* Two primary actions — Mark vs History */}
+        {/* Two primary actions — Mark and Grid. The Approve workflow was
+            removed; teacher submissions auto-lock at save time, same as
+            principal-marked records. Records list (still reachable for
+            history/corrections) sits in the Grid view's "Records" link. */}
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
           <button onClick={() => setView('MARK')}
-            className="flex flex-col items-start gap-3 bg-gradient-to-br from-blue-600 to-indigo-600 text-white rounded-2xl p-5 shadow-md hover:shadow-lg active:scale-[0.98] transition-all text-left">
-            <div className="w-12 h-12 rounded-xl bg-white/15 backdrop-blur-sm border border-white/30 flex items-center justify-center">
-              <Save size={22}/>
+            className="flex items-center gap-4 bg-gradient-to-br from-blue-600 to-indigo-600 text-white rounded-2xl p-4 shadow-md hover:shadow-lg active:scale-[0.98] transition-all text-left">
+            <div className="w-11 h-11 rounded-xl bg-white/15 border border-white/25 flex items-center justify-center shrink-0">
+              <Save size={20}/>
             </div>
-            <div>
-              <div className="font-black text-lg">Attendance</div>
-              <div className="text-[11px] font-bold text-blue-100 mt-0.5">Mark today's attendance</div>
+            <div className="min-w-0">
+              <div className="font-black text-sm">Mark Attendance</div>
+              <div className="text-[10px] font-bold text-blue-100 mt-0.5">Pick date · mark P/A/H · save</div>
             </div>
           </button>
           <button onClick={() => setView('GRID')}
-            className="flex flex-col items-start gap-3 bg-white border border-slate-100 rounded-2xl p-5 shadow-sm hover:shadow-md hover:border-indigo-200 active:scale-[0.98] transition-all text-left">
-            <div className="w-12 h-12 rounded-xl bg-indigo-50 text-indigo-600 flex items-center justify-center">
-              <LayoutGrid size={22}/>
+            className="flex items-center gap-4 bg-white border border-slate-100 rounded-2xl p-4 shadow-sm hover:shadow-md hover:border-indigo-200 active:scale-[0.98] transition-all text-left">
+            <div className="w-11 h-11 rounded-xl bg-indigo-50 text-indigo-600 flex items-center justify-center shrink-0">
+              <LayoutGrid size={20}/>
             </div>
-            <div>
-              <div className="font-black text-lg text-slate-900">History</div>
-              <div className="text-[11px] font-bold text-slate-400 mt-0.5">Date range view · CSV / Excel export</div>
+            <div className="min-w-0">
+              <div className="font-black text-sm text-slate-900">Grid View</div>
+              <div className="text-[10px] font-bold text-slate-400 mt-0.5">Monthly grid · edit · export</div>
             </div>
           </button>
         </div>
-
-        {/* Pending review — only show when there's something to act on */}
-        {pendingCount > 0 && (
-          <button onClick={() => setView('RECORDS')}
-            className="w-full flex items-center gap-4 bg-amber-50 border border-amber-200 rounded-2xl p-4 active:scale-[0.99] hover:bg-amber-100 transition-colors text-left">
-            <div className="w-11 h-11 rounded-xl bg-amber-100 text-amber-600 flex items-center justify-center shrink-0">
-              <Users size={20} />
-            </div>
-            <div className="flex-1">
-              <div className="font-extrabold text-amber-900 text-sm">{pendingCount} pending {pendingCount === 1 ? 'review' : 'reviews'}</div>
-              <div className="text-[10px] font-bold text-amber-700 mt-0.5">Approve or reject teacher submissions</div>
-            </div>
-            <ChevronRight size={16} className="text-amber-400"/>
-          </button>
-        )}
 
         {/* Recent records */}
         {records.slice(0, 5).length > 0 && (
@@ -1098,12 +1051,6 @@ export const StudentAttendanceManager: React.FC<Props> = ({ onBack }) => {
                     <div className="font-bold text-slate-900 text-sm">{r.className}-{r.section}</div>
                     <div className="text-[10px] font-bold text-slate-400">{r.date} · {r.totalPresent}P / {r.totalAbsent}A</div>
                   </div>
-                  {r.status === 'PENDING' && (
-                    <span className="text-[9px] font-black text-amber-700 bg-amber-50 border border-amber-200 px-2 py-0.5 rounded-full">Pending</span>
-                  )}
-                  {r.status === 'APPROVED' && (
-                    <span className="text-[9px] font-black text-emerald-700 bg-emerald-50 border border-emerald-200 px-2 py-0.5 rounded-full">Approved</span>
-                  )}
                   <ChevronRight size={14} className="text-slate-300 shrink-0"/>
                 </button>
               ))}

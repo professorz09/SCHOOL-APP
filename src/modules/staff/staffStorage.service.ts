@@ -9,7 +9,17 @@ import { useAuthStore } from '@/store/authStore';
 
 export const STAFF_DOCS_BUCKET = 'staff-documents';
 
-const MAX_BYTES = 5 * 1024 * 1024;
+// Per-doc-type ceilings — same policy as student documents.
+//   PHOTO     → 1 MB
+//   most docs → 2 MB
+//   absolute  → 5 MB hard cap
+const MAX_BYTES_PHOTO    = 1 * 1024 * 1024;
+const MAX_BYTES_DOC      = 2 * 1024 * 1024;
+const ABSOLUTE_MAX_BYTES = 5 * 1024 * 1024;
+const limitFor = (docType: string): number =>
+  docType === 'PHOTO' ? MAX_BYTES_PHOTO : MAX_BYTES_DOC;
+const fmtSize = (b: number) =>
+  b >= 1024 * 1024 ? `${(b / 1024 / 1024).toFixed(1)} MB` : `${Math.round(b / 1024)} KB`;
 const ALLOWED_MIME = new Set([
   'image/jpeg', 'image/png', 'image/webp', 'image/heic', 'image/heif',
   'application/pdf',
@@ -35,8 +45,12 @@ export const staffStorageService = {
   ): Promise<{ path: string }> {
     if (!staffId) throw new Error('Staff id required');
     if (!file) throw new Error('File required');
-    if (file.size > MAX_BYTES) {
-      throw new Error(`File must be < 5 MB (got ${(file.size / 1024 / 1024).toFixed(1)} MB)`);
+    if (file.size > ABSOLUTE_MAX_BYTES) {
+      throw new Error(`File too large — absolute max ${fmtSize(ABSOLUTE_MAX_BYTES)}, got ${fmtSize(file.size)}. Please compress before uploading.`);
+    }
+    const cap = limitFor(docType);
+    if (file.size > cap) {
+      throw new Error(`File must be < ${fmtSize(cap)} (got ${fmtSize(file.size)})`);
     }
     if (file.type && !ALLOWED_MIME.has(file.type)) {
       throw new Error(`Unsupported file type: ${file.type}`);

@@ -121,7 +121,6 @@ export const PrincipalExamsManager: React.FC<Props> = ({ onBack }) => {
     try {
       await apiExams.editResults(picked.id, {
         academicYearId: activeYear.id,
-        editorMode: editorModeActive,
         results: payload,
       });
       await logAudit('exam_results_edited', 'exam_results', picked.id, {

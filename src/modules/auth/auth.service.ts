@@ -40,10 +40,11 @@ interface UserProfileRow {
   school_id: string | null;
   first_login_changed: boolean;
   is_active: boolean;
+  editor_mode_until: string | null;
 }
 
 const PROFILE_FIELDS =
-  'id, mobile_number, role, name, email, school_id, first_login_changed, is_active';
+  'id, mobile_number, role, name, email, school_id, first_login_changed, is_active, editor_mode_until';
 
 async function fetchProfile(userId: string): Promise<UserProfileRow | null> {
   const { data, error } = await supabase
@@ -77,6 +78,12 @@ async function buildSession(profile: UserProfileRow): Promise<AuthSession> {
   if (profile.role === 'PARENT') {
     session.linkedStudentIds = await fetchLinkedStudentIds(profile.id);
   }
+  // Mirror server-side Editor-Mode window into the local store so UI gates
+  // and countdown timers reflect the persisted timestamp on first paint.
+  try {
+    const { useEditorModeStore } = await import('@/store/editorModeStore');
+    useEditorModeStore.getState().hydrate(profile.editor_mode_until ?? null);
+  } catch { /* store import shouldn't fail; ignore so login isn't blocked */ }
   return session;
 }
 

@@ -43,14 +43,8 @@ export interface FeePaymentUpload {
   id: string;
   amount: number;
   description: string;
-  screenshotName: string;
-  /**
-   * Path of the uploaded screenshot in the `fee-screenshots` storage
-   * bucket (`<schoolId>/<studentId>/<filename>`). Null for legacy rows
-   * created before screenshots were actually persisted. Resolve to a
-   * viewable URL with `studentDashboardService.getFeeScreenshotSignedUrl`.
-   */
-  screenshotPath: string | null;
+  /** UPI/Bank reference number entered by parent — required, NOT NULL. */
+  transactionId: string;
   submittedAt: string;
   status: 'PENDING' | 'APPROVED' | 'REJECTED';
 }

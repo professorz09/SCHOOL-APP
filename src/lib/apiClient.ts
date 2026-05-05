@@ -13,7 +13,7 @@ async function getToken(): Promise<string> {
   return session.access_token;
 }
 
-async function apiFetch<T>(
+export async function apiFetch<T>(
   method: 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE',
   path: string,
   body?: unknown,
@@ -56,6 +56,8 @@ export const apiAuth = {
   me:             () => get<any>('/auth/me'),
   changePassword: (password: string) =>
     post<void>('/auth/change-password', { password }),
+  enableEditorMode:  () => post<{ until: string }>('/auth/editor-mode/enable'),
+  disableEditorMode: () => post<{ until: null }>('/auth/editor-mode/disable'),
 };
 
 // ─── Academic Year ───────────────────────────────────────────────────────────
@@ -157,7 +159,7 @@ export const apiFees = {
     post<any>('/fees/govt-pay', body),
   writeoff: (body: { installmentId: string; amount: number; reason: string }) =>
     post<any>('/fees/writeoff', body),
-  reversePayment: (body: { paymentId: string; reason: string; editorMode: boolean }) =>
+  reversePayment: (body: { paymentId: string; reason: string }) =>
     post<{ reversalId: string; originalId: string }>('/fees/payment/reverse', body),
 };
 
@@ -175,6 +177,8 @@ export const apiStaff = {
   }) => post<any>('/staff/salary/update', body),
   relieve: (body: { staffId: string; date: string; reason: string }) =>
     post<any>('/staff/relieve', body),
+  rejoin: (staffId: string) =>
+    post<{ staffId: string }>('/staff/rejoin', { staffId }),
   create: (body: {
     userId: string | null; name: string; role: string; salary: number;
     subject?: string; phone?: string; email?: string; aadhaarNo?: string;
@@ -248,6 +252,8 @@ export const apiAttendance = {
   updateStudents: (body: {
     attendanceId: string;
     reason?: string;
+    /** 'patch' (default) preserves rows not in `students`; 'full' deletes them. */
+    mode?: 'patch' | 'full';
     students: { studentId: string; isPresent?: boolean; status?: AttendanceCellStatus }[];
   }) => post<any>('/attendance/update-students', body),
   markByPrincipal: (body: {
@@ -278,7 +284,6 @@ export const apiExams = {
   unlockResults: (testId: string) => post<any>(`/exam/${testId}/unlock-results`, {}),
   editResults: (testId: string, body: {
     academicYearId: string;
-    editorMode: boolean;
     results: { studentId: string; marks: number; remarks?: string | null }[];
   }) => post<{ testId: string; count: number; status: string }>(`/exam/${testId}/edit-results`, body),
   configurePassMarks: (testId: string, body: {
@@ -359,6 +364,10 @@ export interface DashboardStats {
 }
 
 export const apiPrincipal = {
+  // Distinct subject names across the school — drives autocomplete in
+  // timetable allot + staff create/edit. No setup screen, no managed list:
+  // it's just "what's already been typed before".
+  subjectSuggestions: () => get<string[]>('/principal/subject-suggestions'),
   // Notices
   noticeList: () => get<any[]>('/principal/notice/list'),
   noticeCreate: (body: { title: string; body: string; audience: string; pinned?: boolean; sentBy?: string; targetStudentId?: string | null }) =>
@@ -370,7 +379,7 @@ export const apiPrincipal = {
     last_login: string | null;
   }>>('/principal/users/list'),
   resetUserPassword: (userId: string) =>
-    post<{ ok: true; name: string; mobile: string }>('/principal/users/reset-password', { userId }),
+    post<{ ok: true; name: string; mobile: string; tempPassword: string }>('/principal/users/reset-password', { userId }),
   noticeDelete: (noticeId: string) =>
     post<any>('/principal/notice/delete', { noticeId }),
 
@@ -456,6 +465,12 @@ export const apiPrincipal = {
     post<any>('/principal/fee-structure/delete', { structureId }),
   feeStructureSeed: (ayId: string) =>
     post<{ seeded: boolean; count?: number }>('/principal/fee-structure/seed', { ayId }),
+  feeStructureApplyToClass: (body: {
+    structureId: string; isRte?: boolean;
+    discountAmount?: number; discountPct?: number;
+  }) => post<{ generated: number; skipped: number; total: number; errors: string[] }>(
+    '/principal/fee-structure/apply-to-class', body,
+  ),
 
   // Fee Upload Review
   feeUploadReview: (body: { uploadId: string; decision: 'APPROVED' | 'REJECTED'; note?: string }) =>

@@ -1,6 +1,5 @@
 import React, { useState, useEffect } from 'react';
 import { Calendar, Sparkles, Lock } from 'lucide-react';
-import { ToastContainer } from '@/shared/components/ui/Toast';
 import { useUIStore } from '@/store/uiStore';
 import { useAcademicYear } from '@/shared/context/AcademicYearContext';
 import { PrincipalDashboard } from '@/roles/principal/components/PrincipalDashboard';
@@ -91,7 +90,6 @@ export const PrincipalLayout: React.FC = () => {
           Pehla Academic Year Banayein
           <Sparkles size={16} className="opacity-80" />
         </button>
-        <ToastContainer />
       </div>
     );
   }
@@ -124,10 +122,5 @@ export const PrincipalLayout: React.FC = () => {
   if (view === 'PROMOTION')        return <PromotionWizard         onBack={goBack} />;
   if (view === 'ANALYTICS')        return <AnalyticsManager        onBack={goBack} />;
 
-  return (
-    <>
-      <PrincipalDashboard onNavigate={goTo} />
-      <ToastContainer />
-    </>
-  );
+  return <PrincipalDashboard onNavigate={goTo} />;
 };

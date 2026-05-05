@@ -7,6 +7,7 @@ export interface AuthUser {
   role: string;
   school_id: string | null;
   name: string;
+  editor_mode_until: string | null;
 }
 
 declare global {
@@ -29,10 +30,10 @@ export async function requireAuth(req: Request, res: Response, next: NextFunctio
 
     const { data: profile, error: pe } = await adminDb
       .from('users')
-      .select('id, role, school_id, name')
+      .select('id, role, school_id, name, editor_mode_until')
       .eq('id', user.id)
       .eq('is_active', true)
-      .single();
+      .maybeSingle();
 
     if (pe || !profile) throw new ApiError(401, 'User profile not found or inactive');
 
@@ -51,4 +52,24 @@ export function requireRole(...roles: string[]) {
     }
     next();
   };
+}
+
+/**
+ * Server-side Editor Mode gate. Reads `users.editor_mode_until` (set by the
+ * RPC `enable_editor_mode`) and rejects unless the window is active. Routes
+ * that previously trusted `body.editorMode` should be wrapped in this so a
+ * direct API caller can't bypass the UI gating.
+ */
+export function requireEditorMode(req: Request, res: Response, next: NextFunction) {
+  const until = req.user?.editor_mode_until;
+  if (!until || new Date(until).getTime() < Date.now()) {
+    return fail(res, new ApiError(403, 'Editor Mode not active — enable it from the principal dashboard first'));
+  }
+  next();
+}
+
+/** Boolean helper for routes that need to log "was editor mode active?" without 403'ing. */
+export function isEditorModeActive(req: Request): boolean {
+  const until = req.user?.editor_mode_until;
+  return !!until && new Date(until).getTime() >= Date.now();
 }

@@ -8,8 +8,8 @@ export interface FeePaymentUploadRecord {
   submittedBy: string;
   amount: number;
   description: string;
-  screenshotName: string;
-  screenshotUrl: string | null;
+  /** UPI/Bank reference number entered by parent — required, NOT NULL. */
+  transactionId: string;
   status: FeeUploadStatus;
   submittedAt: string;
   reviewedAt: string | null;

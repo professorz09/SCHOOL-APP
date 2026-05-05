@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { AppRole, NavTab } from '@/shared/types/index';
 import { Header, BottomNav, SidebarNav } from '@/shared/components/Navigation';
 import { PrincipalLayout } from '@/roles/principal/pages/PrincipalLayout';
@@ -25,6 +25,7 @@ import { SchoolsManager }      from '@/roles/super-admin/components/SchoolsManag
 import { BillingManager }      from '@/roles/super-admin/components/BillingManager';
 import { AttendanceManager }   from '@/modules/attendance/components/TeacherAttendanceManager';
 import { TeacherNoticesView }  from '@/modules/notices/components/TeacherNoticesView';
+import { ToastContainer }      from '@/shared/components/ui/Toast';
 
 const useIsDesktop = () => {
   const [isDesktop, setIsDesktop] = useState(() => window.innerWidth >= 1024);
@@ -50,6 +51,77 @@ export default function App() {
   const [tab, setTab] = useState<NavTab>('HOME');
   const [linkedStudents, setLinkedStudents] = useState<Student[]>([]);
   const isDesktop = useIsDesktop();
+  const mainScrollRef = useRef<HTMLElement | null>(null);
+
+  // Desktop keyboard scrolling: browser only auto-scrolls a non-window
+  // container with arrow/PageUp/PageDown/Home/End/Space if it has focus.
+  // We focus the scroll region on view changes and also forward those keys
+  // to it from a global listener (skipping when the user is typing in an
+  // input/textarea/contenteditable so we don't hijack form keys).
+  useEffect(() => {
+    if (!isDesktop) return;
+    const el = mainScrollRef.current;
+    if (!el) return;
+
+    // Focus shortly after mount/tab switch so arrow keys scroll immediately.
+    const t = window.setTimeout(() => {
+      const active = document.activeElement as HTMLElement | null;
+      const isEditing = !!active && (
+        active.tagName === 'INPUT' ||
+        active.tagName === 'TEXTAREA' ||
+        active.tagName === 'SELECT' ||
+        active.isContentEditable
+      );
+      if (!isEditing) el.focus({ preventScroll: true });
+    }, 50);
+
+    const onKey = (e: KeyboardEvent) => {
+      const target = e.target as HTMLElement | null;
+      if (target) {
+        const tag = target.tagName;
+        if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT' || target.isContentEditable) return;
+      }
+      const main = mainScrollRef.current;
+      if (!main) return;
+      // Many sub-views ship their own `flex-1 overflow-y-auto` container, so
+      // <main> itself isn't the actual scroll surface. Pick the deepest
+      // visible vertically-scrollable element that still has room to move; if
+      // none, fall back to <main>.
+      const pickScrollEl = (): HTMLElement => {
+        const candidates = main.querySelectorAll<HTMLElement>('*');
+        let best: HTMLElement | null = null;
+        let bestArea = 0;
+        candidates.forEach((el) => {
+          if (el.scrollHeight - el.clientHeight <= 1) return;
+          const style = getComputedStyle(el);
+          const oy = style.overflowY;
+          if (oy !== 'auto' && oy !== 'scroll') return;
+          const r = el.getBoundingClientRect();
+          if (r.width <= 0 || r.height <= 0) return;
+          const area = r.width * r.height;
+          if (area > bestArea) { bestArea = area; best = el; }
+        });
+        return best ?? main;
+      };
+      const scrollEl = pickScrollEl();
+      const page = scrollEl.clientHeight * 0.9;
+      const step = 60;
+      switch (e.key) {
+        case 'ArrowDown':       scrollEl.scrollBy({ top:  step, behavior: 'auto' }); e.preventDefault(); break;
+        case 'ArrowUp':         scrollEl.scrollBy({ top: -step, behavior: 'auto' }); e.preventDefault(); break;
+        case 'PageDown':        scrollEl.scrollBy({ top:  page, behavior: 'smooth' }); e.preventDefault(); break;
+        case 'PageUp':          scrollEl.scrollBy({ top: -page, behavior: 'smooth' }); e.preventDefault(); break;
+        case ' ':               scrollEl.scrollBy({ top: e.shiftKey ? -page : page, behavior: 'smooth' }); e.preventDefault(); break;
+        case 'Home':            scrollEl.scrollTo({ top: 0, behavior: 'smooth' }); e.preventDefault(); break;
+        case 'End':             scrollEl.scrollTo({ top: scrollEl.scrollHeight, behavior: 'smooth' }); e.preventDefault(); break;
+      }
+    };
+    window.addEventListener('keydown', onKey);
+    return () => {
+      window.clearTimeout(t);
+      window.removeEventListener('keydown', onKey);
+    };
+  }, [isDesktop, tab, isSubView]);
 
   // Restore session from Supabase on mount.
   useEffect(() => {
@@ -162,37 +234,50 @@ export default function App() {
   // Sidebar shows brand + notification + user. Content fills the rest.
   // No duplicate top bar; sub-views own their internal header so we don't
   // pad the main twice.
+  // ToastContainer is mounted once at the app root so toasts always render —
+  // every nested view (Transport, Timetable, Settings, …) shares this single
+  // instance instead of needing its own.
   if (isDesktop) {
     return (
-      <div className="flex h-full bg-slate-50 overflow-hidden">
-        <aside className="w-64 xl:w-72 bg-white border-r border-slate-100 shadow-sm shrink-0">
-          <SidebarNav role={role} currentTab={tab} setTab={setTab} onLogout={() => logout()} />
-        </aside>
+      <>
+        <div className="flex h-full bg-slate-50 overflow-hidden">
+          <aside className="w-64 xl:w-72 bg-white border-r border-slate-100 shadow-sm shrink-0">
+            <SidebarNav role={role} currentTab={tab} setTab={setTab} onLogout={() => logout()} />
+          </aside>
 
-        <main className="flex-1 overflow-y-auto hide-scrollbar">
-          {renderTabContent()}
-        </main>
-      </div>
+          <main
+            ref={mainScrollRef}
+            tabIndex={0}
+            className="flex-1 overflow-y-auto hide-scrollbar focus:outline-none"
+          >
+            {renderTabContent()}
+          </main>
+        </div>
+        <ToastContainer />
+      </>
     );
   }
 
   // ── Mobile layout ─────────────────────────────────────────────────────────
   return (
-    <div className="h-dvh bg-slate-100 flex flex-col overflow-hidden">
-      <div className="w-full h-full bg-slate-50 flex flex-col overflow-hidden">
-        {/* Roles whose dashboard renders its own greeting block (with extra
-            context like school name or active-year chip) should suppress the
-            generic Header so the two don't stack. */}
-        {tab === 'HOME' && !isSubView && role !== 'STUDENT' && role !== 'PRINCIPAL' && <Header role={role} />}
+    <>
+      <div className="h-dvh bg-slate-100 flex flex-col overflow-hidden">
+        <div className="w-full h-full bg-slate-50 flex flex-col overflow-hidden">
+          {/* Roles whose dashboard renders its own greeting block (with extra
+              context like school name or active-year chip) should suppress the
+              generic Header so the two don't stack. */}
+          {tab === 'HOME' && !isSubView && role !== 'STUDENT' && role !== 'PRINCIPAL' && role !== 'TEACHER' && <Header role={role} />}
 
-        <main className="flex-1 overflow-y-auto pb-32 hide-scrollbar">
-          {renderTabContent()}
-        </main>
+          <main className="flex-1 overflow-y-auto pb-32 hide-scrollbar">
+            {renderTabContent()}
+          </main>
 
-        <div className="fixed bottom-0 left-0 right-0 z-20">
-          <BottomNav role={role} currentTab={tab} setTab={(t) => { setTab(t); setSubView(t !== 'HOME' && t !== 'PROFILE'); }} />
+          <div className="fixed bottom-0 left-0 right-0 z-20">
+            <BottomNav role={role} currentTab={tab} setTab={(t) => { setTab(t); setSubView(t !== 'HOME' && t !== 'PROFILE'); }} />
+          </div>
         </div>
       </div>
-    </div>
+      <ToastContainer />
+    </>
   );
 }

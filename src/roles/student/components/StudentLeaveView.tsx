@@ -108,6 +108,16 @@ export const StudentLeaveView: React.FC<Props> = ({ onBack, studentId }) => {
   const approved = leaveApps.filter(l => l.status === 'APPROVED').length;
   const rejected = leaveApps.filter(l => l.status === 'REJECTED').length;
 
+  // Anti-spam cap: max 3 leave applications per student per IST day. DB
+  // trigger + server route both enforce; UI mirrors the budget so the parent
+  // sees it before clicking Submit.
+  const istToday = new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Kolkata' });
+  const todayCount = leaveApps.filter(l =>
+    (l.createdAt ?? '').slice(0, 10) === istToday
+  ).length;
+  const DAILY_CAP = 3;
+  const reachedCap = todayCount >= DAILY_CAP;
+
   return (
     <div className="w-full bg-slate-50 flex flex-col animate-in slide-in-from-right-8 duration-300">
       {/* Header */}
@@ -122,14 +132,26 @@ export const StudentLeaveView: React.FC<Props> = ({ onBack, studentId }) => {
               <p className="text-[10px] font-bold text-slate-400 mt-0.5">Applications & Status</p>
             </div>
           </div>
-          <button
-            onClick={() => setShowForm(f => !f)}
-            className={`flex items-center gap-1.5 px-3 py-2 rounded-xl text-xs font-black uppercase transition-colors ${
-              showForm ? 'bg-slate-200 text-slate-700' : 'bg-blue-600 text-white'
+          <div className="flex items-center gap-2">
+            <span className={`text-[10px] font-black px-2 py-0.5 rounded-full border ${
+              reachedCap
+                ? 'bg-rose-50 text-rose-600 border-rose-200'
+                : todayCount > 0
+                  ? 'bg-amber-50 text-amber-700 border-amber-200'
+                  : 'bg-slate-50 text-slate-500 border-slate-200'
             }`}>
-            {showForm ? <X size={14}/> : <Plus size={14}/>}
-            {showForm ? 'Cancel' : 'Apply'}
-          </button>
+              {todayCount}/{DAILY_CAP} today
+            </span>
+            <button
+              onClick={() => setShowForm(f => !f)}
+              disabled={!showForm && reachedCap}
+              className={`flex items-center gap-1.5 px-3 py-2 rounded-xl text-xs font-black uppercase transition-colors disabled:opacity-50 disabled:cursor-not-allowed ${
+                showForm ? 'bg-slate-200 text-slate-700' : 'bg-blue-600 text-white'
+              }`}>
+              {showForm ? <X size={14}/> : <Plus size={14}/>}
+              {showForm ? 'Cancel' : 'Apply'}
+            </button>
+          </div>
         </div>
 
         {/* Stats */}

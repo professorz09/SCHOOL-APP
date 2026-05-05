@@ -1,11 +1,12 @@
 import React, { useCallback, useEffect, useState } from 'react';
-import { ArrowLeft, Plus, Bell, Trash2, Pin, User, Search } from 'lucide-react';
+import { ArrowLeft, Plus, Bell, Trash2, Pin, User, Search, Megaphone } from 'lucide-react';
 import { noticeService } from '@/modules/notices/notice.service';
 import type { Notice, NoticeAudience } from '@/modules/notices/notice.types';
 import { useUIStore } from '@/store/uiStore';
 import { useRealtimeTable } from '@/shared/hooks/useRealtimeTable';
 import { studentService } from '@/modules/students/student.service';
 import type { Student } from '@/modules/students/student.types';
+import { getRelevantBroadcasts, type RelevantBroadcast } from '@/shared/utils/broadcasts.service';
 
 type View = 'LIST' | 'COMPOSE';
 
@@ -48,14 +49,17 @@ export const NoticesManager: React.FC<Props> = ({ onBack }) => {
   // Kept in component state to avoid a fresh fetch every keystroke.
   const [students, setStudents] = useState<Student[] | null>(null);
   const [studentSearch, setStudentSearch] = useState('');
+  const [broadcasts, setBroadcasts] = useState<RelevantBroadcast[]>([]);
 
   const loadNotices = useCallback(() => {
     noticeService.invalidate();
     noticeService.getAll().then(setNotices).catch(() => {});
+    getRelevantBroadcasts('PRINCIPAL').then(setBroadcasts).catch(() => setBroadcasts([]));
   }, []);
 
   useEffect(() => { loadNotices(); }, [loadNotices]);
   useRealtimeTable('notices', loadNotices);
+  useRealtimeTable('broadcasts', loadNotices, { schoolColumn: false });
 
   // Fetch students the first time the principal switches to SPECIFIC_STUDENT.
   useEffect(() => {
@@ -227,6 +231,24 @@ export const NoticesManager: React.FC<Props> = ({ onBack }) => {
         <button onClick={() => setView('COMPOSE')} className="p-2 bg-violet-500 text-white rounded-full shadow-md"><Plus size={18} /></button>
       )}
       <div className="flex-1 overflow-y-auto p-4  space-y-3">
+        {broadcasts.length > 0 && (
+          <div className="space-y-2">
+            <p className="text-[10px] font-black uppercase tracking-widest text-indigo-500">Platform Announcements</p>
+            {broadcasts.map(b => (
+              <div key={b.id} className="bg-gradient-to-br from-indigo-50 to-violet-50 rounded-2xl border border-indigo-200 shadow-sm p-4">
+                <div className="flex items-center gap-2 mb-1.5">
+                  <Megaphone size={11} className="text-indigo-600 shrink-0" />
+                  <span className="text-[9px] font-black px-2 py-0.5 rounded-full border uppercase text-indigo-700 bg-white border-indigo-200">Announcement</span>
+                  <span className="ml-auto text-[10px] font-bold text-indigo-500">
+                    {b.sentAt ? new Date(b.sentAt).toLocaleDateString('en-IN', { day: '2-digit', month: 'short' }) : '—'}
+                  </span>
+                </div>
+                <div className="font-black text-slate-900 text-sm leading-tight mb-1">{b.title}</div>
+                <p className="text-xs font-medium text-slate-700 leading-relaxed whitespace-pre-line">{b.body}</p>
+              </div>
+            ))}
+          </div>
+        )}
         {notices.map(notice => (
           <div key={notice.id} className={`bg-white rounded-2xl border shadow-sm p-4 ${notice.pinned ? 'border-violet-200 bg-violet-50/30' : 'border-slate-100'}`}>
             <div className="flex items-start justify-between gap-2 mb-2">

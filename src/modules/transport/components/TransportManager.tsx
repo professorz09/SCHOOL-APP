@@ -11,6 +11,7 @@ import {
 import { staffService } from '@/modules/staff/staff.service';
 import { StaffMember } from '@/modules/staff/staff.types';
 import { useRealtimeTable } from '@/shared/hooks/useRealtimeTable';
+import { useUIStore } from '@/store/uiStore';
 
 type Tab = 'VEHICLES' | 'TRACKING' | 'STUDENTS';
 
@@ -31,7 +32,10 @@ function buildStopsWithStatus(vehicle: TransportVehicle) {
 }
 
 export const TransportManager: React.FC<Props> = ({ onBack }) => {
-  const [tab, setTab]                   = useState<Tab>('VEHICLES');
+  const { showToast } = useUIStore();
+  // Default landing is the live-tracking view — principals open transport
+  // 99% of the time to check where buses are, not to add a new vehicle.
+  const [tab, setTab]                   = useState<Tab>('TRACKING');
   const [vehicles, setVehicles]         = useState<TransportVehicle[]>([]);
   const [assignments, setAssignments]   = useState<StudentTransportAssignment[]>([]);
   const [students, setStudents]         = useState<TransportStudent[]>([]);
@@ -163,6 +167,12 @@ export const TransportManager: React.FC<Props> = ({ onBack }) => {
       setNewVehicleType('BUS');
       setNewVehicleCapacity('50');
       if (created) { setRouteVehicleId(created.id); setNewRouteName(''); }
+      showToast('Vehicle added');
+    } catch (e) {
+      // Was previously swallowed — a 400 from the server (e.g. duplicate
+      // vehicle_no, validation failure) silently reset the spinner with no
+      // user feedback, so the principal thought "add nahi ho raha".
+      showToast(e instanceof Error ? e.message : 'Failed to add vehicle', 'error');
     } finally { setAddingVehicle(false); }
   };
 
@@ -416,7 +426,7 @@ export const TransportManager: React.FC<Props> = ({ onBack }) => {
 
         {/* Tabs */}
         <div className="flex border-t border-slate-100">
-          {(['VEHICLES', 'TRACKING', 'STUDENTS'] as Tab[]).map(t => (
+          {(['TRACKING', 'VEHICLES', 'STUDENTS'] as Tab[]).map(t => (
             <button key={t} onClick={() => setTab(t)}
               className={`flex-1 py-3 text-[10px] font-black uppercase tracking-widest border-b-2 transition-colors ${
                 tab === t ? 'border-blue-600 text-blue-600' : 'border-transparent text-slate-400'

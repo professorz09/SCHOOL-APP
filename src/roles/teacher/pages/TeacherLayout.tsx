@@ -1,9 +1,8 @@
 import React, { useState, useEffect } from 'react';
-import { ToastContainer } from '@/shared/components/ui/Toast';
 import { useUIStore } from '@/store/uiStore';
 import {
   FileCheck2, ClipboardList, ScrollText, CircleAlert,
-  Bell, CalendarDays, Clock, MapPin, Users,
+  Bell, CalendarDays, Clock, Users, Sparkles, Play,
 } from 'lucide-react';
 import { teacherService } from '@/roles/teacher/teacher.service';
 import { AttendanceManager } from '@/modules/attendance/components/TeacherAttendanceManager';
@@ -36,6 +35,12 @@ const isCurrentPeriod = (startTime: string, endTime: string): boolean => {
   return nowMins >= sh * 60 + sm && nowMins < eh * 60 + em;
 };
 
+const isPast = (endTime: string): boolean => {
+  const now = new Date();
+  const [eh, em] = endTime.split(':').map(Number);
+  return now.getHours() * 60 + now.getMinutes() > eh * 60 + em;
+};
+
 export const TeacherLayout: React.FC = () => {
   const [view, setView] = useState<TeacherView>('DASHBOARD');
   const { isSubView, setSubView } = useUIStore();
@@ -43,22 +48,20 @@ export const TeacherLayout: React.FC = () => {
   const goBack = () => { setView('DASHBOARD'); setSubView(false); };
 
   useEffect(() => { setSubView(false); }, []);
-
   // When footer HOME pressed, isSubView becomes false → reset to dashboard
   useEffect(() => { if (!isSubView) setView('DASHBOARD'); }, [isSubView]);
+
   const session = useAuthStore(state => state.session);
   const teacherName = session?.name ?? 'Teacher';
+  const initials = teacherName.split(' ').map(w => w[0]).join('').slice(0, 2).toUpperCase();
+
   const [todayClasses, setTodayClasses] = useState<TodayEntry[]>([]);
-  const [teacherClasses, setTeacherClasses] = useState<TeacherClass[]>([]);
+  const [, setTeacherClasses] = useState<TeacherClass[]>([]);
 
   useEffect(() => {
     teacherService.getClasses().then(setTeacherClasses).catch(() => setTeacherClasses([]));
     teacherService.getTodayClasses().then(setTodayClasses).catch(() => setTodayClasses([]));
   }, []);
-
-  const totalStudents = teacherClasses.reduce((sum, c) => sum + c.studentCount, 0);
-  const primarySubject = teacherClasses[0]?.subject ?? '—';
-  const classLabels = teacherClasses.map(c => `${c.className}-${c.section}`).join(', ');
 
   if (view === 'ATTENDANCE')  return <AttendanceManager      onBack={goBack} />;
   if (view === 'TESTS')       return <TestsManager           onBack={goBack} />;
@@ -66,104 +69,135 @@ export const TeacherLayout: React.FC = () => {
   if (view === 'COMPLAINTS')  return <TeacherComplaintsView  onBack={goBack} />;
   if (view === 'NOTICES')     return <TeacherNoticesView     onBack={goBack} />;
   if (view === 'TIMETABLE')   return <TeacherTimetableView   onBack={goBack} />;
-  if (view === 'STUDENTS')    return <TeacherStudentList      onBack={goBack} />;
+  if (view === 'STUDENTS')    return <TeacherStudentList     onBack={goBack} />;
 
-  const modules = [
-    { icon: CalendarDays,   label: 'My Timetable', view: 'TIMETABLE'   as TeacherView, color: 'bg-sky-50 text-sky-600',        desc: 'Weekly schedule & periods' },
-    { icon: Users,          label: 'My Students',  view: 'STUDENTS'    as TeacherView, color: 'bg-emerald-50 text-emerald-600', desc: 'View roster for my classes' },
-    { icon: FileCheck2,     label: 'Attendance',   view: 'ATTENDANCE'  as TeacherView, color: 'bg-blue-50 text-blue-600',      desc: 'Mark class attendance' },
-    { icon: ClipboardList,  label: 'Tests',        view: 'TESTS'       as TeacherView, color: 'bg-indigo-50 text-indigo-600',  desc: 'Schedule & manage exams' },
-    { icon: Bell,           label: 'Notices',      view: 'NOTICES'     as TeacherView, color: 'bg-violet-50 text-violet-600',  desc: 'Send notices (incl. homework tag)' },
-    { icon: ScrollText,     label: 'AI Exam Gen',  view: 'EXAM_GEN'    as TeacherView, color: 'bg-amber-50 text-amber-600',    desc: 'Generate with Gemini AI' },
-    { icon: CircleAlert,    label: 'Complaints',   view: 'COMPLAINTS'  as TeacherView, color: 'bg-rose-50 text-rose-600',      desc: 'Report to principal' },
+  // 8 tiles in a 4×2 grid. Picked the most-used teacher actions; everything
+  // else (e.g. profile/settings) lives in the bottom-nav YOU tab.
+  const modules: Array<{
+    icon: React.ComponentType<{ size?: number; className?: string }>;
+    label: string;
+    view: TeacherView;
+    color: string;
+  }> = [
+    { icon: FileCheck2,    label: 'Attendance', view: 'ATTENDANCE', color: 'text-blue-600'    },
+    { icon: ClipboardList, label: 'Tests',      view: 'TESTS',      color: 'text-violet-600'  },
+    { icon: ScrollText,    label: 'Notices',    view: 'NOTICES',    color: 'text-orange-500'  },
+    { icon: Sparkles,      label: 'Exam Gen.',  view: 'EXAM_GEN',   color: 'text-emerald-600' },
+    { icon: CalendarDays,  label: 'Timetable',  view: 'TIMETABLE',  color: 'text-sky-600'     },
+    { icon: Users,         label: 'Students',   view: 'STUDENTS',   color: 'text-indigo-600'  },
+    { icon: CircleAlert,   label: 'Helpdesk',   view: 'COMPLAINTS', color: 'text-rose-500'    },
   ];
 
   return (
-    <>
-    <div className="flex flex-col gap-4 lg:gap-6 animate-in slide-in-from-bottom-4 duration-300 fade-in pt-2 lg:pt-6 pb-4 lg:pb-8 px-5 lg:px-8 xl:px-12">
-      {/* Greeting */}
-      <div className="lg:hidden">
-        <p className="text-[10px] font-black uppercase tracking-widest text-slate-400">TEACHER DASHBOARD</p>
-        <h2 className="text-2xl font-black text-slate-900 mt-0.5">Hello, {teacherName}</h2>
-        <p className="text-xs font-bold text-slate-400 mt-0.5">{primarySubject}{classLabels ? ` · ${classLabels}` : ''}</p>
+    <div className="flex flex-col gap-6 lg:gap-8 animate-in fade-in duration-300 px-5 lg:px-10 xl:px-16 max-w-7xl mx-auto w-full pt-4 lg:pt-8 pb-8 lg:pb-12">
+
+      {/* ── Header ─────────────────────────────────────────────────────── */}
+      <div className="flex items-center justify-between">
+        <div className="flex items-center gap-3 min-w-0">
+          <div className="w-12 h-12 lg:w-14 lg:h-14 rounded-full bg-blue-100 text-blue-600 border-2 border-blue-200 flex items-center justify-center font-black text-lg shrink-0">
+            {initials}
+          </div>
+          <div className="min-w-0">
+            <h2 className="text-2xl lg:text-3xl font-black text-slate-900 uppercase tracking-tight leading-none truncate">
+              Hi, {teacherName.split(' ')[0]}
+            </h2>
+            <p className="text-[10px] lg:text-xs font-black uppercase tracking-widest text-slate-400 mt-1">
+              Welcome to EduGrow
+            </p>
+          </div>
+        </div>
+        <button onClick={() => goTo('NOTICES')}
+          className="relative w-11 h-11 bg-white rounded-full border border-slate-200 shadow-sm flex items-center justify-center shrink-0 hover:bg-slate-50 transition-colors">
+          <Bell size={18} className="text-slate-600" />
+          {todayClasses.length > 0 && (
+            <span className="absolute -top-1 -right-1 min-w-[20px] h-5 px-1 bg-rose-500 rounded-full flex items-center justify-center">
+              <span className="text-[9px] font-black text-white">{todayClasses.length}</span>
+            </span>
+          )}
+        </button>
       </div>
 
-      {/* Today's summary */}
-      <div className="grid grid-cols-3 gap-2 lg:gap-4">
-        {[
-          { label: "Today's Classes", val: String(todayClasses.length), color: 'text-blue-600' },
-          { label: 'Total Students', val: totalStudents > 0 ? String(totalStudents) : '—', color: 'text-slate-900' },
-          { label: 'Classes', val: teacherClasses.length > 0 ? String(teacherClasses.length) : '—', color: 'text-emerald-600' },
-        ].map(({ label, val, color }) => (
-          <div key={label} className="bg-white rounded-2xl border border-slate-100 shadow-sm p-3 lg:p-5 text-center">
-            <div className={`text-xl lg:text-4xl font-black tabular-nums ${color}`}>{val}</div>
-            <div className="text-[9px] lg:text-[11px] font-black uppercase tracking-widest text-slate-400 mt-0.5 lg:mt-2 leading-tight">{label}</div>
-          </div>
+      {/* ── Module grid ────────────────────────────────────────────────── */}
+      <div className="grid grid-cols-4 gap-3 lg:gap-4">
+        {modules.map(({ icon: Icon, label, view: v, color }) => (
+          <button key={label} onClick={() => goTo(v)}
+            className="aspect-square flex flex-col items-center justify-center gap-2 lg:gap-3 bg-white border border-slate-200 rounded-2xl shadow-sm active:scale-95 hover:shadow-md hover:border-slate-300 hover:-translate-y-0.5 transition-all">
+            <Icon size={26} className={color} />
+            <span className="text-[9px] lg:text-[11px] font-black uppercase tracking-widest text-slate-600 text-center leading-tight px-1">
+              {label}
+            </span>
+          </button>
         ))}
       </div>
 
-      {/* Today's schedule + Quick actions — side-by-side on desktop */}
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-4 lg:gap-6">
-        {/* Today's timetable */}
-        <div className="bg-white rounded-2xl border border-slate-100 shadow-sm p-4 lg:p-5 lg:col-span-2">
-          <div className="flex items-center justify-between mb-3">
-            <p className="text-[10px] lg:text-xs font-black uppercase tracking-widest text-slate-400">Today's Schedule</p>
-            <button onClick={() => goTo('TIMETABLE')}
-              className="text-[9px] lg:text-[11px] font-black text-blue-500 uppercase tracking-widest hover:text-blue-700">
-              Full Week →
-            </button>
-          </div>
-          {todayClasses.length === 0 ? (
-            <p className="text-xs font-bold text-slate-400 text-center py-4 lg:py-8">No classes today</p>
-          ) : (
-            <div className="space-y-2.5">
-              {todayClasses.map(entry => {
-                const live = isCurrentPeriod(entry.slot.startTime, entry.slot.endTime);
-                const now = new Date();
-                const [eh, em] = entry.slot.endTime.split(':').map(Number);
-                const done = now.getHours() * 60 + now.getMinutes() > eh * 60 + em;
-                return (
-                  <div key={entry.id}
-                    className={`flex items-center gap-3 p-3 rounded-xl ${live ? 'bg-blue-50 border border-blue-200' : 'bg-slate-50'}`}>
-                    <div className={`w-2 h-10 rounded-full shrink-0 ${done ? 'bg-slate-200' : live ? 'bg-blue-500' : 'bg-slate-300'}`} />
-                    <div className="flex-1 min-w-0">
-                      <div className="font-extrabold text-slate-900 text-xs lg:text-sm">{entry.className}-{entry.section} · {entry.subject}</div>
-                      <div className="flex items-center gap-2 text-[10px] lg:text-[11px] font-bold text-slate-400 mt-0.5">
-                        <Clock size={9} /> {entry.slot.startTime}–{entry.slot.endTime}
-                        {entry.room && <><MapPin size={9} /> {entry.room}</>}
-                      </div>
-                    </div>
-                    {live && <span className="text-[9px] font-black bg-blue-500 text-white px-2 py-0.5 rounded-full uppercase animate-pulse">Live</span>}
-                    {done && <span className="text-[9px] font-black text-slate-400 uppercase">Done</span>}
-                  </div>
-                );
-              })}
-            </div>
-          )}
+      {/* ── Upcoming classes ───────────────────────────────────────────── */}
+      <section>
+        <div className="flex items-center justify-between mb-3">
+          <h3 className="text-lg lg:text-xl font-black text-slate-900 uppercase tracking-tight">
+            Upcoming Classes
+          </h3>
+          <button onClick={() => goTo('TIMETABLE')}
+            className="text-[10px] lg:text-xs font-black text-blue-600 uppercase tracking-widest hover:text-blue-700 transition-colors">
+            View Timetable →
+          </button>
         </div>
 
-        {/* Quick Actions — vertical column on desktop, full width below schedule on mobile */}
-        <div>
-          <p className="text-[10px] lg:text-xs font-black uppercase tracking-widest text-slate-400 mb-2 lg:mb-3">Quick Actions</p>
-          <div className="space-y-2">
-            {modules.map(({ icon: Icon, label, view: v, color, desc }) => (
-              <button key={label} onClick={() => goTo(v)}
-                className="w-full flex items-center gap-4 bg-white rounded-2xl border border-slate-100 shadow-sm p-4 text-left active:scale-95 hover:shadow-md hover:border-slate-200 transition-all">
-                <div className={`w-11 h-11 rounded-xl flex items-center justify-center shrink-0 ${color}`}>
-                  <Icon size={22} />
-                </div>
-                <div className="flex-1 min-w-0">
-                  <div className="font-extrabold text-slate-900 text-sm">{label}</div>
-                  <div className="text-[10px] font-bold text-slate-400 mt-0.5 truncate">{desc}</div>
-                </div>
-                <div className="text-slate-300">›</div>
-              </button>
-            ))}
+        {todayClasses.length === 0 ? (
+          <div className="bg-white rounded-2xl border border-slate-100 shadow-sm p-8 text-center">
+            <CalendarDays size={28} className="mx-auto mb-2 text-slate-300" />
+            <p className="text-sm font-black text-slate-500">No classes today</p>
+            <p className="text-[11px] font-bold text-slate-400 mt-1">Enjoy the day!</p>
           </div>
-        </div>
-      </div>
+        ) : (
+          // Dashboard preview — keep it short; full schedule lives in the
+          // Timetable view linked above.
+          <div className="bg-white rounded-2xl border border-slate-100 shadow-sm divide-y divide-slate-50 overflow-hidden">
+            {todayClasses.slice(0, 3).map(entry => {
+              const live = isCurrentPeriod(entry.slot.startTime, entry.slot.endTime);
+              const done = isPast(entry.slot.endTime);
+              const barColor = live
+                ? 'bg-emerald-500'
+                : done
+                  ? 'bg-slate-200'
+                  : 'bg-slate-300';
+              return (
+                <div key={entry.id} className={`flex items-stretch gap-3 px-4 py-4 ${live ? 'bg-emerald-50/30' : ''}`}>
+                  <div className={`w-1.5 rounded-full shrink-0 ${barColor}`} />
+                  <div className="flex-1 min-w-0">
+                    <div className={`font-black text-sm lg:text-base uppercase tracking-tight ${done ? 'text-slate-400' : 'text-slate-900'}`}>
+                      Class {entry.className}-{entry.section} ({entry.subject})
+                    </div>
+                    <div className="flex items-center gap-1.5 mt-1">
+                      <Clock size={12} className="text-slate-400" />
+                      <span className="text-[11px] lg:text-xs font-bold text-slate-500">
+                        {entry.slot.startTime} – {entry.slot.endTime}
+                      </span>
+                      {entry.room && (
+                        <>
+                          <span className="text-slate-300">·</span>
+                          <span className="text-[11px] lg:text-xs font-bold text-slate-500">{entry.room}</span>
+                        </>
+                      )}
+                    </div>
+                  </div>
+                  <div className="flex items-center shrink-0">
+                    {live ? (
+                      <button className="w-10 h-10 rounded-full bg-blue-50 text-blue-600 flex items-center justify-center hover:bg-blue-100 transition-colors">
+                        <Play size={16} className="ml-0.5 fill-current" />
+                      </button>
+                    ) : done ? (
+                      <span className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Done</span>
+                    ) : (
+                      <span className="text-[10px] font-black text-slate-300 uppercase tracking-widest">Up next</span>
+                    )}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        )}
+      </section>
+
     </div>
-    <ToastContainer />
-    </>
   );
 };

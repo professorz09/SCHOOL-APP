@@ -12,6 +12,7 @@ import { schoolInfoService, SchoolInfo } from '@/shared/utils/schoolInfo.service
 import { FeeStructureForm, FeeStructureItem } from '@/modules/fees/components/FeeStructureForm';
 import { AuditLogsViewer } from '@/roles/principal/components/AuditLogsViewer';
 import { useEditorModeStore } from '@/store/editorModeStore';
+import { stripClassPrefix } from '@/shared/utils/className';
 import { useAcademicYear } from '@/shared/context/AcademicYearContext';
 
 type View = 'MENU' | 'SCHOOL_INFO' | 'CLASSES' | 'FEE_STRUCT' | 'FEE_STRUCT_EDIT' | 'PAYMENTS' | 'SECURITY' | 'DATA_EXPORT' | 'ACTIVITY_LOG' | 'USERS';
@@ -69,7 +70,8 @@ export const SettingsManager: React.FC<Props> = ({ onBack, initialView }) => {
   const [pwSaving, setPwSaving] = useState(false);
 
   // Editor Mode
-  const editorEnabled = useEditorModeStore(s => s.enabled);
+  const editorEnabled = useEditorModeStore(s => s.isActive());
+  const editorPending = useEditorModeStore(s => s.pending);
   const editorEnable  = useEditorModeStore(s => s.enable);
   const editorDisable = useEditorModeStore(s => s.disable);
   const editorRemMs   = useEditorModeStore(s => s.remainingMs);
@@ -187,6 +189,35 @@ export const SettingsManager: React.FC<Props> = ({ onBack, initialView }) => {
       });
       setEditingFs(null);
       setView('FEE_STRUCT');
+
+      // After saving a CLASS-scoped structure, offer to fan it out to every
+      // student in that class who doesn't yet have a schedule. Without this
+      // step the structure is dormant — students show "0 installments" even
+      // though their class is configured. We confirm because regeneration
+      // is destructive on existing unpaid rows; the server endpoint
+      // additionally guards by skipping students who already have any
+      // installments in the active year.
+      const isClassScope = saved.structureType === 'CLASS'
+        && saved.className && saved.className !== 'TRANSPORT' && saved.className !== 'ALL_CLASSES';
+      if (isClassScope) {
+        const proceed = window.confirm(
+          `Apply this structure to all students of ${saved.className}?\n\n` +
+          `Students who already have a schedule for this year will be skipped.`,
+        );
+        if (proceed) {
+          try {
+            const result = await apiPrincipal.feeStructureApplyToClass({ structureId: saved.id });
+            showToast(
+              `Generated for ${result.generated} student${result.generated === 1 ? '' : 's'}` +
+              (result.skipped > 0 ? ` · ${result.skipped} already had a schedule` : ''),
+            );
+            return;
+          } catch (e) {
+            showToast(e instanceof Error ? e.message : 'Schedule generation failed', 'error');
+            return;
+          }
+        }
+      }
       showToast(`Fee structure "${saved.name}" saved`);
     } catch (e) {
       showToast(e instanceof Error ? e.message : 'Failed to save fee structure', 'error');
@@ -250,13 +281,21 @@ export const SettingsManager: React.FC<Props> = ({ onBack, initialView }) => {
               </div>
             </div>
             <button
-              onClick={() => editorEnabled ? editorDisable() : setEditorConfirm(true)}
-              className={`px-4 py-2 rounded-xl text-[11px] font-black transition-colors ${
+              disabled={editorPending}
+              onClick={() => {
+                if (editorPending) return;
+                if (editorEnabled) {
+                  editorDisable().catch(e => showToast(e instanceof Error ? e.message : 'Disable failed', 'error'));
+                } else {
+                  setEditorConfirm(true);
+                }
+              }}
+              className={`px-4 py-2 rounded-xl text-[11px] font-black transition-colors disabled:opacity-50 ${
                 editorEnabled
                   ? 'bg-amber-500 text-white active:bg-amber-600'
                   : 'bg-slate-900 text-white active:bg-slate-700'
               }`}>
-              {editorEnabled ? 'Disable' : 'Enable'}
+              {editorPending ? '…' : editorEnabled ? 'Disable' : 'Enable'}
             </button>
           </div>
           {editorEnabled && (
@@ -294,7 +333,11 @@ export const SettingsManager: React.FC<Props> = ({ onBack, initialView }) => {
                   className="flex-1 py-3 bg-slate-100 text-slate-700 font-black text-xs rounded-xl">
                   Cancel
                 </button>
-                <button onClick={() => { editorEnable(); setEditorConfirm(false); }}
+                <button onClick={() => {
+                    editorEnable()
+                      .catch(e => showToast(e instanceof Error ? e.message : 'Enable failed', 'error'));
+                    setEditorConfirm(false);
+                  }}
                   className="flex-1 py-3 bg-amber-500 text-white font-black text-xs rounded-xl">
                   Enable
                 </button>
@@ -490,7 +533,7 @@ export const SettingsManager: React.FC<Props> = ({ onBack, initialView }) => {
             // class-wide tuition/fee templates from per-vehicle transport
             // schedules. Field comes back from feeService.getFeeStructures.
             const isVehicle = (fs as { structureType?: 'CLASS' | 'VEHICLE' }).structureType === 'VEHICLE';
-            const tileLabel = isVehicle ? 'BUS' : fs.className.replace('Class ', '').slice(0, 4);
+            const tileLabel = isVehicle ? 'BUS' : stripClassPrefix(fs.className).slice(0, 4);
             const tileClass = isVehicle
               ? 'w-10 h-10 rounded-xl bg-orange-50 text-orange-700 flex items-center justify-center font-black text-xs shrink-0 text-center leading-tight'
               : 'w-10 h-10 rounded-xl bg-emerald-50 text-emerald-700 flex items-center justify-center font-black text-xs shrink-0 text-center leading-tight';
@@ -753,7 +796,7 @@ interface DataExportProps {
 
 // Tables that have a school_id column — filter directly with .eq().
 const EXPORT_TABLES_BY_SCHOOL = [
-  'academic_years', 'sections', 'subjects',
+  'academic_years', 'sections',
   'students',
   'staff', 'salary_payments', 'staff_attendance',
   'fee_structures', 'fee_installments', 'payment_records', 'fee_write_offs',
@@ -1083,6 +1126,7 @@ const UsersView: React.FC<{ onBack: () => void }> = ({ onBack }) => {
   const [roleFilter, setRoleFilter] = useState<string>('ALL');
   const [confirm, setConfirm] = useState<ConnectedUser | null>(null);
   const [resetting, setResetting] = useState(false);
+  const [tempPwd, setTempPwd] = useState<{ name: string; mobile: string; tempPassword: string } | null>(null);
 
   const reload = async () => {
     try {
@@ -1100,7 +1144,10 @@ const UsersView: React.FC<{ onBack: () => void }> = ({ onBack }) => {
     setResetting(true);
     try {
       const res = await apiPrincipal.resetUserPassword(confirm.id);
-      showToast(`Password reset · ${res.name} can log in with mobile ${res.mobile}`);
+      // Surface the one-time temp password in a sticky toast — the principal
+      // must hand it over personally; the password is never stored anywhere
+      // else and can't be recovered after this dialog closes.
+      setTempPwd({ name: res.name, mobile: res.mobile, tempPassword: res.tempPassword });
       setConfirm(null);
       await reload();
     } catch (e) {
@@ -1248,6 +1295,41 @@ const UsersView: React.FC<{ onBack: () => void }> = ({ onBack }) => {
           </div>
         </div>
       )}
+
+      {/* One-time temp-password reveal — closes only on explicit click. */}
+      {tempPwd && (
+        <div className="fixed inset-0 z-50 bg-black/60 flex items-end sm:items-center justify-center p-4">
+          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-sm p-5">
+            <h3 className="font-black text-slate-900 text-base mb-1">Temporary password</h3>
+            <p className="text-[11px] font-bold text-slate-500 mb-3">
+              Hand this password to <span className="text-slate-900">{tempPwd.name}</span> (mobile {tempPwd.mobile}). It will not be shown again.
+            </p>
+            <div className="bg-slate-100 rounded-xl px-4 py-3 mb-4 flex items-center justify-between gap-3">
+              <code className="font-mono text-base font-black text-slate-900 tracking-wider select-all break-all">
+                {tempPwd.tempPassword}
+              </code>
+              <button
+                onClick={() => {
+                  navigator.clipboard?.writeText(tempPwd.tempPassword);
+                  showToast('Copied');
+                }}
+                className="text-[10px] font-black bg-slate-900 text-white px-3 py-1.5 rounded-lg shrink-0">
+                Copy
+              </button>
+            </div>
+            <div className="bg-amber-50 border border-amber-200 rounded-xl p-2.5 mb-4">
+              <p className="text-[10px] font-bold text-amber-800 leading-relaxed">
+                User must change this on next login. Old sessions are already invalidated.
+              </p>
+            </div>
+            <button onClick={() => setTempPwd(null)}
+              className="w-full py-3 rounded-2xl bg-slate-900 text-white font-black">
+              Done
+            </button>
+          </div>
+        </div>
+      )}
     </div>
   );
 };
+

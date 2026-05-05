@@ -406,6 +406,14 @@ async function handleSetUserActive(
     .eq('id', body.userId);
   if (error) return sendJson(res, 500, { error: error.message });
 
+  // Force-logout on deactivate: invalidate every active session for the
+  // target user so an already-open browser tab can't keep working until the
+  // JWT naturally expires (~1 hour). Best-effort — failure here doesn't
+  // roll back the deactivation.
+  if (!body.isActive) {
+    try { await admin.auth.admin.signOut(body.userId); } catch { /* ignore */ }
+  }
+
   await logAuditAs(admin, caller.id, null,
     body.isActive ? 'activate_user' : 'deactivate_user',
     'user', body.userId, { name: target.name, role: target.role });
@@ -607,6 +615,10 @@ async function handleSetSchoolUserActive(
     .update({ is_active: body.isActive, updated_at: new Date().toISOString() })
     .eq('id', body.userId);
   if (error) return sendJson(res, 500, { error: error.message });
+
+  if (!body.isActive) {
+    try { await admin.auth.admin.signOut(body.userId); } catch { /* ignore */ }
+  }
 
   await logAuditAs(admin, caller.id, caller.school_id,
     body.isActive ? 'activate_user' : 'deactivate_user',

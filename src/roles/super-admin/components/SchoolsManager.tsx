@@ -1,7 +1,7 @@
 import React, { useEffect, useState, useCallback } from 'react';
 import {
   ArrowLeft, Plus, Search, Building2, MapPin, Phone, Users,
-  Edit2, CheckCircle2, XCircle, Save, UserCheck,
+  Edit2, CheckCircle2, Save, UserCheck,
   IndianRupee, Copy, ChevronRight, BookOpen, TrendingUp, AlertCircle,
   Wallet, CreditCard, RefreshCw,
 } from 'lucide-react';
@@ -12,6 +12,7 @@ import { School, CreateSchoolInput } from '@/roles/super-admin/school.types';
 import { SchoolStatus, BillingPlan, STATUS_COLORS, PLAN_COLORS } from '@/shared/config/constants';
 import { schoolService } from '@/shared/utils/school.service';
 import { billingService, ANNUAL_PLAN_PRICES } from '@/roles/super-admin/billing.service';
+import { platformSettings, DEFAULT_PLAN_PRICING, PlanPricing } from '@/roles/super-admin/platformSettings.service';
 import { BillingYear } from '@/roles/super-admin/billing.types';
 import { apiAdminSchools, SchoolBillingInfo, SchoolFeePayment } from '@/lib/apiClient';
 
@@ -56,6 +57,7 @@ const fmtDate = (d: string) => {
 
 type RealStaff = Awaited<ReturnType<typeof schoolService.getSchoolStaff>>[number];
 type RealStudent = Awaited<ReturnType<typeof schoolService.getSchoolStudents>>[number];
+type SchoolOverview = Awaited<ReturnType<typeof schoolService.getSchoolOverview>>;
 
 export const SchoolsManager: React.FC<Props> = ({ onBack }) => {
   const { schools, fetchSchools, addSchool, updateSchool } = useSchoolStore();
@@ -68,7 +70,6 @@ export const SchoolsManager: React.FC<Props> = ({ onBack }) => {
   const [search, setSearch]     = useState('');
   const [activeAYIdx, setActiveAYIdx] = useState(0);
   const [isSubmitting, setIsSubmitting] = useState(false);
-  const [confirmDeactivate, setConfirmDeactivate] = useState<School | null>(null);
   const [createdCredentials, setCreatedCredentials] = useState<{ schoolName: string; mobile: string; password: string } | null>(null);
   const [schoolStaff, setSchoolStaff]       = useState<RealStaff[]>([]);
   const [schoolStudents, setSchoolStudents] = useState<RealStudent[]>([]);
@@ -76,6 +77,8 @@ export const SchoolsManager: React.FC<Props> = ({ onBack }) => {
   const [studentsLoading, setStudentsLoading] = useState(false);
   const [staffSearch, setStaffSearch]       = useState('');
   const [studentsSearch, setStudentsSearch] = useState('');
+  const [overview, setOverview]             = useState<SchoolOverview | null>(null);
+  const [overviewLoading, setOverviewLoading] = useState(false);
 
   // ── Billing state ─────────────────────────────────────────────────────────
   const [billingInfo, setBillingInfo]       = useState<SchoolBillingInfo | null>(null);
@@ -94,10 +97,16 @@ export const SchoolsManager: React.FC<Props> = ({ onBack }) => {
     paymentStartDate: new Date().toISOString().split('T')[0], password: '',
   };
   const [form, setForm] = useState<Partial<CreateSchoolInput>>(blankForm);
+  // Live plan prices from platform_settings (Settings page) — falls back to
+  // the static defaults if the platform_settings row hasn't been seeded yet.
+  const [livePricing, setLivePricing] = useState<PlanPricing>(DEFAULT_PLAN_PRICING);
 
   useEffect(() => {
     fetchSchools().catch(e => showToast(e instanceof Error ? e.message : 'Failed to load schools', 'error'));
     fetchBilling().catch(e => showToast(e instanceof Error ? e.message : 'Failed to load billing data', 'error'));
+    platformSettings.getAll()
+      .then(s => setLivePricing(s.pricing))
+      .catch(() => { /* keep defaults */ });
   }, []);
 
   const filtered = schools.filter(s =>
@@ -181,11 +190,6 @@ export const SchoolsManager: React.FC<Props> = ({ onBack }) => {
     } finally { setIsSubmitting(false); }
   };
 
-  const handleStatusToggle = (school: School) => {
-    if (school.status === SchoolStatus.ACTIVE) setConfirmDeactivate(school);
-    else doStatusChange(school, SchoolStatus.ACTIVE);
-  };
-
   const loadStaff = async (schoolId: string) => {
     setStaffLoading(true);
     try {
@@ -210,16 +214,6 @@ export const SchoolsManager: React.FC<Props> = ({ onBack }) => {
     }
   };
 
-  const doStatusChange = async (school: School, status: SchoolStatus) => {
-    try {
-      await updateSchool(school.id, { status });
-      setSelected(s => s ? { ...s, status } : null);
-      setConfirmDeactivate(null);
-      showToast(`${school.name} is now ${status}`);
-    } catch (e) {
-      showToast(e instanceof Error ? e.message : 'Failed to update status', 'error');
-    }
-  };
 
   const handleSaveFixedAmount = async () => {
     if (!selected) return;
@@ -331,7 +325,14 @@ export const SchoolsManager: React.FC<Props> = ({ onBack }) => {
               return (
                 <button key={school.id}
                   className="w-full bg-white rounded-2xl border border-slate-100 shadow-sm text-left active:scale-[0.99] transition-transform overflow-hidden"
-                  onClick={() => { setSelected(school); setActiveAYIdx(0); setView('DETAIL'); }}>
+                  onClick={() => {
+                    setSelected(school); setActiveAYIdx(0); setView('DETAIL');
+                    setOverview(null); setOverviewLoading(true);
+                    schoolService.getSchoolOverview(school.id)
+                      .then(setOverview)
+                      .catch(e => showToast(e instanceof Error ? e.message : 'Failed to load overview', 'error'))
+                      .finally(() => setOverviewLoading(false));
+                  }}>
                   <div className="p-4">
                     <div className="flex items-start gap-3">
                       {/* Avatar */}
@@ -426,7 +427,7 @@ export const SchoolsManager: React.FC<Props> = ({ onBack }) => {
               <select value={form.plan} onChange={e => setForm(f => ({ ...f, plan: e.target.value as BillingPlan }))}
                 className="w-full border border-slate-200 bg-slate-50 rounded-xl px-3 py-3 font-bold text-sm outline-none focus:border-blue-500 focus:bg-white transition-colors">
                 {Object.values(BillingPlan).map(p => (
-                  <option key={p} value={p}>₹{ANNUAL_PLAN_PRICES[p].toLocaleString('en-IN')}/yr — {p}</option>
+                  <option key={p} value={p}>₹{livePricing[p].toLocaleString('en-IN')}/yr — {p}</option>
                 ))}
               </select>
             </div>
@@ -460,20 +461,15 @@ export const SchoolsManager: React.FC<Props> = ({ onBack }) => {
     const ay = selected.academicYears[activeAYIdx];
     const billing = latestBillingMap[selected.id];
     const pct = billing ? Math.round((billing.totalPaid / billing.totalDue) * 100) : 0;
-    const isActive = selected.status === SchoolStatus.ACTIVE;
-
     return (
       <div className="w-full bg-slate-50 flex flex-col animate-in slide-in-from-right-8 duration-300">
+        {/* Edit-only action set. Deactivation/deletion was intentionally
+            removed from this header — status changes happen inside the
+            Edit form so a destructive action can't be one tap away. */}
         {renderHeader(selected.name, () => setView('LIST'),
-          <div className="flex gap-2">
-            <button onClick={() => handleEdit(selected)} className="p-2 bg-blue-50 text-blue-600 rounded-full hover:bg-blue-100 transition-colors">
-              <Edit2 size={18} />
-            </button>
-            <button onClick={() => handleStatusToggle(selected)}
-              className={`p-2 rounded-full transition-colors ${isActive ? 'bg-rose-50 text-rose-600 hover:bg-rose-100' : 'bg-emerald-50 text-emerald-600 hover:bg-emerald-100'}`}>
-              {isActive ? <XCircle size={18} /> : <CheckCircle2 size={18} />}
-            </button>
-          </div>
+          <button onClick={() => handleEdit(selected)} className="p-2 bg-blue-50 text-blue-600 rounded-full hover:bg-blue-100 transition-colors">
+            <Edit2 size={18} />
+          </button>
         )}
         <div className="flex-1 overflow-y-auto p-4  space-y-4">
 
@@ -493,9 +489,9 @@ export const SchoolsManager: React.FC<Props> = ({ onBack }) => {
             </div>
             <div className="grid grid-cols-3 gap-2">
               {[
-                { label: 'Students', val: selected.studentCount.toLocaleString('en-IN'), color: 'text-blue-300' },
-                { label: 'Teachers', val: selected.teacherCount, color: 'text-emerald-300' },
-                { label: 'Classes', val: ay?.sections.length ?? 0, color: 'text-amber-300' },
+                { label: 'Students', val: (overview?.totalStudents ?? selected.studentCount).toLocaleString('en-IN'), color: 'text-blue-300' },
+                { label: 'Teachers', val: overview?.totalTeachers ?? selected.teacherCount, color: 'text-emerald-300' },
+                { label: 'Classes',  val: overview?.classBreakdown.length ?? 0, color: 'text-amber-300' },
               ].map(({ label, val, color }) => (
                 <div key={label} className="bg-white/10 rounded-xl p-3 text-center">
                   <div className={`text-xl font-black ${color}`}>{val}</div>
@@ -569,6 +565,63 @@ export const SchoolsManager: React.FC<Props> = ({ onBack }) => {
             </div>
           )}
 
+          {/* Live Operations — real numbers pulled from each domain table.
+              Replaces the placeholder AY stats which read from a static
+              array that the school service never populated. */}
+          <div className="bg-white rounded-2xl border border-slate-100 shadow-sm p-4">
+            <div className="flex items-center justify-between mb-3">
+              <p className="text-[10px] font-black uppercase tracking-widest text-slate-400">
+                Operations {overview?.activeAYLabel ? `· ${overview.activeAYLabel}` : ''}
+              </p>
+              {overviewLoading && (
+                <div className="w-3 h-3 border border-slate-200 border-t-slate-600 rounded-full animate-spin" />
+              )}
+            </div>
+            {!overview ? (
+              <p className="text-xs font-bold text-slate-400">Loading…</p>
+            ) : (
+              <div className="grid grid-cols-2 gap-2">
+                {[
+                  { label: 'Students',           val: overview.totalStudents.toLocaleString('en-IN'),
+                    sub: overview.rteStudents > 0 ? `${overview.rteStudents} RTE` : 'Active', color: 'text-blue-600' },
+                  { label: 'Staff',              val: overview.totalStaff.toLocaleString('en-IN'),
+                    sub: `${overview.totalTeachers} teachers`, color: 'text-emerald-600' },
+                  { label: 'Salary Cost / mo',   val: `₹${overview.monthlySalaryCost.toLocaleString('en-IN')}`,
+                    sub: `₹${overview.salaryPaidThisMonth.toLocaleString('en-IN')} paid`, color: 'text-amber-600' },
+                  { label: 'Fees This Month',    val: `₹${overview.feeCollectedThisMonth.toLocaleString('en-IN')}`,
+                    sub: `₹${overview.feeCollectedThisYear.toLocaleString('en-IN')} YTD`, color: 'text-indigo-600' },
+                  { label: 'Expenses / mo',      val: `₹${overview.expensesThisMonth.toLocaleString('en-IN')}`,
+                    sub: `₹${overview.expensesThisYear.toLocaleString('en-IN')} YTD`, color: 'text-rose-600' },
+                  { label: 'Net This Month',
+                    val: `₹${(overview.feeCollectedThisMonth - overview.expensesThisMonth - overview.salaryPaidThisMonth).toLocaleString('en-IN')}`,
+                    sub: 'Fees − exp − salary',
+                    color: (overview.feeCollectedThisMonth - overview.expensesThisMonth - overview.salaryPaidThisMonth) >= 0 ? 'text-emerald-600' : 'text-rose-600' },
+                ].map(s => (
+                  <div key={s.label} className="bg-slate-50 rounded-xl p-3 border border-slate-100">
+                    <div className={`text-base font-black ${s.color} leading-tight`}>{s.val}</div>
+                    <div className="text-[9px] font-black uppercase tracking-widest text-slate-500 mt-1">{s.label}</div>
+                    <div className="text-[9px] font-bold text-slate-400 mt-0.5">{s.sub}</div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+
+          {/* Class-wise breakdown */}
+          {overview && overview.classBreakdown.length > 0 && (
+            <div className="bg-white rounded-2xl border border-slate-100 shadow-sm p-4">
+              <p className="text-[10px] font-black uppercase tracking-widest text-slate-400 mb-3">Class Breakdown</p>
+              <div className="grid grid-cols-3 gap-2">
+                {overview.classBreakdown.map(c => (
+                  <div key={`${c.className}-${c.section}`} className="bg-slate-50 rounded-xl p-2 text-center border border-slate-100">
+                    <div className="text-[10px] font-black text-slate-700">{c.className}{c.section ? `-${c.section}` : ''}</div>
+                    <div className="text-base font-black text-slate-900 mt-0.5">{c.count}</div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
           {/* Academic year tabs */}
           {selected.academicYears.length > 0 && (
             <div>
@@ -584,28 +637,12 @@ export const SchoolsManager: React.FC<Props> = ({ onBack }) => {
             </div>
           )}
 
-          {/* AY stats */}
-          {ay && (
-            <div className="grid grid-cols-3 gap-2">
-              {[
-                { label: 'Students', val: ay.totalStudents.toLocaleString('en-IN'), color: 'text-blue-600' },
-                { label: 'Revenue',  val: `₹${(ay.totalRevenue / 100000).toFixed(1)}L`, color: 'text-emerald-600' },
-                { label: 'Expense',  val: `₹${(ay.totalExpense / 100000).toFixed(1)}L`, color: 'text-rose-500' },
-              ].map(({ label, val, color }) => (
-                <div key={label} className="bg-white rounded-2xl border border-slate-100 shadow-sm p-3 text-center">
-                  <div className={`text-lg font-black ${color}`}>{val}</div>
-                  <div className="text-[9px] font-black uppercase tracking-widest text-slate-400 mt-0.5">{label}</div>
-                </div>
-              ))}
-            </div>
-          )}
-
           {/* Quick-nav tiles */}
           <div className="grid grid-cols-2 gap-3">
             {[
-              { icon: BookOpen,    label: 'Sections',    view: 'SECTIONS' as View, color: 'text-indigo-600 bg-indigo-50', count: ay?.sections.length ?? 0 },
-              { icon: Users,       label: 'Students',    view: 'STUDENTS' as View, color: 'text-blue-600 bg-blue-50',    count: ay?.totalStudents ?? 0 },
-              { icon: UserCheck,   label: 'Staff',       view: 'STAFF' as View,    color: 'text-emerald-600 bg-emerald-50', count: selected.teacherCount },
+              { icon: BookOpen,    label: 'Sections',    view: 'SECTIONS' as View, color: 'text-indigo-600 bg-indigo-50', count: overview?.classBreakdown.length ?? 0 },
+              { icon: Users,       label: 'Students',    view: 'STUDENTS' as View, color: 'text-blue-600 bg-blue-50',    count: overview?.totalStudents ?? 0 },
+              { icon: UserCheck,   label: 'Staff',       view: 'STAFF' as View,    color: 'text-emerald-600 bg-emerald-50', count: overview?.totalStaff ?? 0 },
               { icon: Wallet,      label: 'Billing',     view: 'BILLING' as View,  color: 'text-violet-600 bg-violet-50', count: 0 },
             ].map(({ icon: Icon, label, view: v, color, count }) => (
               <button key={label}
@@ -777,29 +814,31 @@ export const SchoolsManager: React.FC<Props> = ({ onBack }) => {
 
   // ── SECTIONS ──────────────────────────────────────────────────────────────────
   if (view === 'SECTIONS' && selected) {
-    const ay = selected.academicYears[activeAYIdx];
+    const sections = overview?.classBreakdown ?? [];
     return (
       <div className="w-full bg-slate-50 flex flex-col animate-in slide-in-from-right-8 duration-300">
-        {renderHeader('Sections', () => setView('DETAIL'))}
-        <div className="flex-1 overflow-y-auto p-4  space-y-3">
-          {(!ay || ay.sections.length === 0) && (
+        {renderHeader(`Sections${overview?.activeAYLabel ? ` · ${overview.activeAYLabel}` : ''}`, () => setView('DETAIL'))}
+        <div className="flex-1 overflow-y-auto p-4 space-y-3">
+          {sections.length === 0 ? (
             <div className="flex flex-col items-center py-16 text-slate-400">
               <BookOpen size={32} className="mb-3 opacity-40" />
-              <p className="font-bold text-sm">No sections in {ay?.label ?? 'this year'}</p>
+              <p className="font-bold text-sm">No sections in this year</p>
             </div>
-          )}
-          {ay?.sections.map(sec => (
-            <button key={sec.id} onClick={() => { setSelectedSection(sec); setStudentsSearch(''); loadStudents(selected.id); setView('STUDENTS'); }}
+          ) : sections.map(sec => (
+            <button key={`${sec.className}-${sec.section}`}
+              onClick={() => {
+                setSelectedSection({ className: sec.className, section: sec.section });
+                setStudentsSearch(`${sec.className}${sec.section ? '-' + sec.section : ''}`);
+                loadStudents(selected.id); setView('STUDENTS');
+              }}
               className="w-full flex items-center justify-between bg-white rounded-2xl border border-slate-100 shadow-sm p-4 active:scale-95 transition-transform text-left">
               <div className="flex items-center gap-3">
                 <div className="w-10 h-10 rounded-xl bg-indigo-50 text-indigo-700 flex items-center justify-center font-black text-xs">
-                  {sec.section}
+                  {sec.section || '—'}
                 </div>
                 <div>
-                  <div className="font-extrabold text-slate-900 text-sm">{sec.className} – Section {sec.section}</div>
-                  <div className="text-[10px] font-bold text-slate-400 mt-0.5">
-                    {sec.studentCount} students · {sec.classTeacher}
-                  </div>
+                  <div className="font-extrabold text-slate-900 text-sm">{sec.className}{sec.section ? ` – Section ${sec.section}` : ''}</div>
+                  <div className="text-[10px] font-bold text-slate-400 mt-0.5">{sec.count} students</div>
                 </div>
               </div>
               <ChevronRight size={18} className="text-slate-300" />
@@ -966,7 +1005,7 @@ export const SchoolsManager: React.FC<Props> = ({ onBack }) => {
                 <select value={form.plan} onChange={e => setForm(f => ({ ...f, plan: e.target.value as BillingPlan }))}
                   className="w-full border border-slate-200 bg-slate-50 rounded-xl px-3 py-3 font-bold text-sm outline-none focus:border-blue-500 focus:bg-white transition-colors">
                   {Object.values(BillingPlan).map(p => (
-                    <option key={p} value={p}>₹{ANNUAL_PLAN_PRICES[p].toLocaleString('en-IN')}/yr — {p}</option>
+                    <option key={p} value={p}>₹{livePricing[p].toLocaleString('en-IN')}/yr — {p}</option>
                   ))}
                 </select>
               </div>
@@ -1027,36 +1066,6 @@ export const SchoolsManager: React.FC<Props> = ({ onBack }) => {
             className="w-full py-3 bg-emerald-600 text-white font-black rounded-xl active:scale-95 transition-transform">
             Done
           </button>
-        </div>
-      </div>
-    );
-  }
-
-  // ── Deactivate confirm ────────────────────────────────────────────────────────
-  if (confirmDeactivate) {
-    return (
-      <div className="absolute inset-0 z-60 bg-slate-900/60 flex items-end justify-center animate-in fade-in">
-        <div className="bg-white w-full rounded-t-3xl p-6 pb-10 animate-in slide-in-from-bottom-4">
-          <div className="w-10 h-10 rounded-2xl bg-rose-100 text-rose-600 flex items-center justify-center mb-4">
-            <XCircle size={22} />
-          </div>
-          <h3 className="font-black text-slate-900 text-lg mb-1">Deactivate School?</h3>
-          <p className="text-sm text-slate-500 mb-2">
-            Deactivating <span className="font-black text-slate-800">"{confirmDeactivate.name}"</span> will suspend access for:
-          </p>
-          <div className="bg-rose-50 rounded-2xl p-3 mb-5 space-y-1.5">
-            <div className="flex items-center gap-2 text-sm font-bold text-rose-700">
-              <Users size={14} /> {confirmDeactivate.studentCount.toLocaleString('en-IN')} students
-            </div>
-            <div className="flex items-center gap-2 text-sm font-bold text-rose-700">
-              <UserCheck size={14} /> {confirmDeactivate.teacherCount} teachers & staff
-            </div>
-          </div>
-          <p className="text-xs font-bold text-slate-400 mb-5">All data is retained. Re-activate anytime.</p>
-          <div className="flex gap-3">
-            <button onClick={() => setConfirmDeactivate(null)} className="flex-1 py-3 rounded-2xl border border-slate-200 font-black text-slate-600 active:scale-95 transition-transform">Cancel</button>
-            <button onClick={() => doStatusChange(confirmDeactivate, SchoolStatus.INACTIVE)} className="flex-1 py-3 rounded-2xl bg-rose-600 text-white font-black active:scale-95 transition-transform">Deactivate</button>
-          </div>
         </div>
       </div>
     );

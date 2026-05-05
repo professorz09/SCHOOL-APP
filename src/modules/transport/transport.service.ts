@@ -142,33 +142,31 @@ interface AssignmentRow {
   transport_vehicles: { vehicle_no: string } | null;
 }
 
-async function _loadVehicles(schoolId: string): Promise<void> {
-  const { data: vData, error: vErr } = await supabase
-    .from('transport_vehicles')
-    .select('id, vehicle_no, type, capacity, route_name, driver_id, driver_name, driver_phone, is_active')
-    .eq('school_id', schoolId).eq('is_active', true)
-    .order('vehicle_no');
-  if (vErr) throw new Error(vErr.message);
-  const vehicles = (vData ?? []) as VehicleRow[];
+async function _loadVehicles(_schoolId: string): Promise<void> {
+  // Route through the server API instead of the supabase JS client. The
+  // server uses adminDb (RLS-bypassed) but enforces school scoping via the
+  // authenticated user — and gives us a single source of truth for what the
+  // UI sees, independent of any client-side auth/session edge cases.
+  const apiRows = await apiTransport.getVehicles().catch(() => [] as any[]);
+  const vehicles = (apiRows as Array<{
+    id: string; vehicle_no: string; type: string; capacity: number;
+    route_name: string | null; driver_id: string | null;
+    driver_name: string | null; driver_phone: string | null;
+    is_active: boolean;
+    route_stops?: StopRow[];
+  }>).filter(v => v.is_active);
 
-  const ids = vehicles.map(v => v.id);
-  const { data: sData } = ids.length
-    ? await supabase
-        .from('route_stops')
-        .select('id, vehicle_id, name, estimated_time, lat, lng, sort_order')
-        .in('vehicle_id', ids).order('sort_order')
-    : { data: [] };
+  // The /vehicles endpoint already embeds route_stops via the join.
   const stopsMap = new Map<string, RouteStop[]>();
-  ((sData ?? []) as StopRow[]).forEach(r => {
-    const arr = stopsMap.get(r.vehicle_id) ?? [];
-    arr.push({
+  for (const v of vehicles) {
+    const stops = (v.route_stops ?? []).slice().sort((a, b) => (a.sort_order ?? 0) - (b.sort_order ?? 0));
+    stopsMap.set(v.id, stops.map(r => ({
       id: r.id, name: r.name,
       estimatedTime: r.estimated_time ?? '',
       lat: Number(r.lat), lng: Number(r.lng),
-    });
-    stopsMap.set(r.vehicle_id, arr);
-  });
-
+    })));
+  }
+  const ids = vehicles.map(v => v.id);
   // Latest GPS per vehicle.
   const { data: locData } = ids.length
     ? await supabase
@@ -205,43 +203,61 @@ async function _loadAssignments(schoolId: string): Promise<void> {
   const ayId = (ay as { id: string } | null)?.id;
   if (!ayId) { _assignmentsCache = []; return; }
 
-  // Constrain the embedded student_academic_records join to the active
-  // year so class/section labels reflect the current year, not whichever
-  // record was returned first when a student has multi-year history.
+  // No direct FK between student_transport_assignments and
+  // student_academic_records (both share student_id), so the nested embed
+  // PostgREST tried to resolve fails with "Could not find a relationship
+  // … in the schema cache". We pull the AR rows separately and merge by
+  // student_id below.
   const { data, error } = await supabase
     .from('student_transport_assignments')
     .select(`
       id, student_id, academic_year_id, vehicle_id, stop_id,
       monthly_amount, start_date, end_date, is_active, reason, end_reason,
       students!inner(name, school_id),
-      student_academic_records(class_name, section, academic_year_id),
       route_stops(name),
       transport_vehicles(vehicle_no)
     `)
     .eq('students.school_id', schoolId)
     .eq('academic_year_id', ayId)
-    .eq('student_academic_records.academic_year_id', ayId)
     .eq('is_active', true);
   if (error) throw new Error(error.message);
-  _assignmentsCache = ((data ?? []) as unknown as AssignmentRow[]).map(a => ({
-    id: a.id,
-    studentId: a.student_id,
-    studentName: a.students?.name ?? '',
-    className: a.student_academic_records
-      ? `${a.student_academic_records.class_name}-${a.student_academic_records.section}`
-      : '',
-    vehicleId: a.vehicle_id ?? '',
-    boardingStopId: a.stop_id ?? '',
-    boardingStopName: a.route_stops?.name ?? '—',
-    academicYearId: a.academic_year_id,
-    monthlyAmount: Number(a.monthly_amount),
-    startDate: a.start_date ?? '',
-    endDate: a.end_date,
-    isActive: a.is_active,
-    reason: a.reason,
-    endReason: a.end_reason,
-    vehicleNo: a.transport_vehicles?.vehicle_no,
-  }));
+  const rows = (data ?? []) as unknown as Array<Omit<AssignmentRow, 'student_academic_records'>>;
+
+  // Resolve class/section labels from student_academic_records in a single
+  // follow-up query. Empty list short-circuits.
+  const studentIds = Array.from(new Set(rows.map(r => r.student_id)));
+  const arMap = new Map<string, { class_name: string; section: string }>();
+  if (studentIds.length > 0) {
+    const { data: arData } = await supabase
+      .from('student_academic_records')
+      .select('student_id, class_name, section, academic_year_id')
+      .in('student_id', studentIds)
+      .eq('academic_year_id', ayId);
+    for (const r of ((arData ?? []) as Array<{ student_id: string; class_name: string; section: string }>)) {
+      arMap.set(r.student_id, { class_name: r.class_name, section: r.section });
+    }
+  }
+
+  _assignmentsCache = rows.map(a => {
+    const ar = arMap.get(a.student_id);
+    return {
+      id: a.id,
+      studentId: a.student_id,
+      studentName: a.students?.name ?? '',
+      className: ar ? `${ar.class_name}-${ar.section}` : '',
+      vehicleId: a.vehicle_id ?? '',
+      boardingStopId: a.stop_id ?? '',
+      boardingStopName: a.route_stops?.name ?? '—',
+      academicYearId: a.academic_year_id,
+      monthlyAmount: Number(a.monthly_amount),
+      startDate: a.start_date ?? '',
+      endDate: a.end_date,
+      isActive: a.is_active,
+      reason: a.reason,
+      endReason: a.end_reason,
+      vehicleNo: a.transport_vehicles?.vehicle_no,
+    };
+  });
 }
 
 // ─── Service API ──────────────────────────────────────────────────────────────

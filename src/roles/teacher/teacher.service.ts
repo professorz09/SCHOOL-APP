@@ -308,6 +308,22 @@ function rowToComplaint(r: ComplaintRow): TeacherComplaint {
 
 const TODAY_DAY_NAMES = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
 
+// Mirror of `DEFAULT_SLOTS` in modules/timetable/timetable.service.ts. When
+// the school hasn't persisted custom periods we still need to resolve slot
+// IDs ('p1', 'assembly', ...) to their default times. Keep this in sync if
+// the principal-side defaults change.
+const DEFAULT_SLOT_BY_ID: Record<string, { name: string; start_time: string; end_time: string; period_type: string; sort_order: number }> = {
+  assembly: { name: 'Assembly',     start_time: '08:00', end_time: '08:20', period_type: 'ASSEMBLY', sort_order: 0 },
+  p1:       { name: 'Period 1',     start_time: '08:20', end_time: '09:05', period_type: 'CLASS',    sort_order: 1 },
+  p2:       { name: 'Period 2',     start_time: '09:05', end_time: '09:50', period_type: 'CLASS',    sort_order: 2 },
+  break:    { name: 'Short Break',  start_time: '09:50', end_time: '10:05', period_type: 'BREAK',    sort_order: 3 },
+  p3:       { name: 'Period 3',     start_time: '10:05', end_time: '10:50', period_type: 'CLASS',    sort_order: 4 },
+  p4:       { name: 'Period 4',     start_time: '10:50', end_time: '11:35', period_type: 'CLASS',    sort_order: 5 },
+  lunch:    { name: 'Lunch Break',  start_time: '11:35', end_time: '12:15', period_type: 'LUNCH',    sort_order: 6 },
+  p5:       { name: 'Period 5',     start_time: '12:15', end_time: '13:00', period_type: 'CLASS',    sort_order: 7 },
+  p6:       { name: 'Period 6',     start_time: '13:00', end_time: '13:45', period_type: 'CLASS',    sort_order: 8 },
+};
+
 export const teacherService = {
   // ── Classes ───────────────────────────────────────────────────────────────
 
@@ -750,7 +766,11 @@ export const teacherService = {
     }));
   },
 
-  /** Today's entries with PERIOD_SLOTS time info attached (sorted by start). */
+  /** Today's entries with period times attached (sorted by start). When the
+   *  school hasn't persisted custom periods to `timetable_periods`, we fall
+   *  back to the same DEFAULT_SLOTS the principal-side TimetableManager
+   *  uses so the dashboard isn't blank just because the periods table is
+   *  empty (this was the actual cause of the empty teacher dashboard). */
   async getTodayClasses(): Promise<Array<{
     id: string; classId: string; className: string; section: string;
     subject: string; room: string;
@@ -758,7 +778,6 @@ export const teacherService = {
   }>> {
     const today = TODAY_DAY_NAMES[new Date().getDay()];
     const entries = await this.getMyTimetable();
-    // Pull period defs to get time strings
     const schoolId = getSchoolId();
     const yearId = await getActiveYearId();
     const { data: periodData } = await supabase
@@ -773,7 +792,7 @@ export const teacherService = {
     return entries
       .filter(e => e.day === today)
       .map(e => {
-        const p = periodMap.get(e.slotId);
+        const p = periodMap.get(e.slotId) ?? DEFAULT_SLOT_BY_ID[e.slotId.toLowerCase()];
         return {
           id: e.id,
           classId: e.classId,
@@ -926,13 +945,21 @@ export const teacherService = {
       .eq('school_id', schoolId).eq('academic_year_id', yearId)
       .order('sort_order');
     if (error) throw new Error(error.message);
-    return ((data ?? []) as Array<{
+    const rows = (data ?? []) as Array<{
       id: string; name: string; start_time: string; end_time: string;
       period_type: string; sort_order: number;
-    }>).map(r => ({
-      slotId: r.id, label: r.name,
-      startTime: r.start_time, endTime: r.end_time,
-      type: r.period_type, sortOrder: r.sort_order,
+    }>;
+    if (rows.length > 0) {
+      return rows.map(r => ({
+        slotId: r.id, label: r.name,
+        startTime: r.start_time, endTime: r.end_time,
+        type: r.period_type, sortOrder: r.sort_order,
+      }));
+    }
+    // DB has no custom periods — return the static defaults.
+    return Object.entries(DEFAULT_SLOT_BY_ID).map(([slotId, p]) => ({
+      slotId, label: p.name, startTime: p.start_time, endTime: p.end_time,
+      type: p.period_type, sortOrder: p.sort_order,
     }));
   },
 

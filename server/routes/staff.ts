@@ -6,15 +6,39 @@ import { requireAuth, requireRole } from '../middleware/auth';
 export const staffRouter = Router();
 
 // POST /api/staff/deactivate
+// Suspends a staff member AND clears their dangling references in
+// timetable_entries (teacher_id, teacher_name) so the principal's existing
+// timetable doesn't keep displaying the suspended teacher's name on slots
+// that need re-assignment. staff_class_assignments and staff_permissions
+// are also cleared for the same reason.
 staffRouter.post('/deactivate', requireAuth, requireRole('PRINCIPAL'), async (req, res) => {
   try {
     const { staffId } = requireBody<{ staffId: string }>(req, ['staffId']);
+    const schoolId = req.user.school_id!;
+
     const { error } = await adminDb.from('staff').update({
       is_active: false,
       status: 'SUSPENDED',
       updated_at: new Date().toISOString(),
-    }).eq('id', staffId).eq('school_id', req.user.school_id!);
+    }).eq('id', staffId).eq('school_id', schoolId);
     if (error) throw new ApiError(500, error.message);
+
+    // Best-effort cleanup of references — failures don't block deactivation,
+    // since the staff row is already inactive and `_active` filters in the
+    // UI will hide their identity. Logged for triage.
+    const cleanups = await Promise.allSettled([
+      adminDb.from('timetable_entries')
+        .update({ teacher_id: null, teacher_name: 'Suspended — re-assign' })
+        .eq('school_id', schoolId).eq('teacher_id', staffId),
+      adminDb.from('staff_class_assignments').delete()
+        .eq('school_id', schoolId).eq('staff_id', staffId),
+      adminDb.from('staff_permissions').delete()
+        .eq('school_id', schoolId).eq('staff_id', staffId),
+    ]);
+    for (const r of cleanups) {
+      if (r.status === 'rejected') console.warn('[staff/deactivate] cleanup failure', r.reason);
+    }
+
     ok(res, { staffId });
   } catch (err) { fail(res, err); }
 });
@@ -69,12 +93,21 @@ staffRouter.post('/salary/update', requireAuth, requireRole('PRINCIPAL'), async 
 });
 
 // POST /api/staff/relieve — set_staff_relieving_date RPC (auth.uid() required)
+//
+// Relieving a staff member is the terminal-by-default lifecycle transition
+// (versus suspend, which is recoverable). Beyond stamping relieving_date /
+// status='RELIEVED', we also tear down the same downstream references the
+// suspend flow clears, so the staff member stops appearing in active rosters
+// and can no longer authenticate. Without these the relieved teacher's name
+// would keep showing on timetable slots and they could still log in.
 staffRouter.post('/relieve', requireAuth, requireRole('PRINCIPAL'), async (req, res) => {
   try {
     const body = requireBody<{
       staffId: string; date: string; reason: string;
     }>(req, ['staffId', 'date', 'reason']);
     if (!body.date) throw new ApiError(400, 'Relieving date required');
+
+    const schoolId = req.user.school_id!;
 
     const db = userDb(req.jwt);
     const { error } = await db.rpc('set_staff_relieving_date', {
@@ -84,7 +117,71 @@ staffRouter.post('/relieve', requireAuth, requireRole('PRINCIPAL'), async (req, 
     });
     if (error) throw new ApiError(500, error.message);
 
+    // Best-effort downstream cleanup. Same shape as /deactivate. Failures
+    // are logged but don't block the response — relieving_date is already
+    // stamped, so the principal can re-trigger any individual cleanup if
+    // needed.
+    const { data: staffRow } = await adminDb.from('staff')
+      .select('user_id').eq('id', body.staffId).eq('school_id', schoolId).maybeSingle();
+    const userId = (staffRow as { user_id: string | null } | null)?.user_id ?? null;
+
+    const cleanups = await Promise.allSettled([
+      adminDb.from('timetable_entries')
+        .update({ teacher_id: null, teacher_name: 'Relieved — re-assign' })
+        .eq('school_id', schoolId).eq('teacher_id', body.staffId),
+      adminDb.from('staff_class_assignments').delete()
+        .eq('school_id', schoolId).eq('staff_id', body.staffId),
+      adminDb.from('staff_permissions').delete()
+        .eq('school_id', schoolId).eq('staff_id', body.staffId),
+      // Lock the auth account so the relieved teacher can't log in. We do
+      // this directly on the users row (matches what super-admin's
+      // setUserActive does for non-staff roles).
+      userId
+        ? adminDb.from('users').update({ is_active: false, updated_at: new Date().toISOString() }).eq('id', userId)
+        : Promise.resolve({ error: null }),
+    ]);
+    for (const r of cleanups) {
+      if (r.status === 'rejected') console.warn('[staff/relieve] cleanup failure', r.reason);
+    }
+
     ok(res, { staffId: body.staffId, date: body.date });
+  } catch (err) { fail(res, err); }
+});
+
+// POST /api/staff/rejoin — undo a RELIEVED transition.
+// Real-world rationale: a teacher who has been relieved sometimes returns
+// (re-hired for the next session, mistake, etc). Without this endpoint, the
+// only recovery was direct DB editing because the UI guards everything on
+// status === 'RELIEVED'. Clearing relieving_date / relieving_reason and
+// flipping status back to ACTIVE puts the row back into normal rosters; the
+// teacher then needs class/permission re-assignment via the existing UI.
+staffRouter.post('/rejoin', requireAuth, requireRole('PRINCIPAL'), async (req, res) => {
+  try {
+    const { staffId } = requireBody<{ staffId: string }>(req, ['staffId']);
+    const schoolId = req.user.school_id!;
+
+    const { data: row, error: rErr } = await adminDb.from('staff')
+      .select('user_id, status').eq('id', staffId).eq('school_id', schoolId).maybeSingle();
+    if (rErr) throw new ApiError(500, rErr.message);
+    if (!row) throw new ApiError(404, 'Staff not found');
+
+    const { error } = await adminDb.from('staff').update({
+      status:           'ACTIVE',
+      relieving_date:   null,
+      relieving_reason: null,
+      is_active:        true,
+      updated_at:       new Date().toISOString(),
+    }).eq('id', staffId).eq('school_id', schoolId);
+    if (error) throw new ApiError(500, error.message);
+
+    const userId = (row as { user_id: string | null }).user_id;
+    if (userId) {
+      await adminDb.from('users')
+        .update({ is_active: true, updated_at: new Date().toISOString() })
+        .eq('id', userId);
+    }
+
+    ok(res, { staffId });
   } catch (err) { fail(res, err); }
 });
 

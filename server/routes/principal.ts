@@ -30,15 +30,35 @@ principalRouter.get('/users/list', requireAuth, PRINCIPAL, async (req, res) => {
 // (self) or contact platform support.
 const RESETTABLE_ROLES = new Set(['STUDENT', 'PARENT', 'TEACHER', 'DRIVER', 'PEON', 'STAFF']);
 
-// POST /api/principal/users/reset-password — forces password back to mobile
-// number and flips first_login_changed=false so the user is required to set
-// a new one on their next login. Multiple guards stack:
+// POST /api/principal/users/reset-password — generates a random one-time
+// temporary password, sets it on the auth user, and flips
+// first_login_changed=false so the user MUST set a new password on next
+// login. The temp password is returned in the response (and only there) so
+// the principal can hand it over in person — it is never stored in the
+// database. Previously this set the password to the user's mobile number,
+// which is enumerable and was a takeover vector during the reset window.
+//
+// Guards:
 //   1. Same-school check (cross-school target → 403)
 //   2. Self-reset blocked (would lock principal out)
 //   3. Role allowlist (no resetting other principals or super-admins)
 //   4. Rate limit: same target can only be reset once per 7 days
 //   5. Force logout: invalidates all active sessions for the target user
-//   6. Audit log includes target role + IP
+//   6. Audit log includes target role + IP (NOT the temp password)
+function generateTempPassword(): string {
+  // 10-char alphanumeric, mixed case + digit; satisfies the new
+  // change-password complexity rule so the user can immediately replace it
+  // without a "weaker than current" rejection.
+  const alphabet = 'ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnpqrstuvwxyz23456789';
+  const buf = new Uint8Array(10);
+  // crypto is global in Node 19+ and available in this codebase already.
+  (globalThis.crypto ?? require('node:crypto').webcrypto).getRandomValues(buf);
+  let out = '';
+  for (let i = 0; i < buf.length; i++) out += alphabet[buf[i] % alphabet.length];
+  // Force at least one digit + one letter even if the random pick missed.
+  return out.slice(0, 8) + '7Aa';
+}
+
 principalRouter.post('/users/reset-password', requireAuth, PRINCIPAL, async (req, res) => {
   try {
     const { userId } = requireBody<{ userId: string }>(req, ['userId']);
@@ -78,11 +98,11 @@ principalRouter.post('/users/reset-password', requireAuth, PRINCIPAL, async (req
       throw new ApiError(429, `${t.name} ka password 7 din me ek baar hi reset ho sakta hai. Next available: ${nextAvailable}.`);
     }
 
-    // Reset auth password to mobile (the default new-user pattern). Service
-    // role bypasses the prevent_self_escalation trigger, so the subsequent
-    // first_login_changed=false flip is allowed.
+    // Generate a fresh random temp password — never reuse the mobile number,
+    // never persist the temp password anywhere besides the response.
+    const tempPassword = generateTempPassword();
     const { error: pwErr } = await adminDb.auth.admin.updateUserById(t.id, {
-      password: t.mobile_number,
+      password: tempPassword,
     });
     if (pwErr) throw new ApiError(500, `Password reset failed: ${pwErr.message}`);
 
@@ -115,7 +135,7 @@ principalRouter.post('/users/reset-password', requireAuth, PRINCIPAL, async (req
       details:     { target_name: t.name, target_role: t.role, target_mobile: t.mobile_number },
     });
 
-    ok(res, { ok: true, name: t.name, mobile: t.mobile_number });
+    ok(res, { ok: true, name: t.name, mobile: t.mobile_number, tempPassword });
   } catch (err) { fail(res, err); }
 });
 
@@ -255,23 +275,42 @@ principalRouter.post('/approval/approve', requireAuth, PRINCIPAL, async (req, re
 
     const { data: row, error: readErr } = await adminDb.from('approvals')
       .select(APPROVAL_FIELDS)
-      .eq('id', approvalId).eq('school_id', req.user.school_id!).single();
-    if (readErr) throw new ApiError(404, 'Approval not found');
+      .eq('id', approvalId).eq('school_id', req.user.school_id!).maybeSingle();
+    if (readErr) throw new ApiError(500, readErr.message);
+    if (!row) throw new ApiError(404, 'Approval not found');
     const a = row as any;
+    if (a.status !== 'PENDING') throw new ApiError(409, `Approval is already ${a.status}`);
 
     if (a.request_type === 'PROFILE_CHANGE' || a.request_type === 'STUDENT_FIELD_CHANGE') {
+      // Conditional flip first to claim the row; only proceed to apply if we
+      // were the one to win the race. apply_change_request is idempotent on
+      // a non-PENDING row but we still don't want both principals' RPCs to
+      // run side-effects twice.
+      const { data: claimed } = await adminDb.from('approvals')
+        .update({ status: 'APPROVED', approved_by: req.user.id, approved_at: new Date().toISOString() })
+        .eq('id', approvalId)
+        .eq('school_id', req.user.school_id!)
+        .eq('status', 'PENDING')
+        .select('id');
+      if (!claimed || claimed.length === 0) {
+        throw new ApiError(409, 'Approval was just acted on by someone else — refresh and try again');
+      }
       const db = userDb(req.jwt);
       const { error: rpcErr } = await db.rpc('apply_change_request', {
         p_approval_id: approvalId, p_approve: true, p_reason: null,
       });
       if (rpcErr) throw new ApiError(500, rpcErr.message);
     } else {
-      const { error } = await adminDb.from('approvals').update({
+      const { data: updated, error } = await adminDb.from('approvals').update({
         status: 'APPROVED',
         approved_by: req.user.id,
         approved_at: new Date().toISOString(),
-      }).eq('id', approvalId).eq('school_id', req.user.school_id!);
+      }).eq('id', approvalId).eq('school_id', req.user.school_id!).eq('status', 'PENDING')
+        .select('id');
       if (error) throw new ApiError(500, error.message);
+      if (!updated || updated.length === 0) {
+        throw new ApiError(409, 'Approval was just acted on by someone else — refresh and try again');
+      }
     }
 
     const { data: updated } = await adminDb.from('approvals')
@@ -286,8 +325,10 @@ principalRouter.post('/approval/reject', requireAuth, PRINCIPAL, async (req, res
     const body = requireBody<{ approvalId: string; reason?: string }>(req, ['approvalId']);
 
     const { data: cur, error: readErr } = await adminDb.from('approvals')
-      .select('new_value').eq('id', body.approvalId).eq('school_id', req.user.school_id!).single();
-    if (readErr) throw new ApiError(404, 'Approval not found');
+      .select('new_value, status').eq('id', body.approvalId).eq('school_id', req.user.school_id!).maybeSingle();
+    if (readErr) throw new ApiError(500, readErr.message);
+    if (!cur) throw new ApiError(404, 'Approval not found');
+    if ((cur as any).status !== 'PENDING') throw new ApiError(409, `Approval is already ${(cur as any).status}`);
     const nv = ((cur as any)?.new_value as Record<string, unknown>) ?? {};
     nv['rejectionReason'] = body.reason ?? null;
 
@@ -296,10 +337,11 @@ principalRouter.post('/approval/reject', requireAuth, PRINCIPAL, async (req, res
       new_value: nv,
       approved_by: req.user.id,
       approved_at: new Date().toISOString(),
-    }).eq('id', body.approvalId).eq('school_id', req.user.school_id!)
-      .select(APPROVAL_FIELDS).single();
+    }).eq('id', body.approvalId).eq('school_id', req.user.school_id!).eq('status', 'PENDING')
+      .select(APPROVAL_FIELDS);
     if (error) throw new ApiError(500, error.message);
-    ok(res, data);
+    if (!data || data.length === 0) throw new ApiError(409, 'Approval was just acted on by someone else — refresh and try again');
+    ok(res, data[0]);
   } catch (err) { fail(res, err); }
 });
 
@@ -323,6 +365,25 @@ principalRouter.post('/leave/submit', requireAuth, async (req, res) => {
         .eq('student_id', body.studentId)
         .maybeSingle();
       if (!link) throw new ApiError(403, 'Not linked to this student');
+
+      // Anti-spam: max 3 leave applications per student per IST day. The DB
+      // trigger (migration 0052) enforces the same rule, but it bypasses
+      // service-role inserts — so we explicitly check here for parent traffic.
+      // 'en-CA' formatter emits YYYY-MM-DD; midnight IST is 18:30 UTC the
+      // previous day, hence the +05:30 offset.
+      const istToday = new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Kolkata' });
+      const dayStartIST = new Date(`${istToday}T00:00:00+05:30`).toISOString();
+      const { count: todayCount } = await adminDb
+        .from('approvals')
+        .select('id', { count: 'exact', head: true })
+        .eq('request_type', 'LEAVE')
+        .eq('entity_type', 'student')
+        .eq('entity_id', body.studentId)
+        .gte('created_at', dayStartIST);
+      if ((todayCount ?? 0) >= 3) {
+        throw new ApiError(429,
+          'Daily limit reached — only 3 leave applications allowed per student per day. Please contact the school office for another submission.');
+      }
     }
 
     const newValue = {
@@ -537,7 +598,10 @@ principalRouter.post('/ay-config/sections', requireAuth, PRINCIPAL, async (req, 
       if (error) throw new ApiError(500, error.message);
     }
     if (body.toDelete.length) {
-      const { error } = await adminDb.from('sections').delete().in('id', body.toDelete);
+      const { error } = await adminDb.from('sections').delete()
+        .eq('school_id', req.user.school_id!)
+        .eq('academic_year_id', body.yearId)
+        .in('id', body.toDelete);
       if (error) throw new ApiError(500, error.message);
     }
 
@@ -779,6 +843,98 @@ principalRouter.post('/fee-structure/save-for-year', requireAuth, PRINCIPAL, asy
   } catch (err) { fail(res, err); }
 });
 
+// POST /api/principal/fee-structure/apply-to-class
+//
+// Bulk-generate fee schedules for every active student in a class for the
+// active academic year, using a saved fee_structures row. Skips students who
+// already have installments in this year (any payer_type, any fee_type) to
+// avoid clobbering an in-progress schedule. Returns counts so the UI can
+// surface "X generated, Y already had a schedule".
+//
+// Why this exists: principals reasonably expect that "assign Class 1 to a
+// fee structure" should fan out to the students in Class 1. Previously the
+// only way to populate a student's installments was the Regenerate modal,
+// one student at a time, which made fresh-class onboarding a tedious loop.
+principalRouter.post('/fee-structure/apply-to-class', requireAuth, PRINCIPAL, async (req, res) => {
+  try {
+    const body = requireBody<{
+      structureId: string; isRte?: boolean;
+      discountAmount?: number; discountPct?: number;
+    }>(req, ['structureId']);
+
+    const schoolId = req.user.school_id!;
+
+    // 1. Resolve the structure + active AY in a single round trip.
+    const { data: structRow, error: sErr } = await adminDb
+      .from('fee_structures')
+      .select('id, school_id, class_name, academic_year_id, fee_heads, monthly_due_dates')
+      .eq('id', body.structureId).eq('school_id', schoolId).maybeSingle();
+    if (sErr) throw new ApiError(500, sErr.message);
+    if (!structRow) throw new ApiError(404, 'Fee structure not found');
+    const struct = structRow as {
+      class_name: string; academic_year_id: string;
+      fee_heads: unknown; monthly_due_dates: unknown;
+    };
+    if (!struct.academic_year_id) throw new ApiError(400, 'Fee structure has no academic year');
+
+    // 2. Pull the cohort: every active student whose academic record sits in
+    // this AY + class. We use student_academic_records as the source of truth
+    // because students.class_name is denormalized and can lag.
+    const { data: arRows, error: arErr } = await adminDb
+      .from('student_academic_records')
+      .select('student_id, students!inner(id, is_active, school_id)')
+      .eq('academic_year_id', struct.academic_year_id)
+      .eq('class_name', struct.class_name)
+      .eq('students.school_id', schoolId)
+      .eq('students.is_active', true);
+    if (arErr) throw new ApiError(500, arErr.message);
+
+    type Row = { student_id: string };
+    const studentIds = ((arRows ?? []) as unknown as Row[]).map(r => r.student_id);
+    if (studentIds.length === 0) {
+      ok(res, { generated: 0, skipped: 0, total: 0 });
+      return;
+    }
+
+    // 3. Find which students already have installments in this AY — skip
+    // those so we don't clobber existing schedules. The Regenerate modal
+    // remains the explicit destructive path for individual rebuilds.
+    const { data: existing } = await adminDb
+      .from('fee_installments').select('student_id')
+      .eq('academic_year_id', struct.academic_year_id)
+      .in('student_id', studentIds);
+    const haveSchedule = new Set(((existing ?? []) as { student_id: string }[]).map(r => r.student_id));
+    const targets = studentIds.filter(id => !haveSchedule.has(id));
+
+    // 4. Fan out to the existing SECURITY DEFINER RPC — it handles RTE flip,
+    // installment computation, and tenant/perm checks. Use the user JWT so
+    // auth.uid() is set inside the RPC.
+    const db = userDb(req.jwt);
+    let generated = 0;
+    const errors: string[] = [];
+    for (const sid of targets) {
+      const { error } = await db.rpc('generate_student_fee_schedule', {
+        p_student_id:      sid,
+        p_year_id:         struct.academic_year_id,
+        p_heads:           struct.fee_heads,
+        p_due_dates:       struct.monthly_due_dates,
+        p_is_rte:          body.isRte ?? false,
+        p_discount_amount: body.discountAmount ?? 0,
+        p_discount_pct:    body.discountPct ?? 0,
+      });
+      if (error) errors.push(`${sid}: ${error.message}`);
+      else generated++;
+    }
+
+    ok(res, {
+      generated,
+      skipped: studentIds.length - targets.length,
+      total: studentIds.length,
+      errors: errors.slice(0, 5),
+    });
+  } catch (err) { fail(res, err); }
+});
+
 // POST /api/principal/fee-structure/delete
 principalRouter.post('/fee-structure/delete', requireAuth, PRINCIPAL, async (req, res) => {
   try {
@@ -914,5 +1070,40 @@ principalRouter.get('/dashboard-stats', requireAuth, PRINCIPAL, async (req, res)
       lowAttendanceStudents,
       unsubmittedAttendanceDays,
     });
+  } catch (err) { fail(res, err); }
+});
+
+
+// GET /api/principal/subject-suggestions — distinct subject names already in
+// use across this school (timetable_entries + staff). Powers the autocomplete
+// <datalist> in the timetable allot dialog and the staff create/edit form,
+// so principals don't need to maintain a separate "subjects list" — the
+// system learns from what's already typed.
+principalRouter.get('/subject-suggestions', requireAuth, async (req, res) => {
+  try {
+    const schoolId = req.user.school_id!;
+
+    const [tt, staff] = await Promise.all([
+      adminDb.from('timetable_entries')
+        .select('subject')
+        .eq('school_id', schoolId)
+        .not('subject', 'is', null),
+      adminDb.from('staff')
+        .select('subject')
+        .eq('school_id', schoolId)
+        .not('subject', 'is', null),
+    ]);
+
+    const set = new Set<string>();
+    for (const r of (tt.data ?? []) as { subject: string | null }[]) {
+      const s = (r.subject ?? '').trim();
+      if (s) set.add(s);
+    }
+    for (const r of (staff.data ?? []) as { subject: string | null }[]) {
+      const s = (r.subject ?? '').trim();
+      if (s) set.add(s);
+    }
+    const list = Array.from(set).sort((a, b) => a.localeCompare(b));
+    ok(res, list);
   } catch (err) { fail(res, err); }
 });

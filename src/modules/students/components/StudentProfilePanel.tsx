@@ -23,6 +23,7 @@ import { storageService } from '@/shared/utils/storage.service';
 import { StudentClassAssignmentModal } from '@/modules/students/components/StudentClassAssignmentModal';
 import { useAcademicYear } from '@/shared/context/AcademicYearContext';
 import { useEditorModeStore } from '@/store/editorModeStore';
+import { stripClassPrefix } from '@/shared/utils/className';
 import { logAudit } from '@/lib/audit';
 import { feeService, FeeInstallment } from '@/modules/fees/fee.service';
 import type { FeeStructureRecord } from '@/modules/fees/fees.types';
@@ -34,12 +35,14 @@ interface DocumentUpload {
   uploaded: boolean;
 }
 
+// Trimmed to the truly essential documents only. "Other" was removed to keep
+// the checklist focused; if a school needs an extra doc, the staff can use
+// the catch-all upload in the admission form.
 const BLANK_PROFILE_DOCS: DocumentUpload[] = [
+  { type: 'PHOTO',         name: 'Student Photo',        uploaded: false },
+  { type: 'AADHAAR',       name: 'Aadhaar Card',         uploaded: false },
   { type: 'BIRTH_CERT',    name: 'Birth Certificate',    uploaded: false },
   { type: 'TRANSFER_CERT', name: 'Transfer Certificate', uploaded: false },
-  { type: 'AADHAAR',       name: 'Aadhaar Card',          uploaded: false },
-  { type: 'PHOTO',         name: 'Student Photo',         uploaded: false },
-  { type: 'OTHER',         name: 'Other Documents',       uploaded: false },
 ];
 
 interface AcademicHistoryEntry {
@@ -264,10 +267,15 @@ export const StudentProfilePanel: React.FC<Props> = ({ student, onBack, onStuden
   };
 
   // ── Document upload ───────────────────────────────────────────────────────
-  // Hard limit 1.5 MB per document — schools handle large class rosters and
-  // 5 docs per student × thousands of students gets expensive fast. Tight
-  // limits also keep the app snappy on slow rural connections.
-  const MAX_DOC_BYTES = 1.5 * 1024 * 1024;
+  // Per-type ceilings (mirror storage.service.ts):
+  //   PHOTO 1 MB · TRANSFER_CERT 3 MB · others 2 MB · absolute 5 MB.
+  const docCapBytes = (docType: DocumentUpload['type']): number => {
+    if (docType === 'PHOTO')         return 1 * 1024 * 1024;
+    if (docType === 'TRANSFER_CERT') return 3 * 1024 * 1024;
+    return 2 * 1024 * 1024;
+  };
+  const fmtSize = (b: number) =>
+    b >= 1024 * 1024 ? `${(b / 1024 / 1024).toFixed(1)} MB` : `${Math.round(b / 1024)} KB`;
   const handleProfileDocUpload = async (
     e: React.ChangeEvent<HTMLInputElement>,
     docType: DocumentUpload['type'],
@@ -281,8 +289,9 @@ export const StudentProfilePanel: React.FC<Props> = ({ student, onBack, onStuden
       e.target.value = '';
       return;
     }
-    if (file.size > MAX_DOC_BYTES) {
-      showToast(`File too large — max 1.5 MB (${(file.size / 1024 / 1024).toFixed(1)} MB)`, 'error');
+    const cap = docCapBytes(docType);
+    if (file.size > cap) {
+      showToast(`File too large — max ${fmtSize(cap)} (got ${fmtSize(file.size)})`, 'error');
       e.target.value = '';
       return;
     }
@@ -486,18 +495,8 @@ export const StudentProfilePanel: React.FC<Props> = ({ student, onBack, onStuden
           <button onClick={onBack} className="p-2 -ml-2 bg-slate-100 rounded-full text-slate-600">
             <ArrowLeft size={20} />
           </button>
-          <div className="flex items-center gap-2">
-            <button
-              onClick={async () => {
-                if (!schoolInfo) {
-                  try { const info = await schoolInfoService.get(); setSchoolInfo(info); } catch { /* ignore */ }
-                }
-                setShowAdmissionForm(true);
-              }}
-              className="flex items-center gap-1.5 px-3 py-2 bg-blue-50 text-blue-600 font-black text-[10px] uppercase tracking-widest rounded-xl active:scale-90 transition-transform">
-              <FileCheck size={13} /> Form
-            </button>
-          </div>
+          {/* Admission Form download lives inside the Docs tab now — it's
+              a doc-shaped action and clutters the top bar otherwise. */}
         </div>
 
         {/* Hero card */}
@@ -658,7 +657,7 @@ export const StudentProfilePanel: React.FC<Props> = ({ student, onBack, onStuden
                   <>
                     <div className="grid grid-cols-3 gap-2 mb-4">
                       <div className="bg-indigo-50 rounded-xl p-3 text-center">
-                        <div className="text-base font-black text-indigo-700">{currentStudent.className.replace('Class ', '')}</div>
+                        <div className="text-base font-black text-indigo-700">{stripClassPrefix(currentStudent.className)}</div>
                         <div className="text-[9px] font-bold text-indigo-400 mt-0.5">Class</div>
                       </div>
                       <div className="bg-violet-50 rounded-xl p-3 text-center">
@@ -1178,7 +1177,7 @@ export const StudentProfilePanel: React.FC<Props> = ({ student, onBack, onStuden
                             </div>
                             <div className="grid grid-cols-3 gap-2 mb-3">
                               {[
-                                { v: entry.class_name?.replace('Class ', '') ?? '—', l: 'Class' },
+                                { v: stripClassPrefix(entry.class_name) || '—', l: 'Class' },
                                 { v: entry.section ?? '—', l: 'Section' },
                                 { v: entry.roll_no ?? '—', l: 'Roll' },
                               ].map(({ v, l }) => (
@@ -1323,6 +1322,27 @@ export const StudentProfilePanel: React.FC<Props> = ({ student, onBack, onStuden
                 </div>
               )}
               {!docsLoading && (<>
+              {/* Admission Form download — surfaced inside Docs (the natural
+                  home for paperwork) instead of cluttering the profile header. */}
+              <div className="bg-white rounded-2xl border border-slate-100 shadow-sm p-4">
+                <SectionTitle icon={FileCheck} title="Admission Form" />
+                <div className="flex items-center justify-between gap-3 mt-1">
+                  <p className="text-[11px] font-bold text-slate-500 leading-relaxed">
+                    Generate and download {currentStudent.name.split(' ')[0]}'s admission form for printing or filing.
+                  </p>
+                  <button
+                    onClick={async () => {
+                      if (!schoolInfo) {
+                        try { const info = await schoolInfoService.get(); setSchoolInfo(info); } catch { /* ignore */ }
+                      }
+                      setShowAdmissionForm(true);
+                    }}
+                    className="flex items-center gap-1.5 px-3 py-2 bg-indigo-600 hover:bg-indigo-700 text-white font-black text-[10px] uppercase tracking-widest rounded-xl active:scale-95 transition-all shrink-0">
+                    <Download size={12} /> Form
+                  </button>
+                </div>
+              </div>
+
               <div className="bg-white rounded-2xl border border-slate-100 shadow-sm p-4">
                 <SectionTitle icon={FileText} title="Submitted Documents" />
                 {profileDocsLive.length > 0 ? (
@@ -1369,7 +1389,7 @@ export const StudentProfilePanel: React.FC<Props> = ({ student, onBack, onStuden
               <div className="bg-white rounded-2xl border border-slate-100 shadow-sm p-4">
                 <SectionTitle icon={CreditCard} title="Document Checklist" />
                 <p className="text-[10px] font-bold text-slate-400 mb-3">
-                  Upload missing documents · max 1.5 MB · JPG / PNG / WEBP / HEIC / PDF
+                  Photo 1 MB · TC 3 MB · other documents 2 MB · JPG / PNG / WEBP / PDF
                 </p>
                 <div className="space-y-2">
                   {profileDocs.map(doc => {

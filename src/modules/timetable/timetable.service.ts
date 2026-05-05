@@ -176,6 +176,7 @@ async function _loadTeachers(schoolId: string): Promise<void> {
     .map(t => ({ id: t.id, name: t.name, subject: t.subject ?? '' }));
 }
 
+
 export const timetableService = {
   async refreshAll(): Promise<void> {
     const schoolId = getSchoolId();
@@ -185,11 +186,6 @@ export const timetableService = {
 
   getTeachers(): TimetableTeacher[] {
     return [..._teachersCache];
-  },
-
-  getSubjectsForClass(_classId: string): string[] {
-    // Pull a default list — components can extend per school later.
-    return ['Mathematics', 'Science', 'English', 'Hindi', 'Social Studies', 'Computer', 'Physics', 'Chemistry', 'Biology'];
   },
 
   getClassTimetable(classId: string, _academicYearId?: string): TimetableEntry[] {
@@ -250,29 +246,12 @@ export const timetableService = {
     const classConflict = this.hasClassConflict(entry.classId, entry.day, entry.slotId, entry.id);
     if (classConflict) return { ok: false, conflict: classConflict, reason: 'Class already has an entry in this slot' };
 
-    const schoolId = getSchoolId();
     if (!_activeYearId) throw new Error('No active academic year');
 
-    // Resolve section_id from class_name + section.
-    const { data: sec } = await supabase
-      .from('sections').select('id')
-      .eq('school_id', schoolId).eq('academic_year_id', _activeYearId)
-      .eq('class_name', entry.className).eq('section', entry.section).maybeSingle();
-    const sectionId = (sec as { id: string } | null)?.id;
-    if (!sectionId) throw new Error(`Section ${entry.className}-${entry.section} not found`);
-
-    const payload = {
-      school_id: schoolId,
-      academic_year_id: _activeYearId,
-      section_id: sectionId,
-      class_id: entry.classId,
-      day: entry.day,
-      slot_id: entry.slotId,
-      subject: entry.subject,
-      teacher_id: entry.teacherId || null,
-      teacher_name: entry.teacherName,
-      room: entry.room,
-    };
+    // section_id resolution lives on the server (server/routes/timetable.ts
+    // already does it). The previous client-side lookup was redundant and
+    // made every "Allot" tap fire two extra Supabase round-trips before the
+    // POST — a noticeable lag on slow connections.
 
     try {
       await apiTimetable.save({
@@ -291,10 +270,12 @@ export const timetableService = {
     } catch (e) {
       return { ok: false, reason: (e as Error).message };
     }
-    await logAudit('timetable_saved', 'timetable_entry', entry.id ?? 'new', {
+    void logAudit('timetable_saved', 'timetable_entry', entry.id ?? 'new', {
       classId: entry.classId, day: entry.day, slot: entry.slotId,
     });
-    await this.refreshAll();
+    // Reload only what changed (entries) instead of reloading active year +
+    // periods + teachers as well — those don't change on a single save.
+    await _loadEntries(getSchoolId());
     const saved = _entriesCache.find(e =>
       e.classId === entry.classId && e.day === entry.day && e.slotId === entry.slotId
     );
@@ -309,7 +290,9 @@ export const timetableService = {
       throw new Error('Academic year is closed');
     }
     await apiTimetable.deleteEntry(id);
-    await this.refreshAll();
+    // Same as saveEntry — only entries change on a delete; AY/periods/teachers
+    // don't, so don't pay for re-loading them.
+    await _loadEntries(getSchoolId());
   },
 
   /** Local-only edit of a slot's time (in-memory). For DB persistence, add a periods CRUD. */
@@ -332,7 +315,10 @@ export const timetableService = {
 
   getTodayForTeacher(teacherId: string, _academicYearId?: string): (TimetableEntry & { slot: PeriodSlot })[] {
     const days = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'] as const;
-    const today = days[new Date().getDay()] as TDay;
+    // Use IST day-of-week so a teacher in UTC at 19:30 (= IST 01:00 next day)
+    // sees tomorrow's schedule, matching the rest of the app's date model.
+    const istDow = new Date().toLocaleString('en-US', { timeZone: 'Asia/Kolkata', weekday: 'long' });
+    const today = (days.find(d => d === istDow) ?? days[new Date().getDay()]) as TDay;
     return _entriesCache
       .filter(e => e.teacherId === teacherId && e.day === today)
       .map(e => ({ ...e, slot: PERIOD_SLOTS.find(s => s.slotId === e.slotId)! }))

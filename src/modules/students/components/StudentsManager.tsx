@@ -9,6 +9,7 @@ import {
   Lock, Edit2, History, Eye, Upload, Download,
 } from 'lucide-react';
 import { exportCsv } from '@/shared/utils/csv';
+import { stripClassPrefix } from '@/shared/utils/className';
 import { studentService } from '@/modules/students/student.service';
 import { storageService } from '@/shared/utils/storage.service';
 import { Student, CreateStudentInput, STREAMS, STREAM_CLASSES, StudentStream } from '@/modules/students/student.types';
@@ -130,11 +131,13 @@ const [mainView, setMainView] = useState<MainView>(initialView ?? 'CLASSES');
   const [showParentModal, setShowParentModal] = useState(false);
   const [schoolInfo, setSchoolInfo] = useState<SchoolInfo | null>(null);
   const [showAdmissionForm, setShowAdmissionForm] = useState(false);
+  // Trimmed to the truly essential ones — Aadhaar (KYC) + Birth Cert (age
+  // proof) + Transfer Cert (for transfer-in students). The catch-all "Other"
+  // bucket was removed to keep the checklist focused.
   const [documents, setDocuments] = useState<DocumentUpload[]>([
-    { type: 'BIRTH_CERT', name: 'Birth Certificate', uploaded: false },
+    { type: 'AADHAAR',     name: 'Aadhaar Card',         uploaded: false },
+    { type: 'BIRTH_CERT',  name: 'Birth Certificate',    uploaded: false },
     { type: 'TRANSFER_CERT', name: 'Transfer Certificate', uploaded: false },
-    { type: 'AADHAAR', name: 'Aadhaar Card', uploaded: false },
-    { type: 'OTHER', name: 'Other Documents', uploaded: false },
   ]);
   // Actual File objects collected during form fill — uploaded after student is created
   const [documentFiles, setDocumentFiles] = useState<Map<DocumentUpload['type'], File>>(new Map());
@@ -282,8 +285,14 @@ const [mainView, setMainView] = useState<MainView>(initialView ?? 'CLASSES');
   const handleDocumentUpload = (e: React.ChangeEvent<HTMLInputElement>, docType: DocumentUpload['type']) => {
     const file = e.target.files?.[0];
     if (!file) return;
-    if (file.size > 5 * 1024 * 1024) {
-      showToast(`File too large — max 5MB (${(file.size / 1024 / 1024).toFixed(1)}MB)`, 'error');
+    // Mirror storage.service.ts: PHOTO 1 MB, TRANSFER_CERT 3 MB, others 2 MB.
+    const cap =
+      docType === 'PHOTO'         ? 1 * 1024 * 1024 :
+      docType === 'TRANSFER_CERT' ? 3 * 1024 * 1024 :
+      2 * 1024 * 1024;
+    const fmt = (b: number) => b >= 1024 * 1024 ? `${(b / 1024 / 1024).toFixed(1)} MB` : `${Math.round(b / 1024)} KB`;
+    if (file.size > cap) {
+      showToast(`File too large — max ${fmt(cap)} (got ${fmt(file.size)})`, 'error');
       return;
     }
     setDocumentFiles(prev => { const n = new Map(prev); n.set(docType, file); return n; });
@@ -470,7 +479,7 @@ const [mainView, setMainView] = useState<MainView>(initialView ?? 'CLASSES');
                 <p className="text-[11px] font-bold text-slate-600 leading-relaxed">
                   Recent passport-size photo with plain background. Used on ID card, admit card, and admission form.
                 </p>
-                <p className="text-[9px] font-bold text-slate-400">JPG / PNG · Max 5MB · 3:4 ratio recommended</p>
+                <p className="text-[9px] font-bold text-slate-400">JPG / PNG · Max 1 MB · 3:4 ratio recommended</p>
                 <div className="flex items-center gap-2">
                   <label className="cursor-pointer">
                     <input type="file" onChange={e => handleDocumentUpload(e, 'PHOTO')} className="hidden"
@@ -674,7 +683,7 @@ const [mainView, setMainView] = useState<MainView>(initialView ?? 'CLASSES');
           <div className="bg-white rounded-2xl border border-slate-100 shadow-sm p-4 space-y-3">
             <div>
               <p className="text-[10px] font-black uppercase tracking-widest text-slate-400">Documents</p>
-              <p className="text-[10px] font-bold text-slate-400 mt-0.5">Max 5MB · JPG / PNG / PDF — uploaded when you tap Admit</p>
+              <p className="text-[10px] font-bold text-slate-400 mt-0.5">Photo 1 MB · TC 3 MB · others 2 MB · JPG / PNG / PDF — uploaded when you tap Admit</p>
             </div>
             {documents.map(doc => {
               const file = documentFiles.get(doc.type);
@@ -1308,7 +1317,7 @@ const [mainView, setMainView] = useState<MainView>(initialView ?? 'CLASSES');
       if (ia !== -1 && ib !== -1) return ia - ib;
       if (ia !== -1) return -1;
       if (ib !== -1) return 1;
-      return (parseInt(a.replace('Class ', ''), 10) || 0) - (parseInt(b.replace('Class ', ''), 10) || 0);
+      return (parseInt(stripClassPrefix(a), 10) || 0) - (parseInt(stripClassPrefix(b), 10) || 0);
     };
 
     // Class list: use DB sections (shows classes even if no students assigned yet)
@@ -1346,7 +1355,7 @@ const [mainView, setMainView] = useState<MainView>(initialView ?? 'CLASSES');
               </button>
               <div>
                 <h2 className="text-xl font-black text-slate-900 uppercase tracking-tight">
-                  {selectedClass.replace('Class ', '')}-{selectedSection}
+                  {stripClassPrefix(selectedClass)}-{selectedSection}
                 </h2>
                 <p className="text-[10px] font-bold text-slate-400">
                   {classStudents.length}{secMeta?.capacity ? `/${secMeta.capacity}` : ''} students
@@ -1399,7 +1408,7 @@ const [mainView, setMainView] = useState<MainView>(initialView ?? 'CLASSES');
 
     // ── Sections in a class ────────────────────────────────────────────────
     if (selectedClass) {
-      const clsNum = selectedClass.replace('Class ', '');
+      const clsNum = stripClassPrefix(selectedClass);
       return (
         <div className="w-full bg-slate-50 flex flex-col animate-in slide-in-from-right-8 duration-300">
           <div className="bg-white border-b border-slate-100 px-4 pt-4 pb-4 flex items-center gap-3 sticky top-0 z-10 shadow-sm">
@@ -1478,7 +1487,7 @@ const [mainView, setMainView] = useState<MainView>(initialView ?? 'CLASSES');
           <div className="grid grid-cols-2 gap-3">
             {classNames.map(cls => {
               const count = students.filter(s => s.className === cls).length;
-              const clsNum = cls.replace('Class ', '');
+              const clsNum = stripClassPrefix(cls);
               const numSections = dbSections.filter(s => s.className === cls).length;
               return (
                 <button key={cls}

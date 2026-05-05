@@ -1,13 +1,9 @@
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import {
-  ArrowLeft, Upload, CheckCircle2, QrCode, Zap, AlertTriangle, Wallet, Loader,
-  Image as ImageIcon, X, ChevronDown, Calendar, BookOpen, Bus, Receipt as ReceiptIcon,
+  ArrowLeft, CheckCircle2, QrCode, Zap, AlertTriangle, Wallet, Loader,
+  ChevronDown, Calendar, BookOpen, Bus, Receipt as ReceiptIcon, Hash,
 } from 'lucide-react';
-import {
-  studentDashboardService,
-  FEE_SCREENSHOT_MAX_BYTES,
-  FEE_SCREENSHOT_MIME_TYPES,
-} from '@/modules/students/studentDashboard.service';
+import { studentDashboardService } from '@/modules/students/studentDashboard.service';
 import { FeePaymentUpload } from '@/roles/student/student-role.types';
 import { useUIStore } from '@/store/uiStore';
 import { feeService, FeeInstallment, FeeType, PaymentRecord } from '@/modules/fees/fee.service';
@@ -59,13 +55,8 @@ export const FeesView: React.FC<Props> = ({ onBack }) => {
   const [view, setView] = useState<View>('MAIN');
   const [studentId, setStudentId] = useState<string | null>(null);
   const [uploads, setUploads] = useState<FeePaymentUpload[]>([]);
-  const [screenshotName, setScreenshotName] = useState('');
-  const [screenshotFile, setScreenshotFile] = useState<File | null>(null);
-  const [screenshotPreview, setScreenshotPreview] = useState<string | null>(null);
-  const fileInputRef = useRef<HTMLInputElement | null>(null);
+  const [transactionId, setTransactionId] = useState('');
   const [isSubmitting, setIsSubmitting] = useState(false);
-  const [previewUrl, setPreviewUrl] = useState<string | null>(null);
-  const [previewLoading, setPreviewLoading] = useState(false);
   const [feeSummary, setFeeSummary] = useState<{
     tuition: number; transport: number; exam: number; other: number; total: number;
   }>({ tuition: 0, transport: 0, exam: 0, other: 0, total: 0 });
@@ -154,72 +145,26 @@ export const FeesView: React.FC<Props> = ({ onBack }) => {
   }, []);
 
   const resetForm = () => {
-    setScreenshotName('');
-    setScreenshotFile(null);
-    if (screenshotPreview) URL.revokeObjectURL(screenshotPreview);
-    setScreenshotPreview(null);
-    if (fileInputRef.current) fileInputRef.current.value = '';
+    setTransactionId('');
   };
 
-  const handleFilePick = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const f = e.target.files?.[0] ?? null;
-    if (!f) return;
-    if (!(FEE_SCREENSHOT_MIME_TYPES as readonly string[]).includes(f.type)) {
-      showToast('Use a JPG, PNG, WebP, HEIC, or HEIF image', 'error');
-      e.target.value = '';
-      return;
-    }
-    if (f.size > FEE_SCREENSHOT_MAX_BYTES) {
-      showToast(`Image too large (max ${Math.round(FEE_SCREENSHOT_MAX_BYTES / 1024 / 1024)} MB)`, 'error');
-      e.target.value = '';
-      return;
-    }
-    if (screenshotPreview) URL.revokeObjectURL(screenshotPreview);
-    setScreenshotFile(f);
-    setScreenshotPreview(URL.createObjectURL(f));
-  };
-
-  const handleUpload = async () => {
-    if (!screenshotName.trim()) { showToast('Enter UTR number', 'error'); return; }
-    if (!screenshotFile) { showToast('Attach the payment screenshot', 'error'); return; }
+  const handleSubmit = async () => {
+    const txn = transactionId.trim();
+    if (!txn) { showToast('Enter transaction ID (UTR / UPI ref)', 'error'); return; }
+    if (txn.length < 4) { showToast('Transaction ID looks too short', 'error'); return; }
     if (!studentId) return;
     setIsSubmitting(true);
     try {
-      const upload = await studentDashboardService.submitFeeScreenshot(
-        feeSummary.total, 'Fee Payment', screenshotName.trim(), screenshotFile,
+      const upload = await studentDashboardService.submitFeePayment(
+        feeSummary.total, txn, 'Fee Payment',
       );
       setUploads(prev => [upload, ...prev]);
-      showToast('Screenshot submitted for approval');
+      showToast('Submitted — waiting for principal approval');
       resetForm();
       setView('MAIN');
     } catch (err) {
       showToast((err as Error).message ?? 'Failed to submit', 'error');
     } finally { setIsSubmitting(false); }
-  };
-
-  // Free any local object URL when it changes or the component unmounts so
-  // we don't leak blob URLs over the lifetime of the screen.
-  useEffect(() => {
-    return () => {
-      if (screenshotPreview) URL.revokeObjectURL(screenshotPreview);
-    };
-  }, [screenshotPreview]);
-
-  const openScreenshot = async (u: FeePaymentUpload) => {
-    if (!u.screenshotPath) {
-      showToast('No image attached to this submission', 'error');
-      return;
-    }
-    setPreviewLoading(true);
-    try {
-      const url = await studentDashboardService.getFeeScreenshotSignedUrl(u.screenshotPath);
-      if (!url) throw new Error('Could not load image');
-      setPreviewUrl(url);
-    } catch (err) {
-      showToast((err as Error).message ?? 'Could not load image', 'error');
-    } finally {
-      setPreviewLoading(false);
-    }
   };
 
   if (loading) return (
@@ -282,62 +227,65 @@ export const FeesView: React.FC<Props> = ({ onBack }) => {
           </div>
         </div>
 
-        {/* Upload after payment */}
-        <div className="bg-white rounded-2xl border border-slate-100 shadow-sm p-4 space-y-4">
-          <p className="text-[10px] font-black uppercase tracking-widest text-slate-400">After Payment — Upload Proof</p>
-          <p className="text-xs font-bold text-slate-500">Enter the UTR number and attach a screenshot of the payment.</p>
-          <input
-            value={screenshotName}
-            onChange={e => setScreenshotName(e.target.value)}
-            placeholder="UTR / Reference number"
-            className="w-full border border-slate-200 bg-slate-50 rounded-xl px-4 py-3 font-bold text-sm outline-none focus:border-blue-500"
-          />
-
-          <input
-            ref={fileInputRef}
-            type="file"
-            accept={FEE_SCREENSHOT_MIME_TYPES.join(',')}
-            onChange={handleFilePick}
-            className="hidden"
-          />
-          {!screenshotPreview ? (
-            <button
-              type="button"
-              onClick={() => fileInputRef.current?.click()}
-              className="w-full flex items-center justify-center gap-2 border-2 border-dashed border-slate-200 bg-slate-50 rounded-xl px-4 py-5 text-slate-500 font-bold text-sm active:scale-[0.99] transition-transform"
-            >
-              <ImageIcon size={16} />
-              <span>Attach payment screenshot</span>
-            </button>
-          ) : (
-            <div className="relative rounded-xl overflow-hidden border border-slate-200 bg-slate-50">
-              <img src={screenshotPreview} alt="Payment screenshot preview" className="w-full max-h-64 object-contain" />
-              <button
-                type="button"
-                onClick={() => {
-                  if (screenshotPreview) URL.revokeObjectURL(screenshotPreview);
-                  setScreenshotPreview(null);
-                  setScreenshotFile(null);
-                  if (fileInputRef.current) fileInputRef.current.value = '';
-                }}
-                aria-label="Remove screenshot"
-                className="absolute top-2 right-2 bg-slate-900/70 text-white rounded-full p-1.5 active:scale-95"
-              >
-                <X size={14} />
-              </button>
-              {screenshotFile && (
-                <div className="px-3 py-2 text-[10px] font-bold text-slate-500 bg-white border-t border-slate-100 truncate">
-                  {screenshotFile.name} · {(screenshotFile.size / 1024).toFixed(0)} KB
+        {/* Confirm after payment — txn_id only, no file upload. */}
+        {(() => {
+          // Count today's submissions (IST). Anti-spam cap is 3/day, enforced
+          // by DB trigger; we surface it here so the parent sees their budget.
+          const istToday = new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Kolkata' });
+          const todayCount = uploads.filter(u => u.submittedAt.slice(0, 10) === istToday).length;
+          const dailyCap   = 3;
+          const reachedCap = todayCount >= dailyCap;
+          return (
+            <div className="bg-white rounded-2xl border border-slate-100 shadow-sm p-4 space-y-4">
+              <div className="flex items-center justify-between">
+                <p className="text-[10px] font-black uppercase tracking-widest text-slate-400">After Payment — Confirm</p>
+                <span className={`text-[10px] font-black px-2 py-0.5 rounded-full border ${
+                  reachedCap
+                    ? 'bg-rose-50 text-rose-600 border-rose-200'
+                    : todayCount > 0
+                      ? 'bg-amber-50 text-amber-700 border-amber-200'
+                      : 'bg-slate-50 text-slate-500 border-slate-200'
+                }`}>
+                  {todayCount}/{dailyCap} today
+                </span>
+              </div>
+              {reachedCap ? (
+                <div className="bg-rose-50 border border-rose-200 rounded-xl p-3 flex gap-2">
+                  <AlertTriangle size={14} className="text-rose-500 mt-0.5 shrink-0"/>
+                  <div className="text-[11px] font-bold text-rose-700 leading-relaxed">
+                    Daily limit reached — only 3 submissions allowed per day. Misuse rokne ke liye limit hai.
+                    Please contact the school office for another submission.
+                  </div>
                 </div>
+              ) : (
+                <p className="text-xs font-bold text-slate-500">
+                  UPI / bank transaction ID dijiye. Principal verify karke approve karenge.
+                </p>
               )}
-            </div>
-          )}
+              <div className="relative">
+                <Hash size={16} className="absolute left-3.5 top-1/2 -translate-y-1/2 text-slate-400" />
+                <input
+                  value={transactionId}
+                  onChange={e => setTransactionId(e.target.value)}
+                  placeholder="Transaction / UTR / UPI ref"
+                  autoCapitalize="none"
+                  autoCorrect="off"
+                  spellCheck={false}
+                  disabled={reachedCap}
+                  className="w-full border border-slate-200 bg-slate-50 rounded-xl pl-10 pr-4 py-3 font-bold text-sm tracking-wide outline-none focus:border-blue-500 focus:bg-white disabled:opacity-60 disabled:cursor-not-allowed"
+                />
+              </div>
+              <p className="text-[10px] font-bold text-slate-400">
+                UPI app ke "Transaction details" me dikhta hai · 12+ digit reference
+              </p>
 
-          <button onClick={handleUpload} disabled={isSubmitting || !screenshotFile || !screenshotName.trim()}
-            className="w-full flex items-center justify-center gap-2 bg-blue-600 text-white font-black text-sm uppercase tracking-widest py-4 rounded-2xl active:scale-95 transition-transform shadow-lg disabled:opacity-60">
-            {isSubmitting ? 'Submitting…' : <><Upload size={16} /> Submit for Approval</>}
-          </button>
-        </div>
+              <button onClick={handleSubmit} disabled={isSubmitting || reachedCap || transactionId.trim().length < 4}
+                className="w-full flex items-center justify-center gap-2 bg-blue-600 hover:bg-blue-700 text-white font-black text-sm uppercase tracking-widest py-4 rounded-2xl active:scale-[0.98] transition-all shadow-lg disabled:opacity-60 disabled:cursor-not-allowed">
+                {isSubmitting ? 'Submitting…' : <><CheckCircle2 size={16} /> Submit for Approval</>}
+              </button>
+            </div>
+          );
+        })()}
       </div>
     </div>
   );
@@ -381,7 +329,15 @@ export const FeesView: React.FC<Props> = ({ onBack }) => {
                 ₹{feeSummary.total.toLocaleString('en-IN')}
               </div>
 
-              {feeSummary.total === 0 ? (
+              {feeSummary.total === 0 && installments.length === 0 ? (
+                // No schedule generated yet for this student. Earlier we showed
+                // "All fees paid" here, which was misleading — it conflated a
+                // settled ledger with one that simply hasn't been billed yet.
+                <div className="inline-flex items-center gap-2 text-amber-200 font-black text-xs mb-5">
+                  <AlertTriangle size={14} />
+                  Fee schedule not published yet
+                </div>
+              ) : feeSummary.total === 0 ? (
                 <div className="inline-flex items-center gap-2 text-emerald-300 font-black text-sm mb-5">
                   <CheckCircle2 size={16} />
                   {paidTill.allCleared ? `All fees paid till ${paidTill.lastClearedMonth}` : 'All fees paid'}
@@ -527,21 +483,51 @@ export const FeesView: React.FC<Props> = ({ onBack }) => {
                               </span>
                               <span className="text-[9px] font-bold text-slate-400">· {items.length} installment{items.length !== 1 ? 's' : ''}</span>
                             </div>
-                            {items.map((inst, idx) => (
+                            {items.map((inst, idx) => {
+                              // Surface paid/discount/balance to parents the
+                              // same way the principal sees them. Earlier
+                              // parents only got Total + status — they
+                              // couldn't tell what portion was their cash
+                              // vs a school-applied discount, which made
+                              // PARTIAL rows confusing.
+                              const balance = Math.max(0, inst.amount - inst.paidAmount - inst.writeOffAmount);
+                              return (
                               <div key={inst.id}
-                                className={`flex items-center justify-between px-4 py-3 ${idx < items.length - 1 ? 'border-b border-slate-50' : ''}`}>
-                                <div>
-                                  <div className="font-bold text-slate-900 text-sm">{inst.month}</div>
-                                  <div className="text-[10px] font-bold text-slate-400 mt-0.5">Due {inst.dueDate}</div>
+                                className={`px-4 py-3 ${idx < items.length - 1 ? 'border-b border-slate-50' : ''}`}>
+                                <div className="flex items-center justify-between">
+                                  <div className="min-w-0">
+                                    <div className="font-bold text-slate-900 text-sm">{inst.month}</div>
+                                    <div className="text-[10px] font-bold text-slate-400 mt-0.5">Due {inst.dueDate}</div>
+                                  </div>
+                                  <div className="text-right shrink-0">
+                                    <div className="font-black text-slate-900 text-sm tabular-nums">₹{inst.amount.toLocaleString('en-IN')}</div>
+                                    <span className={`text-[9px] font-black px-2 py-0.5 rounded-full uppercase ${instStatusColor(inst.status)}`}>
+                                      {inst.status}
+                                    </span>
+                                  </div>
                                 </div>
-                                <div className="text-right">
-                                  <div className="font-black text-slate-900 text-sm">₹{inst.amount.toLocaleString('en-IN')}</div>
-                                  <span className={`text-[9px] font-black px-2 py-0.5 rounded-full uppercase ${instStatusColor(inst.status)}`}>
-                                    {inst.status}
-                                  </span>
-                                </div>
+                                {(inst.paidAmount > 0 || inst.writeOffAmount > 0) && (
+                                  <div className="flex items-center gap-1.5 flex-wrap mt-2 text-[10px] font-black tabular-nums">
+                                    {inst.paidAmount > 0 && (
+                                      <span className="px-2 py-0.5 rounded-full bg-emerald-50 text-emerald-700 border border-emerald-100">
+                                        Paid ₹{inst.paidAmount.toLocaleString('en-IN')}
+                                      </span>
+                                    )}
+                                    {inst.writeOffAmount > 0 && (
+                                      <span className="px-2 py-0.5 rounded-full bg-indigo-50 text-indigo-700 border border-indigo-100">
+                                        Discount ₹{inst.writeOffAmount.toLocaleString('en-IN')}
+                                      </span>
+                                    )}
+                                    {balance > 0 && (
+                                      <span className="px-2 py-0.5 rounded-full bg-rose-50 text-rose-700 border border-rose-100">
+                                        Balance ₹{balance.toLocaleString('en-IN')}
+                                      </span>
+                                    )}
+                                  </div>
+                                )}
                               </div>
-                            ))}
+                              );
+                            })}
                           </div>
                         );
                       })}
@@ -558,56 +544,24 @@ export const FeesView: React.FC<Props> = ({ onBack }) => {
           <div className="mx-4 mt-5">
             <h3 className="text-sm font-black text-slate-900 uppercase tracking-wide mb-3">SUBMITTED PAYMENTS</h3>
             <div className="space-y-2">
-              {uploads.map(u => {
-                const hasImage = !!u.screenshotPath;
-                return (
-                  <div key={u.id} className="bg-white rounded-2xl border border-slate-100 shadow-sm p-4 flex items-center justify-between">
-                    <div className="min-w-0 pr-3">
-                      <div className="font-extrabold text-slate-900 text-sm truncate">{u.description}</div>
-                      <div className="text-[10px] font-bold text-slate-400 mt-0.5 truncate">UTR: {u.screenshotName} · {u.submittedAt}</div>
-                      {hasImage ? (
-                        <button
-                          onClick={() => openScreenshot(u)}
-                          disabled={previewLoading}
-                          className="mt-1.5 inline-flex items-center gap-1 text-[10px] font-black uppercase tracking-widest text-blue-600 disabled:opacity-60"
-                        >
-                          <ImageIcon size={10} />
-                          {previewLoading ? 'Loading…' : 'View screenshot'}
-                        </button>
-                      ) : (
-                        <div className="mt-1.5 text-[10px] font-bold text-slate-300 italic">No image attached</div>
-                      )}
-                    </div>
-                    <div className="flex flex-col items-end gap-1 shrink-0">
-                      <span className={`text-[9px] font-black px-2 py-0.5 rounded-full uppercase ${statusBadge(u.status)}`}>{u.status}</span>
-                      <span className="font-black text-slate-900 text-sm">₹{u.amount.toLocaleString('en-IN')}</span>
+              {uploads.map(u => (
+                <div key={u.id} className="bg-white rounded-2xl border border-slate-100 shadow-sm p-4 flex items-center justify-between">
+                  <div className="min-w-0 pr-3">
+                    <div className="font-extrabold text-slate-900 text-sm truncate">{u.description}</div>
+                    <div className="flex items-center gap-1.5 text-[10px] font-bold text-slate-400 mt-0.5 truncate">
+                      <Hash size={10} className="shrink-0"/>
+                      <span className="font-mono tracking-wide truncate">{u.transactionId}</span>
+                      <span>·</span>
+                      <span>{u.submittedAt}</span>
                     </div>
                   </div>
-                );
-              })}
+                  <div className="flex flex-col items-end gap-1 shrink-0">
+                    <span className={`text-[9px] font-black px-2 py-0.5 rounded-full uppercase ${statusBadge(u.status)}`}>{u.status}</span>
+                    <span className="font-black text-slate-900 text-sm">₹{u.amount.toLocaleString('en-IN')}</span>
+                  </div>
+                </div>
+              ))}
             </div>
-          </div>
-        )}
-
-        {/* ── Screenshot lightbox ────────────────────────────────────────── */}
-        {previewUrl && (
-          <div
-            className="fixed inset-0 bg-black/80 z-50 flex items-center justify-center p-4"
-            onClick={() => setPreviewUrl(null)}
-          >
-            <button
-              onClick={(e) => { e.stopPropagation(); setPreviewUrl(null); }}
-              className="absolute top-4 right-4 bg-white/10 text-white rounded-full p-2"
-              aria-label="Close screenshot"
-            >
-              <X size={20} />
-            </button>
-            <img
-              src={previewUrl}
-              alt="Payment screenshot"
-              className="max-w-full max-h-full rounded-2xl object-contain"
-              onClick={(e) => e.stopPropagation()}
-            />
           </div>
         )}
 
@@ -620,19 +574,28 @@ export const FeesView: React.FC<Props> = ({ onBack }) => {
                 const desc = p.installmentDetails.length
                   ? p.installmentDetails.map(d => `${d.feeType === 'TUITION' ? 'Tuition' : 'Transport'} — ${d.month}`).join(', ')
                   : (p.note ?? 'Fee Payment');
+                const discount = p.discountAmount ?? 0;
                 return (
                   <div key={p.id}
-                    className={`flex items-center justify-between p-4 ${idx < arr.length - 1 ? 'border-b border-slate-100' : ''}`}>
-                    <div className="min-w-0 pr-3">
-                      <div className="font-extrabold text-slate-900 text-sm truncate">{desc}</div>
-                      <div className="text-[10px] font-bold text-slate-400 mt-0.5">
-                        {p.date} · {p.receiptNo} · {p.method}
+                    className={`p-4 ${idx < arr.length - 1 ? 'border-b border-slate-100' : ''}`}>
+                    <div className="flex items-center justify-between">
+                      <div className="min-w-0 pr-3">
+                        <div className="font-extrabold text-slate-900 text-sm truncate">{desc}</div>
+                        <div className="text-[10px] font-bold text-slate-400 mt-0.5">
+                          {p.date} · {p.receiptNo} · {p.method}
+                        </div>
+                      </div>
+                      <div className="flex items-center gap-2 shrink-0">
+                        <CheckCircle2 size={14} className="text-emerald-500" />
+                        <span className="font-black text-slate-900 text-sm">₹{p.amount.toLocaleString('en-IN')}</span>
                       </div>
                     </div>
-                    <div className="flex items-center gap-2 shrink-0">
-                      <CheckCircle2 size={14} className="text-emerald-500" />
-                      <span className="font-black text-slate-900 text-sm">₹{p.amount.toLocaleString('en-IN')}</span>
-                    </div>
+                    {discount > 0 && (
+                      <div className="mt-2 flex items-center justify-between bg-indigo-50 border border-indigo-100 rounded-lg px-3 py-1.5">
+                        <span className="text-[10px] font-black text-indigo-700 uppercase tracking-wide">Discount Applied</span>
+                        <span className="text-[11px] font-black text-indigo-700 tabular-nums">+ ₹{discount.toLocaleString('en-IN')} cleared</span>
+                      </div>
+                    )}
                   </div>
                 );
               })}

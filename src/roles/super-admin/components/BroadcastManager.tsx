@@ -1,6 +1,7 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import { ArrowLeft, MailPlus, Send, History, Trash2, Users, School, BookOpen, GraduationCap } from 'lucide-react';
 import { useBroadcastStore } from '@/roles/super-admin/broadcastStore';
+import { useSchoolStore } from '@/roles/super-admin/schoolStore';
 import { useUIStore } from '@/store/uiStore';
 import { BroadcastAudience } from '@/shared/config/constants';
 import { Broadcast } from '@/roles/super-admin/broadcast.types';
@@ -9,15 +10,16 @@ interface Props {
   onBack: () => void;
 }
 
-const AUDIENCE_META: Record<BroadcastAudience, { label: string; icon: React.ReactNode; reach: string; color: string }> = {
-  [BroadcastAudience.ALL]: { label: 'All Users', icon: <Users size={16} />, reach: '~18,500 users', color: 'bg-blue-50 text-blue-700 border-blue-200' },
-  [BroadcastAudience.PRINCIPALS]: { label: 'Principals Only', icon: <School size={16} />, reach: '6 principals', color: 'bg-indigo-50 text-indigo-700 border-indigo-200' },
-  [BroadcastAudience.TEACHERS]: { label: 'Teachers Only', icon: <BookOpen size={16} />, reach: '~352 teachers', color: 'bg-emerald-50 text-emerald-700 border-emerald-200' },
-  [BroadcastAudience.STUDENTS]: { label: 'Students Only', icon: <GraduationCap size={16} />, reach: '~6,740 students', color: 'bg-amber-50 text-amber-700 border-amber-200' },
+const AUDIENCE_STATIC: Record<BroadcastAudience, { label: string; icon: React.ReactNode; color: string }> = {
+  [BroadcastAudience.ALL]:        { label: 'All Users',       icon: <Users size={16} />,         color: 'bg-blue-50 text-blue-700 border-blue-200' },
+  [BroadcastAudience.PRINCIPALS]: { label: 'Principals Only', icon: <School size={16} />,        color: 'bg-indigo-50 text-indigo-700 border-indigo-200' },
+  [BroadcastAudience.TEACHERS]:   { label: 'Teachers Only',   icon: <BookOpen size={16} />,      color: 'bg-emerald-50 text-emerald-700 border-emerald-200' },
+  [BroadcastAudience.STUDENTS]:   { label: 'Students Only',   icon: <GraduationCap size={16} />, color: 'bg-amber-50 text-amber-700 border-amber-200' },
 };
 
 export const BroadcastManager: React.FC<Props> = ({ onBack }) => {
   const { broadcasts, fetchBroadcasts, send, delete: deleteBroadcast } = useBroadcastStore();
+  const { schools, fetchSchools } = useSchoolStore();
   const { showToast } = useUIStore();
 
   const [tab, setTab] = useState<'NEW' | 'HISTORY'>('NEW');
@@ -28,7 +30,44 @@ export const BroadcastManager: React.FC<Props> = ({ onBack }) => {
 
   useEffect(() => {
     fetchBroadcasts().catch(e => showToast(e instanceof Error ? e.message : 'Failed to load broadcasts', 'error'));
+    if (schools.length === 0) {
+      fetchSchools().catch(() => { /* non-fatal — reach counts will read zero */ });
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  // Reach estimates are derived live from the actual school totals — was
+  // previously hardcoded ("~18,500 users", etc.) which got stale instantly.
+  const reachCounts = useMemo(() => {
+    const totalStudents = schools.reduce((s, sc) => s + (sc.studentCount ?? 0), 0);
+    const totalTeachers = schools.reduce((s, sc) => s + (sc.teacherCount ?? 0), 0);
+    const principals    = schools.length;
+    return {
+      [BroadcastAudience.ALL]:        totalStudents + totalTeachers + principals,
+      [BroadcastAudience.PRINCIPALS]: principals,
+      [BroadcastAudience.TEACHERS]:   totalTeachers,
+      [BroadcastAudience.STUDENTS]:   totalStudents,
+    } as Record<BroadcastAudience, number>;
+  }, [schools]);
+
+  const fmtReach = (a: BroadcastAudience): string => {
+    const n = reachCounts[a];
+    if (!n) return 'no users yet';
+    const noun = a === BroadcastAudience.PRINCIPALS ? (n === 1 ? 'principal' : 'principals')
+      : a === BroadcastAudience.TEACHERS ? 'teachers'
+      : a === BroadcastAudience.STUDENTS ? 'students'
+      : 'users';
+    return `${n.toLocaleString('en-IN')} ${noun}`;
+  };
+
+  type AudienceMeta = typeof AUDIENCE_STATIC[BroadcastAudience] & { reach: string };
+  const AUDIENCE_META: Record<BroadcastAudience, AudienceMeta> = useMemo(() => ({
+    [BroadcastAudience.ALL]:        { ...AUDIENCE_STATIC[BroadcastAudience.ALL],        reach: fmtReach(BroadcastAudience.ALL) },
+    [BroadcastAudience.PRINCIPALS]: { ...AUDIENCE_STATIC[BroadcastAudience.PRINCIPALS], reach: fmtReach(BroadcastAudience.PRINCIPALS) },
+    [BroadcastAudience.TEACHERS]:   { ...AUDIENCE_STATIC[BroadcastAudience.TEACHERS],   reach: fmtReach(BroadcastAudience.TEACHERS) },
+    [BroadcastAudience.STUDENTS]:   { ...AUDIENCE_STATIC[BroadcastAudience.STUDENTS],   reach: fmtReach(BroadcastAudience.STUDENTS) },
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }), [reachCounts]);
 
   const handleSend = async () => {
     if (!title.trim() || !body.trim()) { showToast('Title and message required', 'error'); return; }

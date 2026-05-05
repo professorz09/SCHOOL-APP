@@ -14,7 +14,10 @@ timetableRouter.post('/save', requireAuth, requireRole('PRINCIPAL'), async (req,
       className: string; section: string;
       classId: string; day: string; slotId: string;
       subject: string; teacherId?: string | null; teacherName: string; room: string;
-    }>(req, ['academicYearId', 'className', 'section', 'classId', 'day', 'slotId', 'subject', 'teacherName', 'room']);
+      // `teacherName` and `room` are optional metadata — sending an empty
+      // string used to silently 400 "Field is required" because requireBody
+      // treats '' as missing. Leave them out of the required list.
+    }>(req, ['academicYearId', 'className', 'section', 'classId', 'day', 'slotId', 'subject']);
 
     const schoolId = req.user.school_id!;
 
@@ -38,13 +41,19 @@ timetableRouter.post('/save', requireAuth, requireRole('PRINCIPAL'), async (req,
       slot_id:          body.slotId,
       subject:          body.subject,
       teacher_id:       body.teacherId || null,
-      teacher_name:     body.teacherName,
-      room:             body.room,
+      teacher_name:     body.teacherName ?? '',
+      room:             body.room ?? '',
     };
 
     if (body.id) {
-      const { error } = await adminDb.from('timetable_entries').update(payload).eq('id', body.id);
+      const { data: updated, error } = await adminDb
+        .from('timetable_entries')
+        .update(payload)
+        .eq('id', body.id)
+        .eq('school_id', schoolId)
+        .select('id');
       if (error) throw new ApiError(500, error.message);
+      if (!updated || updated.length === 0) throw new ApiError(404, 'Timetable entry not found');
       ok(res, { id: body.id });
     } else {
       const { data, error } = await adminDb.from('timetable_entries').insert(payload).select('id').single();
@@ -58,8 +67,14 @@ timetableRouter.post('/save', requireAuth, requireRole('PRINCIPAL'), async (req,
 timetableRouter.post('/delete', requireAuth, requireRole('PRINCIPAL'), async (req, res) => {
   try {
     const { id } = requireBody<{ id: string }>(req, ['id']);
-    const { error } = await adminDb.from('timetable_entries').delete().eq('id', id);
+    const { data: deleted, error } = await adminDb
+      .from('timetable_entries')
+      .delete()
+      .eq('id', id)
+      .eq('school_id', req.user.school_id!)
+      .select('id');
     if (error) throw new ApiError(500, error.message);
+    if (!deleted || deleted.length === 0) throw new ApiError(404, 'Timetable entry not found');
     ok(res, { id });
   } catch (err) { fail(res, err); }
 });

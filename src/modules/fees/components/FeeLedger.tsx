@@ -3,7 +3,7 @@ import {
   ArrowLeft, IndianRupee, CheckCircle2, AlertTriangle, Clock, X,
   ShieldCheck, Search, Printer, Banknote, Smartphone, CreditCard,
   Building2, FileCheck, ChevronRight, Receipt, TrendingDown, Users, Filter,
-  RefreshCw, Download, ChevronDown, Calendar, RotateCcw,
+  RefreshCw, Download, ChevronDown, Calendar, RotateCcw, AlertCircle, MoreVertical,
 } from 'lucide-react';
 import { feeService, FeeInstallment, FeeStatus, FeeType, PaymentRecord, GovernmentPaymentRecord } from '@/modules/fees/fee.service';
 import { exportCsv } from '@/shared/utils/csv';
@@ -11,13 +11,14 @@ import { studentService } from '@/modules/students/student.service';
 import type { FeeStructureRecord } from '@/modules/fees/fees.types';
 import { useUIStore } from '@/store/uiStore';
 import { useEditorModeStore } from '@/store/editorModeStore';
+import { useAcademicYear } from '@/shared/context/AcademicYearContext';
 import { FeePaymentSubmissionsQueue } from '@/modules/fees/components/FeePaymentSubmissionsQueue';
 import { PreviousYearDues } from '@/modules/fees/components/PreviousYearDues';
 
 type YearGroup = { academicYearId: string; yearLabel: string; isActive: boolean; installments: FeeInstallment[] };
 
 type PaymentMethod = 'CASH' | 'UPI' | 'NET_BANKING' | 'CHEQUE' | 'ONLINE';
-type ListTab = 'ALL' | 'DUE' | 'CLEARED';
+type ListTab = 'ALL' | 'DUE' | 'CLEARED' | 'PENDING';
 
 const METHOD_LABEL: Record<PaymentMethod, string> = {
   CASH: 'Cash', UPI: 'UPI', NET_BANKING: 'Net Banking', CHEQUE: 'Cheque', ONLINE: 'Online',
@@ -101,6 +102,12 @@ const PAGE_SIZE = 50;
 export const FeeLedger: React.FC<Props> = ({ onBack }) => {
   const { showToast } = useUIStore();
   const editorMode = useEditorModeStore();
+  // School-wide active AY — used as a fallback when the selected student
+  // has no installments yet (so yearGroups is empty and we can't infer the
+  // year from existing rows). Without this, "Generate Schedule" was hitting
+  // the "No active academic year for this student" toast for every student
+  // with a fresh ledger.
+  const { activeYear } = useAcademicYear();
   const [students, setStudents]       = useState<StudentFeeProfile[]>([]);
   const [loading, setLoading]         = useState(true);
   const [selected, setSelected]       = useState<StudentFeeProfile | null>(null);
@@ -111,26 +118,37 @@ export const FeeLedger: React.FC<Props> = ({ onBack }) => {
 
   // Modal states
   const [payModal, setPayModal]             = useState(false);
-  const [writeOffModal, setWriteOffModal]   = useState<FeeInstallment | null>(null);
+  // Standalone write-off modal removed — discounts now flow exclusively
+  // through the Collect Payment modal's Discount field. Existing
+  // fee_write_offs rows in the DB are still surfaced as historical
+  // "Discount" entries in Payment History so audit trail isn't lost.
   const [govtPayModal, setGovtPayModal]     = useState(false);
   const [receiptModal, setReceiptModal]     = useState<PaymentRecord | null>(null);
   // Payment reversal — only set while the confirm modal is open. The list
   // refresh + receipt close happen on success.
   const [reverseTarget, setReverseTarget]   = useState<PaymentRecord | null>(null);
   const [reverseReason, setReverseReason]   = useState('');
+  // Reversal mode + the amount the principal wants to KEEP (not reverse).
+  // 'FULL' wipes the whole payment. 'CUSTOM' fully reverses then re-records
+  // the kept portion as a fresh payment so history reads correctly.
+  const [reverseMode, setReverseMode]       = useState<'FULL' | 'CUSTOM'>('FULL');
+  const [reverseKeepAmount, setReverseKeepAmount] = useState('');
   const [reversing, setReversing]           = useState(false);
   const [regenModal, setRegenModal]         = useState(false);
 
   // Form states
   const [payAmount, setPayAmount]           = useState('');
+  // Drives the Collect button's loading state. Earlier the button gave no
+  // feedback during the API round-trip, so the principal would tap once,
+  // see nothing happen, and tap again — risking duplicate submissions.
+  const [paySubmitting, setPaySubmitting]   = useState(false);
+  const [ledgerMenuOpen, setLedgerMenuOpen] = useState(false);
   const [paymentMethod, setPaymentMethod]   = useState<PaymentMethod>('CASH');
   const [paymentNote, setPaymentNote]       = useState('');
   const [paymentDiscount, setPaymentDiscount] = useState('');
   const [applyDiscount, setApplyDiscount]   = useState(false);
   const [useCustomDate, setUseCustomDate]   = useState(false);
   const [paymentDate, setPaymentDate]       = useState('');
-  const [writeOffAmount, setWriteOffAmount] = useState('');
-  const [writeOffReason, setWriteOffReason] = useState('');
   const [govtPayAmount, setGovtPayAmount]   = useState('');
   const [govtRefNo, setGovtRefNo]           = useState('');
   const [govtNote, setGovtNote]             = useState('');
@@ -262,9 +280,10 @@ export const FeeLedger: React.FC<Props> = ({ onBack }) => {
     }
     const yearId = yearGroups.find(g => g.isActive)?.academicYearId
       ?? selected.installments.find(i => !!i.academicYearId)?.academicYearId
+      ?? activeYear?.id
       ?? '';
     if (!yearId) {
-      showToast('No active academic year for this student', 'error');
+      showToast('No active academic year — create one in Academic Year first', 'error');
       return;
     }
     setRegenSubmitting(true);
@@ -310,12 +329,42 @@ export const FeeLedger: React.FC<Props> = ({ onBack }) => {
     if (!reverseTarget) return;
     const reason = reverseReason.trim();
     if (reason.length < 3) { showToast('Reason required (min 3 chars)', 'error'); return; }
+
+    // Custom mode: keep ₹X of the payment, reverse the rest. Implemented
+    // as a 2-step flow — full reverse, then re-collect the kept portion —
+    // because partial reversal at the RPC level would split per-installment
+    // links and is risky to introduce. Keep amount must be > 0 and < the
+    // original; otherwise it's effectively a full reversal or a no-op.
+    let keepAmount = 0;
+    if (reverseMode === 'CUSTOM') {
+      keepAmount = Math.round(Number(reverseKeepAmount) || 0);
+      if (keepAmount <= 0 || keepAmount >= reverseTarget.amount) {
+        showToast(`Keep amount must be between ₹1 and ₹${reverseTarget.amount - 1}`, 'error');
+        return;
+      }
+    }
+
     setReversing(true);
     try {
-      await feeService.reversePayment(reverseTarget.id, reason, editorMode.isActive());
+      await feeService.reversePayment(reverseTarget.id, reason);
+      // Step 2 — re-collect the kept portion. If this fails, the original
+      // is already reversed; we surface a clear error so the principal can
+      // re-record manually instead of leaving a confusing half-state.
+      if (reverseMode === 'CUSTOM' && keepAmount > 0 && selected) {
+        try {
+          await feeService.recordPayment(
+            reverseTarget.studentId, keepAmount, reverseTarget.method,
+            undefined, `Re-recorded after partial reversal of #${reverseTarget.receiptNo}`,
+            false, false, 0,
+          );
+        } catch (e) {
+          showToast(
+            `Reversed in full, but couldn't record the ₹${keepAmount} kept portion: ${e instanceof Error ? e.message : 'error'}. Please collect manually.`,
+            'error',
+          );
+        }
+      }
       setPaymentTransactions(feeService.getPaymentHistory());
-      // Re-resolve the selected student's profile so installment statuses
-      // (and the schedule's "Paid / Due" totals) reflect the rolled-back state.
       if (selected) {
         const updated = feeService.getStudentFeeProfile(
           selected.studentId, selected.name, selected.className,
@@ -327,6 +376,8 @@ export const FeeLedger: React.FC<Props> = ({ onBack }) => {
       }
       setReverseTarget(null);
       setReverseReason('');
+      setReverseMode('FULL');
+      setReverseKeepAmount('');
       setReceiptModal(null);
       showToast('Payment reversed');
     } catch (e) {
@@ -336,47 +387,47 @@ export const FeeLedger: React.FC<Props> = ({ onBack }) => {
     }
   };
 
+  // PDF export — Tailwind v4 emits CSS colors as oklch(), which
+  // html2canvas can't parse ("Attempting to parse an unsupported color
+  // function 'oklch'"). Going through html2canvas + jsPDF on the live
+  // receipt DOM was therefore broken in production. handlePrintReceipt
+  // already builds a self-contained HTML document with inline hex colors
+  // and zero Tailwind, so we route the "PDF" action through it and let the
+  // browser's "Save as PDF" destination produce the file. Output is
+  // identical to what the user would print — and reliable across browsers.
   const handleDownloadPdf = async (r: PaymentRecord) => {
-    const node = receiptCardRef.current;
-    if (!node) { showToast('Receipt not ready', 'error'); return; }
-    try {
-      const [{ default: html2canvas }, jspdfMod] = await Promise.all([
-        import('html2canvas'),
-        import('jspdf'),
-      ]);
-      const jsPDF = (jspdfMod as { jsPDF: new (o: object) => { addImage: (d: string, t: string, x: number, y: number, w: number, h: number) => void; save: (n: string) => void; internal: { pageSize: { getWidth: () => number; getHeight: () => number } } } }).jsPDF;
-      const canvas = await html2canvas(node, { scale: 2, backgroundColor: '#ffffff', useCORS: true });
-      const img = canvas.toDataURL('image/png');
-      const pdf = new jsPDF({ orientation: 'portrait', unit: 'pt', format: 'a4' });
-      const pageW = pdf.internal.pageSize.getWidth();
-      const pageH = pdf.internal.pageSize.getHeight();
-      // Fit into a 60-pt margin while preserving aspect ratio.
-      const ratio  = canvas.width / canvas.height;
-      const maxW   = pageW - 80;
-      const maxH   = pageH - 80;
-      const drawW  = ratio >= maxW / maxH ? maxW : maxH * ratio;
-      const drawH  = ratio >= maxW / maxH ? maxW / ratio : maxH;
-      pdf.addImage(img, 'PNG', (pageW - drawW) / 2, 40, drawW, drawH);
-      pdf.save(`receipt-${r.receiptNo}.pdf`);
-    } catch (e) {
-      showToast(e instanceof Error ? e.message : 'PDF export failed', 'error');
-    }
+    handlePrintReceipt(r);
+    showToast('In the print dialog, choose "Save as PDF" as destination.');
   };
 
   const handlePayment = async () => {
-    if (!selected || !payAmount) return;
-    const amount = Number(payAmount);
-    if (isNaN(amount) || amount <= 0) return;
-    const discount = applyDiscount ? (Number(paymentDiscount) || 0) : 0;
+    if (!selected) return;
+    if (paySubmitting) return; // guard against double-click
+    const amount = Number(payAmount) || 0;
+    const discount = Number(paymentDiscount) || 0;
+    if (amount <= 0 && discount <= 0) {
+      showToast('Enter a cash amount or a discount', 'error');
+      return;
+    }
+    if (amount < 0 || discount < 0) {
+      showToast('Amounts must be positive', 'error');
+      return;
+    }
     const today = new Date().toISOString().split('T')[0];
     const chosenDate = useCustomDate && paymentDate ? paymentDate : today;
     if (useCustomDate && paymentDate && paymentDate > today) {
       showToast('Future date not allowed', 'error');
       return;
     }
+    setPaySubmitting(true);
     try {
       const result = await feeService.recordPayment(
-        selected.studentId, amount, METHOD_LABEL[paymentMethod],
+        selected.studentId,
+        // RPC requires at least 1 to record a row when there's only a discount.
+        // Cash component is faithful to what the user typed; discount goes via the
+        // dedicated parameter and is allocated against installments separately.
+        Math.max(amount, 0),
+        METHOD_LABEL[paymentMethod],
         chosenDate, paymentNote || undefined, false, applyLateFee, discount,
       );
       // Treat the RPC's persisted paymentId as the source of truth: if the
@@ -397,12 +448,17 @@ export const FeeLedger: React.FC<Props> = ({ onBack }) => {
       // Read back the canonical payment row written by the RPC. Receipt
       // number, id, date and allocations all come from the persisted row;
       // we do NOT manufacture a local synthetic record any more.
-      const canonical = feeService.getPaymentRecordById(result.paymentId);
+      // Try to resolve the freshly-written payment from cache. If the
+      // RPC returned a paymentId but the cache lookup misses (rare, e.g. a
+      // brief refresh delay), fall back to the most recent payment for this
+      // student so the receipt modal still opens reliably. Earlier the
+      // receipt would simply not show in this race.
+      let canonical = feeService.getPaymentRecordById(result.paymentId);
+      if (!canonical) {
+        const recent = feeService.getPaymentHistory(selected.studentId)[0];
+        if (recent) canonical = recent;
+      }
       setPaymentTransactions(feeService.getPaymentHistory());
-      if (canonical) setReceiptModal(canonical);
-      // Refresh per-year accordion totals so the schedule tab reflects the
-      // freshly-allocated payment without requiring the principal to reselect
-      // the student.
       await reloadYearGroups(selected.studentId);
       setPayAmount('');
       setPaymentNote('');
@@ -411,21 +467,14 @@ export const FeeLedger: React.FC<Props> = ({ onBack }) => {
       setUseCustomDate(false);
       setPaymentDate('');
       setPayModal(false);
+      // Open receipt AFTER closing the pay modal so the receipt modal isn't
+      // immediately overlaid by an animating-out pay modal.
+      if (canonical) setReceiptModal(canonical);
+      else showToast('Payment recorded');
     } catch (e) {
       showToast(e instanceof Error ? e.message : 'Payment failed', 'error');
-    }
-  };
-
-  const handleWriteOff = async () => {
-    if (!writeOffModal || !writeOffReason.trim()) return;
-    const amount = Number(writeOffAmount) || writeOffModal.amount - writeOffModal.paidAmount;
-    if (await feeService.writeOffFee(writeOffModal.id, amount, writeOffReason)) {
-      const updated = feeService.getStudentFeeProfile(selected!.studentId, selected!.name, selected!.className, selected!.admissionNo, selected!.isRte);
-      updateStudent(updated);
-      setWriteOffModal(null);
-      setWriteOffAmount('');
-      setWriteOffReason('');
-      showToast('Fee write-off recorded');
+    } finally {
+      setPaySubmitting(false);
     }
   };
 
@@ -550,8 +599,9 @@ export const FeeLedger: React.FC<Props> = ({ onBack }) => {
     (s.admissionNo ?? '').toLowerCase().includes(search.toLowerCase()) ||
     (s.className ?? '').toLowerCase().includes(search.toLowerCase());
 
-  const dueStudents     = students.filter(s => hasDue(s));
-  const clearedStudents = students.filter(s => !hasDue(s));
+  const pendingStudents = students.filter(s => s.installments.length === 0);
+  const dueStudents     = students.filter(s => s.installments.length > 0 && hasDue(s));
+  const clearedStudents = students.filter(s => s.installments.length > 0 && !hasDue(s));
   const totalParentDue  = dueStudents.reduce((a, s) => a + getParentDue(s.studentId).total, 0);
   const totalGovtDue    = dueStudents.filter(s => s.isRte).reduce((a, s) => a + getGovtDue(s.studentId).total, 0);
   const totalCollected  = students.reduce((a, s) => {
@@ -560,8 +610,9 @@ export const FeeLedger: React.FC<Props> = ({ onBack }) => {
 
   const visibleStudents = students.filter(s => {
     if (!searchMatch(s)) return false;
-    if (listTab === 'DUE')     return hasDue(s);
-    if (listTab === 'CLEARED') return !hasDue(s);
+    if (listTab === 'PENDING') return s.installments.length === 0;
+    if (listTab === 'DUE')     return s.installments.length > 0 && hasDue(s);
+    if (listTab === 'CLEARED') return s.installments.length > 0 && !hasDue(s);
     return true;
   });
 
@@ -578,9 +629,9 @@ export const FeeLedger: React.FC<Props> = ({ onBack }) => {
     const pct           = totalDue > 0 ? Math.round((totalPaid / totalDue) * 100) : 100;
 
     return (
-      <div className="w-full bg-slate-50 flex flex-col animate-in slide-in-from-right-8 duration-300 lg:max-w-6xl lg:mx-auto">
+      <div className="w-full bg-slate-50 flex flex-col animate-in slide-in-from-right-8 duration-300 lg:max-w-6xl lg:mx-auto lg:px-4 lg:py-6">
         {/* Header */}
-        <div className="bg-white border-b border-slate-100 px-4 lg:px-6 pt-4 lg:pt-6 pb-4 lg:pb-5 shadow-sm sticky top-0 z-10">
+        <div className="bg-white border-b border-slate-100 px-4 lg:px-6 pt-4 lg:pt-5 pb-3 lg:pb-4 shadow-sm sticky top-0 lg:static z-10 lg:rounded-2xl lg:border lg:border-slate-100 lg:shadow-sm lg:mb-3">
           <div className="flex items-center gap-3 mb-4 lg:mb-5">
             <button onClick={() => setSelected(null)} className="p-2 -ml-2 bg-slate-100 rounded-full text-slate-600 hover:bg-slate-200 transition-colors">
               <ArrowLeft size={20} />
@@ -617,73 +668,87 @@ export const FeeLedger: React.FC<Props> = ({ onBack }) => {
             )}
           </div>
 
-          {/* Progress bar */}
+          {/* Progress bar — advance credit is shown inside the Collect
+              Payment modal where it's actionable; an always-visible
+              full-width "Advance Credit ₹X" banner here was the single
+              biggest space-eater on desktop, and the same number appears
+              again inside the modal anyway. */}
           <div className="h-2 lg:h-2.5 bg-slate-100 rounded-full overflow-hidden">
             <div className={`h-full rounded-full transition-all ${pct === 100 ? 'bg-emerald-500' : 'bg-blue-500'}`} style={{ width: `${pct}%` }} />
           </div>
-
-          {/* Advance credit */}
           {advance > 0 && (
-            <div className="mt-2 lg:mt-3 flex items-center justify-between bg-violet-50 border border-violet-200 rounded-xl px-3 lg:px-4 py-2 lg:py-3">
-              <span className="text-[10px] lg:text-xs font-black text-violet-600">Advance Credit</span>
-              <span className="text-sm lg:text-base font-black text-violet-700 tabular-nums">₹{advance.toLocaleString('en-IN')}</span>
-            </div>
+            <p className="text-right text-[10px] lg:text-[11px] font-bold text-violet-600 mt-1.5">
+              Advance credit on file: ₹{advance.toLocaleString('en-IN')}
+            </p>
           )}
         </div>
 
-        {/* Tab bar */}
-        <div className="bg-white border-b border-slate-100 px-4 lg:px-6 flex gap-5 lg:gap-7 items-center">
-          {(['SCHEDULE', 'HISTORY'] as const).map(t => (
-            <button key={t} onClick={() => setDetailTab(t)}
-              className={`py-3 lg:py-3.5 text-[10px] lg:text-xs font-black uppercase tracking-widest border-b-2 transition-colors ${detailTab === t ? 'border-blue-600 text-blue-600' : 'border-transparent text-slate-400 hover:text-slate-600'}`}>
-              {t === 'SCHEDULE' ? 'Fee Schedule' : 'Payment History'}
+        {/* Tab bar — clean two-tab strip + a single overflow menu on the
+            right for Regenerate / Govt Pay / CSV. Mixing four mismatched
+            buttons into the tab line earlier (per the screenshot) made
+            the actual tabs hard to read. The overflow keeps daily actions
+            (the tabs + Collect Payment below) front-and-centre. */}
+        <div className="bg-white border-b border-slate-100 px-4 lg:px-6 flex justify-between items-center">
+          <div className="flex gap-5 lg:gap-7">
+            {(['SCHEDULE', 'HISTORY'] as const).map(t => (
+              <button key={t} onClick={() => setDetailTab(t)}
+                className={`py-3 lg:py-3.5 text-[10px] lg:text-xs font-black uppercase tracking-widest border-b-2 transition-colors ${detailTab === t ? 'border-blue-600 text-blue-600' : 'border-transparent text-slate-400 hover:text-slate-600'}`}>
+                {t === 'SCHEDULE' ? 'Fee Schedule' : 'Payment History'}
+              </button>
+            ))}
+          </div>
+          <div className="relative">
+            <button onClick={() => setLedgerMenuOpen(o => !o)}
+              className="my-2 flex items-center gap-1 px-2.5 py-1.5 rounded-lg text-slate-500 hover:bg-slate-100 transition-colors">
+              <MoreVertical size={16} />
             </button>
-          ))}
-          {editorMode.isActive() && (
-            <button onClick={openRegenModal}
-              className={`${selected.isRte ? '' : 'ml-auto'} my-2 flex items-center gap-1 bg-amber-50 hover:bg-amber-100 text-amber-700 text-[10px] lg:text-[11px] font-black px-3 py-1.5 rounded-xl border border-amber-200 active:scale-95 transition-all`}>
-              <RefreshCw size={11} /> Regenerate
-            </button>
-          )}
-          {selected.isRte && (
-            <button onClick={() => setGovtPayModal(true)}
-              className="ml-auto my-2 flex items-center gap-1 bg-blue-50 hover:bg-blue-100 text-blue-700 text-[10px] lg:text-[11px] font-black px-3 py-1.5 rounded-xl border border-blue-200 active:scale-95 transition-all">
-              <ShieldCheck size={11} /> Govt Pay
-            </button>
-          )}
-          <button
-            onClick={() => {
-              const scheduleRows = selected.installments.map(i => ({
-                kind: 'SCHEDULE',
-                month: i.month,
-                fee_type: i.feeType,
-                due_date: i.dueDate,
-                amount: i.amount,
-                paid: i.paidAmount,
-                discount: i.writeOffAmount,
-                status: i.status,
-                payer_type: i.payerType,
-              }));
-              const txnRows = paymentTransactions.filter(t => t.studentId === selected.studentId).map(t => ({
-                kind: 'PAYMENT',
-                date: t.date,
-                receipt_no: t.receiptNo,
-                method: t.method,
-                amount: t.amount,
-                discount: (t as { discountAmount?: number }).discountAmount ?? 0,
-                advance: t.advanceAmount,
-                installments: t.installmentDetails.map(d => `${d.month}:${d.feeType}=${d.amount}`).join(' | '),
-              }));
-              const safeName = selected.name.replace(/\s+/g, '_');
-              exportCsv(`fees_${safeName}_${selected.admissionNo}_${new Date().toISOString().slice(0, 10)}`,
-                [...scheduleRows, ...txnRows]);
-            }}
-            className={`${selected.isRte || editorMode.isActive() ? '' : 'ml-auto'} my-2 flex items-center gap-1 bg-slate-100 hover:bg-slate-200 text-slate-700 text-[10px] lg:text-[11px] font-black px-3 py-1.5 rounded-xl border border-slate-200 active:scale-95 transition-all`}>
-            <Download size={11} /> CSV
-          </button>
+            {ledgerMenuOpen && (
+              <>
+                <div className="fixed inset-0 z-30" onClick={() => setLedgerMenuOpen(false)} />
+                <div className="absolute right-0 top-full mt-1 z-40 w-52 bg-white rounded-xl shadow-lg border border-slate-200 py-1.5 animate-in fade-in slide-in-from-top-2">
+                  {(editorMode.isActive() || selected.installments.length === 0) && (
+                    <button onClick={() => { setLedgerMenuOpen(false); openRegenModal(); }}
+                      className="w-full flex items-center gap-2 px-3 py-2 text-[11px] font-black text-amber-700 hover:bg-amber-50 transition-colors">
+                      <RefreshCw size={12} /> {selected.installments.length === 0 ? 'Generate Schedule' : 'Regenerate Schedule'}
+                    </button>
+                  )}
+                  {selected.isRte && (
+                    <button onClick={() => { setLedgerMenuOpen(false); setGovtPayModal(true); }}
+                      className="w-full flex items-center gap-2 px-3 py-2 text-[11px] font-black text-blue-700 hover:bg-blue-50 transition-colors">
+                      <ShieldCheck size={12} /> Record Govt Payment
+                    </button>
+                  )}
+                  <button
+                    onClick={() => {
+                      setLedgerMenuOpen(false);
+                      const scheduleRows = selected.installments.map(i => ({
+                        kind: 'SCHEDULE',
+                        month: i.month, fee_type: i.feeType, due_date: i.dueDate,
+                        amount: i.amount, paid: i.paidAmount, discount: i.writeOffAmount,
+                        status: i.status, payer_type: i.payerType,
+                      }));
+                      const txnRows = paymentTransactions.filter(t => t.studentId === selected.studentId).map(t => ({
+                        kind: 'PAYMENT',
+                        date: t.date, receipt_no: t.receiptNo, method: t.method,
+                        amount: t.amount,
+                        discount: (t as { discountAmount?: number }).discountAmount ?? 0,
+                        advance: t.advanceAmount,
+                        installments: t.installmentDetails.map(d => `${d.month}:${d.feeType}=${d.amount}`).join(' | '),
+                      }));
+                      const safeName = selected.name.replace(/\s+/g, '_');
+                      exportCsv(`fees_${safeName}_${selected.admissionNo}_${new Date().toISOString().slice(0, 10)}`,
+                        [...scheduleRows, ...txnRows]);
+                    }}
+                    className="w-full flex items-center gap-2 px-3 py-2 text-[11px] font-black text-slate-700 hover:bg-slate-50 transition-colors">
+                    <Download size={12} /> Export CSV
+                  </button>
+                </div>
+              </>
+            )}
+          </div>
         </div>
 
-        <div className="flex-1 overflow-y-auto p-4 lg:p-6 space-y-3 lg:space-y-4">
+        <div className="flex-1 overflow-y-auto lg:overflow-visible p-4 lg:p-0 lg:pt-2 space-y-3 lg:space-y-4">
 
           {/* ── COLLECT BUTTON (inside schedule tab) ──────────────────────── */}
           {detailTab === 'SCHEDULE' && (
@@ -705,15 +770,38 @@ export const FeeLedger: React.FC<Props> = ({ onBack }) => {
             />
           )}
 
+          {/* Empty state — no installments anywhere for this student. The
+              schedule tab used to render a header with "0 installments" and
+              an empty body, leaving the principal with no obvious next
+              step. We now surface a clear CTA pointing to Regenerate, and
+              don't gate first-time generation behind editor mode. */}
+          {detailTab === 'SCHEDULE' && yearGroups.length === 0 && selected.installments.length === 0 && (
+            <div className="bg-white rounded-2xl border border-slate-200 shadow-sm p-6 lg:p-8 text-center">
+              <div className="w-12 h-12 rounded-2xl bg-amber-50 text-amber-600 flex items-center justify-center mx-auto mb-3">
+                <Calendar size={20} />
+              </div>
+              <p className="font-black text-slate-900 text-sm lg:text-base mb-1">No fee schedule yet</p>
+              <p className="text-xs lg:text-sm font-bold text-slate-500 mb-4 max-w-md mx-auto">
+                This student doesn't have any installments. Generate one from a saved fee structure for {selected.className.split('-')[0] || 'this class'}.
+              </p>
+              <button onClick={openRegenModal}
+                className="inline-flex items-center gap-2 bg-amber-600 hover:bg-amber-700 text-white font-black text-xs uppercase tracking-widest px-5 py-3 rounded-xl shadow-md active:scale-95 transition-transform">
+                <RefreshCw size={14} /> Generate Schedule
+              </button>
+            </div>
+          )}
+
           {/* ── FEE SCHEDULE — grouped by academic year ───────────────────── */}
           {detailTab === 'SCHEDULE' && (yearGroups.length > 0
             ? yearGroups
-            : [{
-                academicYearId: '__legacy__',
-                yearLabel: 'Current Year',
-                isActive: true,
-                installments: selected.installments,
-              }]
+            : selected.installments.length > 0
+              ? [{
+                  academicYearId: '__legacy__',
+                  yearLabel: 'Current Year',
+                  isActive: true,
+                  installments: selected.installments,
+                }]
+              : []
           ).map(group => {
             const collapsed = !!collapsedYears[group.academicYearId];
             const yearTotal = group.installments.reduce((a, i) => a + i.amount, 0);
@@ -757,88 +845,103 @@ export const FeeLedger: React.FC<Props> = ({ onBack }) => {
                   <div className="space-y-4">
                   {realInsts.length > 0 && (
                   <div>
-                  <div className="flex items-center gap-2 mb-2 px-1">
-                    <span className="text-[10px] font-black text-slate-500 uppercase tracking-widest">Payable Installments</span>
-                    <span className="text-[10px] font-bold text-slate-400">· {realInsts.length}</span>
-                  </div>
-                  <div className="grid grid-cols-1 lg:grid-cols-2 gap-3">
-                  {realInsts.map(inst => {
-              const due = inst.amount - inst.paidAmount - inst.writeOffAmount;
-              const receipt = feeService.getPaymentRecordByInstallmentId(inst.id);
-
-              return (
-                <div key={inst.id} className="bg-white rounded-2xl border border-slate-100 shadow-sm overflow-hidden hover:shadow-md hover:border-slate-200 transition-all">
-                  <div className="flex">
-                    {/* Status accent strip */}
-                    <div className={`w-1.5 shrink-0 ${STATUS_BAR[inst.status] ?? STATUS_BAR_FALLBACK}`} />
-                    <div className="flex-1 p-3.5 lg:p-4">
-                      {/* Top row — month + amount on opposite ends */}
-                      <div className="flex items-start justify-between gap-3 mb-2">
-                        <div className="min-w-0">
-                          <div className="flex items-center gap-1.5 flex-wrap">
-                            <span className="font-black text-slate-900 text-base lg:text-lg leading-none">{inst.month}</span>
-                            <span className={`text-[9px] font-black px-1.5 py-0.5 rounded-md ${FEE_TYPE_COLOR[inst.feeType] ?? 'bg-slate-100 text-slate-600'}`}>
-                              {FEE_TYPE_LABEL[inst.feeType] ?? inst.feeType}
-                            </span>
-                            {inst.payerType === 'GOVERNMENT' && (
-                              <span className="text-[9px] font-black px-1.5 py-0.5 rounded-md bg-emerald-50 text-emerald-700">RTE</span>
-                            )}
-                          </div>
-                          <div className="text-[10px] lg:text-[11px] font-bold text-slate-400 mt-1">Due: {inst.dueDate}</div>
-                        </div>
-                        <div className="text-right shrink-0">
-                          <div className="font-black text-slate-900 text-base lg:text-lg tabular-nums leading-none">₹{inst.amount.toLocaleString('en-IN')}</div>
-                          <span className={`inline-flex items-center gap-1 mt-1.5 text-[9px] lg:text-[10px] font-black px-2 py-0.5 rounded-full border ${STATUS_COLOR[inst.status] ?? STATUS_COLOR_FALLBACK}`}>
-                            {STATUS_ICON(inst.status)} {inst.status}
-                          </span>
-                        </div>
-                      </div>
-
-                      {/* Payment breakdown — only when there's something to break down */}
-                      {(inst.paidAmount > 0 || inst.writeOffAmount > 0 || due > 0) && (
-                        <div className="flex items-center gap-3 flex-wrap text-[10px] lg:text-[11px] font-bold pb-2 border-b border-slate-100">
-                          {inst.paidAmount > 0 && (
-                            <span className="text-emerald-600">Paid <span className="tabular-nums">₹{inst.paidAmount.toLocaleString('en-IN')}</span></span>
-                          )}
-                          {inst.writeOffAmount > 0 && (
-                            <span className="text-indigo-500">Discount <span className="tabular-nums">₹{inst.writeOffAmount.toLocaleString('en-IN')}</span></span>
-                          )}
-                          {due > 0 && (
-                            <span className="text-rose-500">Due <span className="tabular-nums">₹{due.toLocaleString('en-IN')}</span></span>
-                          )}
-                        </div>
-                      )}
-
-                      {inst.writeOffReason && (
-                        <div className="text-[10px] font-bold text-indigo-500 mt-1.5 italic">Reason: {inst.writeOffReason}</div>
-                      )}
-
-                      {/* Actions — only when relevant. Anything not yet PAID
-                          and with a remaining balance is actionable
-                          (UPCOMING / DUE / PARTIAL plus the legacy
-                          UNPAID / OVERDUE values). */}
-                      {(receipt || (due > 0 && inst.status !== 'PAID' && inst.status !== 'WAIVED' && inst.status !== 'WRITTEN_OFF' && inst.status !== 'CANCELLED')) && (
-                        <div className="flex items-center gap-2 mt-2">
-                          {receipt && (
-                            <button onClick={() => setReceiptModal(receipt)}
-                              className="flex items-center gap-1 text-[10px] font-black text-indigo-600 px-2.5 py-1 rounded-full border border-indigo-200 bg-indigo-50 hover:bg-indigo-100 transition-colors">
-                              <Printer size={10} /> Receipt
-                            </button>
-                          )}
-                          {due > 0 && inst.status !== 'PAID' && inst.status !== 'WAIVED' && inst.status !== 'WRITTEN_OFF' && inst.status !== 'CANCELLED' && (
-                            <button onClick={() => setWriteOffModal(inst)}
-                              className="flex items-center gap-1 text-[10px] font-black text-indigo-500 px-2.5 py-1 rounded-full border border-indigo-200 bg-indigo-50 hover:bg-indigo-100 transition-colors">
-                              <TrendingDown size={10} /> Discount
-                            </button>
-                          )}
-                        </div>
-                      )}
+                    <div className="flex items-center gap-2 mb-3 px-1">
+                      <span className="text-[10px] font-black text-slate-500 uppercase tracking-widest">Payable</span>
+                      <span className="text-[10px] font-bold text-slate-400">· {realInsts.length}</span>
                     </div>
-                  </div>
-                </div>
-              );
-                  })}
-                  </div>
+                    {/* Timeline — vertical rail on the left, status dot per
+                        installment, content flows inline. Replaces the heavy
+                        boxed cards with a calendar-strip feel: each row is one
+                        scan-line, the dot's colour is the status at a glance,
+                        and only Total + (optionally) Paid / Discount / Balance
+                        chips are shown below the headline. */}
+                    <div className="relative pl-5 lg:pl-6">
+                      {/* the rail */}
+                      <div className="absolute left-2 lg:left-2.5 top-1 bottom-1 w-px bg-slate-200" />
+                      <div className="space-y-3">
+                        {realInsts.map(inst => {
+                          const due = inst.amount - inst.paidAmount - inst.writeOffAmount;
+                          const receipt = feeService.getPaymentRecordByInstallmentId(inst.id);
+                          const dotColor = STATUS_BAR[inst.status] ?? STATUS_BAR_FALLBACK;
+                          const isActionable = due > 0
+                            && inst.status !== 'PAID' && inst.status !== 'WAIVED'
+                            && inst.status !== 'WRITTEN_OFF' && inst.status !== 'CANCELLED';
+
+                          return (
+                            <div key={inst.id} className="relative">
+                              {/* dot on the rail (slightly inset so it sits
+                                  on top of the line, not next to it) */}
+                              <div className={`absolute -left-[14px] lg:-left-[14px] top-1.5 w-3 h-3 rounded-full ring-2 ring-white ${dotColor}`} />
+
+                              <div className="bg-white rounded-xl border border-slate-100 px-3.5 py-2.5 lg:px-4 lg:py-3 hover:border-slate-200 transition-colors">
+                                {/* Headline row */}
+                                <div className="flex items-center justify-between gap-2">
+                                  <div className="min-w-0 flex items-center gap-2 flex-wrap">
+                                    <span className="font-black text-slate-900 text-sm lg:text-base leading-none">{inst.month}</span>
+                                    <span className={`text-[9px] font-black px-1.5 py-0.5 rounded ${FEE_TYPE_COLOR[inst.feeType] ?? 'bg-slate-100 text-slate-600'}`}>
+                                      {FEE_TYPE_LABEL[inst.feeType] ?? inst.feeType}
+                                    </span>
+                                    {inst.payerType === 'GOVERNMENT' && (
+                                      <span className="text-[9px] font-black px-1.5 py-0.5 rounded bg-emerald-50 text-emerald-700">RTE</span>
+                                    )}
+                                  </div>
+                                  <div className="text-right shrink-0">
+                                    <div className="font-black text-slate-900 text-sm lg:text-base tabular-nums leading-none">₹{inst.amount.toLocaleString('en-IN')}</div>
+                                    <div className="text-[9px] font-bold text-slate-400 mt-0.5">{inst.dueDate}</div>
+                                  </div>
+                                </div>
+
+                                {/* Sub-row chips: only when there's something
+                                    real to show. UPCOMING rows render with
+                                    just the headline above — that's the
+                                    point of the timeline-clean look. */}
+                                {(inst.paidAmount > 0 || inst.writeOffAmount > 0 || due > 0 || ['PAID','WAIVED','WRITTEN_OFF','CANCELLED'].includes(inst.status)) && (
+                                  <div className="flex items-center gap-1.5 flex-wrap mt-2 text-[10px] font-black tabular-nums">
+                                    {inst.paidAmount > 0 && (
+                                      <span className="px-2 py-0.5 rounded-full bg-emerald-50 text-emerald-700 border border-emerald-100">
+                                        Paid ₹{inst.paidAmount.toLocaleString('en-IN')}
+                                      </span>
+                                    )}
+                                    {inst.writeOffAmount > 0 && (
+                                      <span className="px-2 py-0.5 rounded-full bg-indigo-50 text-indigo-700 border border-indigo-100">
+                                        Discount ₹{inst.writeOffAmount.toLocaleString('en-IN')}
+                                      </span>
+                                    )}
+                                    {due > 0 ? (
+                                      <span className="px-2 py-0.5 rounded-full bg-rose-50 text-rose-700 border border-rose-100">
+                                        Balance ₹{due.toLocaleString('en-IN')}
+                                      </span>
+                                    ) : (inst.amount > 0 || inst.paidAmount > 0 || inst.writeOffAmount > 0) ? (
+                                      <span className="px-2 py-0.5 rounded-full bg-emerald-50 text-emerald-700 border border-emerald-100">
+                                        ✓ {inst.status === 'WAIVED' ? 'Waived' : inst.status === 'WRITTEN_OFF' ? 'Written off' : inst.status === 'CANCELLED' ? 'Cancelled' : 'Cleared'}
+                                      </span>
+                                    ) : null}
+                                  </div>
+                                )}
+
+                                {inst.writeOffReason && (
+                                  <div className="text-[10px] font-bold text-indigo-500 mt-1 italic truncate">{inst.writeOffReason}</div>
+                                )}
+
+                                {/* Per the fees spec, discount is a payment-time
+                                    action — applied inside the Collect Payment
+                                    modal, not as a standalone row control. The
+                                    only inline action left is "Receipt" for
+                                    rows that already have a payment recorded. */}
+                                {receipt && (
+                                  <div className="mt-2">
+                                    <button onClick={() => setReceiptModal(receipt)}
+                                      className="flex items-center gap-1 text-[10px] font-black text-indigo-600 px-2 py-1 rounded-full border border-indigo-100 bg-indigo-50 hover:bg-indigo-100 transition-colors">
+                                      <Printer size={10} /> Receipt
+                                    </button>
+                                  </div>
+                                )}
+                              </div>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    </div>
                   </div>
                   )}
                   {govtZeros.length > 0 && (
@@ -878,6 +981,141 @@ export const FeeLedger: React.FC<Props> = ({ onBack }) => {
 
           {/* ── PAYMENT HISTORY ───────────────────────────────────────────── */}
           {detailTab === 'HISTORY' && (() => {
+            // Two event streams merged into one chronological list:
+            //   1. Cash payments (incl. reversals + payment-time discount)
+            //   2. Govt RTE transfers
+            // Standalone write-offs were removed per spec — discount is
+            // only applied at payment time and surfaces as a sub-line on
+            // the matching cash receipt below.
+            type Item =
+              | { kind: 'PAY'; date: string; payload: PaymentRecord }
+              | { kind: 'GOVT'; date: string; payload: GovernmentPaymentRecord };
+            const items: Item[] = [
+              ...paymentTransactions.filter(t => t.studentId === selected.studentId)
+                .map(p => ({ kind: 'PAY' as const, date: p.date, payload: p })),
+              ...govtTransactions.filter(g => g.allocatedStudentIds.includes(selected.studentId))
+                .map(g => ({ kind: 'GOVT' as const, date: g.date, payload: g })),
+            ].sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
+
+            if (items.length === 0) return (
+              <div className="flex flex-col items-center py-16 text-slate-400">
+                <Receipt size={32} className="mb-3 opacity-40" />
+                <p className="font-bold text-sm">No transactions yet</p>
+              </div>
+            );
+            const txns = paymentTransactions.filter(t => t.studentId === selected.studentId);
+            const govtTxns = govtTransactions.filter(g => g.allocatedStudentIds.includes(selected.studentId));
+            const totalCash     = txns.filter(t => !t.reversedAt && !t.reversesPaymentId).reduce((s, t) => s + t.amount, 0);
+            const totalDiscount = txns.reduce((s, t) => s + (t.discountAmount ?? 0), 0);
+            const totalGovt     = govtTxns.reduce((s, g) => s + g.amount, 0);
+            return (
+              <>
+              {/* Summary strip — three numbers, no chrome */}
+              <div className="grid grid-cols-3 gap-2 mb-4">
+                <div className="bg-emerald-50 border border-emerald-100 rounded-xl px-3 py-2 text-center">
+                  <div className="text-sm lg:text-base font-black text-emerald-700 tabular-nums">₹{totalCash.toLocaleString('en-IN')}</div>
+                  <div className="text-[9px] font-black text-slate-400 uppercase tracking-widest mt-0.5">Cash</div>
+                </div>
+                <div className="bg-indigo-50 border border-indigo-100 rounded-xl px-3 py-2 text-center">
+                  <div className="text-sm lg:text-base font-black text-indigo-700 tabular-nums">₹{totalDiscount.toLocaleString('en-IN')}</div>
+                  <div className="text-[9px] font-black text-slate-400 uppercase tracking-widest mt-0.5">Discount</div>
+                </div>
+                <div className="bg-blue-50 border border-blue-100 rounded-xl px-3 py-2 text-center">
+                  <div className="text-sm lg:text-base font-black text-blue-700 tabular-nums">₹{totalGovt.toLocaleString('en-IN')}</div>
+                  <div className="text-[9px] font-black text-slate-400 uppercase tracking-widest mt-0.5">Govt</div>
+                </div>
+              </div>
+
+              {/* Unified timeline — vertical rail with one dot per entry,
+                  colour-coded by kind. Cash = emerald, discount = indigo,
+                  govt = blue. Mirrors the schedule timeline so the two
+                  tabs read as a coherent visual system. */}
+              <div className="relative pl-5 lg:pl-6">
+                <div className="absolute left-2 lg:left-2.5 top-1 bottom-1 w-px bg-slate-200" />
+                <div className="space-y-3">
+                {items.map(item => {
+                  if (item.kind === 'GOVT') {
+                    const g = item.payload;
+                    return (
+                      <div key={`g-${g.id}`} className="relative">
+                        <div className="absolute -left-[14px] top-1.5 w-3 h-3 rounded-full ring-2 ring-white bg-blue-500" />
+                        <div className="bg-white rounded-xl border border-blue-100 px-3.5 py-2.5">
+                          <div className="flex items-center justify-between gap-2">
+                            <div className="min-w-0 flex items-center gap-2 flex-wrap">
+                              <span className="font-black text-slate-900 text-sm">{g.date}</span>
+                              <span className="text-[9px] font-black px-1.5 py-0.5 rounded bg-blue-50 text-blue-700 border border-blue-200 uppercase">Govt RTE</span>
+                            </div>
+                            <div className="font-black text-blue-700 text-sm tabular-nums shrink-0">₹{g.amount.toLocaleString('en-IN')}</div>
+                          </div>
+                          <div className="text-[10px] font-bold text-slate-400 mt-0.5">Ref: {g.referenceNo}</div>
+                          {g.note && <div className="text-[10px] font-bold text-slate-400 italic mt-0.5">{g.note}</div>}
+                        </div>
+                      </div>
+                    );
+                  }
+                  // PAY
+                  const txn = item.payload;
+                  const isReversal     = !!txn.reversesPaymentId;
+                  const isReversedOrig = !!txn.reversedAt && !isReversal;
+                  const dotColor = isReversal ? 'bg-rose-500' : isReversedOrig ? 'bg-slate-300' : 'bg-emerald-500';
+                  const amountColor = isReversal ? 'text-rose-600' : isReversedOrig ? 'text-slate-400 line-through' : 'text-emerald-600';
+                  return (
+                    <div key={`p-${txn.id}`} className="relative">
+                      <div className={`absolute -left-[14px] top-1.5 w-3 h-3 rounded-full ring-2 ring-white ${dotColor}`} />
+                      <div className={`rounded-xl border px-3.5 py-2.5 ${
+                        isReversal ? 'bg-amber-50/40 border-amber-200' :
+                        isReversedOrig ? 'bg-white border-slate-200 opacity-70' :
+                                         'bg-white border-emerald-100'
+                      }`}>
+                        <div className="flex items-center justify-between gap-2">
+                          <div className="min-w-0 flex items-center gap-2 flex-wrap">
+                            <span className={`font-black text-sm ${isReversedOrig ? 'text-slate-500' : 'text-slate-900'}`}>{txn.date}</span>
+                            {isReversal && (
+                              <span className="text-[9px] font-black px-1.5 py-0.5 rounded bg-amber-100 text-amber-700 border border-amber-200 uppercase">Reversal</span>
+                            )}
+                            {isReversedOrig && (
+                              <span className="text-[9px] font-black px-1.5 py-0.5 rounded bg-rose-100 text-rose-700 border border-rose-200 uppercase">Reversed</span>
+                            )}
+                            {!isReversal && !isReversedOrig && (
+                              <span className="text-[9px] font-black px-1.5 py-0.5 rounded bg-emerald-50 text-emerald-700 border border-emerald-200 uppercase">{txn.method}</span>
+                            )}
+                          </div>
+                          <div className={`font-black text-sm tabular-nums shrink-0 ${amountColor}`}>
+                            {txn.amount < 0 ? '-' : ''}₹{Math.abs(txn.amount).toLocaleString('en-IN')}
+                          </div>
+                        </div>
+                        {!isReversal && !isReversedOrig && (txn.discountAmount ?? 0) > 0 && (
+                          <div className="flex items-center justify-between mt-1.5 px-2 py-1 rounded-md bg-indigo-50 border border-indigo-100">
+                            <span className="text-[10px] font-black text-indigo-700">+ Discount applied</span>
+                            <span className="text-[11px] font-black text-indigo-700 tabular-nums">₹{(txn.discountAmount ?? 0).toLocaleString('en-IN')}</span>
+                          </div>
+                        )}
+                        {txn.installmentDetails.length > 0 && (
+                          <div className="text-[10px] font-bold text-slate-500 mt-1 truncate">
+                            → {txn.installmentDetails.map(d => d.month).join(', ')}
+                          </div>
+                        )}
+                        {isReversedOrig && txn.reversalReason && (
+                          <div className="text-[10px] font-bold text-rose-600 italic mt-1 truncate">"{txn.reversalReason}"</div>
+                        )}
+                        <div className="text-[9px] font-bold text-slate-400 mt-0.5">#{txn.receiptNo}</div>
+                        <button onClick={() => setReceiptModal(txn)}
+                          className="mt-1.5 flex items-center gap-1 text-[10px] font-black text-indigo-600 px-2 py-0.5 rounded-full border border-indigo-100 bg-indigo-50 hover:bg-indigo-100 transition-colors">
+                          <Receipt size={10} /> Receipt
+                        </button>
+                      </div>
+                    </div>
+                  );
+                })}
+                </div>
+              </div>
+              </>
+            );
+          })()}
+
+          {/* OLD: legacy duplicate cash/govt blocks. Kept commented as a
+              reference for the unified timeline above. */}
+          {false && detailTab === 'HISTORY' && (() => {
             const txns = paymentTransactions.filter(t => t.studentId === selected.studentId)
               .sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
             const govtTxns = govtTransactions.filter(g => g.allocatedStudentIds.includes(selected.studentId))
@@ -922,6 +1160,22 @@ export const FeeLedger: React.FC<Props> = ({ onBack }) => {
                         isReversal ? 'text-rose-600' : isReversedOrig ? 'text-slate-400 line-through' : 'text-emerald-600'
                       }`}>{txn.amount < 0 ? '-' : ''}₹{Math.abs(txn.amount).toLocaleString('en-IN')}</div>
                     </div>
+                    {/* Discount applied alongside this payment — surfaced as
+                        its own row so the principal can audit the cleared
+                        total at a glance: cash + discount = installments
+                        cleared. Hidden when no discount or when this row is
+                        a reversal entry. */}
+                    {!isReversal && !isReversedOrig && (txn.discountAmount ?? 0) > 0 && (
+                      <div className="flex items-center justify-between mb-2 px-3 py-1.5 rounded-lg bg-indigo-50 border border-indigo-100">
+                        <div className="flex items-center gap-1.5">
+                          <TrendingDown size={11} className="text-indigo-600" />
+                          <span className="text-[10px] lg:text-[11px] font-black text-indigo-700">Discount</span>
+                        </div>
+                        <span className="text-[11px] lg:text-xs font-black text-indigo-700 tabular-nums">
+                          + ₹{(txn.discountAmount ?? 0).toLocaleString('en-IN')} cleared
+                        </span>
+                      </div>
+                    )}
                     {txn.installmentDetails.length > 0 && (
                       <div className="text-[9px] lg:text-[10px] font-bold text-slate-400 mb-2.5 line-clamp-2">
                         → {txn.installmentDetails.map(d => d.month).join(', ')}
@@ -967,10 +1221,25 @@ export const FeeLedger: React.FC<Props> = ({ onBack }) => {
         </div>
 
         {/* ── PAY MODAL ────────────────────────────────────────────────────── */}
-        {payModal && (
+        {payModal && (() => {
+          // Live computation strip — drives the bottom summary so the
+          // principal can see exactly where the money lands BEFORE clicking
+          // Collect. Earlier this was opaque ("auto-allocated to oldest
+          // dues first, excess to advance credit") and the principal had
+          // to mentally simulate it.
+          const cash       = Number(payAmount) || 0;
+          const disc       = Number(paymentDiscount) || 0;
+          const totalDueNow = (selected?.installments ?? [])
+            .reduce((s, i) => s + Math.max(0, i.amount - i.paidAmount - i.writeOffAmount), 0)
+            + (applyLateFee ? lateFeeTotal : 0);
+          const cleared = Math.min(cash + disc, totalDueNow);
+          const goesToAdvance = Math.max(0, cash + disc - totalDueNow);
+          const remainingAfter = Math.max(0, totalDueNow - cash - disc);
+          return (
           <div className="absolute inset-0 bg-slate-900/60 backdrop-blur-sm z-50 flex items-end">
-            <div className="w-full bg-white rounded-t-3xl p-6 pb-8 animate-in slide-in-from-bottom-8">
-              <div className="flex justify-between items-center mb-5">
+            <div className="w-full max-w-lg mx-auto bg-white rounded-t-3xl p-5 pb-7 animate-in slide-in-from-bottom-8 max-h-[92vh] overflow-y-auto">
+              {/* Header */}
+              <div className="flex justify-between items-start mb-4">
                 <div>
                   <h3 className="text-lg font-black text-slate-900">Collect Payment</h3>
                   <p className="text-[10px] font-bold text-slate-400">{selected.name} · {selected.className}</p>
@@ -981,7 +1250,19 @@ export const FeeLedger: React.FC<Props> = ({ onBack }) => {
                 </button>
               </div>
 
-              {/* Method pills */}
+              {/* Total due — anchor number so the principal always knows the
+                  target. Replaces the earlier "Advance Credit ₹11,500" first
+                  callout which confused users into thinking that was money
+                  owed. */}
+              <div className="bg-slate-900 text-white rounded-2xl p-4 mb-4">
+                <p className="text-[10px] font-black uppercase tracking-widest text-slate-300 mb-1">Total Due</p>
+                <p className="text-3xl font-black tabular-nums">₹{totalDueNow.toLocaleString('en-IN')}</p>
+                {advance > 0 && (
+                  <p className="text-[10px] font-bold text-violet-300 mt-1">+ ₹{advance.toLocaleString('en-IN')} advance credit on file</p>
+                )}
+              </div>
+
+              {/* Method */}
               <p className="text-[10px] font-black uppercase tracking-widest text-slate-400 mb-2">Method</p>
               <div className="flex gap-2 flex-wrap mb-4">
                 {(Object.keys(METHOD_LABEL) as PaymentMethod[]).map(m => (
@@ -992,48 +1273,81 @@ export const FeeLedger: React.FC<Props> = ({ onBack }) => {
                 ))}
               </div>
 
-              {/* Amount */}
-              <p className="text-[10px] font-black uppercase tracking-widest text-slate-400 mb-2">Amount Received</p>
-              <div className="bg-slate-50 border border-slate-200 rounded-xl p-3 flex items-center gap-2 mb-1">
-                <IndianRupee size={20} className="text-slate-400 shrink-0" />
-                <input type="number" value={payAmount} onChange={e => setPayAmount(e.target.value)}
-                  placeholder="0" className="flex-1 bg-transparent font-black text-slate-900 text-2xl outline-none" />
+              {/* Amount + Discount paired — both inline, both labelled. The
+                  Discount row is always present (no toggle) so the principal
+                  doesn't have to hunt for it; it just reads "₹0" until they
+                  type. Pairing them visually makes the relationship obvious:
+                  Total Cleared = Cash + Discount. */}
+              <div className="grid grid-cols-2 gap-3 mb-3">
+                <div>
+                  <p className="text-[10px] font-black uppercase tracking-widest text-emerald-700 mb-1.5">Cash Received</p>
+                  <div className="bg-emerald-50 border border-emerald-200 rounded-xl p-2.5 flex items-center gap-1.5">
+                    <IndianRupee size={16} className="text-emerald-600 shrink-0" />
+                    <input type="number" min="0" value={payAmount}
+                      onChange={e => setPayAmount(e.target.value)}
+                      placeholder="0" className="flex-1 bg-transparent font-black text-emerald-900 text-xl outline-none w-full" />
+                  </div>
+                </div>
+                <div>
+                  <p className="text-[10px] font-black uppercase tracking-widest text-indigo-700 mb-1.5">Discount</p>
+                  <div className="bg-indigo-50 border border-indigo-200 rounded-xl p-2.5 flex items-center gap-1.5">
+                    <IndianRupee size={16} className="text-indigo-500 shrink-0" />
+                    <input type="number" min="0" value={paymentDiscount}
+                      onChange={e => {
+                        const v = e.target.value;
+                        setPaymentDiscount(v);
+                        setApplyDiscount(Number(v) > 0);
+                      }}
+                      placeholder="0" className="flex-1 bg-transparent font-black text-indigo-900 text-xl outline-none w-full" />
+                  </div>
+                </div>
               </div>
-              {advance > 0 && (
-                <div className="flex items-center justify-between bg-violet-50 border border-violet-200 rounded-xl px-3 py-2 mb-3">
-                  <span className="text-[10px] font-black text-violet-600">Advance Credit</span>
-                  <span className="text-sm font-black text-violet-700">₹{advance.toLocaleString('en-IN')}</span>
+              <p className="text-[10px] font-bold text-slate-400 mb-4">
+                Cash + Discount auto-allocate to oldest dues first.
+                Discount only reduces installments — it never goes to advance credit.
+              </p>
+
+              {/* Live result — exactly tells the principal what's about to
+                  happen. Three states: nothing entered, partial pay, or
+                  excess (which surfaces "goes to advance"). */}
+              {(cash > 0 || disc > 0) && (
+                <div className={`rounded-xl border px-3 py-3 mb-3 ${
+                  goesToAdvance > 0 ? 'bg-violet-50 border-violet-200' :
+                  remainingAfter > 0 ? 'bg-amber-50 border-amber-200' :
+                                       'bg-emerald-50 border-emerald-200'
+                }`}>
+                  <div className="flex items-center justify-between text-[11px] font-black mb-1">
+                    <span className="text-slate-700">Will clear</span>
+                    <span className={`tabular-nums ${
+                      goesToAdvance > 0 ? 'text-violet-700' :
+                      remainingAfter > 0 ? 'text-amber-700' :
+                                           'text-emerald-700'
+                    }`}>₹{cleared.toLocaleString('en-IN')}</span>
+                  </div>
+                  {remainingAfter > 0 && (
+                    <div className="flex items-center justify-between text-[10px] font-bold text-amber-700">
+                      <span>Still due after this</span>
+                      <span className="tabular-nums">₹{remainingAfter.toLocaleString('en-IN')}</span>
+                    </div>
+                  )}
+                  {goesToAdvance > 0 && (
+                    <div className="flex items-center justify-between text-[10px] font-bold text-violet-700">
+                      <span>Excess cash → advance credit</span>
+                      <span className="tabular-nums">₹{goesToAdvance.toLocaleString('en-IN')}</span>
+                    </div>
+                  )}
                 </div>
               )}
 
-              {/* Late-fee preview — recomputed every time the modal opens.
-                  Per-installment breakdown helps the principal explain to the
-                  parent exactly which dues triggered the late fee and by how
-                  many days they are overdue. */}
+              {/* Late-fee preview — only shown when there's actually a late
+                  fee to talk about. Same skip toggle as before. */}
               {lateFeeTotal > 0 && (
                 <div className={`rounded-xl px-3 py-2.5 mb-3 border ${applyLateFee ? 'bg-amber-50 border-amber-200' : 'bg-slate-50 border-slate-200'}`}>
-                  <div className="flex items-center justify-between mb-2">
-                    <span className={`text-[10px] font-black ${applyLateFee ? 'text-amber-700' : 'text-slate-500 line-through'}`}>Late Fee (overdue dues)</span>
-                    <span className={`text-sm font-black ${applyLateFee ? 'text-amber-700' : 'text-slate-400 line-through'}`}>+₹{lateFeeTotal.toLocaleString('en-IN')}</span>
+                  <div className="flex items-center justify-between mb-1">
+                    <span className={`text-[10px] font-black ${applyLateFee ? 'text-amber-700' : 'text-slate-500 line-through'}`}>Late Fee</span>
+                    <span className={`text-sm font-black ${applyLateFee ? 'text-amber-700' : 'text-slate-400 line-through'}`}>+ ₹{lateFeeTotal.toLocaleString('en-IN')}</span>
                   </div>
-                  {lateFeeBreakdown.filter(b => b.lateFee > 0).length > 0 && (
-                    <ul className={`mb-2 divide-y ${applyLateFee ? 'divide-amber-200' : 'divide-slate-200'} max-h-32 overflow-y-auto`}>
-                      {lateFeeBreakdown.filter(b => b.lateFee > 0).map(b => {
-                        const inst = selected?.installments.find(i => i.id === b.installmentId);
-                        const label = inst ? `${inst.month} · ${FEE_TYPE_LABEL[inst.feeType]}` : `Due ${new Date(b.dueDate).toLocaleDateString('en-IN', { day: 'numeric', month: 'short' })}`;
-                        return (
-                          <li key={b.installmentId} className="flex items-center justify-between py-1">
-                            <div className="flex flex-col">
-                              <span className={`text-[11px] font-bold ${applyLateFee ? 'text-amber-800' : 'text-slate-500 line-through'}`}>{label}</span>
-                              <span className={`text-[9px] font-semibold ${applyLateFee ? 'text-amber-600' : 'text-slate-400'}`}>{b.daysLate} {b.daysLate === 1 ? 'day' : 'days'} late · {/PERCENT/i.test(b.source) ? '% of due' : 'flat'}</span>
-                            </div>
-                            <span className={`text-[11px] font-black ${applyLateFee ? 'text-amber-700' : 'text-slate-400 line-through'}`}>+₹{b.lateFee.toLocaleString('en-IN')}</span>
-                          </li>
-                        );
-                      })}
-                    </ul>
-                  )}
-                  <label className="flex items-center gap-2 text-[10px] font-bold text-slate-500 cursor-pointer">
+                  <label className="flex items-center gap-2 text-[10px] font-bold text-slate-500 cursor-pointer mt-1">
                     <input type="checkbox" checked={!applyLateFee}
                       onChange={e => setApplyLateFee(!e.target.checked)}
                       className="accent-amber-600" />
@@ -1042,89 +1356,44 @@ export const FeeLedger: React.FC<Props> = ({ onBack }) => {
                 </div>
               )}
 
-              <p className="text-[10px] font-bold text-slate-400 mb-3">Auto-allocated to oldest dues first. Excess stored as advance credit.</p>
-
-              <textarea value={paymentNote} onChange={e => setPaymentNote(e.target.value)}
-                rows={2} placeholder="Note (optional)…"
-                className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-2.5 text-sm font-bold text-slate-900 outline-none focus:border-blue-500 resize-none mb-3" />
-
-              {/* Discount — optional toggle */}
-              <label className="flex items-center gap-2 mb-2 cursor-pointer select-none">
-                <input type="checkbox" checked={applyDiscount} onChange={e => { setApplyDiscount(e.target.checked); if (!e.target.checked) setPaymentDiscount(''); }}
-                  className="accent-indigo-600 w-4 h-4" />
-                <span className="text-[11px] font-black text-slate-700">Apply Discount</span>
-              </label>
-              {applyDiscount && (
-                <div className="bg-indigo-50 border border-indigo-200 rounded-xl p-3 flex items-center gap-2 mb-3">
-                  <IndianRupee size={16} className="text-indigo-400 shrink-0" />
-                  <input type="number" min="0" value={paymentDiscount} onChange={e => setPaymentDiscount(e.target.value)}
-                    placeholder="Discount amount…" className="flex-1 bg-transparent font-black text-indigo-900 text-lg outline-none" />
+              {/* More — note + custom date hidden by default to keep the
+                  primary flow on one screen. Open only when needed. */}
+              <details className="mb-3 group">
+                <summary className="cursor-pointer text-[11px] font-black text-slate-500 uppercase tracking-widest flex items-center gap-1.5 select-none">
+                  <ChevronDown size={12} className="group-open:rotate-180 transition-transform" />
+                  More options
+                </summary>
+                <div className="mt-2 space-y-2">
+                  <textarea value={paymentNote} onChange={e => setPaymentNote(e.target.value)}
+                    rows={2} placeholder="Note (e.g., scholarship reason, txn id)…"
+                    className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 text-sm font-bold text-slate-900 outline-none focus:border-blue-500 resize-none" />
+                  <label className="flex items-center gap-2 cursor-pointer select-none">
+                    <input type="checkbox" checked={useCustomDate} onChange={e => { setUseCustomDate(e.target.checked); if (!e.target.checked) setPaymentDate(''); }}
+                      className="accent-slate-600 w-4 h-4" />
+                    <span className="text-[11px] font-black text-slate-700">Backdate this payment</span>
+                  </label>
+                  {useCustomDate && (
+                    <input type="date" value={paymentDate} max={new Date().toISOString().split('T')[0]}
+                      onChange={e => setPaymentDate(e.target.value)}
+                      className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 text-sm font-bold text-slate-900 outline-none" />
+                  )}
                 </div>
-              )}
-              {applyDiscount && paymentDiscount && Number(paymentDiscount) > 0 && (
-                <div className="flex items-center justify-between bg-indigo-50 border border-indigo-100 rounded-xl px-3 py-2 mb-3">
-                  <span className="text-[10px] font-black text-indigo-600">Total Cleared</span>
-                  <span className="text-sm font-black text-indigo-700">₹{((Number(payAmount) || 0) + (Number(paymentDiscount) || 0)).toLocaleString('en-IN')}</span>
-                </div>
-              )}
+              </details>
 
-              {/* Custom date — optional toggle */}
-              <label className="flex items-center gap-2 mb-2 cursor-pointer select-none">
-                <input type="checkbox" checked={useCustomDate} onChange={e => { setUseCustomDate(e.target.checked); if (!e.target.checked) setPaymentDate(''); }}
-                  className="accent-slate-600 w-4 h-4" />
-                <span className="text-[11px] font-black text-slate-700">Use Custom Payment Date</span>
-              </label>
-              {useCustomDate && (
-                <div className="bg-slate-50 border border-slate-200 rounded-xl px-3 py-2.5 mb-3">
-                  <input type="date" value={paymentDate} max={new Date().toISOString().split('T')[0]}
-                    onChange={e => setPaymentDate(e.target.value)}
-                    className="w-full bg-transparent text-sm font-bold text-slate-900 outline-none" />
-                </div>
-              )}
-
-              <button onClick={handlePayment} disabled={!payAmount}
-                className="w-full py-3.5 bg-emerald-600 text-white font-black rounded-xl disabled:opacity-40 flex items-center justify-center gap-2">
-                <CheckCircle2 size={16} /> Collect & Generate Receipt
+              <button onClick={handlePayment}
+                disabled={paySubmitting || (!payAmount && !paymentDiscount)}
+                className="w-full py-3.5 bg-emerald-600 hover:bg-emerald-700 active:scale-[0.98] text-white font-black rounded-xl disabled:opacity-40 disabled:cursor-not-allowed flex items-center justify-center gap-2 transition-all">
+                {paySubmitting
+                  ? <><RefreshCw size={16} className="animate-spin" /> Saving payment…</>
+                  : <><CheckCircle2 size={16} /> Collect & Generate Receipt</>
+                }
               </button>
             </div>
           </div>
-        )}
+          );
+        })()}
 
         {/* ── DISCOUNT MODAL ────────────────────────────────────────────────── */}
-        {writeOffModal && (
-          <div className="absolute inset-0 bg-slate-900/60 backdrop-blur-sm z-50 flex items-end">
-            <div className="w-full bg-white rounded-t-3xl p-6 pb-8 animate-in slide-in-from-bottom-8">
-              <div className="flex justify-between items-center mb-4">
-                <div>
-                  <h3 className="text-lg font-black text-slate-900">Apply Discount</h3>
-                  <p className="text-[10px] font-bold text-slate-400">{FEE_TYPE_LABEL[writeOffModal.feeType]} · {writeOffModal.month}</p>
-                </div>
-                <button onClick={() => setWriteOffModal(null)} className="w-8 h-8 bg-slate-100 rounded-full flex items-center justify-center">
-                  <X size={16} className="text-slate-500" />
-                </button>
-              </div>
-              <div className="bg-indigo-50 border border-indigo-200 rounded-xl p-3 mb-4 flex items-center justify-between">
-                <span className="text-xs font-bold text-indigo-700">Outstanding</span>
-                <span className="text-sm font-black text-indigo-800">₹{(writeOffModal.amount - writeOffModal.paidAmount).toLocaleString('en-IN')}</span>
-              </div>
-              <p className="text-[10px] font-black uppercase tracking-widest text-slate-400 mb-2">Discount Amount (₹)</p>
-              <div className="bg-slate-50 border border-slate-200 rounded-xl p-3 flex items-center gap-2 mb-4">
-                <IndianRupee size={16} className="text-slate-400" />
-                <input type="number" min="0" value={writeOffAmount} onChange={e => setWriteOffAmount(e.target.value)}
-                  placeholder="Leave blank to discount full remaining"
-                  className="flex-1 bg-transparent font-black text-slate-900 text-lg outline-none" />
-              </div>
-              <p className="text-[10px] font-black uppercase tracking-widest text-slate-400 mb-2">Reason (required)</p>
-              <textarea value={writeOffReason} onChange={e => setWriteOffReason(e.target.value)}
-                rows={2} placeholder="e.g. Sibling discount, scholarship, financial hardship…"
-                className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-3 text-sm font-bold text-slate-900 outline-none focus:border-indigo-500 resize-none mb-4" />
-              <button onClick={handleWriteOff} disabled={!writeOffReason.trim()}
-                className="w-full py-3.5 bg-indigo-600 text-white font-black rounded-xl disabled:opacity-40 flex items-center justify-center gap-2">
-                <TrendingDown size={16} /> Confirm Discount
-              </button>
-            </div>
-          </div>
-        )}
 
         {/* ── GOVT PAY MODAL ─────────────────────────────────────────────────── */}
         {govtPayModal && (
@@ -1306,10 +1575,57 @@ export const FeeLedger: React.FC<Props> = ({ onBack }) => {
                 </button>
               </div>
 
-              <div className="bg-amber-50 border border-amber-200 rounded-xl p-3 mb-4">
-                <p className="text-[11px] font-bold text-amber-800 leading-relaxed">
-                  Ek negative ledger entry banegi (-₹{reverseTarget.amount.toLocaleString('en-IN')})
-                  aur installment balances roll back honge. Action audit log me jayega.
+              {/* Mode toggle — Full vs partial. The "Custom" path keeps a
+                  portion of the payment and reverses the rest, implemented
+                  as full-reverse-then-recollect on the server side. */}
+              <div className="grid grid-cols-2 gap-2 mb-3">
+                <button
+                  onClick={() => setReverseMode('FULL')}
+                  disabled={reversing}
+                  className={`py-2.5 rounded-xl text-[11px] font-black uppercase tracking-widest transition-colors ${reverseMode === 'FULL' ? 'bg-rose-600 text-white' : 'bg-slate-50 text-slate-500 border border-slate-200'}`}>
+                  Reverse Full
+                </button>
+                <button
+                  onClick={() => setReverseMode('CUSTOM')}
+                  disabled={reversing}
+                  className={`py-2.5 rounded-xl text-[11px] font-black uppercase tracking-widest transition-colors ${reverseMode === 'CUSTOM' ? 'bg-rose-600 text-white' : 'bg-slate-50 text-slate-500 border border-slate-200'}`}>
+                  Keep Partial
+                </button>
+              </div>
+
+              {reverseMode === 'CUSTOM' ? (
+                <div className="bg-amber-50 border border-amber-200 rounded-xl p-3 mb-3">
+                  <label className="block text-[10px] font-black uppercase tracking-widest text-amber-700 mb-1.5">
+                    Amount to keep <span className="text-rose-500">*</span>
+                  </label>
+                  <div className="bg-white border border-amber-200 rounded-lg px-3 py-2 flex items-center gap-2 mb-2">
+                    <IndianRupee size={14} className="text-amber-600" />
+                    <input type="number" min="1" max={reverseTarget.amount - 1}
+                      value={reverseKeepAmount}
+                      onChange={e => setReverseKeepAmount(e.target.value)}
+                      placeholder={`1 – ${reverseTarget.amount - 1}`}
+                      disabled={reversing}
+                      className="flex-1 bg-transparent font-black text-amber-900 text-base outline-none" />
+                  </div>
+                  <p className="text-[10px] font-bold text-amber-800 leading-relaxed">
+                    Original ₹{reverseTarget.amount.toLocaleString('en-IN')} will be fully reversed,
+                    then ₹{(Number(reverseKeepAmount) || 0).toLocaleString('en-IN')} re-recorded as a fresh payment.
+                  </p>
+                </div>
+              ) : (
+                <div className="bg-amber-50 border border-amber-200 rounded-xl p-3 mb-3">
+                  <p className="text-[11px] font-bold text-amber-800 leading-relaxed">
+                    A negative ledger entry of −₹{reverseTarget.amount.toLocaleString('en-IN')} will be created
+                    and installment balances rolled back. Audit-logged.
+                  </p>
+                </div>
+              )}
+
+              {/* Window-of-validity hint — same-day only in IST. */}
+              <div className="bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 mb-3 flex items-center gap-2">
+                <Clock size={12} className="text-slate-500" />
+                <p className="text-[10px] font-bold text-slate-600">
+                  Reversible only until end of today (IST). After that this payment is locked into history.
                 </p>
               </div>
 
@@ -1324,13 +1640,13 @@ export const FeeLedger: React.FC<Props> = ({ onBack }) => {
                 className="w-full border border-slate-200 bg-slate-50 rounded-xl px-3 py-2.5 text-sm font-bold text-slate-800 placeholder:text-slate-400 focus:outline-none focus:border-rose-400 resize-none" />
 
               <div className="flex gap-2 mt-4">
-                <button onClick={() => { setReverseTarget(null); setReverseReason(''); }}
+                <button onClick={() => { setReverseTarget(null); setReverseReason(''); setReverseMode('FULL'); setReverseKeepAmount(''); }}
                   disabled={reversing}
                   className="flex-1 py-3 bg-slate-100 text-slate-700 font-black rounded-xl text-sm">
                   Cancel
                 </button>
                 <button onClick={handleReverseConfirm}
-                  disabled={reversing || reverseReason.trim().length < 3}
+                  disabled={reversing || reverseReason.trim().length < 3 || (reverseMode === 'CUSTOM' && (!reverseKeepAmount || Number(reverseKeepAmount) <= 0 || Number(reverseKeepAmount) >= reverseTarget.amount))}
                   className="flex-1 py-3 bg-rose-600 hover:bg-rose-700 text-white font-black rounded-xl text-sm disabled:opacity-50 active:scale-[0.98] transition-all">
                   {reversing ? 'Reversing…' : 'Confirm Reversal'}
                 </button>
@@ -1420,10 +1736,10 @@ export const FeeLedger: React.FC<Props> = ({ onBack }) => {
 
   // ─── LIST VIEW ────────────────────────────────────────────────────────────────
   return (
-    <div className="w-full bg-slate-50 flex flex-col animate-in slide-in-from-right-8 duration-300 lg:max-w-6xl lg:mx-auto">
+    <div className="w-full bg-slate-50 flex flex-col animate-in slide-in-from-right-8 duration-300 lg:max-w-6xl lg:mx-auto lg:px-4 lg:py-6">
 
       {/* Header */}
-      <div className="bg-white border-b border-slate-100 shadow-sm">
+      <div className="bg-white border-b border-slate-100 shadow-sm lg:rounded-2xl lg:border lg:mb-3">
         <div className="px-4 lg:px-6 pt-4 lg:pt-6 pb-3 lg:pb-4 flex items-center gap-3">
           <button onClick={onBack} className="p-2 -ml-2 bg-slate-100 rounded-full text-slate-600 hover:bg-slate-200 transition-colors">
             <ArrowLeft size={20} />
@@ -1464,13 +1780,19 @@ export const FeeLedger: React.FC<Props> = ({ onBack }) => {
               placeholder="Search by name, class, admission no…"
               className="w-full bg-slate-50 border border-slate-200 rounded-2xl pl-10 pr-4 py-2.5 lg:py-3 text-sm font-bold outline-none focus:border-blue-500 transition-colors" />
           </div>
-          <div className="flex gap-2 shrink-0">
-            {(['ALL', 'DUE', 'CLEARED'] as ListTab[]).map(t => (
+          <div className="flex gap-2 shrink-0 overflow-x-auto">
+            {(['ALL', 'DUE', 'PENDING', 'CLEARED'] as ListTab[]).map(t => (
               <button key={t} onClick={() => setListTab(t)}
-                className={`px-4 lg:px-5 py-1.5 lg:py-2.5 rounded-xl text-[10px] lg:text-xs font-black uppercase tracking-widest transition-colors ${listTab === t
-                  ? t === 'DUE' ? 'bg-rose-600 text-white' : t === 'CLEARED' ? 'bg-emerald-600 text-white' : 'bg-slate-900 text-white'
+                className={`shrink-0 px-3 lg:px-5 py-1.5 lg:py-2.5 rounded-xl text-[10px] lg:text-xs font-black uppercase tracking-widest transition-colors ${listTab === t
+                  ? t === 'DUE' ? 'bg-rose-600 text-white'
+                    : t === 'CLEARED' ? 'bg-emerald-600 text-white'
+                    : t === 'PENDING' ? 'bg-amber-600 text-white'
+                    : 'bg-slate-900 text-white'
                   : 'bg-slate-100 text-slate-500 hover:bg-slate-200'}`}>
-                {t === 'ALL' ? `All (${students.length})` : t === 'DUE' ? `Due (${dueStudents.length})` : `Cleared (${clearedStudents.length})`}
+                {t === 'ALL' ? `All (${students.length})`
+                  : t === 'DUE' ? `Due (${dueStudents.length})`
+                  : t === 'PENDING' ? `Pending (${pendingStudents.length})`
+                  : `Cleared (${clearedStudents.length})`}
               </button>
             ))}
           </div>
@@ -1478,7 +1800,7 @@ export const FeeLedger: React.FC<Props> = ({ onBack }) => {
       </div>
 
       {/* List */}
-      <div className="flex-1 overflow-y-auto p-4 lg:p-6">
+      <div className="flex-1 overflow-y-auto lg:overflow-visible p-4 lg:p-0 lg:pt-2">
         {/* Parent/student-submitted payment screenshots awaiting principal review. */}
         <div className="mb-3 lg:mb-4">
           <FeePaymentSubmissionsQueue />
@@ -1496,17 +1818,18 @@ export const FeeLedger: React.FC<Props> = ({ onBack }) => {
             const pd = getParentDue(student.studentId);
             const gd = student.isRte ? getGovtDue(student.studentId) : { tuition: 0, total: 0 };
             const isDue = pd.total > 0 || gd.total > 0;
+            const noSchedule = student.installments.length === 0;
             const totalD = student.installments.reduce((a, i) => a + i.amount, 0);
             const totalP = student.installments.reduce((a, i) => a + i.paidAmount, 0);
-            const pct = totalD > 0 ? Math.round((totalP / totalD) * 100) : 100;
+            const pct = totalD > 0 ? Math.round((totalP / totalD) * 100) : 0;
 
             return (
               <button key={student.studentId}
                 onClick={() => { setSelected(student); setDetailTab('SCHEDULE'); }}
-                className={`w-full text-left bg-white rounded-2xl shadow-sm border p-4 lg:p-5 active:scale-[0.99] hover:shadow-md hover:border-slate-300 transition-all ${isDue ? 'border-rose-200' : 'border-slate-100'}`}>
+                className={`w-full text-left bg-white rounded-2xl shadow-sm border p-4 lg:p-5 active:scale-[0.99] hover:shadow-md hover:border-slate-300 transition-all ${noSchedule ? 'border-amber-200' : isDue ? 'border-rose-200' : 'border-slate-100'}`}>
                 <div className="flex items-center gap-3 lg:gap-4">
                   {/* Avatar */}
-                  <div className={`w-10 h-10 lg:w-12 lg:h-12 rounded-xl flex items-center justify-center font-black text-sm lg:text-base shrink-0 ${isDue ? 'bg-rose-100 text-rose-700' : 'bg-emerald-100 text-emerald-700'}`}>
+                  <div className={`w-10 h-10 lg:w-12 lg:h-12 rounded-xl flex items-center justify-center font-black text-sm lg:text-base shrink-0 ${noSchedule ? 'bg-amber-100 text-amber-700' : isDue ? 'bg-rose-100 text-rose-700' : 'bg-emerald-100 text-emerald-700'}`}>
                     {getInitials(student.name)}
                   </div>
 
@@ -1519,14 +1842,20 @@ export const FeeLedger: React.FC<Props> = ({ onBack }) => {
 
                     {/* Mini progress bar */}
                     <div className="mt-2 h-1 lg:h-1.5 bg-slate-100 rounded-full overflow-hidden">
-                      <div className={`h-full rounded-full ${pct === 100 ? 'bg-emerald-500' : 'bg-blue-400'}`} style={{ width: `${pct}%` }} />
+                      <div className={`h-full rounded-full ${noSchedule ? 'bg-amber-300' : pct === 100 ? 'bg-emerald-500' : 'bg-blue-400'}`} style={{ width: `${noSchedule ? 0 : pct}%` }} />
                     </div>
-                    <div className="text-[9px] lg:text-[10px] font-bold text-slate-400 mt-0.5">{pct}% collected</div>
+                    <div className="text-[9px] lg:text-[10px] font-bold text-slate-400 mt-0.5">
+                      {noSchedule ? 'No schedule' : `${pct}% collected · ${student.installments.length} installments`}
+                    </div>
                   </div>
 
                   {/* Right: due amount or cleared badge */}
                   <div className="shrink-0 text-right">
-                    {isDue ? (
+                    {noSchedule ? (
+                      <span className="flex items-center gap-0.5 text-[9px] lg:text-[10px] font-black text-amber-700 bg-amber-50 border border-amber-200 px-2 py-1 rounded-full">
+                        <AlertCircle size={10} /> Pending
+                      </span>
+                    ) : isDue ? (
                       <>
                         {pd.total > 0 && <div className="font-black text-rose-600 text-sm lg:text-base">₹{pd.total.toLocaleString('en-IN')}</div>}
                         {gd.total > 0 && <div className="font-black text-blue-600 text-sm lg:text-base">₹{gd.total.toLocaleString('en-IN')}</div>}

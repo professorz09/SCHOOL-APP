@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { CheckCircle2, XCircle, Clock, IndianRupee, Image as ImageIcon, ChevronDown, ChevronUp, Eye, X } from 'lucide-react';
+import { CheckCircle2, XCircle, Clock, IndianRupee, ChevronDown, ChevronUp, Hash, Copy } from 'lucide-react';
 import { feeService } from '@/modules/fees/fee.service';
 import type { FeePaymentUploadRecord, FeeUploadStatus } from '@/modules/fees/fees.types';
 import { useUIStore } from '@/store/uiStore';
@@ -26,8 +26,6 @@ export const FeePaymentSubmissionsQueue: React.FC = () => {
   const [loading, setLoading] = useState(true);
   const [busyId, setBusyId] = useState<string | null>(null);
   const [expanded, setExpanded] = useState(false);
-  const [previewUrl, setPreviewUrl] = useState<string | null>(null);
-  const [previewLoadingId, setPreviewLoadingId] = useState<string | null>(null);
   const showToast = useUIStore(s => s.showToast);
 
   const reload = async () => {
@@ -44,24 +42,6 @@ export const FeePaymentSubmissionsQueue: React.FC = () => {
 
   useEffect(() => { reload(); }, []);
 
-  const openScreenshot = async (item: FeePaymentUploadRecord) => {
-    if (!item.screenshotUrl) {
-      showToast('No image attached to this submission', 'error');
-      return;
-    }
-    setPreviewLoadingId(item.id);
-    try {
-      const url = await feeService.getFeePaymentScreenshotUrl(item.screenshotUrl);
-      if (!url) throw new Error('Could not load image');
-      setPreviewUrl(url);
-    } catch (err) {
-      console.error('[fee-uploads] preview failed', err);
-      showToast(err instanceof Error ? err.message : 'Could not load image', 'error');
-    } finally {
-      setPreviewLoadingId(null);
-    }
-  };
-
   const review = async (id: string, decision: 'APPROVED' | 'REJECTED') => {
     setBusyId(id);
     try {
@@ -76,6 +56,17 @@ export const FeePaymentSubmissionsQueue: React.FC = () => {
       showToast(err instanceof Error ? err.message : 'Action failed', 'error');
     } finally {
       setBusyId(null);
+    }
+  };
+
+  // Copy txn_id to clipboard so the principal can paste into bank/UPI
+  // statement search to verify before approving.
+  const copyTxn = async (txn: string) => {
+    try {
+      await navigator.clipboard.writeText(txn);
+      showToast('Transaction ID copied', 'success');
+    } catch {
+      showToast('Could not copy', 'error');
     }
   };
 
@@ -145,27 +136,20 @@ export const FeePaymentSubmissionsQueue: React.FC = () => {
                 {item.description && (
                   <p className="text-[11px] font-medium text-slate-500 mt-1 line-clamp-2">{item.description}</p>
                 )}
-                <div className="flex items-center gap-2 mt-1">
-                  {item.screenshotName && (
-                    <div className="flex items-center gap-1 text-[10px] font-bold text-slate-400 min-w-0">
-                      <ImageIcon size={10} className="shrink-0" />
-                      <span className="truncate">{item.screenshotName}</span>
-                    </div>
-                  )}
-                  {item.screenshotUrl ? (
-                    <button
-                      type="button"
-                      onClick={() => openScreenshot(item)}
-                      disabled={previewLoadingId === item.id}
-                      className="inline-flex items-center gap-1 text-[10px] font-black uppercase tracking-widest text-blue-600 disabled:opacity-60"
-                    >
-                      <Eye size={10} />
-                      {previewLoadingId === item.id ? 'Loading…' : 'View image'}
-                    </button>
-                  ) : (
-                    <span className="text-[10px] font-bold text-slate-300 italic">No image</span>
-                  )}
-                </div>
+                {/* Transaction ID — the canonical proof. Click to copy so the
+                    principal can paste it into bank/UPI statement search. */}
+                <button
+                  type="button"
+                  onClick={() => copyTxn(item.transactionId)}
+                  className="inline-flex items-center gap-1.5 mt-1.5 px-2 py-1 rounded-lg bg-blue-50 hover:bg-blue-100 border border-blue-200 transition-colors max-w-full"
+                  title="Copy transaction ID"
+                >
+                  <Hash size={11} className="text-blue-600 shrink-0" />
+                  <span className="font-mono text-[11px] font-bold text-blue-700 tracking-wide truncate">
+                    {item.transactionId}
+                  </span>
+                  <Copy size={10} className="text-blue-400 shrink-0" />
+                </button>
                 {item.reviewerNote && (
                   <p className="text-[10px] font-medium text-slate-400 italic mt-1">
                     Note: {item.reviewerNote}
@@ -198,28 +182,6 @@ export const FeePaymentSubmissionsQueue: React.FC = () => {
           </li>
         ))}
       </ul>
-
-      {previewUrl && (
-        <div
-          className="fixed inset-0 bg-black/80 z-50 flex items-center justify-center p-4"
-          onClick={() => setPreviewUrl(null)}
-        >
-          <button
-            type="button"
-            onClick={(e) => { e.stopPropagation(); setPreviewUrl(null); }}
-            className="absolute top-4 right-4 bg-white/10 text-white rounded-full p-2"
-            aria-label="Close screenshot"
-          >
-            <X size={20} />
-          </button>
-          <img
-            src={previewUrl}
-            alt="Fee payment screenshot"
-            className="max-w-full max-h-full rounded-2xl object-contain"
-            onClick={(e) => e.stopPropagation()}
-          />
-        </div>
-      )}
     </div>
   );
 };

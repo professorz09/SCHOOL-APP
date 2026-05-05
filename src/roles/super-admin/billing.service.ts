@@ -12,9 +12,28 @@ import {
   PaymentAllocationLine,
 } from '@/roles/super-admin/billing.types';
 import { BillingPlan, PLAN_PRICES } from '@/shared/config/constants';
+import { platformSettings, DEFAULT_PLAN_PRICING, PlanPricing } from '@/roles/super-admin/platformSettings.service';
 
 // Back-compat re-export — older call sites import this name from the service.
+// Stays static so synchronous UI labels still work; the billing flows below
+// fetch the live overrides from `platform_settings` before stamping amounts.
 export const ANNUAL_PLAN_PRICES = PLAN_PRICES;
+
+let _pricingCache: PlanPricing | null = null;
+let _pricingFetchedAt = 0;
+const PRICING_TTL_MS = 60_000;
+async function getLivePricing(): Promise<PlanPricing> {
+  const fresh = Date.now() - _pricingFetchedAt < PRICING_TTL_MS;
+  if (_pricingCache && fresh) return _pricingCache;
+  try {
+    const all = await platformSettings.getAll();
+    _pricingCache = all.pricing;
+    _pricingFetchedAt = Date.now();
+    return all.pricing;
+  } catch {
+    return DEFAULT_PLAN_PRICING;
+  }
+}
 
 interface ScheduleRow {
   school_id: string;
@@ -285,6 +304,15 @@ export const billingService = {
     return latest ? yearRowToBillingYear(latest as unknown as YearRow) : null;
   },
 
+  /** Auto-rollover: ensure every school's latest billing year covers today.
+   *  Idempotent — RPC is a no-op for already-current schools. Called on
+   *  every super-admin billing fetch so manual "Create next year" clicks
+   *  are no longer required for the common case. */
+  async ensureBillingYearsUpToDate(): Promise<void> {
+    const { error } = await supabase.rpc('ensure_billing_years_up_to_date');
+    if (error) throw new Error(error.message);
+  },
+
   async createNextYear(schoolId: string, _carriedForward: number): Promise<BillingYear> {
     // Server computes the carry-forward from the latest year's outstanding
     // (negative outstanding = advance credit). The argument is preserved for
@@ -323,7 +351,8 @@ export const billingService = {
     }
 
     // Otherwise create from scratch (rare path: schedule was deleted out-of-band).
-    const annualAmount = customAmount ?? PLAN_PRICES[plan];
+    const livePricing = await getLivePricing();
+    const annualAmount = customAmount ?? livePricing[plan];
     const { data: schedule, error: sErr } = await supabase
       .from('school_billing_schedules')
       .insert({
@@ -362,7 +391,8 @@ export const billingService = {
     plan: BillingPlan,
     customAmount?: number,
   ): Promise<void> {
-    const annualAmount = customAmount ?? PLAN_PRICES[plan];
+    const livePricing = await getLivePricing();
+    const annualAmount = customAmount ?? livePricing[plan];
     const { error } = await supabase
       .from('school_billing_schedules')
       .update({

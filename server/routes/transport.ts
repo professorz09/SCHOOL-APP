@@ -96,13 +96,26 @@ async function addFlatTransportSchedule(
 
 // ─── Routes ───────────────────────────────────────────────────────────────────
 
+// Helper: assert a student belongs to the caller's school.
+async function assertStudentInSchool(studentId: string, schoolId: string): Promise<void> {
+  const { data } = await adminDb
+    .from('students')
+    .select('id')
+    .eq('id', studentId)
+    .eq('school_id', schoolId)
+    .maybeSingle();
+  if (!data) throw new ApiError(404, 'Student not found');
+}
+
 // GET /api/transport/student/:studentId
 transportRouter.get('/student/:studentId', requireAuth, requireRole('PRINCIPAL', 'DRIVER', 'PARENT'), async (req, res) => {
   try {
+    const studentId = String(req.params.studentId);
+    await assertStudentInSchool(studentId, req.user.school_id!);
     const { data, error } = await adminDb
       .from('student_transport_assignments')
       .select('*, transport_vehicles(id, vehicle_no, route_name), route_stops(id, name, estimated_time)')
-      .eq('student_id', req.params.studentId)
+      .eq('student_id', studentId)
       .order('start_date', { ascending: false });
     if (error) throw new ApiError(500, error.message);
     ok(res, data);
@@ -128,17 +141,61 @@ transportRouter.get('/vehicles', requireAuth, requireRole('PRINCIPAL', 'DRIVER')
 // POST /api/transport/vehicles/add
 transportRouter.post('/vehicles/add', requireAuth, requireRole('PRINCIPAL'), async (req, res) => {
   try {
+    // routeName is optional — the principal labels routes later via stops/add.
+    // Previously this required a non-empty routeName, which silently rejected
+    // every "Add Vehicle" submission from the UI (the form sends an empty
+    // string by design).
     const body = requireBody<{
-      vehicleNo: string; type: string; capacity: number; routeName: string;
-    }>(req, ['vehicleNo', 'type', 'capacity', 'routeName']);
+      vehicleNo: string; type: string; capacity: number; routeName?: string;
+    }>(req, ['vehicleNo', 'type', 'capacity']);
+
+    // If the same vehicle_no exists for this school but is_active=false
+    // (soft-deleted), reactivate instead of failing on the global UNIQUE
+    // constraint — gives the UI an idempotent "add" experience.
+    const { data: existing } = await adminDb
+      .from('transport_vehicles')
+      .select('id, school_id, is_active')
+      .eq('vehicle_no', body.vehicleNo)
+      .maybeSingle();
+    if (existing) {
+      const ex = existing as { id: string; school_id: string; is_active: boolean };
+      if (ex.school_id !== req.user.school_id) {
+        throw new ApiError(409, `Vehicle number ${body.vehicleNo} is already registered to another school`);
+      }
+      if (ex.is_active) {
+        throw new ApiError(409, `Vehicle ${body.vehicleNo} already exists`);
+      }
+      const { data: revived, error: revErr } = await adminDb
+        .from('transport_vehicles')
+        .update({
+          is_active: true,
+          type:       body.type,
+          capacity:   body.capacity,
+          route_name: body.routeName ?? '',
+          updated_at: new Date().toISOString(),
+        })
+        .eq('id', ex.id)
+        .select('id, vehicle_no, type, capacity, route_name, driver_id, driver_name, driver_phone, is_active')
+        .single();
+      if (revErr) throw new ApiError(500, revErr.message);
+      ok(res, revived, 200);
+      return;
+    }
+
     const { data, error } = await adminDb.from('transport_vehicles').insert({
       school_id:  req.user.school_id!,
       vehicle_no: body.vehicleNo,
       type:       body.type,
       capacity:   body.capacity,
-      route_name: body.routeName,
+      route_name: body.routeName ?? '',
     }).select('id, vehicle_no, type, capacity, route_name, driver_id, driver_name, driver_phone, is_active').single();
-    if (error) throw new ApiError(500, error.message);
+    if (error) {
+      // Map the unique-violation 23505 to a friendly message.
+      if (/duplicate key|unique/i.test(error.message)) {
+        throw new ApiError(409, `Vehicle number ${body.vehicleNo} already exists`);
+      }
+      throw new ApiError(500, error.message);
+    }
     ok(res, data, 201);
   } catch (err) { fail(res, err); }
 });
@@ -170,6 +227,28 @@ transportRouter.post('/vehicles/deactivate', requireAuth, requireRole('PRINCIPAL
 
 // ─── Stop CRUD ────────────────────────────────────────────────────────────────
 
+// Helper: assert a vehicle belongs to the caller's school.
+async function assertVehicleInSchool(vehicleId: string, schoolId: string): Promise<void> {
+  const { data } = await adminDb
+    .from('transport_vehicles')
+    .select('id')
+    .eq('id', vehicleId)
+    .eq('school_id', schoolId)
+    .maybeSingle();
+  if (!data) throw new ApiError(404, 'Vehicle not found');
+}
+
+// Helper: assert a stop's vehicle belongs to the caller's school.
+async function assertStopInSchool(stopId: string, schoolId: string): Promise<void> {
+  const { data } = await adminDb
+    .from('route_stops')
+    .select('id, transport_vehicles!inner(school_id)')
+    .eq('id', stopId)
+    .eq('transport_vehicles.school_id', schoolId)
+    .maybeSingle();
+  if (!data) throw new ApiError(404, 'Stop not found');
+}
+
 // POST /api/transport/stops/add
 transportRouter.post('/stops/add', requireAuth, requireRole('PRINCIPAL'), async (req, res) => {
   try {
@@ -177,6 +256,7 @@ transportRouter.post('/stops/add', requireAuth, requireRole('PRINCIPAL'), async 
       vehicleId: string; name: string; estimatedTime: string;
       lat?: number; lng?: number; sortOrder?: number;
     }>(req, ['vehicleId', 'name', 'estimatedTime']);
+    await assertVehicleInSchool(body.vehicleId, req.user.school_id!);
     const { data, error } = await adminDb.from('route_stops').insert({
       vehicle_id:     body.vehicleId,
       name:           body.name,
@@ -196,6 +276,7 @@ transportRouter.post('/stops/update', requireAuth, requireRole('PRINCIPAL'), asy
     const body = requireBody<{
       stopId: string; patch: Record<string, unknown>;
     }>(req, ['stopId', 'patch']);
+    await assertStopInSchool(body.stopId, req.user.school_id!);
     const safe: Record<string, unknown> = {};
     if (body.patch.name !== undefined)          safe.name           = body.patch.name;
     if (body.patch.estimatedTime !== undefined) safe.estimated_time = body.patch.estimatedTime;
@@ -211,6 +292,7 @@ transportRouter.post('/stops/update', requireAuth, requireRole('PRINCIPAL'), asy
 transportRouter.post('/stops/remove', requireAuth, requireRole('PRINCIPAL'), async (req, res) => {
   try {
     const { stopId } = requireBody<{ stopId: string }>(req, ['stopId']);
+    await assertStopInSchool(stopId, req.user.school_id!);
     const { error } = await adminDb.from('route_stops').delete().eq('id', stopId);
     if (error) throw new ApiError(500, error.message);
     ok(res, { stopId });
@@ -225,6 +307,10 @@ transportRouter.post('/assign', requireAuth, requireRole('PRINCIPAL'), async (re
       monthlyAmount: number; startDate: string; academicYearId: string;
       endDate?: string; reason?: string; feeStructureId?: string;
     }>(req, ['studentId', 'vehicleId', 'stopId', 'monthlyAmount', 'startDate', 'academicYearId']);
+
+    await assertStudentInSchool(body.studentId, req.user.school_id!);
+    await assertVehicleInSchool(body.vehicleId, req.user.school_id!);
+    await assertStopInSchool(body.stopId, req.user.school_id!);
 
     // 1. Snapshot prior active assignment for rollback
     const { data: priorRow } = await adminDb
@@ -317,6 +403,8 @@ transportRouter.post('/remove', requireAuth, requireRole('PRINCIPAL'), async (re
     const body = requireBody<{
       studentId: string; endDate: string; reason?: string;
     }>(req, ['studentId', 'endDate']);
+
+    await assertStudentInSchool(body.studentId, req.user.school_id!);
 
     const { data: active } = await adminDb
       .from('student_transport_assignments')

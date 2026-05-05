@@ -1,10 +1,12 @@
 import React, { useEffect, useState, useCallback } from 'react';
 import {
-  ArrowLeft, Pin, ChevronDown, ChevronUp, BookOpen,
+  ArrowLeft, Pin, ChevronDown, ChevronUp, BookOpen, Megaphone,
 } from 'lucide-react';
 import { studentDashboardService } from '@/modules/students/studentDashboard.service';
 import { StudentNotice } from '@/roles/student/student-role.types';
 import { useRealtimeTable } from '@/shared/hooks/useRealtimeTable';
+import { getRelevantBroadcasts, type RelevantBroadcast } from '@/shared/utils/broadcasts.service';
+import { useAuthStore } from '@/store/authStore';
 
 interface Props { onBack: () => void; }
 
@@ -54,29 +56,57 @@ const NoticeCard: React.FC<{ notice: StudentNotice }> = ({ notice }) => {
   );
 };
 
+/* ── Platform-broadcast card (super-admin → schools) ──────────────── */
+const BroadcastCard: React.FC<{ b: RelevantBroadcast }> = ({ b }) => {
+  const [open, setOpen] = useState(false);
+  return (
+    <div className="bg-gradient-to-br from-indigo-50 to-violet-50 rounded-2xl border border-indigo-200 shadow-sm overflow-hidden">
+      <div className="px-4 pt-3.5 pb-3">
+        <div className="flex items-center gap-2 mb-1.5">
+          <Megaphone size={11} className="text-indigo-600 shrink-0" />
+          <span className="text-[9px] font-black px-2 py-0.5 rounded-full border uppercase text-indigo-700 bg-white border-indigo-200">
+            Announcement
+          </span>
+          <span className="ml-auto text-[10px] font-bold text-indigo-500 shrink-0">
+            {b.sentAt ? new Date(b.sentAt).toLocaleDateString('en-IN', { day: '2-digit', month: 'short' }) : '—'}
+          </span>
+        </div>
+        <div className="font-black text-slate-900 text-sm leading-tight mb-2">{b.title}</div>
+        <button onClick={() => setOpen(o => !o)}
+          className="flex items-center gap-1 text-[10px] font-black text-indigo-600 uppercase tracking-wide">
+          {open ? <ChevronUp size={12}/> : <ChevronDown size={12}/>}
+          {open ? 'Hide' : 'Read More'}
+        </button>
+        {open && (
+          <div className="mt-2 bg-white/60 rounded-xl p-3 border border-indigo-100">
+            <p className="text-xs font-medium text-slate-700 leading-relaxed whitespace-pre-line">{b.body}</p>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+};
+
 /* ── Main Component ─────────────────────────────────── */
 export const StudentNoticesView: React.FC<Props> = ({ onBack }) => {
+  const role = useAuthStore(s => s.session?.role ?? '');
   const [notices, setNotices] = useState<StudentNotice[]>([]);
+  const [broadcasts, setBroadcasts] = useState<RelevantBroadcast[]>([]);
   const [filter, setFilter]   = useState<FilterKey>('ALL');
 
   const loadAll = useCallback(() => {
     studentDashboardService.getNotices().then(setNotices);
-  }, []);
+    getRelevantBroadcasts(role).then(setBroadcasts).catch(() => setBroadcasts([]));
+  }, [role]);
 
   useEffect(() => { loadAll(); }, [loadAll]);
 
   useRealtimeTable('notices', loadAll);
+  useRealtimeTable('broadcasts', loadAll, { schoolColumn: false });
 
   const filtered = filter === 'ALL'
     ? notices
     : notices.filter(n => (n.category ?? 'GENERAL').toUpperCase() === filter);
-
-  const counts = {
-    ALL:      notices.length,
-    HOMEWORK: notices.filter(n => n.category === 'HOMEWORK').length,
-    EXAM:     notices.filter(n => n.category === 'EXAM').length,
-    GENERAL:  notices.filter(n => !['HOMEWORK', 'EXAM'].includes(n.category ?? '')).length,
-  };
 
   const FILTER_TABS: { key: FilterKey; label: string }[] = [
     { key: 'ALL',      label: 'All' },
@@ -98,23 +128,37 @@ export const StudentNoticesView: React.FC<Props> = ({ onBack }) => {
           </div>
         </div>
 
+        {/* Filter pills — labels only. Earlier each pill carried a count
+            badge ("HOMEWORK 0", "EXAM 12") which clipped on narrow phones
+            once the number got to 2-3 digits. The total count already
+            shows in the header subtitle, so per-tab counts are redundant. */}
         <div className="flex gap-2 lg:gap-3 lg:max-w-5xl lg:mx-auto lg:w-full">
           {FILTER_TABS.map(t => (
             <button key={t.key} onClick={() => setFilter(t.key)}
-              className={`flex-1 flex items-center justify-center gap-1.5 py-1.5 lg:py-2.5 rounded-xl text-[10px] lg:text-xs font-black uppercase tracking-widest transition-colors ${
+              className={`flex-1 py-1.5 lg:py-2.5 rounded-xl text-[10px] lg:text-xs font-black uppercase tracking-widest transition-colors ${
                 filter === t.key ? 'bg-slate-900 text-white' : 'bg-white text-slate-400 border border-slate-200 hover:border-slate-300'
               }`}>
               {t.label}
-              <span className={`text-[9px] lg:text-[10px] font-black px-1.5 py-0.5 rounded-full ${filter === t.key ? 'bg-white/20 text-white' : 'bg-slate-100 text-slate-500'}`}>
-                {counts[t.key]}
-              </span>
             </button>
           ))}
         </div>
       </div>
 
-      <div className="flex-1 overflow-y-auto p-4 lg:p-8 lg:max-w-5xl lg:mx-auto lg:w-full">
-        {filtered.length === 0 ? (
+      <div className="flex-1 overflow-y-auto p-4 lg:p-8 lg:max-w-5xl lg:mx-auto lg:w-full space-y-4">
+        {/* Platform announcements (super-admin → schools). Shown only on
+            the ALL filter so the role-specific category tabs stay clean. */}
+        {filter === 'ALL' && broadcasts.length > 0 && (
+          <div>
+            <p className="text-[10px] font-black uppercase tracking-widest text-indigo-500 mb-2 px-1">
+              Platform Announcements
+            </p>
+            <div className="grid grid-cols-1 lg:grid-cols-2 gap-3 lg:gap-4">
+              {broadcasts.map(b => <BroadcastCard key={b.id} b={b} />)}
+            </div>
+          </div>
+        )}
+
+        {filtered.length === 0 && (filter !== 'ALL' || broadcasts.length === 0) ? (
           <div className="flex flex-col items-center py-20 text-slate-400">
             <BookOpen size={32} className="mb-3 opacity-40"/>
             <p className="font-bold text-sm">Nothing here</p>

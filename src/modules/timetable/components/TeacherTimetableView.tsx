@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { ArrowLeft, Clock, MapPin, BookOpen } from 'lucide-react';
+import { ArrowLeft, Clock, MapPin, BookOpen, Coffee, Sparkles } from 'lucide-react';
 import { teacherService } from '@/roles/teacher/teacher.service';
 import { useAuthStore } from '@/store/authStore';
 
@@ -8,6 +8,11 @@ interface Props { onBack: () => void; }
 type TDay = 'Monday' | 'Tuesday' | 'Wednesday' | 'Thursday' | 'Friday' | 'Saturday';
 const DAYS: TDay[] = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
 
+const DAY_SHORT: Record<TDay, string> = {
+  Monday: 'Mon', Tuesday: 'Tue', Wednesday: 'Wed',
+  Thursday: 'Thu', Friday: 'Fri', Saturday: 'Sat',
+};
+
 interface RawEntry {
   id: string; classId: string; className: string; section: string;
   day: string; slotId: string; subject: string; room: string;
@@ -15,37 +20,8 @@ interface RawEntry {
 
 interface Slot {
   slotId: string; label: string; startTime: string; endTime: string;
+  type: string; sortOrder: number;
 }
-
-// Build the date for each weekday of the current week (Mon–Sat)
-const buildWeekDates = (): Record<TDay, { date: string; dayNum: number; monthShort: string }> => {
-  const today = new Date();
-  const dow = today.getDay(); // 0=Sun
-  const map = {} as Record<TDay, { date: string; dayNum: number; monthShort: string }>;
-  for (let i = 0; i < 6; i++) {
-    const d = new Date(today);
-    d.setDate(today.getDate() + (i + 1 - (dow === 0 ? 7 : dow)));
-    map[DAYS[i]] = {
-      date: d.toISOString().split('T')[0],
-      dayNum: d.getDate(),
-      monthShort: d.toLocaleDateString('en-IN', { month: 'short' }),
-    };
-  }
-  return map;
-};
-
-const WEEK_DATES = buildWeekDates();
-
-const todayDayName = (): TDay => {
-  const days = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
-  const n = days[new Date().getDay()];
-  return (n === 'Sunday' ? 'Monday' : n) as TDay;
-};
-
-const DAY_SHORT: Record<TDay, string> = {
-  Monday: 'Mon', Tuesday: 'Tue', Wednesday: 'Wed',
-  Thursday: 'Thu', Friday: 'Fri', Saturday: 'Sat',
-};
 
 const fmtTime = (t: string) => {
   const [h, m] = t.split(':').map(Number);
@@ -62,10 +38,16 @@ const isCurrentPeriod = (startTime: string, endTime: string): boolean => {
   return nowMins >= sh * 60 + sm && nowMins < eh * 60 + em;
 };
 
-const periodDuration = (startTime: string, endTime: string): number => {
-  const [sh, sm] = startTime.split(':').map(Number);
+const isPast = (endTime: string): boolean => {
+  const now = new Date();
   const [eh, em] = endTime.split(':').map(Number);
-  return (eh * 60 + em) - (sh * 60 + sm);
+  return now.getHours() * 60 + now.getMinutes() > eh * 60 + em;
+};
+
+const todayDayName = (): TDay => {
+  const days = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
+  const n = days[new Date().getDay()];
+  return (n === 'Sunday' ? 'Monday' : n) as TDay;
 };
 
 export const TeacherTimetableView: React.FC<Props> = ({ onBack }) => {
@@ -90,6 +72,7 @@ export const TeacherTimetableView: React.FC<Props> = ({ onBack }) => {
         setSlots(periods.map(p => ({
           slotId: p.slotId, label: p.label,
           startTime: p.startTime, endTime: p.endTime,
+          type: p.type, sortOrder: p.sortOrder,
         })));
       } finally {
         if (!cancelled) setIsLoading(false);
@@ -98,18 +81,22 @@ export const TeacherTimetableView: React.FC<Props> = ({ onBack }) => {
     return () => { cancelled = true; };
   }, []);
 
-  // Scroll today's card into view
+  // Center today's pill in the day strip on first paint.
   useEffect(() => {
     if (!stripRef.current) return;
     const todayEl = stripRef.current.querySelector('[data-today="true"]');
     if (todayEl) (todayEl as HTMLElement).scrollIntoView({ behavior: 'auto', inline: 'center', block: 'nearest' });
   }, [isLoading]);
 
-  const slotMap = useMemo(() => {
-    const m = new Map<string, Slot>();
-    for (const s of slots) m.set(s.slotId, s);
+  // Map slotId → entry for the active day, so we can build a complete
+  // timeline (every slot, even ones the teacher doesn't teach).
+  const entriesBySlot = useMemo(() => {
+    const m = new Map<string, RawEntry>();
+    for (const e of entries) {
+      if (e.day === activeDay) m.set(e.slotId, e);
+    }
     return m;
-  }, [slots]);
+  }, [entries, activeDay]);
 
   const dayCounts = useMemo(() => {
     const m: Record<string, number> = {};
@@ -117,198 +104,209 @@ export const TeacherTimetableView: React.FC<Props> = ({ onBack }) => {
     return m;
   }, [entries]);
 
-  const dayEntries = useMemo(() =>
-    entries
-      .filter(e => e.day === activeDay)
-      .map(e => ({ ...e, slot: slotMap.get(e.slotId) }))
-      .filter((e): e is RawEntry & { slot: Slot } => !!e.slot)
-      .sort((a, b) => a.slot.startTime.localeCompare(b.slot.startTime)),
-    [entries, activeDay, slotMap],
+  // Slots in time-order. Each gets either an entry, a fixed-type label
+  // (BREAK/LUNCH/ASSEMBLY), or "Free" for class slots without an entry.
+  const orderedSlots = useMemo(() =>
+    [...slots].sort((a, b) => a.startTime.localeCompare(b.startTime)),
+    [slots],
   );
 
   const teacherName = session?.name ?? 'Teacher';
+  const teacherInitials = teacherName.split(' ').map(w => w[0]).join('').slice(0, 2).toUpperCase();
+
+  const todayTeachingCount = dayCounts[todayDay] ?? 0;
 
   return (
-    <div className="w-full bg-slate-50 flex flex-col animate-in slide-in-from-right-8 duration-300">
+    <div className="w-full bg-slate-50 flex flex-col animate-in slide-in-from-right-8 duration-300 min-h-screen">
 
-      {/* ── Header ── */}
-      <div className="bg-white border-b border-slate-100 px-4 pt-4 pb-4 sticky top-0 z-10 shadow-sm">
-        <div className="flex items-center gap-3 mb-4">
-          <button onClick={onBack} className="p-2 -ml-2 bg-slate-100 rounded-full text-slate-600">
+      {/* ── Header ─────────────────────────────────────────────────────── */}
+      <div className="bg-white border-b border-slate-100 px-4 lg:px-8 pt-4 lg:pt-6 pb-3 lg:pb-4 sticky top-0 z-10 shadow-sm">
+        <div className="flex items-center gap-3 mb-4 lg:max-w-5xl lg:mx-auto lg:w-full">
+          <button onClick={onBack} className="p-2 -ml-2 bg-slate-100 rounded-full text-slate-600 hover:bg-slate-200 transition-colors">
             <ArrowLeft size={20} />
           </button>
-          <div>
-            <h2 className="text-xl font-black text-slate-900 uppercase tracking-tight">My Timetable</h2>
-            <p className="text-[10px] font-bold text-slate-400">{teacherName} · {entries.length} periods this week</p>
+          <div className="w-10 h-10 rounded-full bg-blue-100 text-blue-600 border-2 border-blue-200 flex items-center justify-center font-black text-sm shrink-0">
+            {teacherInitials}
+          </div>
+          <div className="flex-1 min-w-0">
+            <h2 className="text-xl lg:text-2xl font-black text-slate-900 uppercase tracking-tight leading-none">
+              My Timetable
+            </h2>
+            <p className="text-[10px] lg:text-xs font-bold text-slate-400 mt-1">
+              {todayTeachingCount} period{todayTeachingCount === 1 ? '' : 's'} today · {entries.length} this week
+            </p>
           </div>
         </div>
 
         {/* ── Day strip ── */}
-        <div ref={stripRef} className="flex gap-2.5 overflow-x-auto hide-scrollbar pb-0.5">
+        <div ref={stripRef} className="flex gap-2 overflow-x-auto hide-scrollbar lg:max-w-5xl lg:mx-auto lg:w-full pb-1">
           {DAYS.map(day => {
-            const isToday   = day === todayDay;
-            const isActive  = day === activeDay;
-            const count     = dayCounts[day] ?? 0;
-
+            const isToday  = day === todayDay;
+            const isActive = day === activeDay;
+            const count    = dayCounts[day] ?? 0;
             return (
               <button
                 key={day}
                 data-today={isToday}
                 onClick={() => setActiveDay(day)}
-                className={`flex-shrink-0 flex flex-col items-center px-3 pt-2.5 pb-2 rounded-2xl min-w-[60px] transition-all active:scale-95 ${
+                className={`shrink-0 flex flex-col items-center px-5 py-3 rounded-2xl min-w-[80px] transition-all active:scale-95 ${
                   isActive
-                    ? 'bg-indigo-600 shadow-lg shadow-indigo-200'
+                    ? 'bg-blue-600 text-white shadow-md shadow-blue-200'
                     : isToday
-                    ? 'bg-indigo-50 border border-indigo-200'
-                    : 'bg-slate-50 border border-slate-100'
+                      ? 'bg-blue-50 text-blue-700 border border-blue-200'
+                      : 'bg-slate-50 text-slate-600 border border-slate-100'
                 }`}
               >
-                {/* Day short name */}
-                <span className={`text-[10px] font-black uppercase tracking-widest ${
-                  isActive ? 'text-indigo-200' : isToday ? 'text-indigo-500' : 'text-slate-400'
-                }`}>
+                <span className="text-sm font-black uppercase tracking-widest leading-none">
                   {DAY_SHORT[day]}
                 </span>
-
-                {/* Date number — big */}
-                <span className={`text-2xl font-black leading-none mt-0.5 ${
-                  isActive ? 'text-white' : isToday ? 'text-indigo-700' : 'text-slate-800'
-                }`}>
-                  {WEEK_DATES[day].dayNum}
-                </span>
-
-                {/* Month */}
-                <span className={`text-[9px] font-bold mt-0.5 ${
-                  isActive ? 'text-indigo-200' : isToday ? 'text-indigo-400' : 'text-slate-400'
-                }`}>
-                  {WEEK_DATES[day].monthShort}
-                </span>
-
-                {/* Period count badge */}
-                <div className={`mt-1.5 min-w-[18px] h-[18px] flex items-center justify-center rounded-full text-[9px] font-black ${
+                <span className={`text-[9px] font-black mt-1.5 leading-none ${
                   count === 0
-                    ? isActive ? 'bg-white/10 text-white/50' : 'bg-slate-100 text-slate-300'
-                    : isActive ? 'bg-white text-indigo-600' : 'bg-indigo-100 text-indigo-600'
+                    ? isActive ? 'text-blue-200' : 'text-slate-300'
+                    : isActive ? 'text-blue-100' : isToday ? 'text-blue-500' : 'text-slate-400'
                 }`}>
-                  {count}
-                </div>
+                  {count > 0 ? `${count} cls` : '—'}
+                </span>
               </button>
             );
           })}
         </div>
       </div>
 
-      {/* ── Period list ── */}
-      <div className="flex-1 overflow-y-auto p-4 space-y-3">
+      {/* ── Timeline ───────────────────────────────────────────────────── */}
+      <div className="flex-1 overflow-y-auto p-4 lg:p-8 lg:max-w-5xl lg:mx-auto lg:w-full space-y-2">
         {isLoading ? (
-          <div className="flex flex-col items-center py-16 text-slate-400">
-            <div className="w-8 h-8 border-4 border-slate-200 border-t-indigo-500 rounded-full animate-spin mb-3" />
+          <div className="flex flex-col items-center py-20 text-slate-400">
+            <div className="w-8 h-8 border-2 border-slate-200 border-t-blue-500 rounded-full animate-spin mb-3" />
             <p className="font-bold text-sm">Loading…</p>
           </div>
-        ) : dayEntries.length === 0 ? (
-          <div className="flex flex-col items-center py-16 text-slate-400">
-            <BookOpen size={40} className="mb-3 opacity-30" />
-            <p className="font-bold text-sm">No classes on {activeDay}</p>
-            <p className="text-xs mt-1 opacity-60">
-              {activeDay === 'Saturday' ? 'Weekend — enjoy the break!' : 'Free day this week'}
-            </p>
+        ) : orderedSlots.length === 0 ? (
+          <div className="bg-white rounded-2xl border border-slate-100 shadow-sm p-10 text-center">
+            <BookOpen size={32} className="mx-auto mb-3 text-slate-300" />
+            <p className="text-sm font-black text-slate-500">No periods set up</p>
+            <p className="text-[11px] font-bold text-slate-400 mt-1">Ask the principal to configure period slots first.</p>
           </div>
         ) : (
-          dayEntries.map((entry, idx) => {
-            const live = activeDay === todayDay && isCurrentPeriod(entry.slot.startTime, entry.slot.endTime);
-            const dur  = periodDuration(entry.slot.startTime, entry.slot.endTime);
-            return (
-              <div key={entry.id} className={`rounded-2xl border overflow-hidden transition-all ${
-                live ? 'border-blue-300 shadow-lg shadow-blue-100' : 'border-slate-100 shadow-sm'
-              }`}>
-                {/* Top accent strip + time row */}
-                <div className={`flex items-center justify-between px-4 py-2.5 ${
-                  live ? 'bg-blue-500' : 'bg-indigo-600'
-                }`}>
-                  <div className="flex items-center gap-2">
-                    <Clock size={11} className="text-white/70" />
-                    <span className="text-[11px] font-black text-white">
-                      {fmtTime(entry.slot.startTime)} – {fmtTime(entry.slot.endTime)}
-                    </span>
-                    <span className="text-[9px] font-bold text-white/50">{entry.slot.label}</span>
-                  </div>
-                  <div className="flex items-center gap-2">
-                    {live && (
-                      <span className="text-[8px] font-black bg-white text-blue-600 px-2 py-0.5 rounded-full uppercase animate-pulse">
-                        Live
-                      </span>
-                    )}
-                    <span className="text-[9px] font-black text-white/70">{dur} min</span>
-                  </div>
-                </div>
+          <>
+            <p className="text-[10px] lg:text-xs font-black uppercase tracking-widest text-slate-400 px-1 mb-3">
+              {activeDay} schedule
+            </p>
 
-                {/* Period body */}
-                <div className={`px-4 py-3 flex items-center gap-3 ${live ? 'bg-blue-50' : 'bg-white'}`}>
-                  {/* Period index circle */}
-                  <div className={`w-9 h-9 rounded-xl flex items-center justify-center shrink-0 font-black text-sm ${
-                    live ? 'bg-blue-100 text-blue-600' : 'bg-indigo-50 text-indigo-600'
-                  }`}>
-                    {idx + 1}
-                  </div>
+            {/* Vertical timeline rail. Each slot gets a dot on the left rail
+                (color-coded by status) connected by a continuous line. The
+                card body lives to the right. */}
+            <div className="relative pl-8 lg:pl-10">
+              <div className="absolute left-3 lg:left-4 top-1.5 bottom-1.5 w-px bg-slate-200" />
 
-                  <div className="flex-1 min-w-0">
-                    <div className={`font-black text-base truncate ${live ? 'text-blue-900' : 'text-slate-900'}`}>
-                      {entry.subject || 'Class'}
-                    </div>
-                    <div className="flex items-center gap-2 mt-1 flex-wrap">
-                      <span className={`text-[10px] font-black px-2 py-0.5 rounded-full ${
-                        live ? 'bg-blue-100 text-blue-700' : 'bg-slate-100 text-slate-600'
-                      }`}>
-                        {entry.className}-{entry.section}
-                      </span>
-                      {entry.room && (
-                        <span className="flex items-center gap-1 text-[10px] font-bold text-slate-400">
-                          <MapPin size={9} /> {entry.room}
-                        </span>
-                      )}
-                    </div>
-                  </div>
-                </div>
-              </div>
-            );
-          })
-        )}
+              <div className="space-y-3">
+                {orderedSlots.map(slot => {
+                  const entry = entriesBySlot.get(slot.slotId);
+                  const isFixed = slot.type === 'BREAK' || slot.type === 'LUNCH' || slot.type === 'ASSEMBLY';
+                  const hasClass = !!entry;
+                  const live = activeDay === todayDay && isCurrentPeriod(slot.startTime, slot.endTime);
+                  const past = activeDay === todayDay && isPast(slot.endTime);
 
-        {/* ── Weekly summary card ── */}
-        {!isLoading && (
-          <div className="bg-white rounded-2xl border border-slate-100 shadow-sm p-4 mt-2">
-            <p className="text-[9px] font-black uppercase tracking-widest text-slate-400 mb-3">Weekly Load</p>
-            <div className="space-y-2.5">
-              {DAYS.map(day => {
-                const count   = dayCounts[day] ?? 0;
-                const isToday = day === todayDay;
-                const maxPeriods = Math.max(...DAYS.map(d => dayCounts[d] ?? 0), 1);
-                return (
-                  <button key={day} onClick={() => setActiveDay(day)}
-                    className="w-full flex items-center gap-3 active:scale-[0.98] transition-transform">
-                    <span className={`text-[10px] font-black w-8 shrink-0 ${
-                      isToday ? 'text-indigo-600' : 'text-slate-500'
-                    }`}>
-                      {DAY_SHORT[day]}
-                    </span>
-                    <div className="flex-1 bg-slate-100 rounded-full h-2.5 overflow-hidden">
+                  const dotColor = live
+                    ? 'bg-emerald-500 ring-emerald-100'
+                    : hasClass
+                      ? 'bg-blue-500 ring-blue-100'
+                      : isFixed
+                        ? slot.type === 'LUNCH'
+                          ? 'bg-amber-400 ring-amber-100'
+                          : 'bg-violet-400 ring-violet-100'
+                        : 'bg-slate-300 ring-slate-100';
+                  const cardClass = live
+                    ? 'bg-emerald-50/40 border-emerald-200'
+                    : hasClass
+                      ? 'bg-white border-slate-100'
+                      : isFixed
+                        ? 'bg-amber-50/30 border-amber-100'
+                        : 'bg-slate-50 border-slate-100';
+                  const dimmed = past && !live;
+
+                  return (
+                    <div key={slot.slotId} className="relative">
+                      {/* Dot on the rail */}
                       <div
-                        className={`h-2.5 rounded-full transition-all ${
-                          activeDay === day ? 'bg-indigo-500' : isToday ? 'bg-indigo-300' : 'bg-slate-300'
-                        }`}
-                        style={{ width: count > 0 ? `${Math.round((count / maxPeriods) * 100)}%` : '4px' }}
+                        className={`absolute -left-[26px] lg:-left-[28px] top-3 w-4 h-4 rounded-full ring-4 ${dotColor} ${live ? 'animate-pulse' : ''}`}
                       />
+                      {/* Card */}
+                      <div className={`rounded-2xl border shadow-sm overflow-hidden ${cardClass} ${dimmed ? 'opacity-60' : ''}`}>
+                        <div className="px-3 lg:px-4 py-3 flex items-center gap-3 lg:gap-4">
+                          {/* Time block */}
+                          <div className="shrink-0 w-20 lg:w-24">
+                            <div className="text-[11px] lg:text-xs font-black text-slate-900 leading-none">
+                              {fmtTime(slot.startTime)}
+                            </div>
+                            <div className="text-[10px] lg:text-[11px] font-bold text-slate-400 leading-none mt-1">
+                              {fmtTime(slot.endTime)}
+                            </div>
+                          </div>
+
+                          <div className="w-px self-stretch bg-slate-100" />
+
+                          {/* Body */}
+                          <div className="flex-1 min-w-0">
+                            {hasClass ? (
+                              <>
+                                <div className="font-black text-sm lg:text-base uppercase tracking-tight truncate text-slate-900">
+                                  {entry.subject || 'Class'}
+                                </div>
+                                <div className="flex items-center gap-2 lg:gap-3 mt-1 flex-wrap">
+                                  <span className="text-[10px] lg:text-[11px] font-black px-2 py-0.5 rounded-full bg-blue-50 text-blue-700 border border-blue-100">
+                                    {entry.className}-{entry.section}
+                                  </span>
+                                  {entry.room && (
+                                    <span className="flex items-center gap-1 text-[10px] lg:text-[11px] font-bold text-slate-500">
+                                      <MapPin size={10} /> {entry.room}
+                                    </span>
+                                  )}
+                                </div>
+                              </>
+                            ) : isFixed ? (
+                              <>
+                                <div className="flex items-center gap-2 font-black text-sm lg:text-base uppercase tracking-tight text-slate-700">
+                                  {slot.type === 'LUNCH'
+                                    ? <Coffee size={14} className="text-amber-500" />
+                                    : <Sparkles size={14} className="text-violet-500" />}
+                                  {slot.label}
+                                </div>
+                                <div className="text-[10px] lg:text-[11px] font-bold text-slate-400 mt-1">
+                                  {slot.type === 'LUNCH' ? 'Lunch break' : slot.type === 'BREAK' ? 'Short break' : 'Assembly'}
+                                </div>
+                              </>
+                            ) : (
+                              <>
+                                <div className="font-black text-sm lg:text-base uppercase tracking-tight text-slate-400">
+                                  Free period
+                                </div>
+                                <div className="text-[10px] lg:text-[11px] font-bold text-slate-400 mt-1">
+                                  {slot.label} · No class assigned to you
+                                </div>
+                              </>
+                            )}
+                          </div>
+
+                          {/* Right badges */}
+                          <div className="shrink-0 flex items-center">
+                            {live ? (
+                              <span className="text-[9px] font-black bg-emerald-500 text-white px-2.5 py-1 rounded-full uppercase tracking-widest animate-pulse">
+                                Live
+                              </span>
+                            ) : past ? (
+                              <span className="text-[9px] font-black text-slate-400 uppercase tracking-widest">
+                                Done
+                              </span>
+                            ) : null}
+                          </div>
+                        </div>
+                      </div>
                     </div>
-                    <span className={`text-[10px] font-black w-5 text-right shrink-0 ${
-                      count > 0 ? 'text-slate-600' : 'text-slate-300'
-                    }`}>
-                      {count}
-                    </span>
-                  </button>
-                );
-              })}
+                  );
+                })}
+              </div>
             </div>
-          </div>
+          </>
         )}
       </div>
     </div>
