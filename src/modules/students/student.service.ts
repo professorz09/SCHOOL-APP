@@ -469,13 +469,13 @@ export const studentService = {
     // Complaints filed by/about this student in this year.
     const { data: comps } = await supabase
       .from('complaints')
-      .select('id, subject, description, status, created_at, resolved_at, response, from_role, from_name')
+      .select('id, subject, description, status, created_at, resolved_at, response, from_role, from_name, is_anonymous')
       .eq('from_user_id', studentId)
       .order('created_at', { ascending: false });
     const complaints = ((comps ?? []) as Array<{
       id: string; subject: string; description: string | null; status: string;
       created_at: string; resolved_at: string | null; response: string | null;
-      from_role: string; from_name: string | null;
+      from_role: string; from_name: string | null; is_anonymous: boolean | null;
     }>).map(c => {
       // Defensive mapping: legacy OPEN/IN_PROGRESS rows still exist on
       // pre-0033 environments. Migration 0033 backfills them.
@@ -488,16 +488,18 @@ export const studentService = {
         status = raw as import('@/roles/principal/principal.types').ComplaintStatus;
       } else status = 'PENDING';
 
+      const anon = c.is_anonymous === true;
       return {
         id: c.id,
         from: (c.from_role === 'TEACHER' || c.from_role === 'PARENT' ? c.from_role : 'STUDENT') as 'STUDENT' | 'TEACHER' | 'PARENT',
-        fromName: c.from_name ?? '',
+        fromName: anon ? 'Anonymous' : (c.from_name ?? ''),
         subject: c.subject,
         description: c.description ?? '',
         status,
         createdAt: c.created_at,
         resolvedAt: c.resolved_at,
         response: c.response,
+        isAnonymous: anon,
       };
     });
 

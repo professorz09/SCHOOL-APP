@@ -231,54 +231,45 @@ export const StudentAttendanceManager: React.FC<Props> = ({ onBack }) => {
     return gridDetails[date]?.[stuId] ?? null;
   };
 
+  // Cell tap → cycle status. Two prior issues:
+  //   1. The "Tap Edit" toast fired on every tap when edit mode was off,
+  //      stacking duplicate toasts. Silent no-op now — the blue banner
+  //      and the disabled cell styling already convey the state.
+  //   2. Locked records bounced the user to a "Records" page that no
+  //      longer exists. With Editor Mode on, we now allow the cell to
+  //      cycle and the save handler routes through /update-students
+  //      with a reason prompt. Without Editor Mode it stays read-only,
+  //      again silently — the lock icon in the header already explains.
   const toggleCell = (date: string, stuId: string) => {
-    // Edit-mode gate — see gridEditMode comment. On mobile every accidental
-    // tap was cycling status; this prevents that. The first tap when off
-    // shows a toast nudge instead of cycling.
-    if (!gridEditMode) {
-      showToast('Tap "Edit" at the top to start marking', 'info');
-      return;
-    }
-    if (date > todayStr()) {
-      showToast('Future date — attendance can only be marked for today or past dates', 'error');
-      return;
-    }
+    if (!gridEditMode) return;
+    if (date > todayStr()) return;
     const rec = recordMap[date];
-    if (rec?.isLocked) {
-      showToast(
-        editorModeActive
-          ? 'Locked dates: open Records → Edit to make a correction with a reason.'
-          : 'Locked. Enable Editor Mode in Settings, then edit via Records.',
-        'error',
-      );
-      return;
-    }
+    if (rec?.isLocked && !editorModeActive) return;
     setEditBuffer(prev => {
       const cur = prev[date]?.[stuId] ?? gridDetails[date]?.[stuId] ?? 'present';
       return { ...prev, [date]: { ...(prev[date] ?? {}), [stuId]: NEXT_STATUS(cur) } };
     });
   };
 
+  // Bulk button tap. Same silent-no-op rule as toggleCell — header /
+  // banner already explain the gate; toasts here just stacked noise.
   const bulkSetDate = (date: string, status: AttendanceCellStatus) => {
-    if (!gridEditMode) {
-      showToast('Tap "Edit" at the top to start marking', 'info');
-      return;
-    }
-    if (date > todayStr()) {
-      showToast('Future date — not editable', 'error');
-      return;
-    }
+    if (!gridEditMode) return;
+    if (date > todayStr()) return;
     const rec = recordMap[date];
-    if (rec?.isLocked) {
-      showToast('Locked. Open Records → Edit (Editor Mode required).', 'error');
-      return;
-    }
+    if (rec?.isLocked && !editorModeActive) return;
     const entries: Record<string, AttendanceCellStatus> = {};
     for (const s of gridStudents) entries[s.id] = status;
     setEditBuffer(prev => ({ ...prev, [date]: entries }));
   };
 
-  // Submit edits for a date (saved as PENDING; principal can approve separately)
+  // Submit edits for a date. Two paths:
+  //   • Date has no record yet (or unlocked) → /submit creates+locks it.
+  //   • Date already has a locked record → /update-students with a reason
+  //     (Editor Mode is required server-side, the toggleCell guard already
+  //     enforces it client-side). Earlier this routed everything through
+  //     /submit, which the server rejected for locked records — that's why
+  //     grid edits silently failed.
   const saveDate = async (date: string) => {
     if (!editGuard.canEdit) {
       showToast('Year closed — enable Correction Mode first', 'error'); return;
@@ -286,6 +277,13 @@ export const StudentAttendanceManager: React.FC<Props> = ({ onBack }) => {
     if (!sectionId) { showToast('Section not resolved — reload the grid', 'error'); return; }
     const edits = editBuffer[date];
     if (!edits || Object.keys(edits).length === 0) return;
+    const rec = recordMap[date];
+    const isLockedEdit = !!rec?.isLocked;
+
+    if (isLockedEdit && !editorModeActive) {
+      showToast('Locked — enable Editor Mode in Settings first', 'error'); return;
+    }
+
     const stuRecords: import('@/modules/attendance/attendance.service').AttendanceStudentRecord[] =
       gridStudents.map(s => ({
         id: s.id,
@@ -294,21 +292,30 @@ export const StudentAttendanceManager: React.FC<Props> = ({ onBack }) => {
         isPresent: (edits[s.id] ?? gridDetails[date]?.[s.id] ?? 'present') !== 'absent',
         status: edits[s.id] ?? gridDetails[date]?.[s.id] ?? 'present' as AttendanceCellStatus,
       }));
+
+    let reason: string | undefined;
+    if (isLockedEdit) {
+      const r = window.prompt('Reason for editing this locked date:')?.trim();
+      if (!r) return;
+      reason = r;
+    }
+
     setIsSubmitting(true);
     try {
       const result = await editGuard.gate(
-        () => sharedAttendance.submitSection(sectionId, date, stuRecords),
+        // Cast to void so the gate's union return type stays uniform —
+        // submitSection returns { attendanceId } whereas updateStudents
+        // returns void; we don't need the attendanceId here either way.
+        async () => {
+          if (isLockedEdit && rec) await sharedAttendance.updateStudents(rec.id, stuRecords, reason);
+          else                     await sharedAttendance.submitSection(sectionId, date, stuRecords);
+        },
         { entityType: 'student_attendance', entityId: `${gridClass}/${gridSection}/${date}` },
       );
       if (result === undefined) return;
-      // Server auto-approves & locks when the principal hits this endpoint
-      // directly, so the toast reflects the final state instead of the old
-      // "pending approval" half-truth.
-      showToast(`Attendance saved & approved for ${new Date(date).getDate()}/${new Date(date).getMonth() + 1}`);
+      showToast(`Attendance saved for ${new Date(date).getDate()}/${new Date(date).getMonth() + 1}`);
       setEditBuffer(prev => {
         const n = { ...prev }; delete n[date];
-        // Auto-leave edit mode once nothing is pending — back to the safe
-        // "tap-doesn't-do-anything" view to prevent accidental changes.
         if (Object.keys(n).length === 0) setGridEditMode(false);
         return n;
       });
@@ -799,12 +806,17 @@ export const StudentAttendanceManager: React.FC<Props> = ({ onBack }) => {
                       const rec = recordMap[d];
                       const isLocked = !!rec?.isLocked;
                       const isFuture = d > todayStr();
+                      // Show bulk pills when the column is editable. With
+                      // Editor Mode on, locked columns are editable too —
+                      // a bulk press queues the change and saveDate routes
+                      // it through /update-students with a reason prompt.
+                      const showBulk = !isFuture && (!isLocked || editorModeActive);
                       return (
                         <th key={d} className="border-b border-r border-slate-100 px-0.5 py-1 text-center">
                           {isFuture ? (
                             <span className="text-[8px] font-black text-slate-300">·</span>
-                          ) : isLocked ? (
-                            <Lock size={8} className="mx-auto text-emerald-400" title="Locked — edit via Records tab (Editor Mode)"/>
+                          ) : !showBulk ? (
+                            <Lock size={8} className="mx-auto text-emerald-400" title="Locked · enable Editor Mode to edit"/>
                           ) : (
                             <div className="flex flex-col gap-0.5 items-center">
                               {(['present','absent','holiday'] as AttendanceCellStatus[]).map(s => (
@@ -846,22 +858,27 @@ export const StudentAttendanceManager: React.FC<Props> = ({ onBack }) => {
                           const st = cellStatus(d, stu.id);
                           const locked = !!rec?.isLocked;
                           const isFuture = d > todayStr();
+                          // A locked cell is only "frozen" when Editor Mode
+                          // is OFF. With Editor Mode on, the principal can
+                          // tap to cycle and saveDate routes the change
+                          // through /update-students with a reason prompt.
+                          const editable = !isFuture && (!locked || editorModeActive);
                           const bg = st ? CELL_BG[st] : 'bg-slate-100 text-slate-300';
                           return (
                             <td key={d}
                               className={`border-b border-r border-slate-100 text-center px-0.5 py-1 ${
                                 isFuture ? 'cursor-not-allowed bg-slate-50/60' :
-                                locked ? 'cursor-not-allowed bg-slate-50/40' :
-                                         'cursor-pointer active:scale-90'
+                                !editable ? 'cursor-not-allowed bg-slate-50/40' :
+                                            'cursor-pointer active:scale-90'
                               }`}
                               onClick={() => toggleCell(d, stu.id)}
                               title={
                                 isFuture ? 'Future date — not editable' :
                                 locked
-                                  ? `Locked${rec?.markedByName ? ` · marked by ${rec.markedByName}` : ''} · enable Editor Mode to edit`
+                                  ? `Locked${rec?.markedByName ? ` · marked by ${rec.markedByName}` : ''}${editorModeActive ? ' · tap to edit' : ' · enable Editor Mode to edit'}`
                                   : rec?.markedByName ? `Marked by ${rec.markedByName}` : undefined
                               }>
-                              <span className={`inline-flex items-center justify-center w-7 h-7 rounded-lg text-[9px] font-black transition-colors ${bg} ${locked || isFuture ? 'opacity-30' : ''}`}>
+                              <span className={`inline-flex items-center justify-center w-7 h-7 rounded-lg text-[9px] font-black transition-colors ${bg} ${(!editable || isFuture) ? 'opacity-30' : ''}`}>
                                 {st ? CELL_LABEL[st] : isFuture ? '·' : '—'}
                               </span>
                             </td>
@@ -1009,35 +1026,71 @@ export const StudentAttendanceManager: React.FC<Props> = ({ onBack }) => {
               </div>
             </div>
           )}
-          {markStudents.length > 0 && (
-            <>
-              {/* Bulk shortcuts hidden when the record is locked + no editor
-                  mode — the principal can only review, not flip statuses. */}
-              {(!markConflict || editorModeActive) && (
-                <div className="flex gap-2">
-                  <button onClick={() => setMarkStudents(prev => prev.map(s => ({ ...s, isPresent: true, status: 'present' as AttendanceCellStatus })))}
-                    className="flex-1 py-2 bg-emerald-500 text-white text-[10px] font-black rounded-xl">All Present</button>
-                  <button onClick={() => setMarkStudents(prev => prev.map(s => ({ ...s, isPresent: false, status: 'absent' as AttendanceCellStatus })))}
-                    className="flex-1 py-2 bg-rose-500 text-white text-[10px] font-black rounded-xl">All Absent</button>
+          {markStudents.length > 0 && (() => {
+            // Three-way bulk: Present / Absent / Holiday. Holiday is a
+            // whole-day mode — when active every student row is forced to
+            // 'holiday' and per-row tapping is disabled (the day is
+            // closed). The user's flow: tap Holiday → save, no per-row
+            // marking needed. Toggling back to All Present/Absent restores
+            // normal interaction.
+            const isAllHoliday = markStudents.every(s => s.status === 'holiday');
+            const interactive  = !markConflict || editorModeActive;
+            return (
+              <>
+                {interactive && (
+                  <div className="grid grid-cols-3 gap-2">
+                    <button onClick={() => setMarkStudents(prev => prev.map(s => ({ ...s, isPresent: true, status: 'present' as AttendanceCellStatus })))}
+                      className="py-2 bg-emerald-500 text-white text-[10px] font-black rounded-xl">All Present</button>
+                    <button onClick={() => setMarkStudents(prev => prev.map(s => ({ ...s, isPresent: false, status: 'absent' as AttendanceCellStatus })))}
+                      className="py-2 bg-rose-500 text-white text-[10px] font-black rounded-xl">All Absent</button>
+                    <button onClick={() => setMarkStudents(prev => prev.map(s => ({ ...s, isPresent: false, status: 'holiday' as AttendanceCellStatus })))}
+                      className={`py-2 text-[10px] font-black rounded-xl border-2 transition-colors ${
+                        isAllHoliday
+                          ? 'bg-slate-700 text-white border-slate-700'
+                          : 'bg-slate-100 text-slate-600 border-slate-200'
+                      }`}>
+                      Holiday
+                    </button>
+                  </div>
+                )}
+                {isAllHoliday && (
+                  <div className="bg-slate-100 border border-slate-200 rounded-2xl p-3 text-center">
+                    <p className="text-[11px] font-black text-slate-700">Holiday for all students</p>
+                    <p className="text-[10px] font-bold text-slate-500 mt-0.5">Tap All Present or All Absent to switch back to per-student marking.</p>
+                  </div>
+                )}
+                <div className="bg-white rounded-2xl border border-slate-100 shadow-sm overflow-hidden">
+                  {markStudents.map((s, idx) => {
+                    const rowBg =
+                      s.status === 'holiday' ? 'bg-slate-50' :
+                      s.status === 'absent'  ? 'bg-rose-50/50' :
+                                               'bg-emerald-50/50';
+                    const chip =
+                      s.status === 'holiday'
+                        ? <span className="text-[10px] font-black text-slate-700 bg-slate-200 px-2.5 py-1 rounded-lg">HOLIDAY</span>
+                        : s.status === 'absent'
+                          ? <span className="text-[10px] font-black text-rose-700 bg-rose-100 px-2.5 py-1 rounded-lg">ABSENT</span>
+                          : <span className="text-[10px] font-black text-emerald-700 bg-emerald-100 px-2.5 py-1 rounded-lg">PRESENT</span>;
+                    // In holiday mode, per-row tap is a no-op (the day is
+                    // collectively closed). To split a holiday day apart,
+                    // hit All Present / All Absent first.
+                    return (
+                      <button key={s.id}
+                        onClick={() => { if (s.status !== 'holiday') toggleMarkStudent(s.id); }}
+                        disabled={s.status === 'holiday'}
+                        className={`w-full flex items-center gap-3 px-4 py-3.5 text-left ${idx < markStudents.length - 1 ? 'border-b border-slate-100' : ''} ${rowBg} ${s.status === 'holiday' ? 'cursor-default' : ''}`}>
+                        <div className="flex-1">
+                          <div className="font-bold text-slate-900 text-sm">{s.name}</div>
+                          <div className="text-[10px] font-bold text-slate-400">Roll {s.rollNo.padStart(2,'0')}</div>
+                        </div>
+                        {chip}
+                      </button>
+                    );
+                  })}
                 </div>
-              )}
-              <div className="bg-white rounded-2xl border border-slate-100 shadow-sm overflow-hidden">
-                {markStudents.map((s, idx) => (
-                  <button key={s.id} onClick={() => toggleMarkStudent(s.id)}
-                    className={`w-full flex items-center gap-3 px-4 py-3.5 text-left ${idx < markStudents.length - 1 ? 'border-b border-slate-100' : ''} ${s.isPresent ? 'bg-emerald-50/50' : 'bg-rose-50/50'}`}>
-                    <div className="flex-1">
-                      <div className="font-bold text-slate-900 text-sm">{s.name}</div>
-                      <div className="text-[10px] font-bold text-slate-400">Roll {s.rollNo.padStart(2,'0')}</div>
-                    </div>
-                    {s.isPresent
-                      ? <span className="text-[10px] font-black text-emerald-700 bg-emerald-100 px-2.5 py-1 rounded-lg">PRESENT</span>
-                      : <span className="text-[10px] font-black text-rose-700 bg-rose-100 px-2.5 py-1 rounded-lg">ABSENT</span>
-                    }
-                  </button>
-                ))}
-              </div>
-            </>
-          )}
+              </>
+            );
+          })()}
         </div>
         <div className="fixed bottom-16 left-0 right-0 lg:sticky lg:left-auto lg:right-auto lg:bottom-0 p-4 lg:p-6 bg-white border-t border-slate-100 z-30 lg:rounded-t-2xl lg:shadow-lg">
           <button onClick={submitMark} disabled={!canSubmit || isSubmitting}

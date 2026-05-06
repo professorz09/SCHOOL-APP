@@ -112,7 +112,7 @@ export const StudentLayout: React.FC = () => {
   if (view === 'COMPLAINTS')  return <StudentComplaintsView onBack={goBack} />;
   if (view === 'ATTENDANCE')  return <AttendanceView        onBack={goBack} />;
   if (view === 'LEAVE')       return ctx
-    ? <StudentLeaveView onBack={goBack} studentId={ctx.studentId} />
+    ? <StudentLeaveView onBack={goBack} studentId={ctx.studentId} studentName={ctx.studentName} />
     : <div className="p-6 text-sm text-slate-400">Loading…</div>;
   if (view === 'PROFILE')     return <StudentProfileView    onBack={goBack} />;
 

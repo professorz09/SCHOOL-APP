@@ -1,5 +1,5 @@
-import React, { useEffect } from 'react';
-import { ArrowLeft, History, ShieldCheck, Building2, IndianRupee, MailPlus, Server, Shield } from 'lucide-react';
+import React, { useEffect, useMemo, useState } from 'react';
+import { ArrowLeft, History, ShieldCheck, Building2, IndianRupee, MailPlus, Server, Shield, Search, Download, X } from 'lucide-react';
 import { useLogsStore } from '@/roles/super-admin/logsStore';
 import { useUIStore } from '@/store/uiStore';
 import { LogType } from '@/shared/config/constants';
@@ -22,11 +22,69 @@ export const LogsViewer: React.FC<Props> = ({ onBack }) => {
   const { logs, isLoading, activeFilter, fetchLogs, setFilter } = useLogsStore();
   const { showToast } = useUIStore();
 
+  // Free-text search (action / entity / performer) and a simple date range.
+  // Both filters are client-side so they layer on top of the existing type
+  // chip without touching the store or service.
+  const [search, setSearch] = useState('');
+  const [fromDate, setFromDate] = useState('');
+  const [toDate, setToDate] = useState('');
+
   useEffect(() => {
     fetchLogs().catch(e => showToast(e instanceof Error ? e.message : 'Failed to load logs', 'error'));
   }, []);
 
-  const visible = activeFilter === 'ALL' ? logs : logs.filter(l => l.entityType === activeFilter);
+  const visible = useMemo(() => {
+    let out = activeFilter === 'ALL' ? logs : logs.filter(l => l.entityType === activeFilter);
+    if (search.trim()) {
+      const q = search.toLowerCase();
+      out = out.filter(l =>
+        l.action.toLowerCase().includes(q) ||
+        l.entity.toLowerCase().includes(q) ||
+        l.performedBy.toLowerCase().includes(q),
+      );
+    }
+    // Timestamp is a free-form display string from the service. We only
+    // filter by date when the row's timestamp parses to a real Date — rows
+    // with relative strings ("2 min ago") fall through unchanged.
+    if (fromDate || toDate) {
+      const fromTs = fromDate ? new Date(fromDate).getTime() : -Infinity;
+      const toTs = toDate ? new Date(toDate).getTime() + 86_399_000 : Infinity;
+      out = out.filter(l => {
+        const t = new Date(l.timestamp).getTime();
+        if (Number.isNaN(t)) return true;
+        return t >= fromTs && t <= toTs;
+      });
+    }
+    return out;
+  }, [logs, activeFilter, search, fromDate, toDate]);
+
+  const exportCsv = () => {
+    if (visible.length === 0) {
+      showToast('Nothing to export with current filters', 'error');
+      return;
+    }
+    // RFC 4180-ish escaping: wrap every field in quotes and double any
+    // embedded quote. Good enough for Excel + Google Sheets.
+    const esc = (v: string) => `"${v.replace(/"/g, '""')}"`;
+    const header = ['Timestamp', 'Type', 'Action', 'Entity', 'Performed By'].map(esc).join(',');
+    const rows = visible.map(l =>
+      [l.timestamp, l.entityType, l.action, l.entity, l.performedBy].map(esc).join(','),
+    );
+    const csv = [header, ...rows].join('\n');
+    const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `system-logs-${new Date().toISOString().slice(0, 10)}.csv`;
+    a.click();
+    URL.revokeObjectURL(url);
+    showToast(`Exported ${visible.length} entries`);
+  };
+
+  const hasActiveFilters = !!search || !!fromDate || !!toDate || activeFilter !== 'ALL';
+  const clearFilters = () => {
+    setSearch(''); setFromDate(''); setToDate(''); setFilter('ALL');
+  };
 
   return (
     <div className="w-full bg-slate-50 flex flex-col animate-in slide-in-from-right-8 duration-300">
@@ -37,8 +95,43 @@ export const LogsViewer: React.FC<Props> = ({ onBack }) => {
           </button>
           <h2 className="text-xl font-black text-slate-900 uppercase tracking-tight">System Logs</h2>
         </div>
-        <div className="text-[10px] font-black text-slate-500 bg-slate-100 px-3 py-1 rounded-full uppercase tracking-widest">
-          {visible.length} entries
+        <div className="flex items-center gap-2">
+          <div className="text-[10px] font-black text-slate-500 bg-slate-100 px-3 py-1 rounded-full uppercase tracking-widest">
+            {visible.length} entries
+          </div>
+          <button onClick={exportCsv}
+            className="flex items-center gap-1.5 px-3 py-1.5 bg-emerald-500 text-white rounded-full text-[10px] font-black uppercase tracking-widest shadow-sm hover:bg-emerald-600 transition-colors">
+            <Download size={12}/> CSV
+          </button>
+        </div>
+      </div>
+
+      {/* Search + date range */}
+      <div className="bg-white border-b border-slate-100 px-4 py-3 space-y-2">
+        <div className="relative">
+          <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400"/>
+          <input value={search} onChange={e => setSearch(e.target.value)}
+            placeholder="Search action, entity, or user…"
+            className="w-full bg-slate-50 border border-slate-200 rounded-xl pl-9 pr-9 py-2.5 font-bold text-sm outline-none focus:border-blue-500"/>
+          {search && (
+            <button onClick={() => setSearch('')}
+              className="absolute right-2 top-1/2 -translate-y-1/2 w-6 h-6 rounded-full bg-slate-200 flex items-center justify-center">
+              <X size={11} className="text-slate-600"/>
+            </button>
+          )}
+        </div>
+        <div className="flex items-center gap-2">
+          <input type="date" value={fromDate} onChange={e => setFromDate(e.target.value)}
+            className="flex-1 bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 font-bold text-xs outline-none focus:border-blue-500"/>
+          <span className="text-[10px] font-black text-slate-400">→</span>
+          <input type="date" value={toDate} onChange={e => setToDate(e.target.value)}
+            className="flex-1 bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 font-bold text-xs outline-none focus:border-blue-500"/>
+          {hasActiveFilters && (
+            <button onClick={clearFilters}
+              className="px-3 py-2 bg-slate-100 text-slate-600 rounded-xl text-[10px] font-black uppercase tracking-widest">
+              Reset
+            </button>
+          )}
         </div>
       </div>
 

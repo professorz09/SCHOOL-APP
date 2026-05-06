@@ -576,7 +576,7 @@ export const studentDashboardService = {
     const userId = getUserId();
     const { data, error } = await supabase
       .from('complaints')
-      .select('id, subject, description, status, created_at, response')
+      .select('id, subject, description, status, created_at, response, is_anonymous')
       .eq('from_user_id', userId)
       .order('created_at', { ascending: false });
     if (error) throw new Error(error.message);
@@ -584,6 +584,7 @@ export const studentDashboardService = {
     return ((data ?? []) as Array<{
       id: string; subject: string; description: string | null;
       status: string; created_at: string; response: string | null;
+      is_anonymous: boolean | null;
     }>).map(c => ({
       id: c.id,
       subject: c.subject,
@@ -591,10 +592,11 @@ export const studentDashboardService = {
       status: mapComplaintStatus(c.status),
       createdAt: c.created_at.slice(0, 10),
       response: c.response,
+      isAnonymous: c.is_anonymous === true,
     }));
   },
 
-  async submitComplaint(subject: string, description: string): Promise<StudentComplaint> {
+  async submitComplaint(subject: string, description: string, isAnonymous = false): Promise<StudentComplaint> {
     const ctx = await getStudentContext();
     const userId = getUserId();
     const role = getRole();
@@ -613,8 +615,9 @@ export const studentDashboardService = {
         subject,
         description,
         status: 'PENDING',
+        is_anonymous: isAnonymous,
       })
-      .select('id, subject, description, status, created_at, response').single();
+      .select('id, subject, description, status, created_at, response, is_anonymous').single();
     if (error) throw new Error(error.message);
 
     await logAudit(
@@ -627,6 +630,7 @@ export const studentDashboardService = {
     const r = data as {
       id: string; subject: string; description: string | null;
       status: string; created_at: string; response: string | null;
+      is_anonymous: boolean | null;
     };
     return {
       id: r.id,
@@ -635,6 +639,7 @@ export const studentDashboardService = {
       status: mapComplaintStatus(r.status),
       createdAt: r.created_at.slice(0, 10),
       response: r.response,
+      isAnonymous: r.is_anonymous === true,
     };
   },
 

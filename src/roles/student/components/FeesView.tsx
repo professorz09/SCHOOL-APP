@@ -168,7 +168,7 @@ export const FeesView: React.FC<Props> = ({ onBack }) => {
   };
 
   if (loading) return (
-    <div className="w-full bg-slate-50 flex flex-col animate-in slide-in-from-right-8 duration-300 min-h-[60vh] lg:min-h-[80vh]">
+    <div className="w-full lg:max-w-5xl lg:mx-auto bg-slate-50 flex flex-col animate-in slide-in-from-right-8 duration-300 min-h-[60vh] lg:min-h-[80vh]">
       <div className="sticky top-0 bg-white border-b border-slate-100 px-4 pt-4 pb-4 flex items-center gap-3 shadow-sm z-10">
         <button onClick={onBack} className="p-2 -ml-2 bg-slate-100 rounded-full">
           <ArrowLeft size={20} className="text-slate-600" />
@@ -185,7 +185,7 @@ export const FeesView: React.FC<Props> = ({ onBack }) => {
   );
 
   if (loadError) return (
-    <div className="w-full bg-slate-50 flex flex-col animate-in slide-in-from-right-8 duration-300 min-h-[60vh] lg:min-h-[80vh]">
+    <div className="w-full lg:max-w-5xl lg:mx-auto bg-slate-50 flex flex-col animate-in slide-in-from-right-8 duration-300 min-h-[60vh] lg:min-h-[80vh]">
       <div className="sticky top-0 bg-white border-b border-slate-100 px-4 pt-4 pb-4 flex items-center gap-3 shadow-sm z-10">
         <button onClick={onBack} className="p-2 -ml-2 bg-slate-100 rounded-full">
           <ArrowLeft size={20} className="text-slate-600" />
@@ -203,7 +203,7 @@ export const FeesView: React.FC<Props> = ({ onBack }) => {
 
   // ── QR Pay View ──────────────────────────────────────────────────────────
   if (view === 'QR_PAY') return (
-    <div className="w-full flex flex-col animate-in slide-in-from-right-8 duration-300">
+    <div className="w-full lg:max-w-5xl lg:mx-auto flex flex-col animate-in slide-in-from-right-8 duration-300">
       {/* Header */}
       <div className="sticky top-0 bg-white px-4 pt-4 pb-4 flex items-center gap-3 border-b border-slate-100 z-10">
         <button onClick={() => setView('MAIN')} className="p-2 -ml-2 bg-slate-100 rounded-full">
@@ -292,7 +292,7 @@ export const FeesView: React.FC<Props> = ({ onBack }) => {
 
   // ── Main View ────────────────────────────────────────────────────────────
   return (
-    <div className="w-full flex flex-col animate-in slide-in-from-right-8 duration-300">
+    <div className="w-full lg:max-w-5xl lg:mx-auto flex flex-col animate-in slide-in-from-right-8 duration-300">
       {/* Header */}
       <div className="sticky top-0 bg-white border-b border-slate-100 px-4 pt-4 pb-4 flex items-center gap-3 shadow-sm z-10">
         <button onClick={onBack} className="p-2 -ml-2 bg-slate-100 rounded-full">

@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { ArrowLeft, CheckSquare, CheckCircle2, XCircle, Clock, FileText } from 'lucide-react';
+import { ArrowLeft, CheckSquare, CheckCircle2, XCircle, FileText } from 'lucide-react';
 import { principalService } from '@/roles/principal/principal.service';
 import { Approval, ApprovalStatus } from '@/roles/principal/principal.types';
 import { useUIStore } from '@/store/uiStore';
@@ -25,7 +25,11 @@ export const ApprovalsManager: React.FC<Props> = ({ onBack }) => {
   const [rejectReason, setRejectReason] = useState('');
   const [showRejectForm, setShowRejectForm] = useState(false);
 
-  useEffect(() => { principalService.getApprovals().then(setApprovals); }, []);
+  useEffect(() => {
+    principalService.getApprovals()
+      .then(setApprovals)
+      .catch(e => showToast(e instanceof Error ? e.message : 'Failed to load approvals', 'error'));
+  }, [showToast]);
 
   const filtered = filter === 'ALL' ? approvals : approvals.filter(a => a.status === filter);
   const pendingCount = approvals.filter(a => a.status === 'PENDING').length;
@@ -38,6 +42,8 @@ export const ApprovalsManager: React.FC<Props> = ({ onBack }) => {
       setSelected(updated);
       setShowRejectForm(false);
       showToast('Request approved');
+    } catch (e) {
+      showToast(e instanceof Error ? e.message : 'Approval failed', 'error');
     } finally { setIsSubmitting(false); }
   };
 
@@ -51,6 +57,8 @@ export const ApprovalsManager: React.FC<Props> = ({ onBack }) => {
       setRejectReason('');
       setShowRejectForm(false);
       showToast('Request rejected', 'info');
+    } catch (e) {
+      showToast(e instanceof Error ? e.message : 'Rejection failed', 'error');
     } finally { setIsSubmitting(false); }
   };
 

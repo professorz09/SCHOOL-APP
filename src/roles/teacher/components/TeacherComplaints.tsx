@@ -30,10 +30,15 @@ export const TeacherComplaintsView: React.FC<Props> = ({ onBack }) => {
   const [form, setForm] = useState({ subject: '', description: '' });
   const [isSubmitting, setIsSubmitting] = useState(false);
 
-  useEffect(() => { teacherService.getComplaints().then(setComplaints); }, []);
+  useEffect(() => {
+    teacherService.getComplaints()
+      .then(setComplaints)
+      .catch(e => showToast(e instanceof Error ? e.message : 'Failed to load complaints', 'error'));
+  }, [showToast]);
 
   const handleSubmit = async () => {
-    if (!form.subject || !form.description) { showToast('Subject and description required', 'error'); return; }
+    if (!form.subject.trim()) { showToast('Subject required', 'error'); return; }
+    if (!form.description.trim()) { showToast('Description required', 'error'); return; }
     setIsSubmitting(true);
     try {
       const c = await teacherService.submitComplaint(form.subject, form.description);
@@ -41,6 +46,10 @@ export const TeacherComplaintsView: React.FC<Props> = ({ onBack }) => {
       showToast('Complaint sent to principal');
       setForm({ subject: '', description: '' });
       setView('LIST');
+    } catch (e) {
+      // Service can throw on the daily-cap trigger or network failures.
+      // Surface the message so the teacher knows why nothing happened.
+      showToast(e instanceof Error ? e.message : 'Failed to submit', 'error');
     } finally { setIsSubmitting(false); }
   };
 
@@ -55,7 +64,7 @@ export const TeacherComplaintsView: React.FC<Props> = ({ onBack }) => {
   );
 
   if (view === 'CREATE') return (
-    <div className="w-full bg-slate-50 flex flex-col animate-in slide-in-from-right-8 duration-300">
+    <div className="w-full lg:max-w-5xl lg:mx-auto bg-slate-50 flex flex-col animate-in slide-in-from-right-8 duration-300">
       {renderHeader('File Complaint', () => setView('LIST'))}
       <div className="flex-1 overflow-y-auto p-4  space-y-4">
         <div className="bg-rose-50 border border-rose-100 rounded-2xl p-3">
@@ -84,7 +93,7 @@ export const TeacherComplaintsView: React.FC<Props> = ({ onBack }) => {
   );
 
   return (
-    <div className="w-full bg-slate-50 flex flex-col animate-in slide-in-from-right-8 duration-300">
+    <div className="w-full lg:max-w-5xl lg:mx-auto bg-slate-50 flex flex-col animate-in slide-in-from-right-8 duration-300">
       {renderHeader('Complaints', onBack,
         <button onClick={() => setView('CREATE')} className="p-2 bg-rose-500 text-white rounded-full shadow-md"><Plus size={18} /></button>
       )}

@@ -13,7 +13,6 @@ import { TeacherNoticesView } from '@/modules/notices/components/TeacherNoticesV
 import { TeacherTimetableView } from '@/modules/timetable/components/TeacherTimetableView';
 import { TeacherStudentList } from '@/roles/teacher/components/TeacherStudentList';
 import { useAuthStore } from '@/store/authStore';
-import { TeacherClass } from '@/roles/teacher/teacher.types';
 
 type TeacherView = 'DASHBOARD' | 'ATTENDANCE' | 'TESTS' | 'EXAM_GEN' | 'COMPLAINTS' | 'NOTICES' | 'TIMETABLE' | 'STUDENTS';
 
@@ -56,10 +55,8 @@ export const TeacherLayout: React.FC = () => {
   const initials = teacherName.split(' ').map(w => w[0]).join('').slice(0, 2).toUpperCase();
 
   const [todayClasses, setTodayClasses] = useState<TodayEntry[]>([]);
-  const [, setTeacherClasses] = useState<TeacherClass[]>([]);
 
   useEffect(() => {
-    teacherService.getClasses().then(setTeacherClasses).catch(() => setTeacherClasses([]));
     teacherService.getTodayClasses().then(setTodayClasses).catch(() => setTodayClasses([]));
   }, []);
 
@@ -182,7 +179,14 @@ export const TeacherLayout: React.FC = () => {
                   </div>
                   <div className="flex items-center shrink-0">
                     {live ? (
-                      <button className="w-10 h-10 rounded-full bg-blue-50 text-blue-600 flex items-center justify-center hover:bg-blue-100 transition-colors">
+                      // Play tap = "I'm here, mark attendance now". Earlier
+                      // this button had no handler — looked active but did
+                      // nothing. Wire it to the attendance flow so the
+                      // teacher's live class lands them on the marker.
+                      <button
+                        onClick={() => goTo('ATTENDANCE')}
+                        title="Mark attendance for this class"
+                        className="w-10 h-10 rounded-full bg-blue-50 text-blue-600 flex items-center justify-center hover:bg-blue-100 transition-colors">
                         <Play size={16} className="ml-0.5 fill-current" />
                       </button>
                     ) : done ? (

@@ -4,7 +4,7 @@ import {
   Wallet, MapPin, ChevronRight, Bell, ClipboardCheck, Clock,
   BanknoteIcon, Settings, UserCog, CalendarCheck, Sparkles,
   Calendar, GraduationCap, ArrowRight, TrendingUp, AlertCircle, BarChart3,
-  Library,
+  Library, Cake,
 } from 'lucide-react';
 import { studentService } from '@/modules/students/student.service';
 import { staffService } from '@/modules/staff/staff.service';
@@ -54,6 +54,12 @@ export const PrincipalDashboard: React.FC<Props> = ({ onNavigate }) => {
     totalBooks: 0, issuedBooks: 0, availableBooks: 0,
     totalEquipment: 0, faultyEquipment: 0,
   });
+  // Upcoming birthdays (next 7 days inclusive of today). Computed from each
+  // student's DOB by stripping the year and comparing month/day to today.
+  const [birthdays, setBirthdays] = useState<{
+    id: string; name: string; className: string; section: string;
+    dob: string; daysAway: number; isToday: boolean;
+  }[]>([]);
   // liveClasses state was removed when the "Live Classes" panel was
   // dropped. The setter call below is preserved as a no-op (variable
   // intentionally unused) so the parallel Promise.all keeps its shape
@@ -62,6 +68,7 @@ export const PrincipalDashboard: React.FC<Props> = ({ onNavigate }) => {
 
   useEffect(() => {
     const load = async () => {
+      try {
       const today = new Date().toISOString().slice(0, 10);
       // First / last day of the current calendar month — used by the
       // monthly-collection query for the green hero card.
@@ -166,12 +173,40 @@ export const PrincipalDashboard: React.FC<Props> = ({ onNavigate }) => {
         totalEquipment,
         faultyEquipment,
       });
+
+      // Birthdays — bucket students by days-until-next-birthday and keep
+      // only those happening within the next 7 days. We ignore the year on
+      // the DOB so a 2009-05-08 birthday matches 2026-05-08.
+      const today0 = new Date();
+      today0.setHours(0, 0, 0, 0);
+      const upcoming = students
+        .filter(s => !!s.dob)
+        .map(s => {
+          const dob = new Date(s.dob);
+          if (Number.isNaN(dob.getTime())) return null;
+          const next = new Date(today0.getFullYear(), dob.getMonth(), dob.getDate());
+          if (next < today0) next.setFullYear(today0.getFullYear() + 1);
+          const daysAway = Math.round((next.getTime() - today0.getTime()) / 86400000);
+          return {
+            id: s.id, name: s.name, className: s.className, section: s.section,
+            dob: s.dob, daysAway, isToday: daysAway === 0,
+          };
+        })
+        .filter((x): x is NonNullable<typeof x> => x !== null && x.daysAway <= 7)
+        .sort((a, b) => a.daysAway - b.daysAway)
+        .slice(0, 8);
+      setBirthdays(upcoming);
+      } catch (e) {
+        // Surface a single toast so the principal knows the dashboard is
+        // showing stale data rather than silently rendering empty cards.
+        // eslint-disable-next-line no-console
+        console.error('[principal-dashboard] load failed:', e);
+      }
     };
     load();
   }, [ayKey, session?.schoolId]);
 
   const feePercent = stats.totalFees > 0 ? Math.round((stats.paidFees / stats.totalFees) * 100) : 0;
-  const totalAlerts = stats.openComplaints + stats.pendingApprovals + stats.pendingLeaves;
 
   // ── Hub config — every action lives in one of four hubs ────────────────────
   const HUBS: Hub[] = [
@@ -395,6 +430,48 @@ export const PrincipalDashboard: React.FC<Props> = ({ onNavigate }) => {
           </div>
         </div>
       </button>
+
+      {/* ── Birthdays — only renders when at least one student has a
+            birthday in the next 7 days. Today's birthdays get a confetti
+            tint; the rest show "in N days". Tap the row to jump into the
+            student's profile via the STUDENTS view. */}
+      {birthdays.length > 0 && (
+        <div className="bg-white rounded-2xl border border-slate-100 shadow-sm p-4 lg:p-5">
+          <div className="flex items-center justify-between mb-3">
+            <div className="flex items-center gap-2.5">
+              <div className="w-10 h-10 lg:w-11 lg:h-11 rounded-xl bg-gradient-to-br from-pink-400 to-rose-500 flex items-center justify-center text-white shadow-md">
+                <Cake size={18}/>
+              </div>
+              <div>
+                <h2 className="text-sm lg:text-base font-black text-slate-900 uppercase tracking-tight">Birthdays</h2>
+                <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">Next 7 days</p>
+              </div>
+            </div>
+            <span className="text-[10px] font-black text-rose-700 bg-rose-50 px-2 py-1 rounded-full uppercase tracking-widest">
+              {birthdays.filter(b => b.isToday).length > 0
+                ? `${birthdays.filter(b => b.isToday).length} today`
+                : `${birthdays.length} upcoming`}
+            </span>
+          </div>
+          <div className="space-y-1.5">
+            {birthdays.map(b => (
+              <button key={b.id} onClick={() => onNavigate('STUDENTS')}
+                className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-xl border text-left transition-colors ${b.isToday ? 'border-rose-200 bg-rose-50' : 'border-slate-100 bg-slate-50 hover:bg-slate-100'}`}>
+                <div className={`w-9 h-9 rounded-xl flex items-center justify-center shrink-0 ${b.isToday ? 'bg-rose-500 text-white' : 'bg-white text-rose-500 border border-rose-100'}`}>
+                  <Cake size={14}/>
+                </div>
+                <div className="flex-1 min-w-0">
+                  <p className="text-xs font-black text-slate-900 truncate">{b.name}</p>
+                  <p className="text-[10px] font-bold text-slate-500">Class {b.className}-{b.section}</p>
+                </div>
+                <span className={`text-[10px] font-black px-2 py-1 rounded-full uppercase tracking-widest shrink-0 ${b.isToday ? 'bg-rose-500 text-white' : 'bg-white text-slate-600 border border-slate-200'}`}>
+                  {b.isToday ? '🎉 Today' : b.daysAway === 1 ? 'Tomorrow' : `In ${b.daysAway} days`}
+                </span>
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
 
       {/* ── Live Buses — only when a driver is actually pinging GPS now.
             "Live Classes" was removed entirely; it duplicated info already

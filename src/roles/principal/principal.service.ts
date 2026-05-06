@@ -81,9 +81,10 @@ interface ComplaintRow {
   response: string | null;
   created_at: string;
   resolved_at: string | null;
+  is_anonymous: boolean | null;
 }
 
-const COMPLAINT_FIELDS = 'id, from_role, from_name, from_class, subject, description, status, response, created_at, resolved_at';
+const COMPLAINT_FIELDS = 'id, from_role, from_name, from_class, subject, description, status, response, created_at, resolved_at, is_anonymous';
 
 function rowToComplaint(r: ComplaintRow): Complaint {
   // Map legacy DB values onto the canonical status set used by the UI.
@@ -99,17 +100,22 @@ function rowToComplaint(r: ComplaintRow): Complaint {
     status = rawStatus as Complaint['status'];
   } else status = 'PENDING';
 
+  // For anonymous rows we hard-mask identity at the boundary so a stale UI
+  // can never accidentally render the name. The DB still keeps from_name /
+  // from_class populated for audit, but they don't leave the service.
+  const anon = r.is_anonymous === true;
   return {
     id: r.id,
     from: (r.from_role as Complaint['from']) ?? 'STUDENT',
-    fromName: r.from_name ?? '',
-    fromClass: r.from_class ?? undefined,
+    fromName: anon ? 'Anonymous' : (r.from_name ?? ''),
+    fromClass: anon ? undefined : (r.from_class ?? undefined),
     subject: r.subject,
     description: r.description ?? '',
     status,
     createdAt: r.created_at.slice(0, 10),
     resolvedAt: r.resolved_at ? r.resolved_at.slice(0, 10) : null,
     response: r.response,
+    isAnonymous: anon,
   };
 }
 

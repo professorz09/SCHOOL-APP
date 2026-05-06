@@ -89,13 +89,27 @@ export const AnalyticsManager: React.FC<Props> = ({ onBack }) => {
   const { showToast } = useUIStore();
   const { currentYear } = useAcademicYear();
 
-  // Default range = current academic year (or last 12 months if no year)
+  // Default range = current academic year (or last 12 months if no year).
+  // currentYear loads asynchronously from context, so the initial mount may
+  // see undefined — we fall back to a 12-month window and then sync once
+  // currentYear arrives.
   const today = new Date();
   const defaultFrom = currentYear?.startDate ?? new Date(today.getFullYear(), today.getMonth() - 11, 1).toISOString().slice(0, 10);
   const defaultTo   = currentYear?.endDate   ?? today.toISOString().slice(0, 10);
 
   const [from, setFrom] = useState(defaultFrom);
   const [to,   setTo]   = useState(defaultTo);
+  // Track whether the user has manually picked a date so a late-arriving
+  // currentYear doesn't blow away their selection.
+  const [userTouchedRange, setUserTouchedRange] = useState(false);
+
+  useEffect(() => {
+    if (userTouchedRange) return;
+    if (currentYear?.startDate && currentYear?.endDate) {
+      setFrom(currentYear.startDate);
+      setTo(currentYear.endDate);
+    }
+  }, [currentYear?.startDate, currentYear?.endDate, userTouchedRange]);
   const [data, setData] = useState<AnalyticsData | null>(null);
   const [loading, setLoading] = useState(true);
   const [exporting, setExporting] = useState(false);
@@ -268,6 +282,7 @@ export const AnalyticsManager: React.FC<Props> = ({ onBack }) => {
 
   // Quick range presets
   const setPreset = (preset: 'YEAR' | 'M3' | 'M1' | 'TODAY') => {
+    setUserTouchedRange(true);
     const t = new Date();
     if (preset === 'YEAR') {
       setFrom(currentYear?.startDate ?? new Date(t.getFullYear(), 0, 1).toISOString().slice(0, 10));
@@ -316,12 +331,12 @@ export const AnalyticsManager: React.FC<Props> = ({ onBack }) => {
         <div className="flex flex-wrap items-end gap-3">
           <div>
             <label className="text-[9px] font-black uppercase tracking-widest text-slate-400 mb-1 block">From</label>
-            <input type="date" value={from} onChange={e => setFrom(e.target.value)}
+            <input type="date" value={from} onChange={e => { setUserTouchedRange(true); setFrom(e.target.value); }}
               className="border border-slate-200 bg-slate-50 rounded-xl px-3 py-2 text-xs font-bold text-slate-800 focus:outline-none focus:border-blue-400"/>
           </div>
           <div>
             <label className="text-[9px] font-black uppercase tracking-widest text-slate-400 mb-1 block">To</label>
-            <input type="date" value={to} onChange={e => setTo(e.target.value)}
+            <input type="date" value={to} onChange={e => { setUserTouchedRange(true); setTo(e.target.value); }}
               className="border border-slate-200 bg-slate-50 rounded-xl px-3 py-2 text-xs font-bold text-slate-800 focus:outline-none focus:border-blue-400"/>
           </div>
           <div className="flex gap-1.5">

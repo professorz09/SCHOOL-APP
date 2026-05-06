@@ -147,6 +147,19 @@ export const StudentProfileView: React.FC<Props> = ({ onBack }) => {
     if (!isParentWithMultiKids) { setLinkedChildren([]); return; }
     let cancelled = false;
     (async () => {
+      // Look up the school's active academic year first so we render each
+      // child's CURRENT class label, not whatever AR row Postgres happened
+      // to return first. ctx.schoolId is already resolved for the active
+      // student; all linked siblings share the same school.
+      const schoolId = ctx?.schoolId ?? null;
+      let activeYearId: string | null = null;
+      if (schoolId) {
+        const { data: yr } = await supabase
+          .from('academic_years').select('id')
+          .eq('school_id', schoolId).eq('is_active', true).maybeSingle();
+        activeYearId = (yr as { id: string } | null)?.id ?? null;
+      }
+
       const { data } = await supabase
         .from('students')
         .select('id, name, student_academic_records(class_name, section, academic_year_id)')
@@ -154,17 +167,23 @@ export const StudentProfileView: React.FC<Props> = ({ onBack }) => {
       if (cancelled) return;
       type Row = { id: string; name: string; student_academic_records: Array<{ class_name: string | null; section: string | null; academic_year_id: string }> };
       const list = ((data ?? []) as unknown as Row[]).map(r => {
-        // Use the AR row matching the school's active year if available, else the first one.
-        const ar = r.student_academic_records[0] ?? { class_name: null, section: null };
+        // Pick the AR matching the active year; fall back to the first row
+        // only when no active year is known (school in a "between years"
+        // state).
+        const ar = (activeYearId
+          ? r.student_academic_records.find(a => a.academic_year_id === activeYearId)
+          : null)
+          ?? r.student_academic_records[0]
+          ?? { class_name: null, section: null };
         return { id: r.id, name: r.name, className: ar.class_name, section: ar.section };
       });
       setLinkedChildren(list);
     })();
     return () => { cancelled = true; };
-  }, [isParentWithMultiKids, linkedIds.join(',')]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [isParentWithMultiKids, linkedIds.join(','), ctx?.schoolId]); // eslint-disable-line react-hooks/exhaustive-deps
 
   return (
-    <div className="w-full bg-slate-50 flex flex-col animate-in slide-in-from-right-8 duration-300">
+    <div className="w-full lg:max-w-5xl lg:mx-auto bg-slate-50 flex flex-col animate-in slide-in-from-right-8 duration-300">
       <div className="bg-white border-b border-slate-100 px-4 pt-4 pb-4 flex items-center gap-3 sticky top-0 z-10 shadow-sm">
         <button onClick={onBack} className="p-2 -ml-2 bg-slate-100 rounded-full text-slate-600">
           <ArrowLeft size={20} />

@@ -6,6 +6,7 @@ import {
 import { studentDashboardService, UpcomingExam } from '@/modules/students/studentDashboard.service';
 import { StudentExamResult } from '@/roles/student/student-role.types';
 import { examService } from '@/modules/exams/exam.service';
+import { useUIStore } from '@/store/uiStore';
 
 interface Props { onBack: () => void; }
 
@@ -91,14 +92,19 @@ function groupByMonth(items: TimelineItem[]): { month: string; items: TimelineIt
 
 /* ═══════════════════════════════════════════════════ */
 export const ResultsView: React.FC<Props> = ({ onBack }) => {
+  const { showToast } = useUIStore();
   const [results, setResults]   = useState<StudentExamResult[]>([]);
   const [upcoming, setUpcoming] = useState<UpcomingExam[]>([]);
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
 
   useEffect(() => {
-    studentDashboardService.getResults().then(setResults);
-    studentDashboardService.getScheduledExams().then(setUpcoming);
-  }, []);
+    studentDashboardService.getResults()
+      .then(setResults)
+      .catch(e => showToast(e instanceof Error ? e.message : 'Failed to load results', 'error'));
+    studentDashboardService.getScheduledExams()
+      .then(setUpcoming)
+      .catch(e => showToast(e instanceof Error ? e.message : 'Failed to load upcoming exams', 'error'));
+  }, [showToast]);
 
   const toggle = (key: string) =>
     setExpanded(prev => { const s = new Set(prev); s.has(key) ? s.delete(key) : s.add(key); return s; });

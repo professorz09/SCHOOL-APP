@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useState } from 'react';
-import { ArrowLeft, CircleAlert, XCircle } from 'lucide-react';
+import { ArrowLeft, CircleAlert, XCircle, EyeOff } from 'lucide-react';
 import { principalService } from '@/roles/principal/principal.service';
 import { Complaint, ComplaintStatus } from '@/roles/principal/principal.types';
 import { useUIStore } from '@/store/uiStore';
@@ -38,8 +38,16 @@ export const ComplaintsManager: React.FC<Props> = ({ onBack }) => {
   const [rejectReason, setRejectReason] = useState('');
 
   const loadComplaints = useCallback(() => {
-    principalService.getComplaints().then(setComplaints);
-  }, []);
+    principalService.getComplaints()
+      .then(rows => {
+        setComplaints(rows);
+        // Keep an open detail view in sync — realtime refetches would otherwise
+        // leave the detail showing the pre-resolution status while the list
+        // shows the new one.
+        setSelected(prev => prev ? rows.find(r => r.id === prev.id) ?? prev : prev);
+      })
+      .catch(e => showToast(e instanceof Error ? e.message : 'Failed to load complaints', 'error'));
+  }, [showToast]);
 
   useEffect(() => { loadComplaints(); }, [loadComplaints]);
   useRealtimeTable('complaints', loadComplaints);
@@ -54,6 +62,8 @@ export const ComplaintsManager: React.FC<Props> = ({ onBack }) => {
       setComplaints(prev => prev.map(c => c.id === updated.id ? updated : c));
       setSelected(updated);
       showToast('Complaint resolved');
+    } catch (e) {
+      showToast(e instanceof Error ? e.message : 'Resolve failed', 'error');
     } finally { setIsSubmitting(false); }
   };
 
@@ -67,6 +77,8 @@ export const ComplaintsManager: React.FC<Props> = ({ onBack }) => {
       setShowRejectModal(false);
       setRejectReason('');
       showToast('Complaint rejected');
+    } catch (e) {
+      showToast(e instanceof Error ? e.message : 'Reject failed', 'error');
     } finally { setIsSubmitting(false); }
   };
 
@@ -81,16 +93,29 @@ export const ComplaintsManager: React.FC<Props> = ({ onBack }) => {
       </div>
       <div className="flex-1 overflow-y-auto p-4  space-y-4">
         <div className="bg-white rounded-2xl border border-slate-100 shadow-sm p-4 space-y-3">
-          <div className="flex items-center justify-between">
-            <span className={`text-[9px] font-black px-2 py-0.5 rounded-full uppercase ${fromColor(selected.from)}`}>{selected.from}</span>
+          <div className="flex items-center justify-between gap-2 flex-wrap">
+            <div className="flex items-center gap-1.5 flex-wrap">
+              <span className={`text-[9px] font-black px-2 py-0.5 rounded-full uppercase ${fromColor(selected.from)}`}>{selected.from}</span>
+              {selected.isAnonymous && (
+                <span className="text-[9px] font-black px-2 py-0.5 rounded-full uppercase bg-violet-100 text-violet-700 flex items-center gap-1">
+                  <EyeOff size={9}/> Anonymous
+                </span>
+              )}
+            </div>
             <span className={`text-[9px] font-black px-2 py-0.5 rounded-full uppercase ${statusColor(selected.status)}`}>{STATUS_LABEL[selected.status]}</span>
           </div>
           <h3 className="font-black text-slate-900 text-base">{selected.subject}</h3>
           <p className="text-sm font-bold text-slate-500">{selected.description}</p>
-          <div className="text-[10px] font-bold text-slate-400">
-            From: <span className="text-slate-700">{selected.fromName}</span>
-            {selected.fromClass && <> · <span className="text-slate-700">{selected.fromClass}</span></>}
-          </div>
+          {selected.isAnonymous ? (
+            <div className="text-[10px] font-bold text-violet-700 bg-violet-50 border border-violet-100 rounded-lg px-3 py-2 flex items-center gap-1.5">
+              <EyeOff size={11}/> Identity hidden — filed anonymously to flag a sensitive issue.
+            </div>
+          ) : (
+            <div className="text-[10px] font-bold text-slate-400">
+              From: <span className="text-slate-700">{selected.fromName}</span>
+              {selected.fromClass && <> · <span className="text-slate-700">{selected.fromClass}</span></>}
+            </div>
+          )}
           <div className="text-[10px] font-bold text-slate-400">Filed: {selected.createdAt}</div>
         </div>
 
@@ -182,15 +207,22 @@ export const ComplaintsManager: React.FC<Props> = ({ onBack }) => {
             <button key={c.id} onClick={() => { setSelected(c); setResponse(c.response ?? ''); setShowRejectModal(false); setRejectReason(''); }}
               className="w-full bg-white rounded-2xl border border-slate-100 shadow-sm p-4 text-left active:bg-slate-50">
               <div className="flex items-start justify-between gap-2 mb-2">
-                <div className="flex gap-2">
+                <div className="flex gap-1.5 flex-wrap">
                   <span className={`text-[9px] font-black px-2 py-0.5 rounded-full uppercase ${fromColor(c.from)}`}>{c.from}</span>
                   <span className={`text-[9px] font-black px-2 py-0.5 rounded-full uppercase ${statusColor(c.status)}`}>{STATUS_LABEL[c.status]}</span>
+                  {c.isAnonymous && (
+                    <span className="text-[9px] font-black px-2 py-0.5 rounded-full uppercase bg-violet-100 text-violet-700 flex items-center gap-1">
+                      <EyeOff size={9}/> Anon
+                    </span>
+                  )}
                 </div>
                 <span className="text-[10px] font-bold text-slate-400 shrink-0">{c.createdAt}</span>
               </div>
               <div className="font-extrabold text-slate-900 text-sm">{c.subject}</div>
               <div className="text-[11px] font-bold text-slate-400 mt-1 line-clamp-2">{c.description}</div>
-              <div className="text-[10px] font-black text-slate-500 mt-1.5">{c.fromName}</div>
+              <div className={`text-[10px] font-black mt-1.5 ${c.isAnonymous ? 'text-violet-600 italic' : 'text-slate-500'}`}>
+                {c.isAnonymous ? 'Anonymous' : c.fromName}
+              </div>
             </button>
           ))}
           {filtered.length === 0 && (

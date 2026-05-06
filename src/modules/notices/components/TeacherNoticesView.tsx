@@ -119,7 +119,7 @@ export const TeacherNoticesView: React.FC<Props> = ({ onBack }) => {
   );
 
   if (view === 'CREATE') return (
-    <div className="w-full bg-slate-50 flex flex-col animate-in slide-in-from-right-8 duration-300">
+    <div className="w-full lg:max-w-5xl lg:mx-auto bg-slate-50 flex flex-col animate-in slide-in-from-right-8 duration-300">
       {renderHeader('Send Notice', () => setView('LIST'))}
       <div className="flex-1 overflow-y-auto p-4 space-y-4">
         <div className="bg-white rounded-2xl border border-slate-100 shadow-sm p-4 space-y-4">
@@ -176,7 +176,7 @@ export const TeacherNoticesView: React.FC<Props> = ({ onBack }) => {
   );
 
   return (
-    <div className="w-full bg-slate-50 flex flex-col animate-in slide-in-from-right-8 duration-300">
+    <div className="w-full lg:max-w-5xl lg:mx-auto bg-slate-50 flex flex-col animate-in slide-in-from-right-8 duration-300">
       {renderHeader('Notices', onBack,
         <button onClick={() => setView('CREATE')} disabled={classes.length === 0}
           className="p-2 bg-indigo-500 text-white rounded-full shadow-md disabled:opacity-50">

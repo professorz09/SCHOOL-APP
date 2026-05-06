@@ -1,4 +1,5 @@
 import { Router } from 'express';
+import rateLimit from 'express-rate-limit';
 import { adminDb, userDb } from '../lib/db';
 import { ok, fail, ApiError, requireBody } from '../lib/helpers';
 import { requireAuth, requireRole } from '../middleware/auth';
@@ -439,6 +440,216 @@ principalRouter.get('/leave/list', requireAuth, async (req, res) => {
 
 // ─── Library — Books ──────────────────────────────────────────────────────────
 
+// ─── Unified Inventory ─────────────────────────────────────────────────────
+//
+// New flat-inventory model for assets. The earlier UI bound principals to a
+// strict Library/Lab split with student-loan tracking; this endpoint is just
+// "school owns these things, in these counts". No assignments, no loans.
+//
+// Rate-limited per principal so a stuck "add then delete" loop can't flood
+// the assets table. 30 add operations per 5-minute window comfortably covers
+// real onboarding (initial inventory bulk add) without enabling spam.
+
+const inventoryAddLimiter = rateLimit({
+  windowMs: 5 * 60_000,
+  limit: 30,
+  keyGenerator: (req: any) => `inv-add:${req.user?.id ?? req.ip}`,
+  standardHeaders: 'draft-7',
+  legacyHeaders: false,
+  message: { ok: false, error: 'Too many inventory additions — slow down for a few minutes.' },
+});
+
+// GET /api/principal/inventory/list
+// Returns every asset row for the school as a flat list with the bits the
+// new UI consumes (id, category, title, description, note, quantity,
+// addedOn, createdAt). category is BOOK/LAB_EQUIPMENT/OTHER per the
+// existing CHECK constraint; description/note live in the `details` jsonb.
+principalRouter.get('/inventory/list', requireAuth, PRINCIPAL, async (req, res) => {
+  try {
+    const { data, error } = await adminDb.from('assets')
+      .select('id, category, name, details, total_count, available_count, created_at, updated_at')
+      .eq('school_id', req.user.school_id!)
+      .eq('is_active', true)
+      .order('created_at', { ascending: false });
+    if (error) throw new ApiError(500, error.message);
+
+    const rows = (data ?? []) as Array<{
+      id: string; category: string; name: string;
+      details: { description?: string; note?: string; addedOn?: string;
+                 author?: string; subject?: string; isbn?: string;
+                 labType?: string; lastServiced?: string } | null;
+      total_count: number; available_count: number;
+      created_at: string; updated_at: string;
+    }>;
+    ok(res, rows.map(r => ({
+      id: r.id,
+      category: r.category,
+      title: r.name,
+      // Description seeded from the new `description` field; for legacy book
+      // rows the principal added under the old UI we synthesise a friendly
+      // description from author/subject so the timeline stays readable.
+      description: r.details?.description
+        ?? [r.details?.author, r.details?.subject].filter(Boolean).join(' · ')
+        ?? '',
+      note:        r.details?.note ?? '',
+      quantity:    r.total_count,
+      addedOn:     r.details?.addedOn ?? r.created_at.slice(0, 10),
+      createdAt:   r.created_at,
+    })));
+  } catch (err) { fail(res, err); }
+});
+
+// POST /api/principal/inventory/add
+// title + category + quantity required; description, note, addedOn optional.
+// Falls back to today for addedOn so the timeline always has a stable bucket.
+principalRouter.post('/inventory/add', requireAuth, PRINCIPAL, inventoryAddLimiter, async (req, res) => {
+  try {
+    const body = requireBody<{
+      title: string; category: 'BOOK' | 'LAB_EQUIPMENT' | 'OTHER';
+      quantity: number; description?: string; note?: string; addedOn?: string;
+    }>(req, ['title', 'category', 'quantity']);
+
+    if (!['BOOK', 'LAB_EQUIPMENT', 'OTHER'].includes(body.category)) {
+      throw new ApiError(400, 'Invalid category');
+    }
+    if (!Number.isFinite(body.quantity) || body.quantity < 1) {
+      throw new ApiError(400, 'Quantity must be at least 1');
+    }
+    const title = body.title.trim();
+    if (!title) throw new ApiError(400, 'Title required');
+
+    const today = new Date().toISOString().slice(0, 10);
+
+    const { data, error } = await adminDb.from('assets').insert({
+      school_id:       req.user.school_id,
+      category:        body.category,
+      name:            title,
+      details: {
+        description: body.description?.trim() || '',
+        note:        body.note?.trim() || '',
+        addedOn:     body.addedOn || today,
+      },
+      total_count:     Math.round(body.quantity),
+      // Mirror available = total. Loan tracking is gone in the new model —
+      // available_count exists only because the column is NOT NULL.
+      available_count: Math.round(body.quantity),
+    }).select('id').single();
+    if (error) throw new ApiError(500, error.message);
+
+    const newId = (data as { id: string }).id;
+    // Audit log entry (7-day TTL, 1000-row cap enforced by trigger). Failure
+    // here is non-fatal — the asset row is already in. The trigger handles
+    // pruning, so we don't need any further bookkeeping here.
+    await adminDb.from('inventory_history').insert({
+      school_id:    req.user.school_id,
+      asset_id:     newId,
+      action:       'ADD',
+      title,
+      category:     body.category,
+      quantity:     Math.round(body.quantity),
+      description:  body.description?.trim() || null,
+      note:         body.note?.trim() || null,
+      done_by:      req.user.id,
+      done_by_name: req.user.name ?? null,
+    });
+
+    ok(res, { id: newId }, 201);
+  } catch (err) { fail(res, err); }
+});
+
+// POST /api/principal/inventory/delete
+principalRouter.post('/inventory/delete', requireAuth, PRINCIPAL, async (req, res) => {
+  try {
+    const { id } = requireBody<{ id: string }>(req, ['id']);
+
+    // Snapshot the row BEFORE deleting so the audit entry has the title /
+    // category / qty even after the asset row is gone. If the row already
+    // doesn't exist we still bail with 404.
+    const { data: snap } = await adminDb.from('assets')
+      .select('id, name, category, total_count, details')
+      .eq('id', id).eq('school_id', req.user.school_id!).maybeSingle();
+    if (!snap) throw new ApiError(404, 'Item not found');
+
+    const { error } = await adminDb.from('assets').delete()
+      .eq('id', id).eq('school_id', req.user.school_id!);
+    if (error) throw new ApiError(500, error.message);
+
+    const s = snap as { id: string; name: string; category: string; total_count: number;
+      details: { description?: string; note?: string } | null };
+    await adminDb.from('inventory_history').insert({
+      school_id:    req.user.school_id,
+      asset_id:     s.id,
+      action:       'DELETE',
+      title:        s.name,
+      category:     s.category,
+      quantity:     s.total_count,
+      description:  s.details?.description ?? null,
+      note:         s.details?.note ?? null,
+      done_by:      req.user.id,
+      done_by_name: req.user.name ?? null,
+    });
+
+    ok(res, { id });
+  } catch (err) { fail(res, err); }
+});
+
+// GET /api/principal/inventory/history
+// Read the audit log. Trigger keeps it pruned to 7 days / 1000 rows so the
+// principal sees only the recent activity window.
+principalRouter.get('/inventory/history', requireAuth, PRINCIPAL, async (req, res) => {
+  try {
+    const { data, error } = await adminDb.from('inventory_history')
+      .select('id, action, title, category, quantity, description, note, done_by_name, done_at')
+      .eq('school_id', req.user.school_id!)
+      .order('done_at', { ascending: false })
+      .limit(1000);
+    if (error) throw new ApiError(500, error.message);
+    ok(res, data ?? []);
+  } catch (err) { fail(res, err); }
+});
+
+// POST /api/principal/inventory/update
+// Lets the principal change quantity / title / description / note without
+// rebuilding the row. Useful when stock changes (broken units removed,
+// donations received). addedOn intentionally NOT editable — it's the
+// "purchased on" anchor and editing it would shuffle timeline groups.
+principalRouter.post('/inventory/update', requireAuth, PRINCIPAL, async (req, res) => {
+  try {
+    const body = requireBody<{
+      id: string; title?: string; quantity?: number;
+      description?: string; note?: string;
+    }>(req, ['id']);
+
+    const { data: existing, error: gErr } = await adminDb.from('assets')
+      .select('details').eq('id', body.id).eq('school_id', req.user.school_id!).maybeSingle();
+    if (gErr) throw new ApiError(500, gErr.message);
+    if (!existing) throw new ApiError(404, 'Item not found');
+    const prevDetails = (existing as { details: Record<string, unknown> | null }).details ?? {};
+
+    const patch: Record<string, unknown> = { updated_at: new Date().toISOString() };
+    if (body.title !== undefined) patch.name = body.title.trim();
+    if (body.quantity !== undefined) {
+      if (!Number.isFinite(body.quantity) || body.quantity < 0) {
+        throw new ApiError(400, 'Quantity must be non-negative');
+      }
+      patch.total_count = Math.round(body.quantity);
+      patch.available_count = Math.round(body.quantity);
+    }
+    if (body.description !== undefined || body.note !== undefined) {
+      patch.details = {
+        ...prevDetails,
+        ...(body.description !== undefined ? { description: body.description.trim() } : {}),
+        ...(body.note !== undefined ? { note: body.note.trim() } : {}),
+      };
+    }
+
+    const { error } = await adminDb.from('assets').update(patch)
+      .eq('id', body.id).eq('school_id', req.user.school_id!);
+    if (error) throw new ApiError(500, error.message);
+    ok(res, { id: body.id });
+  } catch (err) { fail(res, err); }
+});
+
 // POST /api/principal/library/book/add
 principalRouter.post('/library/book/add', requireAuth, PRINCIPAL, async (req, res) => {
   try {
@@ -470,38 +681,16 @@ principalRouter.post('/library/book/delete', requireAuth, PRINCIPAL, async (req,
   } catch (err) { fail(res, err); }
 });
 
-// POST /api/principal/library/book/issue — issue_asset RPC
-principalRouter.post('/library/book/issue', requireAuth, PRINCIPAL, async (req, res) => {
-  try {
-    const body = requireBody<{
-      bookId: string; studentId: string; studentName: string; note?: string;
-    }>(req, ['bookId', 'studentId', 'studentName']);
-
-    const { error } = await adminDb.rpc('issue_asset', {
-      p_asset_id:      body.bookId,
-      p_student_id:    body.studentId || null,
-      p_borrower_name: body.studentName,
-      p_loan_days:     14,
-      p_note:          body.note?.trim() || null,
-    });
-    if (error) throw new ApiError(500, error.message);
-    ok(res, { bookId: body.bookId, studentId: body.studentId });
-  } catch (err) { fail(res, err); }
+// POST /api/principal/library/book/issue — REMOVED. The new flat-inventory
+// model has no per-student loans; the issue_asset / return_asset RPCs were
+// dropped in migration 0062. Endpoints below return 410 Gone so any stale
+// client still calling them gets a clear signal instead of a 500 from a
+// missing RPC. Safe to delete entirely after the next deploy cycle.
+principalRouter.post('/library/book/issue', requireAuth, PRINCIPAL, async (_req, res) => {
+  res.status(410).json({ ok: false, error: 'Loan tracking removed — use the unified inventory list.' });
 });
-
-// POST /api/principal/library/book/return — return_asset RPC
-principalRouter.post('/library/book/return', requireAuth, PRINCIPAL, async (req, res) => {
-  try {
-    const body = requireBody<{ bookId: string; studentId: string; note?: string }>(req, ['bookId', 'studentId']);
-
-    const { error } = await adminDb.rpc('return_asset', {
-      p_asset_id:   body.bookId,
-      p_student_id: body.studentId || null,
-      p_note:       body.note?.trim() || null,
-    });
-    if (error) throw new ApiError(500, error.message);
-    ok(res, { bookId: body.bookId, studentId: body.studentId });
-  } catch (err) { fail(res, err); }
+principalRouter.post('/library/book/return', requireAuth, PRINCIPAL, async (_req, res) => {
+  res.status(410).json({ ok: false, error: 'Loan tracking removed — use the unified inventory list.' });
 });
 
 // ─── Library — Lab Equipment ──────────────────────────────────────────────────

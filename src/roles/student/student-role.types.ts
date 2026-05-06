@@ -74,4 +74,5 @@ export interface StudentComplaint {
   status: 'PENDING' | 'IN_REVIEW' | 'RESOLVED' | 'REJECTED';
   createdAt: string;
   response: string | null;
+  isAnonymous: boolean;
 }

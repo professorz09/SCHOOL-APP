@@ -10,8 +10,11 @@ export const TransportView: React.FC<Props> = ({ onBack }) => {
   const [loading, setLoading] = useState(true);
 
   // Resolve the active student from the session (handles both STUDENT and
-  // PARENT-with-selected-child) and load their transport info, refreshed
-  // every 5s so the bus position and current stop stay live.
+  // PARENT-with-selected-child) and load their transport info. The refresh
+  // loop also re-fetches from server (refreshAll) so the bus position and
+  // current stop stay genuinely live — earlier the interval just re-read
+  // the in-memory cache, so the "Live" badge was lying after first paint.
+  // 15s cadence balances live feel against load on a multi-route fleet.
   useEffect(() => {
     let cancelled = false;
     let interval: ReturnType<typeof setInterval> | null = null;
@@ -23,9 +26,18 @@ export const TransportView: React.FC<Props> = ({ onBack }) => {
         ]);
         if (cancelled) return;
         setData(transportService.getStudentTransportInfo(sid));
-        interval = setInterval(() => {
-          if (!cancelled) setData(transportService.getStudentTransportInfo(sid));
-        }, 5000);
+        interval = setInterval(async () => {
+          if (cancelled) return;
+          try {
+            await transportService.refreshAll();
+            if (!cancelled) setData(transportService.getStudentTransportInfo(sid));
+          } catch (err) {
+            // Don't surface a toast for transient polling failures — the
+            // last good data stays on screen and the next tick will retry.
+            // eslint-disable-next-line no-console
+            console.warn('[transport] poll refresh failed', err);
+          }
+        }, 15000);
       } catch (err) {
         console.error('[transport] resolve failed', err);
       } finally {
@@ -37,7 +49,7 @@ export const TransportView: React.FC<Props> = ({ onBack }) => {
 
   if (loading) {
     return (
-      <div className="w-full bg-slate-50 flex flex-col animate-in slide-in-from-right-8 duration-300">
+      <div className="w-full lg:max-w-5xl lg:mx-auto bg-slate-50 flex flex-col animate-in slide-in-from-right-8 duration-300">
         <div className="bg-white border-b border-slate-100 px-4 pt-4 pb-4 flex items-center gap-3 sticky top-0 z-10 shadow-sm">
           <button onClick={onBack} className="p-2 -ml-2 bg-slate-100 rounded-full text-slate-600"><ArrowLeft size={20} /></button>
           <h2 className="text-xl font-black text-slate-900 uppercase tracking-tight">Transport Tracker</h2>
@@ -55,7 +67,7 @@ export const TransportView: React.FC<Props> = ({ onBack }) => {
 
   if (!data) {
     return (
-      <div className="w-full bg-slate-50 flex flex-col animate-in slide-in-from-right-8 duration-300">
+      <div className="w-full lg:max-w-5xl lg:mx-auto bg-slate-50 flex flex-col animate-in slide-in-from-right-8 duration-300">
         <div className="bg-white border-b border-slate-100 px-4 pt-4 pb-4 flex items-center gap-3 sticky top-0 z-10 shadow-sm">
           <button onClick={onBack} className="p-2 -ml-2 bg-slate-100 rounded-full text-slate-600"><ArrowLeft size={20} /></button>
           <h2 className="text-xl font-black text-slate-900 uppercase tracking-tight">Transport Tracker</h2>
@@ -75,7 +87,7 @@ export const TransportView: React.FC<Props> = ({ onBack }) => {
   const nextStop = data.stops.find(s => s.status === 'UPCOMING');
 
   return (
-    <div className="w-full bg-slate-50 flex flex-col animate-in slide-in-from-right-8 duration-300">
+    <div className="w-full lg:max-w-5xl lg:mx-auto bg-slate-50 flex flex-col animate-in slide-in-from-right-8 duration-300">
       <div className="bg-white border-b border-slate-100 px-4 pt-4 pb-4 flex items-center gap-3 sticky top-0 z-10 shadow-sm">
         <button onClick={onBack} className="p-2 -ml-2 bg-slate-100 rounded-full text-slate-600"><ArrowLeft size={20} /></button>
         <h2 className="text-xl font-black text-slate-900 uppercase tracking-tight">Transport Tracker</h2>

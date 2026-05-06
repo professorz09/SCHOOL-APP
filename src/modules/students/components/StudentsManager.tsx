@@ -160,7 +160,11 @@ const [mainView, setMainView] = useState<MainView>(initialView ?? 'CLASSES');
   const [assignTarget, setAssignTarget] = useState<Student | null>(null);
   const [tcModal, setTcModal] = useState<{ student: Student; tcNumber: string; reason: string } | null>(null);
 
-  useEffect(() => { void studentService.getAll().then(setStudents); }, [activeYear?.id]);
+  useEffect(() => {
+    void studentService.getAll()
+      .then(setStudents)
+      .catch(e => showToast(e instanceof Error ? e.message : 'Failed to load students', 'error'));
+  }, [activeYear?.id]);
   useEffect(() => {
     if (!activeYear?.id) { setDbSections([]); return; }
     void principalService.getSectionsForYear(activeYear.id)

@@ -4,6 +4,11 @@ import { exportCsv } from '@/shared/utils/csv';
 import { principalService } from '@/roles/principal/principal.service';
 import { Expense } from '@/roles/principal/principal.types';
 import { useUIStore } from '@/store/uiStore';
+import { useAuthStore } from '@/store/authStore';
+
+// IST-anchored "today" so users opening the form after 18:30 UTC don't see
+// tomorrow's date pre-filled.
+const istToday = () => new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Kolkata' });
 
 type View = 'LIST' | 'ADD';
 
@@ -22,15 +27,32 @@ interface Props { onBack: () => void; }
 
 export const ExpensesManager: React.FC<Props> = ({ onBack }) => {
   const { showToast } = useUIStore();
+  // Default the approver to the logged-in principal's name. Earlier this was
+  // hardcoded to a sample name and silently saved on every expense — caused
+  // confusion when multiple principals shared the system.
+  const sessionName = useAuthStore(s => s.session?.name ?? '');
   const [view, setView] = useState<View>('LIST');
   const [expenses, setExpenses] = useState<Expense[]>([]);
   const [form, setForm] = useState<Omit<Expense, 'id'>>({
     category: 'MAINTENANCE', description: '', amount: 0,
-    date: new Date().toISOString().split('T')[0], approvedBy: 'Dr. Rajesh Kumar',
+    date: istToday(), approvedBy: sessionName,
   });
   const [isSubmitting, setIsSubmitting] = useState(false);
 
-  useEffect(() => { principalService.getExpenses().then(setExpenses); }, []);
+  // If session arrives after first render (auth still initializing), backfill
+  // the approver field once — but don't overwrite a name the user already
+  // typed.
+  useEffect(() => {
+    if (sessionName) {
+      setForm(f => f.approvedBy ? f : { ...f, approvedBy: sessionName });
+    }
+  }, [sessionName]);
+
+  useEffect(() => {
+    principalService.getExpenses()
+      .then(setExpenses)
+      .catch(e => showToast(e instanceof Error ? e.message : 'Failed to load expenses', 'error'));
+  }, [showToast]);
 
   const total = expenses.reduce((a, e) => a + e.amount, 0);
 
@@ -56,9 +78,7 @@ export const ExpensesManager: React.FC<Props> = ({ onBack }) => {
       const exp = await principalService.addExpense(form);
       setExpenses(prev => [exp, ...prev]);
       showToast('Expense recorded');
-      // Use IST-anchored today so 18:30+ UTC doesn't default to tomorrow.
-      const istToday = new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Kolkata' });
-      setForm({ category: 'MAINTENANCE', description: '', amount: 0, date: istToday, approvedBy: 'Dr. Rajesh Kumar' });
+      setForm({ category: 'MAINTENANCE', description: '', amount: 0, date: istToday(), approvedBy: sessionName });
       setView('LIST');
     } catch (e) {
       showToast(e instanceof Error ? e.message : 'Failed to record expense', 'error');

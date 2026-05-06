@@ -7,7 +7,7 @@ import { Approval } from '@/roles/principal/principal.types';
 import { useAuthStore } from '@/store/authStore';
 import { useUIStore } from '@/store/uiStore';
 
-interface Props { onBack: () => void; studentId: string; }
+interface Props { onBack: () => void; studentId: string; studentName?: string; }
 
 const LEAVE_COLOR: Record<string, string> = {
   PENDING:  'text-amber-600 bg-amber-50 border-amber-200',
@@ -56,10 +56,16 @@ const LeaveCard: React.FC<{ app: Approval }> = ({ app }) => {
   );
 };
 
-export const StudentLeaveView: React.FC<Props> = ({ onBack, studentId }) => {
+export const StudentLeaveView: React.FC<Props> = ({ onBack, studentId, studentName: studentNameProp }) => {
   const session = useAuthStore(s => s.session);
   const { showToast } = useUIStore();
-  const studentName = session?.name ?? 'Student';
+  // Prefer the resolved student's actual name; fall back to session name only
+  // for the STUDENT role (where session.name == student name). Earlier this
+  // always used session.name, so a PARENT-filed leave showed the parent's
+  // name in the principal queue instead of the child's.
+  const studentName = studentNameProp
+    ?? (session?.role === 'STUDENT' ? session.name : '')
+    ?? 'Student';
 
   const [leaveApps, setLeaveApps] = useState<Approval[]>([]);
   const [loading, setLoading]     = useState(true);
@@ -85,7 +91,9 @@ export const StudentLeaveView: React.FC<Props> = ({ onBack, studentId }) => {
   useEffect(() => { void refresh(); /* eslint-disable-next-line react-hooks/exhaustive-deps */ }, [studentId]);
 
   const handleSubmit = async () => {
-    if (!title.trim() || !fromDate || !toDate || !reason.trim()) return;
+    if (!title.trim()) { showToast('Subject required', 'error'); return; }
+    if (!fromDate || !toDate) { showToast('Pick both From and To dates', 'error'); return; }
+    if (!reason.trim()) { showToast('Reason required', 'error'); return; }
     if (new Date(toDate) < new Date(fromDate)) {
       showToast('"To" date cannot be before "From" date', 'error');
       return;
@@ -119,7 +127,7 @@ export const StudentLeaveView: React.FC<Props> = ({ onBack, studentId }) => {
   const reachedCap = todayCount >= DAILY_CAP;
 
   return (
-    <div className="w-full bg-slate-50 flex flex-col animate-in slide-in-from-right-8 duration-300">
+    <div className="w-full lg:max-w-5xl lg:mx-auto bg-slate-50 flex flex-col animate-in slide-in-from-right-8 duration-300">
       {/* Header */}
       <div className="bg-white border-b border-slate-100 px-4 pt-4 pb-4 sticky top-0 z-10 shadow-sm">
         <div className="flex items-center justify-between gap-3 mb-4">

@@ -396,7 +396,7 @@ export const TestsManager: React.FC<Props> = ({ onBack }) => {
       : stuRows.every(r => r.marks !== '');
 
     return (
-      <div className="w-full bg-slate-50 flex flex-col animate-in slide-in-from-right-8 duration-300">
+      <div className="w-full lg:max-w-5xl lg:mx-auto bg-slate-50 flex flex-col animate-in slide-in-from-right-8 duration-300">
         {header(viewLocked ? 'View Results' : (uploadExam.resultsUploaded ? 'Edit Results' : 'Upload Results'), () => setView('LIST'))}
         <div className="flex-1 overflow-y-auto p-4  space-y-4">
           {/* Exam info */}
@@ -507,7 +507,7 @@ export const TestsManager: React.FC<Props> = ({ onBack }) => {
     );
 
     return (
-    <div className="w-full bg-slate-50 flex flex-col animate-in slide-in-from-right-8 duration-300">
+    <div className="w-full lg:max-w-5xl lg:mx-auto bg-slate-50 flex flex-col animate-in slide-in-from-right-8 duration-300">
       {header('Create Exam', () => setView('LIST'))}
       <div className="flex-1 overflow-y-auto p-4 space-y-3 pb-24">
         {/* Section 1: Basics */}
@@ -722,7 +722,7 @@ export const TestsManager: React.FC<Props> = ({ onBack }) => {
   const pendingCount = exams.filter(e => !e.resultsUploaded).length;
 
   return (
-    <div className="w-full bg-slate-50 flex flex-col animate-in slide-in-from-right-8 duration-300">
+    <div className="w-full lg:max-w-5xl lg:mx-auto bg-slate-50 flex flex-col animate-in slide-in-from-right-8 duration-300">
       {header('Exams & Tests', onBack,
         <button onClick={() => setView('CREATE')}
           className="p-2 text-white bg-indigo-500 rounded-full shadow-md">

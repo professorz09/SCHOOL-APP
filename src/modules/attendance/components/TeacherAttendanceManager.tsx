@@ -263,7 +263,7 @@ export const AttendanceManager: React.FC<Props> = ({ onBack }) => {
 
   /* ════════════════ CLASSES VIEW ══════════════════════════════════ */
   if (view === 'CLASSES') return (
-    <div className="w-full bg-slate-50 flex flex-col animate-in slide-in-from-right-8 duration-300">
+    <div className="w-full lg:max-w-6xl lg:mx-auto bg-slate-50 flex flex-col animate-in slide-in-from-right-8 duration-300">
       <div className="bg-white border-b border-slate-100 px-4 pt-4 pb-3 sticky top-0 z-10 shadow-sm">
         <div className="flex items-center gap-3">
           <button onClick={onBack} className="p-2 -ml-2 bg-slate-100 rounded-full text-slate-600">

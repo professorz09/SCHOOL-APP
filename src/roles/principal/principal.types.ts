@@ -16,6 +16,7 @@ export interface Complaint {
   createdAt: string;
   resolvedAt: string | null;
   response: string | null;
+  isAnonymous: boolean;
 }
 
 export interface Expense {

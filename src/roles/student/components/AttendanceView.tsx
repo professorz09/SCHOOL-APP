@@ -23,7 +23,11 @@ export const AttendanceView: React.FC<Props> = ({ onBack }) => {
   const [loading, setLoading] = useState(true);
   const [weekDays, setWeekDays] = useState<AttendanceWeekDay[]>([]);
   const [months, setMonths] = useState<AttendanceMonth[]>([]);
-  const today = new Date().toISOString().split('T')[0];
+  // IST-anchored "today" so the highlight ring lines up with the same row
+  // the server marked as today. UTC slicing skewed by ~5.5h flipped the
+  // "Today" indicator onto tomorrow's slot for users opening the app after
+  // 18:30 UTC.
+  const today = new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Kolkata' });
 
   useEffect(() => {
     let alive = true;
@@ -56,7 +60,7 @@ export const AttendanceView: React.FC<Props> = ({ onBack }) => {
   const barColor = (p: number) => p >= 85 ? 'bg-emerald-500' : p >= 75 ? 'bg-amber-400' : 'bg-rose-400';
 
   return (
-    <div className="w-full bg-slate-50 flex flex-col animate-in slide-in-from-right-8 duration-300">
+    <div className="w-full lg:max-w-5xl lg:mx-auto bg-slate-50 flex flex-col animate-in slide-in-from-right-8 duration-300">
       {/* Header */}
       <div className="bg-white border-b border-slate-100 px-4 pt-4 pb-4 flex items-center gap-3 sticky top-0 z-10 shadow-sm">
         <button onClick={onBack} className="p-2 -ml-2 bg-slate-100 rounded-full text-slate-600">

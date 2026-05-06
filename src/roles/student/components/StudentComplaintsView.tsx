@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useState } from 'react';
-import { ArrowLeft, Plus, CircleAlert, AlertTriangle } from 'lucide-react';
+import { ArrowLeft, Plus, CircleAlert, AlertTriangle, EyeOff, Eye, ShieldAlert } from 'lucide-react';
 import { studentDashboardService } from '@/modules/students/studentDashboard.service';
 import { StudentComplaint } from '@/roles/student/student-role.types';
 import { useUIStore } from '@/store/uiStore';
@@ -28,7 +28,7 @@ export const StudentComplaintsView: React.FC<Props> = ({ onBack }) => {
   const { showToast } = useUIStore();
   const [view, setView] = useState<View>('LIST');
   const [complaints, setComplaints] = useState<StudentComplaint[]>([]);
-  const [form, setForm] = useState({ subject: '', description: '' });
+  const [form, setForm] = useState({ subject: '', description: '', isAnonymous: false });
   const [isSubmitting, setIsSubmitting] = useState(false);
 
   const loadComplaints = useCallback(() => {
@@ -48,18 +48,33 @@ export const StudentComplaintsView: React.FC<Props> = ({ onBack }) => {
   const DAILY_CAP = 3;
   const reachedCap = todayCount >= DAILY_CAP;
 
+  // Anonymous complaints get a separate, stricter cap of 1 per rolling 7
+  // days. The DB trigger (migration 0070) is the source of truth; this is
+  // a UX mirror so the option grays out before the user types a paragraph.
+  const sevenDaysAgo = Date.now() - 7 * 86_400_000;
+  const recentAnonCount = complaints.filter(c =>
+    c.isAnonymous && new Date(c.createdAt).getTime() >= sevenDaysAgo,
+  ).length;
+  const anonCapReached = recentAnonCount >= 1;
+
   const handleSubmit = async () => {
     if (!form.subject || !form.description) { showToast('Subject and description required', 'error'); return; }
     if (reachedCap) {
       showToast('Daily limit reached — only 3 complaints per day. Contact the school office.', 'error');
       return;
     }
+    if (form.isAnonymous && anonCapReached) {
+      showToast('Anonymous limit: only 1 anonymous complaint per 7 days', 'error');
+      return;
+    }
     setIsSubmitting(true);
     try {
-      const c = await studentDashboardService.submitComplaint(form.subject, form.description);
+      const c = await studentDashboardService.submitComplaint(form.subject, form.description, form.isAnonymous);
       setComplaints(prev => [c, ...prev]);
-      showToast('Complaint submitted to principal');
-      setForm({ subject: '', description: '' });
+      showToast(form.isAnonymous
+        ? 'Anonymous complaint sent — your name will not be shown'
+        : 'Complaint submitted to principal');
+      setForm({ subject: '', description: '', isAnonymous: false });
       setView('LIST');
     } catch (e) {
       showToast(e instanceof Error ? e.message : 'Submit failed — try again', 'error');
@@ -77,7 +92,7 @@ export const StudentComplaintsView: React.FC<Props> = ({ onBack }) => {
   );
 
   if (view === 'CREATE') return (
-    <div className="w-full bg-slate-50 flex flex-col animate-in slide-in-from-right-8 duration-300">
+    <div className="w-full lg:max-w-5xl lg:mx-auto bg-slate-50 flex flex-col animate-in slide-in-from-right-8 duration-300">
       {renderHeader('File Complaint', () => setView('LIST'))}
       <div className="flex-1 overflow-y-auto p-4  space-y-4">
         {reachedCap ? (
@@ -109,6 +124,36 @@ export const StudentComplaintsView: React.FC<Props> = ({ onBack }) => {
               placeholder="Describe your issue in detail…"
               className="w-full border border-slate-200 bg-slate-50 rounded-xl px-4 py-3 font-bold text-sm outline-none focus:border-rose-500 resize-none" />
           </div>
+
+          {/* Anonymous toggle — for sensitive issues like bullying. The
+              principal won't see who filed; the school still keeps an
+              internal audit record so misuse can be traced if needed. */}
+          <div className={`rounded-xl border p-3 ${form.isAnonymous ? 'border-violet-200 bg-violet-50' : 'border-slate-200 bg-slate-50'}`}>
+            <button type="button"
+              onClick={() => !anonCapReached && setForm(f => ({ ...f, isAnonymous: !f.isAnonymous }))}
+              disabled={anonCapReached}
+              className="w-full flex items-center justify-between gap-3 disabled:opacity-60">
+              <div className="flex items-center gap-2 min-w-0">
+                <div className={`w-9 h-9 rounded-xl flex items-center justify-center shrink-0 ${form.isAnonymous ? 'bg-violet-500 text-white' : 'bg-white text-slate-500 border border-slate-200'}`}>
+                  {form.isAnonymous ? <EyeOff size={14}/> : <Eye size={14}/>}
+                </div>
+                <div className="text-left min-w-0">
+                  <p className="text-xs font-black text-slate-900">File Anonymously</p>
+                  <p className="text-[10px] font-bold text-slate-500 leading-tight">
+                    Principal won't see your name. Limit: 1 per 7 days.
+                  </p>
+                </div>
+              </div>
+              <div className={`w-10 h-6 rounded-full p-0.5 transition-colors shrink-0 ${form.isAnonymous ? 'bg-violet-500' : 'bg-slate-300'}`}>
+                <div className={`w-5 h-5 rounded-full bg-white shadow-md transition-transform ${form.isAnonymous ? 'translate-x-4' : ''}`}/>
+              </div>
+            </button>
+            {anonCapReached && (
+              <div className="flex items-center gap-1.5 text-[10px] font-bold text-rose-700 mt-2 pt-2 border-t border-violet-200">
+                <ShieldAlert size={11}/> Already used your weekly anonymous slot
+              </div>
+            )}
+          </div>
         </div>
         <button onClick={handleSubmit} disabled={isSubmitting || reachedCap}
           className="w-full flex items-center justify-center gap-2 bg-rose-600 text-white font-black text-xs uppercase tracking-widest py-4 rounded-2xl active:scale-95 transition-transform shadow-lg disabled:opacity-60 disabled:cursor-not-allowed">
@@ -119,7 +164,7 @@ export const StudentComplaintsView: React.FC<Props> = ({ onBack }) => {
   );
 
   return (
-    <div className="w-full bg-slate-50 flex flex-col animate-in slide-in-from-right-8 duration-300">
+    <div className="w-full lg:max-w-5xl lg:mx-auto bg-slate-50 flex flex-col animate-in slide-in-from-right-8 duration-300">
       {renderHeader('My Complaints', onBack,
         <div className="flex items-center gap-2">
           <span className={`text-[10px] font-black px-2 py-0.5 rounded-full border ${
@@ -144,7 +189,14 @@ export const StudentComplaintsView: React.FC<Props> = ({ onBack }) => {
         {complaints.map(c => (
           <div key={c.id} className="bg-white rounded-2xl border border-slate-100 shadow-sm p-4">
             <div className="flex items-start justify-between gap-2 mb-2">
-              <span className={`text-[9px] font-black px-2 py-0.5 rounded-full uppercase ${statusColor(c.status)}`}>{STATUS_LABEL[c.status] ?? c.status}</span>
+              <div className="flex items-center gap-1.5 flex-wrap">
+                <span className={`text-[9px] font-black px-2 py-0.5 rounded-full uppercase ${statusColor(c.status)}`}>{STATUS_LABEL[c.status] ?? c.status}</span>
+                {c.isAnonymous && (
+                  <span className="text-[9px] font-black px-2 py-0.5 rounded-full uppercase bg-violet-50 text-violet-700 flex items-center gap-1">
+                    <EyeOff size={9}/> Anonymous
+                  </span>
+                )}
+              </div>
               <span className="text-[10px] font-bold text-slate-400">{c.createdAt}</span>
             </div>
             <div className="font-extrabold text-slate-900 text-sm">{c.subject}</div>
