@@ -594,6 +594,37 @@ export const feeService = {
     return { applied, advance, paymentId };
   },
 
+  /**
+   * Strict per-installment payment. Applies cash + optional discount to ONE
+   * specific installment chosen by the principal — bypasses the oldest-first
+   * allocator, so payments cannot silently slip into advance_balances.
+   *
+   * Server (pay_installment RPC) hard-rejects overpay: cash + discount must
+   * be ≤ outstanding on that row. Both `paid_amount` and `write_off_amount`
+   * are bumped atomically and a fee_write_offs row is logged when discount > 0,
+   * so the expand-on-tap history shows every cash + discount entry tied to
+   * the row.
+   */
+  async recordPaymentForInstallment(
+    installmentId: string, amount: number, discount = 0,
+    method = 'CASH', date?: string, note?: string, useAdvance = false,
+  ): Promise<{ paymentId: string }> {
+    if (!Number.isInteger(amount) || amount < 0) {
+      throw new Error('Amount must be a non-negative whole rupee value');
+    }
+    if (!Number.isInteger(discount) || discount < 0) {
+      throw new Error('Discount must be a non-negative whole rupee value');
+    }
+    if (amount === 0 && discount === 0 && !useAdvance) {
+      throw new Error('Enter an amount, discount, or use advance before submitting');
+    }
+    const result = await apiFees.payInstallment({
+      installmentId, amount, discount, method, date, note, useAdvance,
+    });
+    await this.refreshAll();
+    return { paymentId: (result as any).paymentId as string };
+  },
+
   /** Bulk RTE / govt payment over multiple students' tuition installments. */
   async recordGovernmentPayment(
     studentIds: string[], totalAmount: number, referenceNo: string, note: string,

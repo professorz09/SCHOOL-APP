@@ -151,6 +151,10 @@ export const apiFees = {
     studentId: string; amount: number; method: string;
     date?: string; note?: string; useAdvance?: boolean; applyLateFee?: boolean; discountAmount?: number;
   }) => post<any>('/fees/pay', body),
+  payInstallment: (body: {
+    installmentId: string; amount: number; discount?: number;
+    method?: string; date?: string; note?: string; useAdvance?: boolean;
+  }) => post<{ paymentId: string; payment: any }>('/fees/pay-installment', body),
   getStudentFees: (studentId: string, yearId?: string) => {
     const q = yearId ? `?yearId=${yearId}` : '';
     return get<any>(`/fees/student/${studentId}${q}`);

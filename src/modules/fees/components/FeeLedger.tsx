@@ -3,7 +3,7 @@ import {
   ArrowLeft, IndianRupee, CheckCircle2, AlertTriangle, Clock, X,
   ShieldCheck, Search, Printer, Banknote, Smartphone, CreditCard,
   Building2, FileCheck, ChevronRight, Receipt, TrendingDown, Users, Filter,
-  RefreshCw, Download, ChevronDown, Calendar, RotateCcw, AlertCircle, MoreVertical,
+  RefreshCw, Download, ChevronDown, Calendar, RotateCcw, AlertCircle,
 } from 'lucide-react';
 import { feeService, FeeInstallment, FeeStatus, FeeType, PaymentRecord, GovernmentPaymentRecord } from '@/modules/fees/fee.service';
 import { exportCsv } from '@/shared/utils/csv';
@@ -177,6 +177,30 @@ export const FeeLedger: React.FC<Props> = ({ onBack }) => {
   // → jspdf when the user clicks "Download PDF". Both libs are lazy-imported.
   const receiptCardRef = useRef<HTMLDivElement | null>(null);
 
+  // Per-installment pay modal: tapping the inline "Pay" button on a schedule
+  // row opens a focused modal that applies cash + (optional) discount to ONLY
+  // that installment via the strict pay_installment RPC. No oldest-first
+  // allocation, no advance dump on overpay.
+  const [rowPayModal, setRowPayModal] = useState<{
+    installmentId: string; month: string; feeType: FeeType;
+    outstanding: number; dueDate: string;
+  } | null>(null);
+  const [rowPayAmount, setRowPayAmount]       = useState('');
+  const [rowPayDiscount, setRowPayDiscount]   = useState('');
+  const [rowPayMethod, setRowPayMethod]       = useState<PaymentMethod>('CASH');
+  const [rowPayNote, setRowPayNote]           = useState('');
+  const [rowPaySubmitting, setRowPaySubmitting] = useState(false);
+  // Mobile UX: keep the modal compact — only Cash + the live remaining
+  // preview show by default. Discount, method, and note live behind a
+  // "More Options" disclosure (mirrors the existing Collect Payment modal).
+  const [rowPayMoreOpen, setRowPayMoreOpen]   = useState(false);
+  const [rowPayUseAdvance, setRowPayUseAdvance] = useState(false);
+  const [rowPayPaidBy, setRowPayPaidBy]       = useState<'PARENT' | 'GOVERNMENT'>('PARENT');
+
+  // Schedule row's expand-on-tap history: which installment is expanded.
+  // Only one open at a time so the timeline stays scannable.
+  const [expandedInstId, setExpandedInstId] = useState<string | null>(null);
+
   useEffect(() => {
     (async () => {
       try {
@@ -306,6 +330,72 @@ export const FeeLedger: React.FC<Props> = ({ onBack }) => {
       showToast(e instanceof Error ? e.message : 'Regenerate failed', 'error');
     } finally {
       setRegenSubmitting(false);
+    }
+  };
+
+  // Open the per-row pay modal for a specific installment. Pre-fills the
+  // outstanding so a one-tap full payment is the common path, but the
+  // principal can still type any amount up to the outstanding (overpay is
+  // hard-rejected by the server's pay_installment RPC).
+  const openRowPay = (inst: FeeInstallment) => {
+    const outstanding = Math.max(0, inst.amount - inst.paidAmount - inst.writeOffAmount);
+    if (outstanding <= 0) return;
+    setRowPayModal({
+      installmentId: inst.id,
+      month: inst.month,
+      feeType: inst.feeType,
+      outstanding,
+      dueDate: inst.dueDate,
+    });
+    setRowPayAmount(String(outstanding));
+    setRowPayDiscount('');
+    setRowPayMethod('CASH');
+    setRowPayNote('');
+    setRowPayMoreOpen(false);
+    setRowPayUseAdvance(false);
+    setRowPayPaidBy(inst.payerType === 'GOVERNMENT' ? 'GOVERNMENT' : 'PARENT');
+  };
+
+  const handleRowPaySubmit = async () => {
+    if (!rowPayModal || !selected) return;
+    const amount   = Number(rowPayAmount) || 0;
+    const discount = Number(rowPayDiscount) || 0;
+    if (amount === 0 && discount === 0 && !rowPayUseAdvance) {
+      showToast('Enter an amount, discount, or use advance', 'error');
+      return;
+    }
+    if (amount + discount > rowPayModal.outstanding) {
+      showToast(`Overpay blocked — max ₹${rowPayModal.outstanding.toLocaleString('en-IN')} on this row`, 'error');
+      return;
+    }
+    setRowPaySubmitting(true);
+    try {
+      // When the principal marks the source as Government, the method is
+      // overridden to 'GOVERNMENT' so history can colour the entry blue
+      // and the audit log distinguishes RTE/grant flows from cash receipts.
+      const effectiveMethod = rowPayPaidBy === 'GOVERNMENT' ? 'GOVERNMENT' : METHOD_LABEL[rowPayMethod];
+      await feeService.recordPaymentForInstallment(
+        rowPayModal.installmentId,
+        Math.round(amount),
+        Math.round(discount),
+        effectiveMethod,
+        undefined,
+        rowPayNote || undefined,
+        rowPayUseAdvance,
+      );
+      const updated = feeService.getStudentFeeProfile(
+        selected.studentId, selected.name, selected.className,
+        selected.admissionNo, selected.isRte,
+      );
+      updateStudent(updated);
+      setPaymentTransactions(feeService.getPaymentHistory());
+      await reloadYearGroups(selected.studentId);
+      setRowPayModal(null);
+      showToast('Payment recorded');
+    } catch (e) {
+      showToast(e instanceof Error ? e.message : 'Payment failed', 'error');
+    } finally {
+      setRowPaySubmitting(false);
     }
   };
 
@@ -658,7 +748,7 @@ export const FeeLedger: React.FC<Props> = ({ onBack }) => {
             <div className="flex-1 min-w-0">
               <div className="flex items-center gap-2">
                 <span className="font-black text-slate-900 text-lg lg:text-2xl truncate">{selected.name}</span>
-                {selected.isRte && <span className="flex items-center gap-0.5 text-[9px] lg:text-[10px] font-black bg-emerald-100 text-emerald-700 px-2 py-0.5 rounded-full"><ShieldCheck size={9} /> RTE</span>}
+                {selected.isRte && <span className="flex items-center gap-0.5 text-[9px] lg:text-[10px] font-black bg-blue-100 text-blue-700 px-2 py-0.5 rounded-full"><ShieldCheck size={9} /> RTE</span>}
               </div>
               <p className="text-[10px] lg:text-xs font-bold text-slate-400">{selected.className} · {selected.admissionNo}</p>
             </div>
@@ -702,64 +792,102 @@ export const FeeLedger: React.FC<Props> = ({ onBack }) => {
           )}
         </div>
 
-        {/* Tab bar — clean two-tab strip + a single overflow menu on the
-            right for Regenerate / Govt Pay / CSV. Mixing four mismatched
-            buttons into the tab line earlier (per the screenshot) made
-            the actual tabs hard to read. The overflow keeps daily actions
-            (the tabs + Collect Payment below) front-and-centre. */}
-        <div className="bg-white border-b border-slate-100 px-4 lg:px-6 flex justify-between items-center">
-          <div className="flex gap-5 lg:gap-7">
+        {/* Tab bar — segmented pill control. Active tab gets a white "card"
+            on a slate-100 track with a subtle shadow, inactive tabs sit flat.
+            Reads more like a finished product than the previous underline-
+            on-borderless-tabs treatment. */}
+        <div className="bg-white border-b border-slate-100 px-4 lg:px-6 py-3 flex items-center justify-between gap-3">
+          <div className="bg-slate-100 rounded-xl p-1 flex flex-1 lg:flex-none">
             {(['SCHEDULE', 'HISTORY'] as const).map(t => (
               <button key={t} onClick={() => setDetailTab(t)}
-                className={`py-3 lg:py-3.5 text-[10px] lg:text-xs font-black uppercase tracking-widest border-b-2 transition-colors ${detailTab === t ? 'border-blue-600 text-blue-600' : 'border-transparent text-slate-400 hover:text-slate-600'}`}>
-                {t === 'SCHEDULE' ? 'Fee Schedule' : 'Payment History'}
+                className={`flex-1 lg:flex-none lg:px-5 py-2 text-[11px] lg:text-xs font-black uppercase tracking-wider rounded-lg transition-all ${detailTab === t ? 'bg-white text-blue-600 shadow-sm' : 'text-slate-500 hover:text-slate-700'}`}>
+                {t === 'SCHEDULE' ? 'Schedule' : 'History'}
               </button>
             ))}
           </div>
+          {/* Download split — explicit Download icon trigger (replaces the
+              cryptic ⋮ menu). Schedule + Regenerate + Govt Pay actions moved
+              inline to the year card / Collect Payment row, so this menu is
+              now exclusively about exporting data. */}
           <div className="relative">
             <button onClick={() => setLedgerMenuOpen(o => !o)}
-              className="my-2 flex items-center gap-1 px-2.5 py-1.5 rounded-lg text-slate-500 hover:bg-slate-100 transition-colors">
-              <MoreVertical size={16} />
+              aria-label="Download data"
+              className="flex items-center gap-1.5 px-3 h-9 rounded-xl text-slate-600 border border-slate-200 hover:bg-slate-50 hover:border-slate-300 transition-colors">
+              <Download size={14} />
+              <span className="text-[11px] font-black uppercase tracking-wider hidden lg:inline">Download</span>
+              <ChevronDown size={12} className={`text-slate-400 transition-transform ${ledgerMenuOpen ? 'rotate-180' : ''}`} />
             </button>
             {ledgerMenuOpen && (
               <>
                 <div className="fixed inset-0 z-30" onClick={() => setLedgerMenuOpen(false)} />
-                <div className="absolute right-0 top-full mt-1 z-40 w-52 bg-white rounded-xl shadow-lg border border-slate-200 py-1.5 animate-in fade-in slide-in-from-top-2">
-                  {(editorMode.isActive() || selected.installments.length === 0) && (
-                    <button onClick={() => { setLedgerMenuOpen(false); openRegenModal(); }}
-                      className="w-full flex items-center gap-2 px-3 py-2 text-[11px] font-black text-amber-700 hover:bg-amber-50 transition-colors">
-                      <RefreshCw size={12} /> {selected.installments.length === 0 ? 'Generate Schedule' : 'Regenerate Schedule'}
-                    </button>
-                  )}
-                  {selected.isRte && (
-                    <button onClick={() => { setLedgerMenuOpen(false); setGovtPayModal(true); }}
-                      className="w-full flex items-center gap-2 px-3 py-2 text-[11px] font-black text-blue-700 hover:bg-blue-50 transition-colors">
-                      <ShieldCheck size={12} /> Record Govt Payment
-                    </button>
-                  )}
+                <div className="absolute right-0 top-full mt-1.5 z-40 w-60 bg-white rounded-xl shadow-lg border border-slate-200 py-1.5 animate-in fade-in slide-in-from-top-2">
                   <button
                     onClick={() => {
                       setLedgerMenuOpen(false);
-                      const scheduleRows = selected.installments.map(i => ({
-                        kind: 'SCHEDULE',
-                        month: i.month, fee_type: i.feeType, due_date: i.dueDate,
-                        amount: i.amount, paid: i.paidAmount, discount: i.writeOffAmount,
-                        status: i.status, payer_type: i.payerType,
-                      }));
-                      const txnRows = paymentTransactions.filter(t => t.studentId === selected.studentId).map(t => ({
-                        kind: 'PAYMENT',
-                        date: t.date, receipt_no: t.receiptNo, method: t.method,
-                        amount: t.amount,
-                        discount: (t as { discountAmount?: number }).discountAmount ?? 0,
-                        advance: t.advanceAmount,
-                        installments: t.installmentDetails.map(d => `${d.month}:${d.feeType}=${d.amount}`).join(' | '),
-                      }));
+                      const studentTxns = paymentTransactions.filter(t => t.studentId === selected.studentId);
+                      const sorted = selected.installments.slice()
+                        .sort((a, b) => new Date(a.dueDate).getTime() - new Date(b.dueDate).getTime());
+                      const rows = sorted.map(i => {
+                        const linked = studentTxns
+                          .filter(t => !t.reversedAt && !t.reversesPaymentId
+                                       && t.installmentIds.includes(i.id))
+                          .sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
+                        const paidOn = linked[0]?.date ?? '';
+                        const remaining = Math.max(0, i.amount - i.paidAmount - i.writeOffAmount);
+                        return {
+                          Month:      i.month,
+                          'Due Date': i.dueDate,
+                          'Fee Type': FEE_TYPE_LABEL[i.feeType] ?? i.feeType,
+                          Total:      i.amount,
+                          Discount:   i.writeOffAmount,
+                          Paid:       i.paidAmount,
+                          'Paid On':  paidOn,
+                          Remaining:  remaining,
+                          Status:     i.status,
+                          Payer:      i.payerType,
+                        };
+                      });
                       const safeName = selected.name.replace(/\s+/g, '_');
-                      exportCsv(`fees_${safeName}_${selected.admissionNo}_${new Date().toISOString().slice(0, 10)}`,
-                        [...scheduleRows, ...txnRows]);
+                      exportCsv(`fees_monthly_${safeName}_${selected.admissionNo}_${new Date().toISOString().slice(0, 10)}`,
+                        rows);
                     }}
-                    className="w-full flex items-center gap-2 px-3 py-2 text-[11px] font-black text-slate-700 hover:bg-slate-50 transition-colors">
-                    <Download size={12} /> Export CSV
+                    className="w-full flex items-start gap-3 px-3 py-2.5 hover:bg-slate-50 transition-colors text-left">
+                    <div className="w-8 h-8 rounded-lg bg-emerald-50 text-emerald-600 flex items-center justify-center shrink-0">
+                      <Calendar size={14} />
+                    </div>
+                    <div className="min-w-0">
+                      <div className="text-[12px] font-black text-slate-900">Monthly Summary</div>
+                      <div className="text-[10px] font-bold text-slate-400">One row per installment · paid date + remaining</div>
+                    </div>
+                  </button>
+                  <button
+                    onClick={() => {
+                      setLedgerMenuOpen(false);
+                      const txnRows = paymentTransactions
+                        .filter(t => t.studentId === selected.studentId)
+                        .map(t => ({
+                          Date:       t.date,
+                          Receipt:    t.receiptNo,
+                          Method:     t.method,
+                          Cash:       t.amount,
+                          Discount:   t.discountAmount ?? 0,
+                          Advance:    t.advanceAmount,
+                          Installments: t.installmentDetails.map(d => `${d.month}:${FEE_TYPE_LABEL[d.feeType] ?? d.feeType}=${d.amount}`).join(' | '),
+                          Reversed:   t.reversedAt ? 'Yes' : '',
+                          Note:       t.note ?? '',
+                        }));
+                      const safeName = selected.name.replace(/\s+/g, '_');
+                      exportCsv(`fees_transactions_${safeName}_${selected.admissionNo}_${new Date().toISOString().slice(0, 10)}`,
+                        txnRows);
+                    }}
+                    className="w-full flex items-start gap-3 px-3 py-2.5 hover:bg-slate-50 transition-colors text-left">
+                    <div className="w-8 h-8 rounded-lg bg-indigo-50 text-indigo-600 flex items-center justify-center shrink-0">
+                      <Receipt size={14} />
+                    </div>
+                    <div className="min-w-0">
+                      <div className="text-[12px] font-black text-slate-900">Transactions</div>
+                      <div className="text-[10px] font-bold text-slate-400">Every payment, discount and reversal</div>
+                    </div>
                   </button>
                 </div>
               </>
@@ -769,12 +897,20 @@ export const FeeLedger: React.FC<Props> = ({ onBack }) => {
 
         <div className="flex-1 overflow-y-auto lg:overflow-visible p-4 lg:p-0 lg:pt-2 space-y-3 lg:space-y-4">
 
-          {/* ── COLLECT BUTTON (inside schedule tab) ──────────────────────── */}
+          {/* ── COLLECT + Govt Pay (inline) ──────────────────────────────── */}
           {detailTab === 'SCHEDULE' && (
-            <button onClick={() => setPayModal(true)}
-              className="w-full lg:w-auto lg:px-8 lg:self-start flex items-center justify-center gap-2 bg-emerald-600 hover:bg-emerald-700 text-white font-black text-sm lg:text-base py-3.5 lg:py-4 rounded-2xl shadow-md active:scale-[0.98] transition-all">
-              <IndianRupee size={16} /> Collect Payment
-            </button>
+            <div className="flex gap-2">
+              <button onClick={() => setPayModal(true)}
+                className="flex-1 lg:flex-none lg:px-8 flex items-center justify-center gap-2 bg-emerald-600 hover:bg-emerald-700 text-white font-black text-sm lg:text-base py-3.5 lg:py-4 rounded-2xl shadow-md active:scale-[0.98] transition-all">
+                <IndianRupee size={16} /> Collect Payment
+              </button>
+              {selected.isRte && (
+                <button onClick={() => setGovtPayModal(true)}
+                  className="px-4 lg:px-5 flex items-center justify-center gap-2 bg-blue-50 hover:bg-blue-100 text-blue-700 font-black text-xs lg:text-sm py-3.5 lg:py-4 rounded-2xl border border-blue-200 active:scale-[0.98] transition-all">
+                  <ShieldCheck size={14} /> <span className="hidden lg:inline">Govt Pay</span>
+                </button>
+              )}
+            </div>
           )}
 
           {/* ── PREVIOUS YEAR DUES ────────────────────────────────────────── */}
@@ -828,30 +964,76 @@ export const FeeLedger: React.FC<Props> = ({ onBack }) => {
             const yearDue   = group.installments.reduce((a, i) => a + Math.max(0, i.amount - i.paidAmount - i.writeOffAmount), 0);
             return (
               <div key={group.academicYearId} className="space-y-3">
-                <button
+                <div
                   onClick={() => setCollapsedYears(prev => ({ ...prev, [group.academicYearId]: !prev[group.academicYearId] }))}
-                  className={`w-full flex items-center justify-between border rounded-2xl px-4 lg:px-5 py-3 lg:py-3.5 active:scale-[0.99] transition-all ${group.isActive ? 'bg-gradient-to-r from-blue-50 to-white border-blue-200 hover:border-blue-300' : 'bg-white border-slate-200 hover:border-slate-300'}`}>
-                  <div className="flex items-center gap-2.5 min-w-0">
-                    <div className={`w-9 h-9 rounded-xl flex items-center justify-center shrink-0 ${group.isActive ? 'bg-blue-600 text-white' : 'bg-slate-100 text-slate-400'}`}>
-                      <Calendar size={15} />
-                    </div>
-                    <div className="min-w-0 text-left">
-                      <div className="flex items-center gap-1.5">
-                        <span className="font-black text-slate-900 text-sm lg:text-base truncate">{group.yearLabel}</span>
-                        {group.isActive && <span className="text-[8px] font-black bg-emerald-100 text-emerald-700 px-1.5 py-0.5 rounded-full">ACTIVE</span>}
+                  role="button" tabIndex={0}
+                  className={`w-full text-left border rounded-2xl px-4 lg:px-5 py-4 cursor-pointer transition-all ${group.isActive ? 'bg-white border-slate-200 hover:border-blue-300 shadow-sm' : 'bg-white border-slate-200 hover:border-slate-300'}`}>
+                  <div className="flex items-center justify-between gap-3">
+                    <div className="flex items-center gap-3 min-w-0">
+                      <div className={`w-10 h-10 lg:w-11 lg:h-11 rounded-xl flex items-center justify-center shrink-0 ${group.isActive ? 'bg-blue-600 text-white' : 'bg-slate-100 text-slate-400'}`}>
+                        <Calendar size={16} />
                       </div>
-                      <div className="text-[10px] font-bold text-slate-400">{group.installments.length} installments · Total ₹{yearTotal.toLocaleString('en-IN')}</div>
+                      <div className="min-w-0">
+                        <div className="flex items-center gap-2">
+                          <span className="font-black text-slate-900 text-base lg:text-lg truncate leading-tight">{group.yearLabel}</span>
+                          {group.isActive && <span className="text-[9px] font-black bg-emerald-100 text-emerald-700 px-2 py-0.5 rounded-full uppercase tracking-wider">Active</span>}
+                        </div>
+                        <div className="text-[11px] font-bold text-slate-500 mt-0.5 tabular-nums">
+                          {group.installments.length} installments · ₹{yearTotal.toLocaleString('en-IN')} total
+                        </div>
+                      </div>
+                    </div>
+                    <div className="flex items-center gap-2 shrink-0">
+                      <div className="text-right">
+                        {yearTotal > 0 && (
+                          <div className="text-base lg:text-lg font-black tabular-nums leading-none text-slate-900">
+                            {Math.round(((yearPaid + group.installments.reduce((a, i) => a + i.writeOffAmount, 0)) / yearTotal) * 100)}<span className="text-slate-400 text-sm">%</span>
+                          </div>
+                        )}
+                        <div className={`text-[10px] font-black uppercase tracking-wider mt-1 ${yearDue === 0 && yearTotal > 0 ? 'text-emerald-600' : 'text-slate-400'}`}>
+                          {yearDue === 0 && yearTotal > 0 ? 'All clear' : 'Collected'}
+                        </div>
+                      </div>
+                      <ChevronDown size={18} className={`text-slate-400 transition-transform ml-1 ${collapsed ? '-rotate-90' : ''}`} />
                     </div>
                   </div>
-                  <div className="flex items-center gap-3 shrink-0">
-                    <div className="text-right">
-                      <div className="text-[11px] font-black text-emerald-600 tabular-nums">₹{yearPaid.toLocaleString('en-IN')} <span className="text-slate-400 font-bold">paid</span></div>
-                      {yearDue > 0 && <div className="text-[11px] font-black text-rose-500 tabular-nums">₹{yearDue.toLocaleString('en-IN')} <span className="text-slate-400 font-bold">due</span></div>}
-                      {yearDue === 0 && yearTotal > 0 && <div className="text-[11px] font-black text-emerald-500">All clear</div>}
+
+                  {/* Year-level progress bar — replaces the cramped 2-line
+                      paid/due numbers stacked on the right with a proper
+                      visual readout. */}
+                  {yearTotal > 0 && (() => {
+                    const cleared = yearPaid + group.installments.reduce((a, i) => a + i.writeOffAmount, 0);
+                    const pctNum = Math.min(100, Math.round((cleared / yearTotal) * 100));
+                    return (
+                      <div className="mt-3 space-y-2">
+                        <div className="h-1.5 bg-slate-100 rounded-full overflow-hidden">
+                          <div className={`h-full rounded-full transition-all ${pctNum >= 100 ? 'bg-emerald-500' : group.isActive ? 'bg-blue-500' : 'bg-slate-400'}`}
+                               style={{ width: `${pctNum}%` }} />
+                        </div>
+                        <div className="flex items-center justify-between text-[11px] font-bold tabular-nums">
+                          <span className="text-emerald-700">₹{yearPaid.toLocaleString('en-IN')} <span className="text-slate-400">paid</span></span>
+                          {yearDue > 0
+                            ? <span className="text-rose-600">₹{yearDue.toLocaleString('en-IN')} <span className="text-slate-400">remaining</span></span>
+                            : <span className="text-slate-400">Settled</span>}
+                        </div>
+                      </div>
+                    );
+                  })()}
+
+                  {/* Regenerate / Generate Schedule action — moved here from
+                      the overflow menu so the rare admin action lives next
+                      to the year it operates on. Only visible to editor-mode
+                      principals or when no installments exist yet. */}
+                  {group.isActive && (editorMode.isActive() || group.installments.length === 0) && (
+                    <div className="mt-3 pt-3 border-t border-slate-100 flex justify-end">
+                      <button
+                        onClick={(e) => { e.stopPropagation(); openRegenModal(); }}
+                        className="flex items-center gap-1.5 text-[11px] font-black text-amber-700 bg-amber-50 hover:bg-amber-100 px-3 py-1.5 rounded-lg border border-amber-200 transition-colors">
+                        <RefreshCw size={11} /> {group.installments.length === 0 ? 'Generate Schedule' : 'Regenerate'}
+                      </button>
                     </div>
-                    <ChevronDown size={16} className={`text-slate-400 transition-transform ${collapsed ? '-rotate-90' : ''}`} />
-                  </div>
-                </button>
+                  )}
+                </div>
 
                 {!collapsed && (() => {
                   const sorted = group.installments.slice()
@@ -864,9 +1046,12 @@ export const FeeLedger: React.FC<Props> = ({ onBack }) => {
                   <div className="space-y-4">
                   {realInsts.length > 0 && (
                   <div>
-                    <div className="flex items-center gap-2 mb-3 px-1">
-                      <span className="text-[10px] font-black text-slate-500 uppercase tracking-widest">Payable</span>
-                      <span className="text-[10px] font-bold text-slate-400">· {realInsts.length}</span>
+                    <div className="flex items-center justify-between mb-3 px-1">
+                      <div className="flex items-center gap-2">
+                        <span className="w-1 h-3.5 bg-blue-500 rounded-full" />
+                        <span className="text-[11px] font-black text-slate-700 uppercase tracking-wider">Payable</span>
+                        <span className="text-[10px] font-black text-slate-400 bg-slate-100 px-1.5 py-0.5 rounded-md">{realInsts.length}</span>
+                      </div>
                     </div>
                     {/* Timeline — vertical rail on the left, status dot per
                         installment, content flows inline. Replaces the heavy
@@ -892,69 +1077,162 @@ export const FeeLedger: React.FC<Props> = ({ onBack }) => {
                                   on top of the line, not next to it) */}
                               <div className={`absolute -left-[14px] lg:-left-[14px] top-1.5 w-3 h-3 rounded-full ring-2 ring-white ${dotColor}`} />
 
-                              <div className="bg-white rounded-xl border border-slate-100 px-3.5 py-2.5 lg:px-4 lg:py-3 hover:border-slate-200 transition-colors">
-                                {/* Headline row */}
-                                <div className="flex items-center justify-between gap-2">
-                                  <div className="min-w-0 flex items-center gap-2 flex-wrap">
-                                    <span className="font-black text-slate-900 text-sm lg:text-base leading-none">{inst.month}</span>
-                                    <span className={`text-[9px] font-black px-1.5 py-0.5 rounded ${FEE_TYPE_COLOR[inst.feeType] ?? 'bg-slate-100 text-slate-600'}`}>
+                              <div className="bg-white rounded-2xl border border-slate-100 p-4 lg:p-5 hover:border-slate-200 transition-colors">
+                                {/* Header — month name big, fee type subtle text below.
+                                    Amount is the visual anchor on the right with
+                                    the due date as a quiet caption. No coloured
+                                    chips compete with the amount for attention. */}
+                                <div className="flex items-start justify-between gap-3">
+                                  <div className="min-w-0">
+                                    <div className="font-black text-slate-900 text-base lg:text-lg leading-tight truncate">{inst.month}</div>
+                                    <div className="text-[11px] font-bold text-slate-400 mt-0.5 truncate">
                                       {FEE_TYPE_LABEL[inst.feeType] ?? inst.feeType}
-                                    </span>
-                                    {inst.payerType === 'GOVERNMENT' && (
-                                      <span className="text-[9px] font-black px-1.5 py-0.5 rounded bg-emerald-50 text-emerald-700">RTE</span>
-                                    )}
+                                      {inst.payerType === 'GOVERNMENT' && <span className="text-emerald-600"> · RTE</span>}
+                                    </div>
                                   </div>
                                   <div className="text-right shrink-0">
-                                    <div className="font-black text-slate-900 text-sm lg:text-base tabular-nums leading-none">₹{inst.amount.toLocaleString('en-IN')}</div>
-                                    <div className="text-[9px] font-bold text-slate-400 mt-0.5">{inst.dueDate}</div>
+                                    <div className="font-black text-slate-900 text-base lg:text-lg tabular-nums leading-tight">₹{inst.amount.toLocaleString('en-IN')}</div>
+                                    <div className="text-[10px] font-bold text-slate-400 mt-0.5">Due {inst.dueDate}</div>
                                   </div>
                                 </div>
 
-                                {/* Sub-row chips: only when there's something
-                                    real to show. UPCOMING rows render with
-                                    just the headline above — that's the
-                                    point of the timeline-clean look. */}
-                                {(inst.paidAmount > 0 || inst.writeOffAmount > 0 || due > 0 || ['PAID','WAIVED','WRITTEN_OFF','CANCELLED'].includes(inst.status)) && (
-                                  <div className="flex items-center gap-1.5 flex-wrap mt-2 text-[10px] font-black tabular-nums">
-                                    {inst.paidAmount > 0 && (
-                                      <span className="px-2 py-0.5 rounded-full bg-emerald-50 text-emerald-700 border border-emerald-100">
-                                        Paid ₹{inst.paidAmount.toLocaleString('en-IN')}
-                                      </span>
-                                    )}
-                                    {inst.writeOffAmount > 0 && (
-                                      <span className="px-2 py-0.5 rounded-full bg-indigo-50 text-indigo-700 border border-indigo-100">
-                                        Discount ₹{inst.writeOffAmount.toLocaleString('en-IN')}
-                                      </span>
-                                    )}
-                                    {due > 0 ? (
-                                      <span className="px-2 py-0.5 rounded-full bg-rose-50 text-rose-700 border border-rose-100">
-                                        Balance ₹{due.toLocaleString('en-IN')}
-                                      </span>
-                                    ) : (inst.amount > 0 || inst.paidAmount > 0 || inst.writeOffAmount > 0) ? (
-                                      <span className="px-2 py-0.5 rounded-full bg-emerald-50 text-emerald-700 border border-emerald-100">
-                                        ✓ {inst.status === 'WAIVED' ? 'Waived' : inst.status === 'WRITTEN_OFF' ? 'Written off' : inst.status === 'CANCELLED' ? 'Cancelled' : 'Cleared'}
-                                      </span>
-                                    ) : null}
+                                {/* Progress bar — replaces the chip-soup with a
+                                    single visual cue. Width = (paid+discount)
+                                    fraction of total. */}
+                                {inst.amount > 0 && (() => {
+                                  const cleared = Math.min(inst.amount, inst.paidAmount + inst.writeOffAmount);
+                                  const pctNum = Math.round((cleared / inst.amount) * 100);
+                                  const barColor =
+                                    inst.status === 'PAID' || inst.status === 'WAIVED' || inst.status === 'WRITTEN_OFF' ? 'bg-emerald-500'
+                                    : inst.status === 'CANCELLED' ? 'bg-slate-300'
+                                    : inst.status === 'PARTIAL_DUE' || inst.status === 'DUE' || inst.status === 'OVERDUE' ? 'bg-rose-500'
+                                    : inst.status === 'PARTIAL' ? 'bg-amber-400'
+                                    : 'bg-slate-200';
+                                  return (
+                                    <div className="mt-3 h-1.5 bg-slate-100 rounded-full overflow-hidden">
+                                      <div className={`h-full rounded-full transition-all ${barColor}`} style={{ width: `${pctNum}%` }} />
+                                    </div>
+                                  );
+                                })()}
+
+                                {/* Status line — one quiet sentence instead of
+                                    three colour-coded chips. */}
+                                <div className="mt-2.5 text-[12px] font-bold text-slate-600 tabular-nums">
+                                  {due > 0 ? (
+                                    <>
+                                      <span className="text-rose-600 font-black">₹{due.toLocaleString('en-IN')} pending</span>
+                                      {(inst.paidAmount > 0 || inst.writeOffAmount > 0) && (
+                                        <span className="text-slate-400">
+                                          {' · '}
+                                          {inst.paidAmount > 0 && <>Paid ₹{inst.paidAmount.toLocaleString('en-IN')}</>}
+                                          {inst.paidAmount > 0 && inst.writeOffAmount > 0 && ' + '}
+                                          {inst.writeOffAmount > 0 && <>Discount ₹{inst.writeOffAmount.toLocaleString('en-IN')}</>}
+                                        </span>
+                                      )}
+                                    </>
+                                  ) : (inst.amount > 0 || inst.paidAmount > 0 || inst.writeOffAmount > 0) ? (
+                                    <span className="text-emerald-700 font-black">
+                                      ✓ {inst.status === 'WAIVED' ? 'Waived' : inst.status === 'WRITTEN_OFF' ? 'Written off' : inst.status === 'CANCELLED' ? 'Cancelled' : 'Fully paid'}
+                                      {inst.writeOffAmount > 0 && (
+                                        <span className="text-slate-400 font-bold"> · ₹{inst.writeOffAmount.toLocaleString('en-IN')} discount</span>
+                                      )}
+                                    </span>
+                                  ) : (
+                                    <span className="text-slate-400">Upcoming</span>
+                                  )}
+                                </div>
+
+                                {/* Action row — Pay (when due) and a single
+                                    History toggle. Receipt + note now live
+                                    INSIDE the history panel where each entry
+                                    has its own receipt button, so the card
+                                    surface stays uncluttered. */}
+                                {(isActionable || inst.paidAmount > 0 || inst.writeOffAmount > 0) && (
+                                  <div className="mt-3 flex items-center gap-2">
+                                    {isActionable && inst.payerType === 'PARENT' ? (
+                                      <button
+                                        onClick={() => openRowPay(inst)}
+                                        className="flex-1 flex items-center justify-center gap-1.5 text-[13px] font-black text-white bg-emerald-600 hover:bg-emerald-700 active:scale-[0.98] py-3 rounded-xl transition-all">
+                                        <IndianRupee size={13} /> Pay ₹{due.toLocaleString('en-IN')}
+                                      </button>
+                                    ) : <div className="flex-1" />}
+                                    {(inst.paidAmount > 0 || inst.writeOffAmount > 0) && (() => {
+                                      const isOpen = expandedInstId === inst.id;
+                                      return (
+                                        <button
+                                          onClick={() => setExpandedInstId(isOpen ? null : inst.id)}
+                                          className="flex items-center gap-1.5 text-[12px] font-black text-slate-600 px-3 py-3 rounded-xl border border-slate-200 hover:bg-slate-50 transition-colors">
+                                          History <ChevronDown size={12} className={`transition-transform ${isOpen ? 'rotate-180' : ''}`} />
+                                        </button>
+                                      );
+                                    })()}
                                   </div>
                                 )}
 
-                                {inst.writeOffReason && (
-                                  <div className="text-[10px] font-bold text-indigo-500 mt-1 italic truncate">{inst.writeOffReason}</div>
-                                )}
-
-                                {/* Per the fees spec, discount is a payment-time
-                                    action — applied inside the Collect Payment
-                                    modal, not as a standalone row control. The
-                                    only inline action left is "Receipt" for
-                                    rows that already have a payment recorded. */}
-                                {receipt && (
-                                  <div className="mt-2">
-                                    <button onClick={() => setReceiptModal(receipt)}
-                                      className="flex items-center gap-1 text-[10px] font-black text-indigo-600 px-2 py-1 rounded-full border border-indigo-100 bg-indigo-50 hover:bg-indigo-100 transition-colors">
-                                      <Printer size={10} /> Receipt
-                                    </button>
-                                  </div>
-                                )}
+                                {/* Expand-on-tap history — each entry is its
+                                    own card-let with date, amount, method, note
+                                    and a per-payment Receipt button. Discounts
+                                    surface as a dedicated row with the reason. */}
+                                {expandedInstId === inst.id && (() => {
+                                  const linked = paymentTransactions
+                                    .filter(p => p.studentId === selected.studentId
+                                              && p.installmentIds.includes(inst.id))
+                                    .sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
+                                  return (
+                                    <div className="mt-3 pt-3 border-t border-slate-100 space-y-2">
+                                      {linked.length === 0 && inst.writeOffAmount === 0 && (
+                                        <div className="text-[11px] font-bold text-slate-400">No transactions on this installment yet.</div>
+                                      )}
+                                      {linked.map(p => {
+                                        const cashApplied = p.installmentDetails
+                                          .filter((_, idx) => p.installmentIds[idx] === inst.id)
+                                          .reduce((s, d) => s + d.amount, 0);
+                                        const reversed = !!p.reversedAt;
+                                        const isReversal = !!p.reversesPaymentId;
+                                        return (
+                                          <div key={p.id}
+                                            className={`bg-slate-50/60 rounded-xl p-3 ${reversed ? 'opacity-50' : ''}`}>
+                                            <div className="flex items-start justify-between gap-2">
+                                              <div className="min-w-0">
+                                                <div className={`text-[13px] font-black ${isReversal ? 'text-rose-600' : 'text-slate-900'} ${reversed ? 'line-through' : ''}`}>
+                                                  {isReversal ? 'Reversed' : (p.method || 'Payment')}
+                                                </div>
+                                                <div className="text-[10px] font-bold text-slate-400 mt-0.5">{p.date}</div>
+                                              </div>
+                                              <div className={`text-[14px] font-black tabular-nums shrink-0 ${isReversal ? 'text-rose-600' : 'text-emerald-700'} ${reversed ? 'line-through' : ''}`}>
+                                                {isReversal ? '−' : '+'}₹{Math.abs(cashApplied).toLocaleString('en-IN')}
+                                              </div>
+                                            </div>
+                                            {p.note && (
+                                              <div className="text-[11px] font-bold text-slate-500 mt-1.5 break-words">“{p.note}”</div>
+                                            )}
+                                            {!reversed && !isReversal && (
+                                              <button onClick={() => setReceiptModal(p)}
+                                                className="mt-2 flex items-center gap-1 text-[11px] font-black text-indigo-600 hover:text-indigo-700 transition-colors">
+                                                <Printer size={11} /> View Receipt
+                                              </button>
+                                            )}
+                                          </div>
+                                        );
+                                      })}
+                                      {inst.writeOffAmount > 0 && (
+                                        <div className="bg-indigo-50/40 rounded-xl p-3">
+                                          <div className="flex items-start justify-between gap-2">
+                                            <div className="min-w-0">
+                                              <div className="text-[13px] font-black text-indigo-700">Discount</div>
+                                              {inst.writeOffReason && (
+                                                <div className="text-[11px] font-bold text-slate-500 mt-0.5 break-words">“{inst.writeOffReason}”</div>
+                                              )}
+                                            </div>
+                                            <div className="text-[14px] font-black tabular-nums shrink-0 text-indigo-700">
+                                              −₹{inst.writeOffAmount.toLocaleString('en-IN')}
+                                            </div>
+                                          </div>
+                                        </div>
+                                      )}
+                                    </div>
+                                  );
+                                })()}
                               </div>
                             </div>
                           );
@@ -1281,13 +1559,16 @@ export const FeeLedger: React.FC<Props> = ({ onBack }) => {
                 )}
               </div>
 
-              {/* Method */}
+              {/* Method — uniform 5-column grid so the buttons line up cleanly
+                  on phones (was previously a flex-wrap with mixed widths that
+                  produced an ugly 3+2 break with "Net Banking" wrapping). */}
               <p className="text-[10px] font-black uppercase tracking-widest text-slate-400 mb-2">Method</p>
-              <div className="flex gap-2 flex-wrap mb-4">
+              <div className="grid grid-cols-5 gap-1.5 mb-4">
                 {(Object.keys(METHOD_LABEL) as PaymentMethod[]).map(m => (
                   <button key={m} onClick={() => setPaymentMethod(m)}
-                    className={`flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-[10px] font-black border transition-colors ${paymentMethod === m ? 'bg-indigo-600 text-white border-indigo-600' : 'bg-slate-50 text-slate-600 border-slate-200'}`}>
-                    {METHOD_ICON[m]} {METHOD_LABEL[m]}
+                    className={`flex flex-col items-center justify-center gap-1 py-2 rounded-xl border text-[9px] font-black transition-colors ${paymentMethod === m ? 'bg-indigo-600 text-white border-indigo-600' : 'bg-slate-50 text-slate-600 border-slate-200 hover:border-slate-300'}`}>
+                    {METHOD_ICON[m]}
+                    <span className="leading-none whitespace-nowrap">{METHOD_LABEL[m]}</span>
                   </button>
                 ))}
               </div>
@@ -1668,6 +1949,188 @@ export const FeeLedger: React.FC<Props> = ({ onBack }) => {
                   disabled={reversing || reverseReason.trim().length < 3 || (reverseMode === 'CUSTOM' && (!reverseKeepAmount || Number(reverseKeepAmount) <= 0 || Number(reverseKeepAmount) >= reverseTarget.amount))}
                   className="flex-1 py-3 bg-rose-600 hover:bg-rose-700 text-white font-black rounded-xl text-sm disabled:opacity-50 active:scale-[0.98] transition-all">
                   {reversing ? 'Reversing…' : 'Confirm Reversal'}
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* ── PER-ROW PAY MODAL (strict pay_installment) ────────────────────── */}
+        {rowPayModal && (
+          <div className="absolute inset-0 bg-slate-900/60 backdrop-blur-sm z-50 flex items-end">
+            <div className="w-full bg-white rounded-t-3xl p-6 pb-8 animate-in slide-in-from-bottom-8 max-h-[85vh] overflow-y-auto">
+              <div className="flex justify-between items-center mb-4">
+                <div>
+                  <h3 className="text-lg font-black text-slate-900">Pay this installment</h3>
+                  <p className="text-[10px] font-bold text-slate-400">
+                    {rowPayModal.month} · {FEE_TYPE_LABEL[rowPayModal.feeType] ?? rowPayModal.feeType} · Due {rowPayModal.dueDate}
+                  </p>
+                </div>
+                <button onClick={() => setRowPayModal(null)} className="w-8 h-8 bg-slate-100 rounded-full flex items-center justify-center">
+                  <X size={16} className="text-slate-500" />
+                </button>
+              </div>
+
+              <div className="bg-emerald-50 border border-emerald-200 rounded-xl p-3 mb-4">
+                <div className="text-[10px] font-black text-emerald-700 uppercase tracking-wider">Outstanding on this row</div>
+                <div className="text-2xl font-black text-emerald-700 tabular-nums mt-1">₹{rowPayModal.outstanding.toLocaleString('en-IN')}</div>
+              </div>
+
+              <div className="space-y-3">
+                <div>
+                  <label className="text-[10px] font-black text-slate-500 uppercase tracking-wider">Cash Amount</label>
+                  <input
+                    type="number" min={0} max={rowPayModal.outstanding}
+                    value={rowPayAmount}
+                    onChange={e => setRowPayAmount(e.target.value)}
+                    className="mt-1 w-full px-3 py-2.5 border border-slate-200 rounded-xl font-black text-slate-900 text-base focus:outline-none focus:border-emerald-400"
+                    placeholder="0"
+                  />
+                </div>
+
+                {/* Compact summary chips — show selected method/payer + any
+                    discount or advance toggled on, so the principal sees the
+                    current state without having to expand More Options. */}
+                <div className="flex items-center gap-2 flex-wrap text-[10px] font-black">
+                  {rowPayPaidBy === 'GOVERNMENT' ? (
+                    <span className="px-2 py-1 rounded-full bg-blue-50 text-blue-700 flex items-center gap-1 border border-blue-200">
+                      <ShieldCheck size={11} /> Paid by Government
+                    </span>
+                  ) : (
+                    <span className="px-2 py-1 rounded-full bg-slate-100 text-slate-600 flex items-center gap-1">
+                      {METHOD_ICON[rowPayMethod]} {METHOD_LABEL[rowPayMethod]}
+                    </span>
+                  )}
+                  {Number(rowPayDiscount) > 0 && (
+                    <span className="px-2 py-1 rounded-full bg-indigo-50 text-indigo-700">
+                      Discount ₹{Number(rowPayDiscount).toLocaleString('en-IN')}
+                    </span>
+                  )}
+                  {rowPayUseAdvance && (
+                    <span className="px-2 py-1 rounded-full bg-violet-50 text-violet-700">
+                      Use Advance
+                    </span>
+                  )}
+                </div>
+
+                {/* More Options disclosure — collapsed by default. */}
+                <div className="border border-slate-200 rounded-xl overflow-hidden">
+                  <button
+                    type="button"
+                    onClick={() => setRowPayMoreOpen(o => !o)}
+                    className="w-full flex items-center justify-between px-3 py-2.5 hover:bg-slate-50 transition-colors">
+                    <span className="text-[10px] font-black text-slate-500 uppercase tracking-wider">More Options</span>
+                    <ChevronDown size={14} className={`text-slate-400 transition-transform ${rowPayMoreOpen ? 'rotate-180' : ''}`} />
+                  </button>
+                  {rowPayMoreOpen && (
+                    <div className="px-3 pb-3 space-y-3 border-t border-slate-100 pt-3">
+                      {/* Paid by — Parent vs Government. When Government, the
+                          method chip + history entry render in blue so RTE /
+                          grant payments are distinguishable from cash receipts. */}
+                      <div>
+                        <label className="text-[10px] font-black text-slate-500 uppercase tracking-wider">Paid By</label>
+                        <div className="mt-1 grid grid-cols-2 gap-2">
+                          <button onClick={() => setRowPayPaidBy('PARENT')}
+                            className={`flex items-center justify-center gap-1.5 py-2 rounded-xl border text-[11px] font-black transition-colors ${rowPayPaidBy === 'PARENT' ? 'bg-slate-900 text-white border-slate-900' : 'bg-white text-slate-500 border-slate-200'}`}>
+                            Parent
+                          </button>
+                          <button onClick={() => setRowPayPaidBy('GOVERNMENT')}
+                            className={`flex items-center justify-center gap-1.5 py-2 rounded-xl border text-[11px] font-black transition-colors ${rowPayPaidBy === 'GOVERNMENT' ? 'bg-blue-600 text-white border-blue-600' : 'bg-white text-blue-600 border-blue-200'}`}>
+                            <ShieldCheck size={12} /> Government
+                          </button>
+                        </div>
+                      </div>
+
+                      {/* Advance credit — shown only when this student has a
+                          positive balance. Tapping the toggle marks the
+                          payment to draw from advance_balances first; cash
+                          field becomes optional in that flow. */}
+                      {selected && feeService.getAdvanceBalance(selected.studentId) > 0 && (
+                        <button
+                          type="button"
+                          onClick={() => setRowPayUseAdvance(v => !v)}
+                          className={`w-full flex items-center justify-between gap-2 px-3 py-2.5 rounded-xl border transition-colors ${rowPayUseAdvance ? 'bg-violet-50 border-violet-300' : 'bg-white border-slate-200 hover:border-violet-300'}`}>
+                          <div className="text-left">
+                            <div className="text-[11px] font-black text-violet-700">Use advance credit</div>
+                            <div className="text-[10px] font-bold text-slate-500 mt-0.5">
+                              ₹{feeService.getAdvanceBalance(selected.studentId).toLocaleString('en-IN')} available
+                            </div>
+                          </div>
+                          <div className={`w-9 h-5 rounded-full p-0.5 transition-colors ${rowPayUseAdvance ? 'bg-violet-600' : 'bg-slate-300'}`}>
+                            <div className={`w-4 h-4 bg-white rounded-full transition-transform ${rowPayUseAdvance ? 'translate-x-4' : ''}`} />
+                          </div>
+                        </button>
+                      )}
+
+                      <div>
+                        <label className="text-[10px] font-black text-slate-500 uppercase tracking-wider">Discount (optional)</label>
+                        <input
+                          type="number" min={0} max={rowPayModal.outstanding}
+                          value={rowPayDiscount}
+                          onChange={e => setRowPayDiscount(e.target.value)}
+                          className="mt-1 w-full px-3 py-2.5 border border-slate-200 rounded-xl font-black text-slate-900 text-base focus:outline-none focus:border-indigo-400"
+                          placeholder="0"
+                        />
+                      </div>
+
+                      <div>
+                        <label className="text-[10px] font-black text-slate-500 uppercase tracking-wider">Method</label>
+                        <div className="mt-1 grid grid-cols-5 gap-1.5">
+                          {(['CASH','UPI','NET_BANKING','CHEQUE','ONLINE'] as PaymentMethod[]).map(m => (
+                            <button key={m}
+                              onClick={() => setRowPayMethod(m)}
+                              className={`flex flex-col items-center justify-center gap-1 py-2 rounded-xl border text-[9px] font-black transition-colors ${rowPayMethod === m ? 'bg-slate-900 text-white border-slate-900' : 'bg-white text-slate-500 border-slate-200 hover:border-slate-300'}`}>
+                              {METHOD_ICON[m]}
+                              <span className="leading-none whitespace-nowrap">{METHOD_LABEL[m]}</span>
+                            </button>
+                          ))}
+                        </div>
+                      </div>
+
+                      <div>
+                        <label className="text-[10px] font-black text-slate-500 uppercase tracking-wider">Note (optional)</label>
+                        <input
+                          type="text" value={rowPayNote}
+                          onChange={e => setRowPayNote(e.target.value)}
+                          className="mt-1 w-full px-3 py-2.5 border border-slate-200 rounded-xl text-sm focus:outline-none focus:border-slate-400"
+                          placeholder="Discount reason / reference"
+                        />
+                      </div>
+                    </div>
+                  )}
+                </div>
+
+                {(() => {
+                  const a = Number(rowPayAmount) || 0;
+                  const d = Number(rowPayDiscount) || 0;
+                  const total = a + d;
+                  const overpay = total > rowPayModal.outstanding;
+                  const remaining = Math.max(0, rowPayModal.outstanding - total);
+                  return (
+                    <div className={`rounded-xl p-3 text-[11px] font-black flex items-center justify-between ${overpay ? 'bg-rose-50 text-rose-700 border border-rose-200' : 'bg-slate-50 text-slate-700'}`}>
+                      <span>{overpay ? 'Overpay blocked' : 'After this entry'}</span>
+                      <span className="tabular-nums">
+                        {overpay
+                          ? `₹${(total - rowPayModal.outstanding).toLocaleString('en-IN')} over`
+                          : `₹${remaining.toLocaleString('en-IN')} remaining`}
+                      </span>
+                    </div>
+                  );
+                })()}
+              </div>
+
+              <div className="flex gap-2 mt-5">
+                <button onClick={() => setRowPayModal(null)}
+                  className="flex-1 py-3 bg-slate-100 hover:bg-slate-200 text-slate-700 font-black rounded-xl text-sm transition-colors">
+                  Cancel
+                </button>
+                <button
+                  onClick={handleRowPaySubmit}
+                  disabled={rowPaySubmitting
+                    || ((Number(rowPayAmount) || 0) + (Number(rowPayDiscount) || 0) === 0 && !rowPayUseAdvance)
+                    || ((Number(rowPayAmount) || 0) + (Number(rowPayDiscount) || 0) > rowPayModal.outstanding)}
+                  className="flex-1 py-3 bg-emerald-600 hover:bg-emerald-700 text-white font-black rounded-xl text-sm disabled:opacity-50 active:scale-[0.98] transition-all">
+                  {rowPaySubmitting ? 'Recording…' : 'Record Payment'}
                 </button>
               </div>
             </div>

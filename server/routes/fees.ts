@@ -142,6 +142,45 @@ feesRouter.post('/pay', requireAuth, requireRole('PRINCIPAL'), async (req, res) 
   } catch (err) { fail(res, err); }
 });
 
+// POST /api/fees/pay-installment — strict per-row payment via pay_installment RPC.
+// Cash + optional discount apply only to the supplied installment_id; overpay
+// is hard-rejected by the RPC (no advance dump).
+feesRouter.post('/pay-installment', requireAuth, requireRole('PRINCIPAL'), async (req, res) => {
+  try {
+    const body = requireBody<{
+      installmentId: string; amount: number;
+      discount?: number; method?: string; date?: string; note?: string;
+      useAdvance?: boolean;
+    }>(req, ['installmentId', 'amount']);
+
+    const amount   = Math.max(0, Math.round(body.amount));
+    const discount = Math.max(0, Math.round(body.discount ?? 0));
+    if (amount === 0 && discount === 0 && !body.useAdvance) {
+      throw new ApiError(400, 'Amount, discount and advance cannot all be zero');
+    }
+
+    const db = userDb(req.jwt);
+    const { data: paymentId, error } = await db.rpc('pay_installment', {
+      p_installment_id: body.installmentId,
+      p_amount:         amount,
+      p_discount:       discount,
+      p_method:         body.method ?? 'CASH',
+      p_date:           body.date ?? new Date().toISOString().split('T')[0],
+      p_note:           body.note ?? null,
+      p_use_advance:    body.useAdvance ?? false,
+    });
+    if (error) throw new ApiError(400, error.message);
+
+    const { data: payment } = await adminDb
+      .from('payment_records')
+      .select('*, payment_installment_links(installment_id, amount_applied)')
+      .eq('id', paymentId)
+      .single();
+
+    ok(res, { paymentId, payment });
+  } catch (err) { fail(res, err); }
+});
+
 // POST /api/fees/govt-pay — bulk RTE / government payment
 feesRouter.post('/govt-pay', requireAuth, requireRole('PRINCIPAL'), async (req, res) => {
   try {

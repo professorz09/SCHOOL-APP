@@ -20,7 +20,7 @@ import React, { useEffect, useMemo, useState } from 'react';
 import {
   ArrowLeft, Library, FlaskConical, BookOpen, Box, Plus, Search,
   Trash2, X, Pencil, Check, AlertTriangle, History as HistoryIcon,
-  ArrowUpFromLine, ArrowDownToLine,
+  ArrowUpFromLine, ArrowDownToLine, RefreshCw,
 } from 'lucide-react';
 import { apiPrincipal } from '@/lib/apiClient';
 import { useUIStore } from '@/store/uiStore';
@@ -103,17 +103,25 @@ export const AssetsManager: React.FC<Props> = ({ onBack }) => {
 
   useEffect(() => { refresh(); /* eslint-disable-next-line react-hooks/exhaustive-deps */ }, []);
 
+  const refreshHistory = React.useCallback(async () => {
+    setHistoryLoading(true);
+    try {
+      const rows = await apiPrincipal.inventoryHistory();
+      setHistory(rows as HistoryEntry[]);
+    } catch (e) {
+      showToast(e instanceof Error ? e.message : 'Failed to load history', 'error');
+    } finally {
+      setHistoryLoading(false);
+    }
+  }, [showToast]);
+
   // Lazy-load history when the user flips to that view; refresh on every
   // open so adds/deletes the principal just performed appear without a
   // hard reload.
   useEffect(() => {
     if (view !== 'HISTORY') return;
-    setHistoryLoading(true);
-    apiPrincipal.inventoryHistory()
-      .then(rows => setHistory(rows as HistoryEntry[]))
-      .catch(e => showToast(e instanceof Error ? e.message : 'Failed to load history', 'error'))
-      .finally(() => setHistoryLoading(false));
-  }, [view, showToast]);
+    void refreshHistory();
+  }, [view, refreshHistory]);
 
   // Group history entries by date for the same timeline pattern as the
   // inventory list. Newest first.
@@ -186,7 +194,9 @@ export const AssetsManager: React.FC<Props> = ({ onBack }) => {
       showToast(`"${title}" added to inventory`);
       setForm(blankForm());
       setAddOpen(false);
-      await refresh();
+      // Refresh both lists so the History tab is current the next time
+      // the principal flips to it without waiting for the tab effect.
+      await Promise.all([refresh(), refreshHistory()]);
     } catch (e) {
       showToast(e instanceof Error ? e.message : 'Failed to add', 'error');
     } finally { setSubmitting(false); }
@@ -220,14 +230,14 @@ export const AssetsManager: React.FC<Props> = ({ onBack }) => {
       await apiPrincipal.inventoryDelete(deleting.id);
       showToast(`"${deleting.title}" removed`);
       setDeleting(null);
-      await refresh();
+      await Promise.all([refresh(), refreshHistory()]);
     } catch (e) {
       showToast(e instanceof Error ? e.message : 'Failed to delete', 'error');
     } finally { setSubmitting(false); }
   };
 
   return (
-    <div className="w-full bg-slate-50 flex flex-col animate-in slide-in-from-right-8 duration-300 min-h-screen">
+    <div className="w-full lg:max-w-5xl lg:mx-auto bg-slate-50 flex flex-col animate-in slide-in-from-right-8 duration-300 min-h-screen">
       {/* Sticky header */}
       <div className="bg-white border-b border-slate-100 px-4 pt-4 pb-3 sticky top-0 z-10 shadow-sm">
         <div className="flex items-center justify-between mb-3">
@@ -321,52 +331,72 @@ export const AssetsManager: React.FC<Props> = ({ onBack }) => {
             </div>
           ) : (
             <>
-              <div className="bg-amber-50 border border-amber-200 rounded-xl px-3 py-2 mb-4 flex items-start gap-2">
-                <HistoryIcon size={12} className="text-amber-600 shrink-0 mt-0.5"/>
-                <p className="text-[10px] font-bold text-amber-800 leading-relaxed">
-                  Inventory history is kept for <span className="font-black">7 days</span>, max <span className="font-black">1000</span> entries.
-                  Older events are auto-removed.
+              <div className="flex items-center justify-between gap-2 mb-3">
+                <p className="text-[10px] font-bold text-slate-500">
+                  Last 7 days · max 1000 entries · auto-pruned
                 </p>
+                <button onClick={refreshHistory}
+                  className="flex items-center gap-1.5 px-3 py-1.5 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-lg text-[10px] font-black uppercase tracking-widest transition-colors">
+                  <RefreshCw size={11}/> Refresh
+                </button>
               </div>
-              <div className="relative pl-5 lg:pl-6">
-                <div className="absolute left-2 lg:left-2.5 top-1.5 bottom-1.5 w-px bg-slate-200" />
+              <div className="space-y-5">
                 {historyGroups.map(group => (
-                  <div key={group.date} className="mb-5">
-                    <div className="text-[10px] font-black uppercase tracking-widest text-slate-500 mb-2.5 -ml-5 lg:-ml-6 pl-5 lg:pl-6">
-                      {formatDay(group.date)}
+                  <div key={group.date}>
+                    <div className="flex items-center gap-2 mb-2">
+                      <div className="text-[10px] font-black uppercase tracking-widest text-slate-500">
+                        {formatDay(group.date)}
+                      </div>
+                      <span className="text-[10px] font-bold text-slate-300">·</span>
+                      <span className="text-[10px] font-bold text-slate-400">
+                        {group.entries.length} event{group.entries.length === 1 ? '' : 's'}
+                      </span>
+                      <div className="flex-1 h-px bg-slate-100"/>
                     </div>
-                    <div className="space-y-2">
+                    <div className="space-y-1.5 lg:space-y-2">
                       {group.entries.map(h => {
                         const isAdd = h.action === 'ADD';
                         const meta = CATEGORY_META[h.category];
+                        const borderAccent = isAdd ? 'border-l-emerald-400' : 'border-l-rose-400';
+                        const ActionIcon = isAdd ? ArrowUpFromLine : ArrowDownToLine;
                         return (
-                          <div key={h.id} className="relative">
-                            <div className={`absolute -left-[14px] top-3 w-3 h-3 rounded-full ring-2 ring-white ${
-                              isAdd ? 'bg-amber-500' : 'bg-rose-500'
-                            }`}/>
-                            <div className="bg-white rounded-xl border border-slate-100 p-3.5">
-                              <div className="flex items-center gap-2">
-                                {isAdd
-                                  ? <ArrowUpFromLine size={11} className="text-amber-600 shrink-0"/>
-                                  : <ArrowDownToLine size={11} className="text-rose-500 shrink-0"/>}
-                                <span className="font-black text-slate-900 text-sm flex-1 truncate">{h.title}</span>
-                                <span className={`text-[9px] font-black px-2 py-0.5 rounded-full uppercase tracking-widest ${
-                                  isAdd ? 'bg-amber-50 text-amber-700' : 'bg-rose-50 text-rose-700'
-                                }`}>
-                                  {isAdd ? 'Added' : 'Removed'}
-                                </span>
+                          <div key={h.id}
+                            className={`bg-white rounded-xl border border-slate-200 border-l-4 ${borderAccent} px-3.5 py-3 lg:px-4 lg:py-3.5`}>
+                            <div className="flex items-start gap-3">
+                              <div className={`w-9 h-9 lg:w-10 lg:h-10 rounded-lg flex items-center justify-center shrink-0 ${
+                                isAdd ? 'bg-emerald-50 text-emerald-700' : 'bg-rose-50 text-rose-700'
+                              }`}>
+                                <ActionIcon size={16} />
                               </div>
-                              <div className="text-[10px] font-bold text-slate-500 mt-1">
-                                <span className={`px-1.5 py-0.5 rounded-md ${meta.soft} ${meta.tint} text-[9px] font-black uppercase tracking-widest`}>
-                                  {meta.label}
-                                </span>
-                                <span className="ml-2">×{h.quantity}</span>
-                                {h.done_by_name && <span className="text-slate-400"> · by {h.done_by_name}</span>}
-                                <span className="text-slate-400"> · {new Date(h.done_at).toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit' })}</span>
+                              <div className="flex-1 min-w-0">
+                                <div className="flex items-center justify-between gap-2">
+                                  <span className="font-black text-slate-900 text-sm lg:text-[15px] truncate">{h.title}</span>
+                                  <span className={`text-[10px] font-black px-2 py-0.5 rounded-full uppercase tracking-widest shrink-0 ${
+                                    isAdd ? 'bg-emerald-50 text-emerald-700' : 'bg-rose-50 text-rose-700'
+                                  }`}>
+                                    {isAdd ? 'Added' : 'Removed'}
+                                  </span>
+                                </div>
+                                <div className="flex items-center flex-wrap gap-1.5 mt-1 text-[10px] font-bold text-slate-500">
+                                  <span className={`px-1.5 py-0.5 rounded ${meta.soft} ${meta.tint} text-[9px] font-black uppercase tracking-widest`}>
+                                    {meta.label}
+                                  </span>
+                                  <span>×{h.quantity}</span>
+                                  {h.done_by_name && (
+                                    <>
+                                      <span className="text-slate-300">·</span>
+                                      <span>by {h.done_by_name}</span>
+                                    </>
+                                  )}
+                                  <span className="text-slate-300">·</span>
+                                  <span className="tabular-nums">
+                                    {new Date(h.done_at).toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit' })}
+                                  </span>
+                                </div>
+                                {h.description && (
+                                  <p className="text-[10px] font-bold text-slate-600 mt-1 line-clamp-2">{h.description}</p>
+                                )}
                               </div>
-                              {h.description && (
-                                <p className="text-[10px] font-bold text-slate-600 mt-1 line-clamp-2">{h.description}</p>
-                              )}
                             </div>
                           </div>
                         );
@@ -396,60 +426,76 @@ export const AssetsManager: React.FC<Props> = ({ onBack }) => {
             )}
           </div>
         ) : (
-          // Timeline view — vertical rail with a coloured dot per item.
-          // The rail is absolutely positioned inside a left-padded wrapper so
-          // it sits behind every dot regardless of card height.
-          <div className="relative pl-5 lg:pl-6">
-            <div className="absolute left-2 lg:left-2.5 top-1.5 bottom-1.5 w-px bg-slate-200" />
+          // Date-grouped list. Each group has a small heading and a stack of
+          // rows. No timeline rail / coloured dots — earlier the dots read as
+          // playful indicators on what's really a register, so swapped to a
+          // clean section + row layout. Category is conveyed via a slim left
+          // border accent + small label, not the icon size.
+          <div className="space-y-5">
             {groups.map(group => (
-              <div key={group.date} className="mb-5">
-                <div className="text-[10px] font-black uppercase tracking-widest text-slate-500 mb-2.5 -ml-5 lg:-ml-6 pl-5 lg:pl-6">
-                  {formatDay(group.date)}
+              <div key={group.date}>
+                <div className="flex items-center gap-2 mb-2">
+                  <div className="text-[10px] font-black uppercase tracking-widest text-slate-500">
+                    {formatDay(group.date)}
+                  </div>
+                  <span className="text-[10px] font-bold text-slate-300">·</span>
+                  <span className="text-[10px] font-bold text-slate-400">
+                    {group.items.length} item{group.items.length === 1 ? '' : 's'}
+                  </span>
+                  <div className="flex-1 h-px bg-slate-100"/>
                 </div>
-                <div className="space-y-2">
+                <div className="space-y-1.5 lg:space-y-2">
                   {group.items.map(item => {
                     const meta = CATEGORY_META[item.category];
                     const Icon = meta.icon;
+                    // Map category-soft tint → matching solid border accent.
+                    const borderAccent =
+                      item.category === 'BOOK'          ? 'border-l-amber-400'   :
+                      item.category === 'LAB_EQUIPMENT' ? 'border-l-emerald-400' :
+                                                          'border-l-slate-300';
                     return (
-                      <div key={item.id} className="relative">
-                        <div className={`absolute -left-[14px] top-3 w-3 h-3 rounded-full ring-2 ring-white ${meta.soft.replace('bg-', 'bg-').replace('-50', '-500').replace('-100', '-500')}`} />
-                        <div className="bg-white rounded-xl border border-slate-100 p-3.5 hover:border-slate-200 transition-colors">
-                          <div className="flex items-start gap-3">
-                            <div className={`w-10 h-10 rounded-lg flex items-center justify-center shrink-0 ${meta.soft} ${meta.tint}`}>
-                              <Icon size={18} />
+                      <div key={item.id}
+                        className={`bg-white rounded-xl border border-slate-200 border-l-4 ${borderAccent} px-3.5 py-3 lg:px-4 lg:py-3.5 hover:border-slate-300 transition-colors`}>
+                        <div className="flex items-start gap-3">
+                          <div className={`w-9 h-9 lg:w-10 lg:h-10 rounded-lg flex items-center justify-center shrink-0 ${meta.soft} ${meta.tint}`}>
+                            <Icon size={16} />
+                          </div>
+                          <div className="flex-1 min-w-0">
+                            <div className="flex items-center justify-between gap-2">
+                              <span className="font-black text-slate-900 text-sm lg:text-[15px] truncate">{item.title}</span>
+                              <span className="text-xs lg:text-sm font-black text-slate-700 tabular-nums shrink-0">
+                                ×{item.quantity}
+                              </span>
                             </div>
-                            <div className="flex-1 min-w-0">
-                              <div className="flex items-center gap-2 flex-wrap">
-                                <span className="font-black text-slate-900 text-sm truncate">{item.title}</span>
-                                <span className={`text-[9px] font-black px-2 py-0.5 rounded-full uppercase tracking-widest ${meta.soft} ${meta.tint}`}>
-                                  {meta.label}
-                                </span>
-                                <span className="text-[10px] font-black text-slate-700 bg-slate-100 px-2 py-0.5 rounded-full">
-                                  ×{item.quantity}
-                                </span>
-                              </div>
+                            <div className="flex items-center gap-2 mt-1 text-[10px] font-bold text-slate-500">
+                              <span className="uppercase tracking-widest">{meta.label}</span>
                               {item.description && (
-                                <p className="text-[11px] font-bold text-slate-600 mt-1 line-clamp-2">{item.description}</p>
-                              )}
-                              {item.note && (
-                                <p className="text-[10px] font-bold text-slate-500 italic mt-1.5 px-2 py-1 rounded-lg bg-slate-50">
-                                  Note: {item.note}
-                                </p>
+                                <>
+                                  <span className="text-slate-300">·</span>
+                                  <span className="truncate">{item.description}</span>
+                                </>
                               )}
                             </div>
-                            {editMode && (
-                              <div className="flex flex-col gap-1 shrink-0">
-                                <button onClick={() => setEditing({ ...item })}
-                                  className="p-1.5 text-blue-600 bg-blue-50 hover:bg-blue-100 rounded-lg transition-colors">
-                                  <Pencil size={12} />
-                                </button>
-                                <button onClick={() => setDeleting(item)}
-                                  className="p-1.5 text-rose-500 bg-rose-50 hover:bg-rose-100 rounded-lg transition-colors">
-                                  <Trash2 size={12} />
-                                </button>
-                              </div>
+                            {item.note && (
+                              <p className="text-[10px] font-bold text-slate-500 mt-1.5 px-2 py-1 rounded bg-slate-50 border border-slate-100">
+                                <span className="text-slate-400 uppercase tracking-widest mr-1">Note:</span>{item.note}
+                              </p>
                             )}
                           </div>
+                          {editMode && (
+                            <div className="flex items-center gap-1 shrink-0">
+                              <button onClick={() => setEditing({ ...item })}
+                                title="Edit"
+                                className="p-1.5 text-blue-600 bg-blue-50 hover:bg-blue-100 rounded-md transition-colors">
+                                <Pencil size={12} />
+                              </button>
+                              <button onClick={() => setDeleting(item)}
+                                title="Delete"
+                                className="p-1.5 text-rose-500 bg-rose-50 hover:bg-rose-100 rounded-md transition-colors">
+                                <Trash2 size={12} />
+                              </button>
+                            </div>
+                          )}
                         </div>
                       </div>
                     );

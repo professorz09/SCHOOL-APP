@@ -1,6 +1,8 @@
-import React, { useEffect, useState, useMemo } from 'react';
+import React, { useEffect, useState } from 'react';
 import { ChevronLeft, ChevronRight } from 'lucide-react';
-import { sharedAttendance, SharedAttendanceRecord, AttendanceCellStatus } from '@/modules/attendance/attendance.service';
+import { AttendanceCellStatus } from '@/modules/attendance/attendance.service';
+import { supabase } from '@/lib/supabase';
+import { useAuthStore } from '@/store/authStore';
 import { useUIStore } from '@/store/uiStore';
 import { useAcademicYear } from '@/shared/context/AcademicYearContext';
 import { todayIST } from '@/shared/utils/date';
@@ -55,10 +57,17 @@ function fmtMonthLabel(ym: string) {
 export const StudentAttendanceTab: React.FC<Props> = ({ studentId }) => {
   const { showToast } = useUIStore();
   const { currentYear } = useAcademicYear();
+  const session = useAuthStore(s => s.session);
 
   const [gridYM, setGridYM] = useState(currentYearMonth());
   const [gridDates, setGridDates] = useState<string[]>([]);
-  const [allRecords, setAllRecords] = useState<SharedAttendanceRecord[]>([]);
+  // Pre-built map: ISO date → cell status. Populated by a direct query to
+  // attendance_student_details for this student. Earlier this component used
+  // sharedAttendance.getAll() and tried to find the student inside the
+  // returned record — but that API only returns header rows (totals), so
+  // r.students was always empty and every cell rendered as "—" no matter
+  // how much real attendance had been marked.
+  const [dateStatusMap, setDateStatusMap] = useState<Record<string, AttendanceCellStatus>>({});
   const [gridLoading, setGridLoading] = useState(false);
 
   // Clamp gridYM to academic year bounds
@@ -74,14 +83,75 @@ export const StudentAttendanceTab: React.FC<Props> = ({ studentId }) => {
   }, [currentYear?.id]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const loadMonth = async (ym: string) => {
-    if (!currentYear) return;
+    // Build the visible date columns up-front from the academic-year bounds,
+    // independent of whether the data fetch succeeds. Earlier the columns
+    // were tied to the same try-block as the supabase query, so any guard
+    // that bailed (missing session, missing year) left the grid header
+    // empty — even though the dates themselves are pure date math.
+    const dates = currentYear
+      ? buildMonthDates(ym, currentYear.startDate, currentYear.endDate)
+      : buildMonthDates(ym);
+    setGridDates(dates);
+
+    if (!currentYear || !studentId || !session?.schoolId) {
+      // Nothing to query yet, but the grid still renders the date header.
+      setDateStatusMap({});
+      return;
+    }
+
     setGridLoading(true);
     try {
-      const dates = buildMonthDates(ym, currentYear.startDate, currentYear.endDate);
-      setGridDates(dates);
+      // Month bounds for the date filter.
+      const [y, m] = ym.split('-').map(Number);
+      const lastDay = new Date(y, m, 0).getDate();
+      const monthStart = `${ym}-01`;
+      const monthEnd   = `${ym}-${String(lastDay).padStart(2, '0')}`;
 
-      const records = await sharedAttendance.getAll();
-      setAllRecords(records);
+      // Two-step lookup. Earlier this was a single query that filtered on a
+      // joined table (`attendance_records!inner`) — that join works in
+      // theory but silently returned no rows under PostgREST when the
+      // selector path didn't propagate; the profile showed dates with no
+      // statuses no matter how much was marked.
+      //
+      // Step 1 — find attendance_record IDs for the school+year+month.
+      const { data: records, error: recErr } = await supabase
+        .from('attendance_records')
+        .select('id, date')
+        .eq('school_id', session.schoolId)
+        .eq('academic_year_id', currentYear.id)
+        .gte('date', monthStart)
+        .lte('date', monthEnd);
+      if (recErr) throw new Error(recErr.message);
+
+      const recRows = (records ?? []) as Array<{ id: string; date: string }>;
+      if (recRows.length === 0) {
+        setDateStatusMap({});
+        return;
+      }
+
+      const idToDate = new Map<string, string>();
+      recRows.forEach(r => idToDate.set(r.id, r.date));
+
+      // Step 2 — pull this student's per-record rows by attendance_id IN (..).
+      const { data: details, error: detErr } = await supabase
+        .from('attendance_student_details')
+        .select('attendance_id, is_present, status')
+        .eq('student_id', studentId)
+        .in('attendance_id', recRows.map(r => r.id));
+      if (detErr) throw new Error(detErr.message);
+
+      const next: Record<string, AttendanceCellStatus> = {};
+      for (const r of (details ?? []) as Array<{
+        attendance_id: string; is_present: boolean; status: string | null;
+      }>) {
+        const date = idToDate.get(r.attendance_id);
+        if (!date) continue;
+        const cell: AttendanceCellStatus =
+          (r.status as AttendanceCellStatus | null) ??
+          (r.is_present ? 'present' : 'absent');
+        next[date] = cell;
+      }
+      setDateStatusMap(next);
     } catch (e) {
       showToast(e instanceof Error ? e.message : 'Failed to load attendance', 'error');
     } finally {
@@ -91,7 +161,7 @@ export const StudentAttendanceTab: React.FC<Props> = ({ studentId }) => {
 
   useEffect(() => {
     loadMonth(gridYM);
-  }, [gridYM, studentId, currentYear?.id]);
+  }, [gridYM, studentId, currentYear?.id, session?.schoolId]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const changeMonth = (delta: number) => {
     const [y, m] = gridYM.split('-').map(Number);
@@ -105,31 +175,11 @@ export const StudentAttendanceTab: React.FC<Props> = ({ studentId }) => {
     setGridYM(nm);
   };
 
-  // Filter records for this student in this month
-  const monthRecords = useMemo(() => {
-    const monthStart = gridYM + '-01';
-    // Real last-day for the month; previously hardcoded '-31' silently
-    // included invalid dates and disagreed with the grid on 30-day months.
-    const [y, m] = gridYM.split('-').map(Number);
-    const lastDay = new Date(y, m, 0).getDate();
-    const monthEnd = `${gridYM}-${String(lastDay).padStart(2, '0')}`;
-    return allRecords.filter(r => {
-      const match = r.students.find(s => s.id === studentId);
-      return match && r.date >= monthStart && r.date <= monthEnd;
-    });
-  }, [allRecords, studentId, gridYM]);
-
-  // Build date-to-status map for this student
-  const dateStatusMap = useMemo(() => {
-    const map: Record<string, AttendanceCellStatus> = {};
-    for (const record of monthRecords) {
-      const student = record.students.find(s => s.id === studentId);
-      if (student) {
-        map[record.date] = student.status;
-      }
-    }
-    return map;
-  }, [monthRecords, studentId]);
+  // dateStatusMap is now populated directly inside loadMonth() from a
+  // single query against attendance_student_details. Earlier this section
+  // re-derived it from sharedAttendance.getAll() rows that never carried
+  // student-level data — the lookup always missed and every cell rendered
+  // as "—".
 
   // Calculate monthly stats. Legacy 'half' rows count as PRESENT — see
   // CELL_LABEL comment above. Half-day is no longer a student concept.
@@ -198,39 +248,49 @@ export const StudentAttendanceTab: React.FC<Props> = ({ studentId }) => {
         </div>
       </div>
 
-      {/* Grid */}
+      {/* Grid — single horizontal scroll container so the date strip and
+          the status row scroll in lockstep. Earlier they sat in two
+          separate `overflow-x-auto` divs and drifted apart on touch
+          scroll, making it impossible to tell which date a status belonged
+          to. */}
       <div className="px-4 pb-4">
         <div className="bg-white rounded-2xl border border-slate-100 overflow-hidden">
-          {/* Header with dates */}
-          <div className="flex overflow-x-auto hide-scrollbar">
-            <div className="w-12 border-r border-slate-100 bg-slate-50 flex items-center justify-center font-bold text-[9px] text-slate-400 shrink-0 py-2">
-              Day
-            </div>
-            {gridDates.map(date => (
-              <div key={date} className="w-10 border-r border-slate-100 flex flex-col items-center justify-center py-2 shrink-0 last:border-r-0">
-                <div className="text-[9px] font-bold text-slate-600">{fmtDay(date)}</div>
-                <div className="text-[8px] font-bold text-slate-400">{fmtDayShort(date)}</div>
-              </div>
-            ))}
-          </div>
-
-          {/* Data row */}
-          <div className="flex border-t border-slate-100 overflow-x-auto hide-scrollbar">
-            <div className="w-12 border-r border-slate-100 bg-slate-50 flex items-center justify-center shrink-0 py-3" />
-            {gridDates.map(date => {
-              const status = dateStatusMap[date];
-              return (
-                <div key={date} className="w-10 border-r border-slate-100 flex items-center justify-center shrink-0 last:border-r-0 py-3">
-                  {status ? (
-                    <div className={`w-7 h-7 rounded-lg flex items-center justify-center text-[10px] font-black ${CELL_BG[status]}`}>
-                      {CELL_LABEL[status]}
-                    </div>
-                  ) : (
-                    <div className="w-7 h-7 rounded-lg bg-slate-100 text-slate-400 flex items-center justify-center text-[10px] font-bold">—</div>
-                  )}
+          <div className="overflow-x-auto hide-scrollbar">
+            {/* Inner shrink-wrap forces both rows to the same width so they
+                share the parent's scroll position. */}
+            <div className="inline-block min-w-full">
+              {/* Header with dates */}
+              <div className="flex">
+                <div className="w-12 border-r border-slate-100 bg-slate-50 flex items-center justify-center font-bold text-[9px] text-slate-400 shrink-0 py-2">
+                  Day
                 </div>
-              );
-            })}
+                {gridDates.map(date => (
+                  <div key={date} className="w-10 border-r border-slate-100 flex flex-col items-center justify-center py-2 shrink-0 last:border-r-0">
+                    <div className="text-[9px] font-bold text-slate-600">{fmtDay(date)}</div>
+                    <div className="text-[8px] font-bold text-slate-400">{fmtDayShort(date)}</div>
+                  </div>
+                ))}
+              </div>
+
+              {/* Data row */}
+              <div className="flex border-t border-slate-100">
+                <div className="w-12 border-r border-slate-100 bg-slate-50 flex items-center justify-center shrink-0 py-3" />
+                {gridDates.map(date => {
+                  const status = dateStatusMap[date];
+                  return (
+                    <div key={date} className="w-10 border-r border-slate-100 flex items-center justify-center shrink-0 last:border-r-0 py-3">
+                      {status ? (
+                        <div className={`w-7 h-7 rounded-lg flex items-center justify-center text-[10px] font-black ${CELL_BG[status]}`}>
+                          {CELL_LABEL[status]}
+                        </div>
+                      ) : (
+                        <div className="w-7 h-7 rounded-lg bg-slate-100 text-slate-400 flex items-center justify-center text-[10px] font-bold">—</div>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
           </div>
         </div>
       </div>

@@ -47,13 +47,6 @@ export const PrincipalDashboard: React.FC<Props> = ({ onNavigate }) => {
     id: string; vehicleNo: string; routeName: string; driverName: string;
     isLive: boolean; lastPing: string | null; currentStop: string;
   }[]>([]);
-  // Inventory snapshot for the Assets widget (library + lab). Kept on the
-  // dashboard so principals see "30 books out, 3 faulty pieces" without
-  // navigating into the Assets page.
-  const [assetsSummary, setAssetsSummary] = useState({
-    totalBooks: 0, issuedBooks: 0, availableBooks: 0,
-    totalEquipment: 0, faultyEquipment: 0,
-  });
   // Upcoming birthdays (next 7 days inclusive of today). Computed from each
   // student's DOB by stripping the year and comparing month/day to today.
   const [birthdays, setBirthdays] = useState<{
@@ -76,7 +69,7 @@ export const PrincipalDashboard: React.FC<Props> = ({ onNavigate }) => {
       const monthStart = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-01`;
       const monthEnd   = today;
       await transportService.refreshAll();
-      const [students, staff, complaints, approvals, allVehicles, attRes, dashStats, monthPayRes, books, equipment] = await Promise.all([
+      const [students, staff, complaints, approvals, allVehicles, attRes, dashStats, monthPayRes] = await Promise.all([
         studentService.getAll(),
         staffService.getAll(),
         principalService.getComplaints(),
@@ -97,8 +90,6 @@ export const PrincipalDashboard: React.FC<Props> = ({ onNavigate }) => {
           .select('amount')
           .eq('school_id', session?.schoolId ?? '00000000-0000-0000-0000-000000000000')
           .gte('date', monthStart).lte('date', monthEnd),
-        principalService.getBooks(),
-        principalService.getEquipment(),
       ]);
       const monthlyCollection = ((monthPayRes.data ?? []) as Array<{ amount: number }>)
         .reduce((sum, r) => sum + Number(r.amount || 0), 0);
@@ -160,19 +151,6 @@ export const PrincipalDashboard: React.FC<Props> = ({ onNavigate }) => {
           };
         });
       setVehicles(liveVehicles);
-
-      // Aggregate library + lab inventory for the home Assets widget.
-      const totalBooks = books.reduce((a, b) => a + b.totalCopies, 0);
-      const availableBooks = books.reduce((a, b) => a + b.availableCopies, 0);
-      const totalEquipment = equipment.reduce((a, e) => a + e.quantity, 0);
-      const faultyEquipment = equipment.reduce((a, e) => a + (e.quantity - e.workingCount), 0);
-      setAssetsSummary({
-        totalBooks,
-        issuedBooks: totalBooks - availableBooks,
-        availableBooks,
-        totalEquipment,
-        faultyEquipment,
-      });
 
       // Birthdays — bucket students by days-until-next-birthday and keep
       // only those happening within the next 7 days. We ignore the year on
@@ -392,44 +370,6 @@ export const PrincipalDashboard: React.FC<Props> = ({ onNavigate }) => {
 
       {/* ── Salary Reminder Widget ─────────────────────────────────────── */}
       <SalaryReminderCard onNavigate={onNavigate} />
-
-      {/* ── Assets snapshot — library + lab inventory at a glance.
-            Surfacing this on home so the principal sees inventory pressure
-            (issued books, faulty kit) without diving into the Academics
-            hub. Whole card taps through to ASSETS. */}
-      <button onClick={() => onNavigate('ASSETS')}
-        className="w-full text-left bg-white rounded-2xl border border-slate-100 shadow-sm p-4 lg:p-5 hover:shadow-md hover:border-amber-200 active:scale-[0.99] transition-all">
-        <div className="flex items-center justify-between mb-3">
-          <div className="flex items-center gap-2.5">
-            <div className="w-10 h-10 lg:w-11 lg:h-11 rounded-xl bg-gradient-to-br from-amber-400 to-orange-500 flex items-center justify-center text-white shadow-md">
-              <Library size={18} />
-            </div>
-            <div>
-              <h2 className="text-sm lg:text-base font-black text-slate-900 uppercase tracking-tight">Assets</h2>
-              <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">Library & Lab Inventory</p>
-            </div>
-          </div>
-          <ChevronRight size={16} className="text-slate-300"/>
-        </div>
-        <div className="grid grid-cols-4 gap-2">
-          <div className="bg-slate-50 rounded-xl p-2.5 text-center">
-            <div className="text-base lg:text-lg font-black text-slate-900 tabular-nums">{assetsSummary.totalBooks}</div>
-            <div className="text-[9px] font-black uppercase tracking-widest text-slate-400 mt-0.5">Books</div>
-          </div>
-          <div className="bg-amber-50 rounded-xl p-2.5 text-center">
-            <div className="text-base lg:text-lg font-black text-amber-700 tabular-nums">{assetsSummary.issuedBooks}</div>
-            <div className="text-[9px] font-black uppercase tracking-widest text-amber-600 mt-0.5">Issued</div>
-          </div>
-          <div className="bg-emerald-50 rounded-xl p-2.5 text-center">
-            <div className="text-base lg:text-lg font-black text-emerald-700 tabular-nums">{assetsSummary.totalEquipment}</div>
-            <div className="text-[9px] font-black uppercase tracking-widest text-emerald-600 mt-0.5">Lab Kit</div>
-          </div>
-          <div className={`rounded-xl p-2.5 text-center ${assetsSummary.faultyEquipment > 0 ? 'bg-rose-50' : 'bg-slate-50'}`}>
-            <div className={`text-base lg:text-lg font-black tabular-nums ${assetsSummary.faultyEquipment > 0 ? 'text-rose-600' : 'text-slate-400'}`}>{assetsSummary.faultyEquipment}</div>
-            <div className={`text-[9px] font-black uppercase tracking-widest mt-0.5 ${assetsSummary.faultyEquipment > 0 ? 'text-rose-500' : 'text-slate-400'}`}>Faulty</div>
-          </div>
-        </div>
-      </button>
 
       {/* ── Birthdays — only renders when at least one student has a
             birthday in the next 7 days. Today's birthdays get a confetti

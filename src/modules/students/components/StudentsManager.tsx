@@ -210,8 +210,15 @@ const [mainView, setMainView] = useState<MainView>(initialView ?? 'CLASSES');
       showToast('Name and admission no. required', 'error');
       return;
     }
-    if (!form.parentMobileNumber.trim()) {
-      showToast('Parent mobile number required', 'error');
+    // Login number is derived: prefer Father's Phone, fall back to Mother's.
+    // At least one must be present so the parent gets a login account.
+    const loginRaw = form.fatherPhone?.trim() || form.motherPhone?.trim() || '';
+    if (!loginRaw) {
+      showToast("Father's Phone is required (used for login). Mother's Phone is a fallback.", 'error');
+      return;
+    }
+    if (!form.fatherName?.trim() && !form.motherName?.trim()) {
+      showToast('At least one parent name is required', 'error');
       return;
     }
     // DOB sanity: reject future / unrealistically old dates and a sane age band.
@@ -228,10 +235,10 @@ const [mainView, setMainView] = useState<MainView>(initialView ?? 'CLASSES');
         return;
       }
     }
-    // Mobile sanity — must be 10 digits.
-    const cleanedMobile = (form.parentMobileNumber || '').replace(/\D/g, '');
+    // Mobile sanity — login number must be 10 digits after stripping noise.
+    const cleanedMobile = loginRaw.replace(/\D/g, '');
     if (cleanedMobile.length !== 10) {
-      showToast('Parent mobile must be 10 digits', 'error');
+      showToast('Login mobile (Father / Mother) must be 10 digits', 'error');
       return;
     }
     // Class/section/stream are NOT collected at admission anymore — the
@@ -244,15 +251,26 @@ const [mainView, setMainView] = useState<MainView>(initialView ?? 'CLASSES');
       // duplicate-check (Aadhaar/father-mobile), per-year academic record, and audit log
       // — all atomically against Supabase. Canonicalize the parent mobile here so a
       // single value drives both the duplicate check and the auth-account provisioning.
+      // Strip the legacy parent* keys from the payload — they used to be
+      // separate inputs but now they're computed from Father / Mother fields.
       const { parentMobileNumber: _pm, parentName: _pn, parentEmail: _pe, ...rest } = form;
-      const canonicalParentMobile = ((form.fatherPhone || form.parentMobileNumber || '').replace(/\D/g, '')).slice(-10);
+      void _pm; void _pn; void _pe;
+      // Canonicalise the login mobile: prefer Father's Phone, fall back to
+      // Mother's Phone. Always last-10-digit so leading +91 / spaces / 0 are
+      // dropped consistently.
+      const canonicalLoginMobile = (
+        (form.fatherPhone || form.motherPhone || '').replace(/\D/g, '')
+      ).slice(-10);
       const studentData: CreateStudentInput = {
         ...rest,
         // Force class/section blank so the AR insert in create() is skipped
         // (UNASSIGNED bucket). totalFee is taken in the assignment modal.
         className: '', section: '', stream: undefined, totalFee: 0,
-        fatherPhone: canonicalParentMobile,
-        fatherName: rest.fatherName || form.parentName || 'Parent',
+        // The service treats fatherPhone as the canonical login mobile —
+        // backfill it from Mother's Phone when Father's is missing so the
+        // parent account is still created.
+        fatherPhone: canonicalLoginMobile,
+        fatherName: rest.fatherName || rest.motherName || 'Parent',
       };
       const { student, parent } = await studentService.create(studentData);
 
@@ -271,17 +289,23 @@ const [mainView, setMainView] = useState<MainView>(initialView ?? 'CLASSES');
 
       // Upload all selected documents in parallel
       if (documentFiles.size > 0) {
-        const uploads = Array.from(documentFiles.entries()).map(async ([docType, file]) => {
+        // Capture each entry's docType + file so the failure message can
+        // include both. Earlier the toast only showed the filename, which
+        // hid the real reason (e.g. "Permission denied", "Bucket not found")
+        // — making "upload failed" effectively mute.
+        const entries: Array<[DocumentUpload['type'], File]> = Array.from(documentFiles.entries());
+        const uploads = entries.map(async ([docType, file]) => {
           const { path } = await storageService.uploadStudentDocument(student.id, docType, file);
           await studentService.addDocumentRecord(student.id, docType, path);
         });
-        const filesArr: File[] = [];
-        documentFiles.forEach(f => filesArr.push(f));
         const results = await Promise.allSettled(uploads);
         results.forEach((r, i) => {
           if (r.status === 'rejected') {
-            const file = filesArr[i];
-            showToast(`Document upload failed: ${file?.name ?? 'unknown'}`, 'error');
+            const [docType, file] = entries[i];
+            const reason = r.reason instanceof Error ? r.reason.message : String(r.reason);
+            // eslint-disable-next-line no-console
+            console.error('[admission] document upload failed', { docType, file: file?.name, reason });
+            showToast(`${docType} upload failed: ${reason}`, 'error');
           }
         });
       }
@@ -657,44 +681,38 @@ const [mainView, setMainView] = useState<MainView>(initialView ?? 'CLASSES');
             ))}
           </div>
 
+          {/* ── Parent details — single consolidated section ────────────
+              Earlier the form had a "Parent Mobile & Login" block ABOVE
+              this one that asked for a "Parent Mobile Number" + "Parent
+              Name" + "Parent Email", which duplicated Father's Phone /
+              Father's Name / Father's Email. That created two screens
+              of redundant fields and a real ambiguity ("which mobile is
+              the login?"). Login is now derived: Father's Phone is the
+              primary login; if that's blank we fall back to Mother's
+              Phone. handleCreate() reads form.fatherPhone || form.motherPhone
+              for the login mobile and surfaces the resulting credentials. */}
           <div className="bg-white rounded-2xl border border-slate-100 shadow-sm p-4 space-y-4">
-            <p className="text-[10px] font-black uppercase tracking-widest text-slate-400">Parent Mobile & Login</p>
-            <div className="bg-blue-50 border border-blue-200 rounded-xl p-3 mb-3">
-              <p className="text-[10px] font-bold text-blue-700">
-                Parent mobile number is used for app login. A temporary password will be created.
+            <div>
+              <p className="text-[10px] font-black uppercase tracking-widest text-slate-400">Parent Details</p>
+              <p className="text-[10px] font-bold text-slate-500 mt-1">
+                Login mobile = Father's Phone (or Mother's if blank). A temporary password is created on admission.
               </p>
             </div>
             {[
-              { label: 'Parent Mobile Number', key: 'parentMobileNumber', placeholder: '10-digit mobile', req: true },
-              { label: 'Parent Name', key: 'parentName', placeholder: 'Mother or Father name', req: true },
-              { label: 'Parent Email', key: 'parentEmail', placeholder: 'parent@email.com' },
-            ].map(({ label, key, placeholder, req }) => (
-              <div key={key}>
-                <label className="block text-[10px] font-black uppercase tracking-widest text-slate-500 mb-1.5">
-                  {label}{req && <sup className="text-rose-500 font-black ml-0.5">*</sup>}
-                  {!req && <span className="text-slate-400 normal-case font-bold text-[9px] ml-1">(optional)</span>}
-                </label>
-                <input value={(form as any)[key]} onChange={e => setForm(f => ({ ...f, [key]: e.target.value }))}
-                  placeholder={placeholder}
-                  className="w-full border border-slate-200 bg-slate-50 rounded-xl px-4 py-3 font-bold text-sm outline-none focus:border-indigo-500" />
-              </div>
-            ))}
-          </div>
-
-          <div className="bg-white rounded-2xl border border-slate-100 shadow-sm p-4 space-y-4">
-            <p className="text-[10px] font-black uppercase tracking-widest text-slate-400">Parent Details</p>
-            {[
-              { label: "Father's Name", key: 'fatherName', placeholder: 'Full name' },
+              { label: "Father's Name", key: 'fatherName', placeholder: 'Full name', req: true },
+              { label: "Father's Phone", key: 'fatherPhone', placeholder: '10-digit mobile', req: true, hint: 'Used for login by default' },
               { label: "Father's Occupation", key: 'fatherOccupation', placeholder: 'Business / Service / Farmer / etc.' },
               { label: "Father's Income", key: 'fatherIncome', placeholder: 'e.g. 5-10 LPA' },
               { label: "Father's Email", key: 'fatherEmail', placeholder: 'father@email.com' },
-              { label: "Father's Phone", key: 'fatherPhone', placeholder: '+91 XXXXX XXXXX' },
               { label: "Mother's Name", key: 'motherName', placeholder: 'Full name' },
+              { label: "Mother's Phone", key: 'motherPhone', placeholder: '10-digit mobile', hint: 'Used for login if Father\'s phone is blank' },
               { label: "Mother's Occupation", key: 'motherOccupation', placeholder: 'Occupation or Homemaker' },
-              { label: "Mother's Phone", key: 'motherPhone', placeholder: '+91 XXXXX XXXXX' },
-            ].map(({ label, key, placeholder }) => (
+            ].map(({ label, key, placeholder, req, hint }) => (
               <div key={key}>
-                <label className="block text-[10px] font-black uppercase tracking-widest text-slate-500 mb-1.5">{label}</label>
+                <label className="block text-[10px] font-black uppercase tracking-widest text-slate-500 mb-1.5">
+                  {label}{req && <sup className="text-rose-500 font-black ml-0.5">*</sup>}
+                  {hint && <span className="text-slate-400 normal-case font-bold text-[9px] ml-2">({hint})</span>}
+                </label>
                 <input value={(form as any)[key]} onChange={e => setForm(f => ({ ...f, [key]: e.target.value }))}
                   placeholder={placeholder}
                   className="w-full border border-slate-200 bg-slate-50 rounded-xl px-4 py-3 font-bold text-sm outline-none focus:border-indigo-500" />

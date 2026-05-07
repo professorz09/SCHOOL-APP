@@ -819,48 +819,15 @@ export const StudentProfilePanel: React.FC<Props> = ({ student, onBack, onStuden
           )}
 
           {/* ── RESULTS TAB ──────────────────────────── */}
+          {/* The Attendance summary block that used to live here was removed —
+              the dedicated ATTENDANCE tab uses StudentAttendanceTab which
+              reads the full daily grid (and works even when records aren't
+              yet APPROVED, unlike the old academicRecord query that only
+              counted approved months and silently looked empty). Keeping
+              two attendance widgets in two tabs created the "I see 0% but
+              the calendar tab is full" confusion. */}
           {activeProfileTab === 'RESULTS' && (
             <>
-              <div className="bg-white rounded-2xl border border-slate-100 shadow-sm p-4">
-                <SectionTitle icon={Calendar} title="Attendance" />
-                <div className="flex items-center justify-between mb-4">
-                  <div>
-                    <div className={`text-3xl font-black ${attGood ? 'text-emerald-600' : 'text-rose-500'}`}>
-                      {currentStudent.attendancePercent}%
-                    </div>
-                    <div className={`text-[10px] font-black uppercase mt-0.5 ${attGood ? 'text-emerald-600' : 'text-rose-500'}`}>
-                      {attGood ? 'Good Standing' : 'Below 75% — Low'}
-                    </div>
-                  </div>
-                  <div className={`w-16 h-16 rounded-full border-4 flex items-center justify-center ${attGood ? 'border-emerald-200' : 'border-rose-200'}`}>
-                    <div className={`w-10 h-10 rounded-full flex items-center justify-center ${attGood ? 'bg-emerald-100' : 'bg-rose-100'}`}>
-                      <Calendar size={18} className={attGood ? 'text-emerald-600' : 'text-rose-500'} />
-                    </div>
-                  </div>
-                </div>
-                {(academicRecord?.attendanceRecords.length ?? 0) === 0 ? (
-                  <div className="flex flex-col items-center py-4 text-slate-400">
-                    <p className="font-bold text-sm">No monthly data</p>
-                  </div>
-                ) : (
-                  <div className="space-y-2">
-                    {academicRecord?.attendanceRecords.map(att => {
-                      const pct = att.total > 0 ? Math.round((att.present / att.total) * 100) : 0;
-                      return (
-                        <div key={att.month} className="flex items-center gap-3">
-                          <div className="w-12 text-[10px] font-bold text-slate-500 shrink-0">{att.month}</div>
-                          <div className="flex-1 bg-slate-100 rounded-full h-2.5">
-                            <div className={`h-2.5 rounded-full transition-all ${pct >= 75 ? 'bg-emerald-500' : 'bg-rose-400'}`}
-                              style={{ width: `${pct}%` }} />
-                          </div>
-                          <div className="w-14 text-right text-[10px] font-black text-slate-600 shrink-0">{att.present}/{att.total}</div>
-                        </div>
-                      );
-                    })}
-                  </div>
-                )}
-              </div>
-
               <div className="bg-white rounded-2xl border border-slate-100 shadow-sm p-4">
                 <SectionTitle icon={BarChart2} title="Exam Results" />
                 {(academicRecord?.exams.length ?? 0) === 0 ? (
