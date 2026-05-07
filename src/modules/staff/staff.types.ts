@@ -7,9 +7,17 @@ export interface SalaryPayment {
   month: string;
   amount: number;
   paidAt: string;
+  /** ISO timestamp when the row was inserted; used by the UI to compute
+   *  the 24-hour reversal window. */
+  createdAt: string;
   transactionId: string;
   note: string;
   method?: SalaryPaymentMethod | null;
+  /** Reversal metadata. When `reversedAt` is set the row stays in the
+   *  payment log but renders struck-through with the reason underneath. */
+  reversedAt: string | null;
+  reversedByName: string | null;
+  reversalReason: string | null;
 }
 
 export interface StaffSalaryHistoryEntry {

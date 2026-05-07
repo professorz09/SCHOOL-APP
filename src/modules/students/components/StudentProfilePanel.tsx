@@ -318,25 +318,44 @@ export const StudentProfilePanel: React.FC<Props> = ({ student, onBack, onStuden
   const openProfileDoc = async (doc: StudentDoc) => {
     try {
       const url = await storageService.getStudentDocumentSignedUrl(doc.storagePath);
-      if (url) window.open(url, '_blank', 'noopener');
-      else showToast('Could not open document', 'error');
-    } catch {
-      showToast('Could not open document', 'error');
+      if (!url) { showToast('Document not found in storage', 'error'); return; }
+      // window.open can be blocked by popup-blockers on desktop. Fall back
+      // to navigating a hidden anchor with target=_blank, which Safari /
+      // Chrome treat as a user-initiated open and don't block.
+      const opened = window.open(url, '_blank', 'noopener,noreferrer');
+      if (!opened) {
+        const a = document.createElement('a');
+        a.href = url; a.target = '_blank'; a.rel = 'noopener noreferrer';
+        document.body.appendChild(a); a.click(); document.body.removeChild(a);
+      }
+    } catch (e) {
+      showToast(e instanceof Error ? e.message : 'Could not open document', 'error');
     }
   };
 
   const downloadProfileDoc = async (doc: StudentDoc) => {
     try {
       const url = await storageService.getStudentDocumentSignedUrl(doc.storagePath, 60);
-      if (!url) { showToast('Could not download document', 'error'); return; }
+      if (!url) { showToast('Document not found in storage', 'error'); return; }
+      // Fetch the bytes ourselves and stream as a Blob so the browser
+      // honours the .download attribute (Supabase signed URLs serve a
+      // Content-Disposition: inline by default, which Chrome/Safari
+      // sometimes ignored when opening the page directly).
+      const res = await fetch(url);
+      if (!res.ok) throw new Error(`HTTP ${res.status} fetching document`);
+      const blob = await res.blob();
+      const blobUrl = URL.createObjectURL(blob);
       const a = document.createElement('a');
-      a.href = url;
-      a.download = doc.name;
+      a.href = blobUrl;
+      a.download = doc.name || 'document';
       document.body.appendChild(a);
       a.click();
       document.body.removeChild(a);
-    } catch {
-      showToast('Could not download document', 'error');
+      // Revoke after a tick so the browser has finished kicking the
+      // download. 1s is the convention used elsewhere in the app.
+      setTimeout(() => URL.revokeObjectURL(blobUrl), 1000);
+    } catch (e) {
+      showToast(e instanceof Error ? e.message : 'Could not download document', 'error');
     }
   };
 
@@ -1044,7 +1063,7 @@ export const StudentProfilePanel: React.FC<Props> = ({ student, onBack, onStuden
           {/* ── ATTENDANCE TAB ────────────────────────── */}
           {activeProfileTab === 'ATTENDANCE' && (
             <div className="bg-white rounded-2xl border border-slate-100 shadow-sm p-4">
-              <StudentAttendanceTab studentId={currentStudent.studentId} />
+              <StudentAttendanceTab studentId={currentStudent.id} />
             </div>
           )}
 

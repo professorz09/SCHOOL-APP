@@ -615,7 +615,10 @@ export const AcademicYearWizard: React.FC<Props> = ({
         showToast(`${label.trim()} ban gaya — ${sectionsPayload.length} sections ke saath!`);
       }
     } catch (e) {
-      const msg = e instanceof Error ? e.message : 'Academic year create karne mein error';
+      // Coerce empty Error messages — an empty string would render as a
+      // blank rose toast/error box with no clue what failed.
+      const raw = e instanceof Error ? e.message : '';
+      const msg = (raw && raw.trim()) || 'Academic year create karne mein error';
       setError(msg);
       showToast(msg, 'error');
     } finally {
@@ -1095,7 +1098,7 @@ export const AcademicYearWizard: React.FC<Props> = ({
                 </div>
               </div>
 
-              {error && (
+              {error.trim() && (
                 <div className="p-3 bg-rose-50 border border-rose-200 rounded-xl flex items-start gap-2">
                   <AlertTriangle size={14} className="text-rose-600 mt-0.5 shrink-0" />
                   <p className="text-[11px] font-black text-rose-700">{error}</p>

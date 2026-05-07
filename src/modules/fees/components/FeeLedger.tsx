@@ -1077,17 +1077,19 @@ export const FeeLedger: React.FC<Props> = ({ onBack }) => {
                                   on top of the line, not next to it) */}
                               <div className={`absolute -left-[14px] lg:-left-[14px] top-1.5 w-3 h-3 rounded-full ring-2 ring-white ${dotColor}`} />
 
-                              <div className="bg-white rounded-2xl border border-slate-100 p-4 lg:p-5 hover:border-slate-200 transition-colors">
+                              <div className={`rounded-2xl p-4 lg:p-5 transition-colors ${inst.payerType === 'GOVERNMENT' ? 'bg-blue-50/40 border-l-4 border border-blue-200 hover:border-blue-300' : 'bg-white border border-slate-100 hover:border-slate-200'}`}>
                                 {/* Header — month name big, fee type subtle text below.
-                                    Amount is the visual anchor on the right with
-                                    the due date as a quiet caption. No coloured
-                                    chips compete with the amount for attention. */}
+                                    RTE installments get a blue left-border + tint
+                                    so the principal can spot government-paid
+                                    rows at a glance even when scrolling fast. */}
                                 <div className="flex items-start justify-between gap-3">
                                   <div className="min-w-0">
                                     <div className="font-black text-slate-900 text-base lg:text-lg leading-tight truncate">{inst.month}</div>
                                     <div className="text-[11px] font-bold text-slate-400 mt-0.5 truncate">
                                       {FEE_TYPE_LABEL[inst.feeType] ?? inst.feeType}
-                                      {inst.payerType === 'GOVERNMENT' && <span className="text-emerald-600"> · RTE</span>}
+                                      {inst.payerType === 'GOVERNMENT' && (
+                                        <span className="text-blue-700 font-black"> · RTE</span>
+                                      )}
                                     </div>
                                   </div>
                                   <div className="text-right shrink-0">
@@ -1189,17 +1191,19 @@ export const FeeLedger: React.FC<Props> = ({ onBack }) => {
                                           .reduce((s, d) => s + d.amount, 0);
                                         const reversed = !!p.reversedAt;
                                         const isReversal = !!p.reversesPaymentId;
+                                        const isGovt = (p.method || '').toUpperCase() === 'GOVERNMENT';
                                         return (
                                           <div key={p.id}
-                                            className={`bg-slate-50/60 rounded-xl p-3 ${reversed ? 'opacity-50' : ''}`}>
+                                            className={`rounded-xl p-3 ${reversed ? 'opacity-50' : ''} ${isGovt ? 'bg-blue-50/60 border border-blue-100' : 'bg-slate-50/60'}`}>
                                             <div className="flex items-start justify-between gap-2">
                                               <div className="min-w-0">
-                                                <div className={`text-[13px] font-black ${isReversal ? 'text-rose-600' : 'text-slate-900'} ${reversed ? 'line-through' : ''}`}>
-                                                  {isReversal ? 'Reversed' : (p.method || 'Payment')}
+                                                <div className={`text-[13px] font-black flex items-center gap-1.5 ${isReversal ? 'text-rose-600' : isGovt ? 'text-blue-700' : 'text-slate-900'} ${reversed ? 'line-through' : ''}`}>
+                                                  {isGovt && !isReversal && <ShieldCheck size={12} />}
+                                                  {isReversal ? 'Reversed' : isGovt ? 'Government' : (p.method || 'Payment')}
                                                 </div>
                                                 <div className="text-[10px] font-bold text-slate-400 mt-0.5">{p.date}</div>
                                               </div>
-                                              <div className={`text-[14px] font-black tabular-nums shrink-0 ${isReversal ? 'text-rose-600' : 'text-emerald-700'} ${reversed ? 'line-through' : ''}`}>
+                                              <div className={`text-[14px] font-black tabular-nums shrink-0 ${isReversal ? 'text-rose-600' : isGovt ? 'text-blue-700' : 'text-emerald-700'} ${reversed ? 'line-through' : ''}`}>
                                                 {isReversal ? '−' : '+'}₹{Math.abs(cashApplied).toLocaleString('en-IN')}
                                               </div>
                                             </div>

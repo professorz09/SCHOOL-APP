@@ -340,7 +340,33 @@ attendanceRouter.post('/submit', requireAuth, requireRole('TEACHER', 'PRINCIPAL'
       studentId: r.studentId,
       status: normalizeStatus(r.status, r.isPresent),
     }));
-    const counts = countsByStatus(normalizedRecords);
+
+    // Defence-in-depth: drop students whose admission_date is after the
+    // attendance date. They weren't on the roster yet — marking them
+    // absent (or present) would distort their percentage and pollute the
+    // class register. Client-side already filters; this catches forged or
+    // legacy payloads.
+    const stuIds = normalizedRecords.map(r => r.studentId);
+    let preEnrollment = new Set<string>();
+    if (stuIds.length > 0) {
+      const { data: admRows } = await adminDb.from('students')
+        .select('id, admission_date')
+        .eq('school_id', req.user.school_id!).in('id', stuIds);
+      const admMap = new Map<string, string | null>();
+      for (const r of (admRows ?? []) as Array<{ id: string; admission_date: string | null }>) {
+        admMap.set(r.id, r.admission_date);
+      }
+      preEnrollment = new Set(
+        normalizedRecords
+          .filter(r => {
+            const ad = admMap.get(r.studentId);
+            return !!ad && body.date < ad;
+          })
+          .map(r => r.studentId),
+      );
+    }
+    const filteredRecords = normalizedRecords.filter(r => !preEnrollment.has(r.studentId));
+    const counts = countsByStatus(filteredRecords);
 
     // No more approval workflow. Whoever submits attendance — teacher or
     // principal — auto-approves and locks the record. Per the schools'
@@ -360,7 +386,7 @@ attendanceRouter.post('/submit', requireAuth, requireRole('TEACHER', 'PRINCIPAL'
         total_absent:    counts.absent,
         total_holiday:   counts.holiday,
         total_half:      counts.half,
-        total_students:  body.records.length,
+        total_students:  filteredRecords.length,
         marked_by:       req.user.id,
         approval_status: approvalStatus,
         is_locked:       isLocked,
@@ -380,7 +406,7 @@ attendanceRouter.post('/submit', requireAuth, requireRole('TEACHER', 'PRINCIPAL'
           total_absent:     counts.absent,
           total_holiday:    counts.holiday,
           total_half:       counts.half,
-          total_students:   body.records.length,
+          total_students:   filteredRecords.length,
           marked_by:        req.user.id,
           approval_status:  approvalStatus,
           is_locked:        isLocked,
@@ -390,14 +416,16 @@ attendanceRouter.post('/submit', requireAuth, requireRole('TEACHER', 'PRINCIPAL'
       attendanceId = (recData as Pick<RecordRow, 'id'>).id;
     }
 
-    const rows = normalizedRecords.map(r => ({
+    const rows = filteredRecords.map(r => ({
       attendance_id: attendanceId,
       student_id:    r.studentId,
       is_present:    statusToIsPresent(r.status),
       status:        r.status,
     }));
-    const { error: insErr } = await adminDb.from('attendance_student_details').insert(rows);
-    if (insErr) throw new ApiError(500, insErr.message);
+    if (rows.length > 0) {
+      const { error: insErr } = await adminDb.from('attendance_student_details').insert(rows);
+      if (insErr) throw new ApiError(500, insErr.message);
+    }
 
     ok(res, { attendanceId, date: body.date, ...counts });
   } catch (err) { fail(res, err); }
@@ -434,7 +462,24 @@ attendanceRouter.post('/mark-by-principal', requireAuth, requireRole('PRINCIPAL'
       studentId: r.studentId,
       status: normalizeStatus(r.status, r.isPresent),
     }));
-    const counts = countsByStatus(normalizedRecords);
+
+    // Pre-enrollment guard mirrors /submit — a principal direct-mark on
+    // 1-Apr shouldn't put a student admitted on 1-May into the register.
+    const stuIds = normalizedRecords.map(r => r.studentId);
+    let admMap = new Map<string, string | null>();
+    if (stuIds.length > 0) {
+      const { data: admRows } = await adminDb.from('students')
+        .select('id, admission_date')
+        .eq('school_id', req.user.school_id!).in('id', stuIds);
+      for (const r of (admRows ?? []) as Array<{ id: string; admission_date: string | null }>) {
+        admMap.set(r.id, r.admission_date);
+      }
+    }
+    const filteredRecords = normalizedRecords.filter(r => {
+      const ad = admMap.get(r.studentId);
+      return !ad || body.date >= ad;
+    });
+    const counts = countsByStatus(filteredRecords);
 
     const { data: existData } = await adminDb
       .from('attendance_records')
@@ -466,7 +511,7 @@ attendanceRouter.post('/mark-by-principal', requireAuth, requireRole('PRINCIPAL'
         total_absent:    counts.absent,
         total_holiday:   counts.holiday,
         total_half:      counts.half,
-        total_students:  body.records.length,
+        total_students:  filteredRecords.length,
         marked_by:       req.user.id,
         approved_by:     req.user.id,
         approval_status: 'APPROVED',
@@ -486,7 +531,7 @@ attendanceRouter.post('/mark-by-principal', requireAuth, requireRole('PRINCIPAL'
           total_absent:     counts.absent,
           total_holiday:    counts.holiday,
           total_half:       counts.half,
-          total_students:   body.records.length,
+          total_students:   filteredRecords.length,
           marked_by:        req.user.id,
           approved_by:      req.user.id,
           approval_status:  'APPROVED',
@@ -499,7 +544,7 @@ attendanceRouter.post('/mark-by-principal', requireAuth, requireRole('PRINCIPAL'
       attendanceId = (recData as Pick<RecordRow, 'id'>).id;
     }
 
-    const detail = normalizedRecords.map(r => ({
+    const detail = filteredRecords.map(r => ({
       attendance_id: attendanceId,
       student_id:    r.studentId,
       is_present:    statusToIsPresent(r.status),
@@ -572,10 +617,10 @@ attendanceRouter.post('/update-students', requireAuth, requireRole('PRINCIPAL'),
     const mode: 'patch' | 'full' = body.mode === 'full' ? 'full' : 'patch';
 
     const { data: ownData } = await adminDb.from('attendance_records')
-      .select('id, school_id, is_locked')
+      .select('id, school_id, is_locked, date')
       .eq('id', body.attendanceId)
       .eq('school_id', req.user.school_id!).maybeSingle();
-    const ownRecord = ownData as (Pick<RecordRow, 'id' | 'is_locked'> & { school_id: string }) | null;
+    const ownRecord = ownData as (Pick<RecordRow, 'id' | 'is_locked'> & { school_id: string; date: string }) | null;
     if (!ownRecord) throw new ApiError(404, 'Attendance record not found');
 
     // Locked records require an explicit correction reason for audit trail.
@@ -588,6 +633,11 @@ attendanceRouter.post('/update-students', requireAuth, requireRole('PRINCIPAL'),
       status: normalizeStatus(s.status, s.isPresent),
     }));
 
+    // Pre-enrollment guard — same as /submit. Drop students whose
+    // admission_date is after the record's date so a correction can't
+    // accidentally backfill attendance for someone who hadn't joined yet.
+    let filteredStudents = normalizedStudents;
+
     if (normalizedStudents.length) {
       // Bind every student_id to the attendance record's school. The route
       // uses adminDb (service role), so RLS won't catch a forged payload
@@ -595,29 +645,41 @@ attendanceRouter.post('/update-students', requireAuth, requireRole('PRINCIPAL'),
       // batch if any studentId doesn't belong to the same school.
       const stuIds = normalizedStudents.map(s => s.studentId);
       const { data: validStu } = await adminDb.from('students')
-        .select('id').eq('school_id', ownRecord.school_id).in('id', stuIds);
-      const validSet = new Set(((validStu ?? []) as { id: string }[]).map(r => r.id));
+        .select('id, admission_date')
+        .eq('school_id', ownRecord.school_id).in('id', stuIds);
+      const validRows = (validStu ?? []) as Array<{ id: string; admission_date: string | null }>;
+      const validSet = new Set(validRows.map(r => r.id));
       const stranger = stuIds.find(id => !validSet.has(id));
       if (stranger) {
         throw new ApiError(403, `Student ${stranger} does not belong to this school`);
       }
+      const admMap = new Map<string, string | null>();
+      for (const r of validRows) admMap.set(r.id, r.admission_date);
+      filteredStudents = normalizedStudents.filter(s => {
+        const ad = admMap.get(s.studentId);
+        return !ad || ownRecord.date >= ad;
+      });
 
-      const rows = normalizedStudents.map(s => ({
-        attendance_id: body.attendanceId,
-        student_id:    s.studentId,
-        is_present:    statusToIsPresent(s.status),
-        status:        s.status,
-      }));
-      const { error: uErr } = await adminDb.from('attendance_student_details')
-        .upsert(rows, { onConflict: 'attendance_id,student_id' });
-      if (uErr) throw new ApiError(500, uErr.message);
+      if (filteredStudents.length) {
+        const rows = filteredStudents.map(s => ({
+          attendance_id: body.attendanceId,
+          student_id:    s.studentId,
+          is_present:    statusToIsPresent(s.status),
+          status:        s.status,
+        }));
+        const { error: uErr } = await adminDb.from('attendance_student_details')
+          .upsert(rows, { onConflict: 'attendance_id,student_id' });
+        if (uErr) throw new ApiError(500, uErr.message);
+      }
     }
 
     // In 'full' mode the payload represents the complete class roster; rows
     // not in the payload are pruned. In 'patch' mode (default) we never
     // delete — partial submits used to clobber unchanged students.
+    // keepIds uses filteredStudents so any legacy pre-enrollment rows in
+    // the DB get cleaned up alongside this update.
     if (mode === 'full') {
-      const keepIds = new Set(body.students.map(s => s.studentId));
+      const keepIds = new Set(filteredStudents.map(s => s.studentId));
       const { data: existData } = await adminDb.from('attendance_student_details')
         .select('student_id').eq('attendance_id', body.attendanceId);
       const toDelete = ((existData ?? []) as StuDetailRow[])
@@ -631,8 +693,8 @@ attendanceRouter.post('/update-students', requireAuth, requireRole('PRINCIPAL'),
     }
 
     // Recompute totals from the canonical row set. In patch mode that means
-    // re-reading the full set after the upsert; in full mode the payload
-    // already represents the complete roster.
+    // re-reading the full set after the upsert; in full mode the filtered
+    // payload already represents the complete (post-prune) roster.
     let counts: ReturnType<typeof countsByStatus>;
     let totalStudents: number;
     if (mode === 'patch') {
@@ -644,8 +706,8 @@ attendanceRouter.post('/update-students', requireAuth, requireRole('PRINCIPAL'),
       counts = countsByStatus(merged);
       totalStudents = merged.length;
     } else {
-      counts = countsByStatus(normalizedStudents);
-      totalStudents = body.students.length;
+      counts = countsByStatus(filteredStudents);
+      totalStudents = filteredStudents.length;
     }
     const { error: rErr } = await adminDb.from('attendance_records').update({
       total_present:  counts.present,

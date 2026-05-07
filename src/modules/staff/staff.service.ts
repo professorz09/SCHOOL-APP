@@ -64,20 +64,31 @@ interface SalaryRow {
   month: string;
   amount: number;
   paid_at: string;
+  created_at?: string;
   transaction_id: string | null;
   note: string | null;
   method?: string | null;
+  reversed_at?: string | null;
+  reversal_reason?: string | null;
+  // When the select projects the related users(name) embed, Supabase types
+  // it as either a single object or an array depending on the relation.
+  users?: { name: string } | { name: string }[] | null;
 }
 
 function rowToSalary(r: SalaryRow): SalaryPayment {
+  const reverser = Array.isArray(r.users) ? r.users[0] : r.users;
   return {
     id: r.id,
     month: r.month,
     amount: Number(r.amount),
     paidAt: r.paid_at,
+    createdAt: r.created_at ?? r.paid_at,
     transactionId: r.transaction_id ?? '',
     note: r.note ?? '',
     method: (r.method as SalaryPaymentMethod | null) ?? null,
+    reversedAt: r.reversed_at ?? null,
+    reversedByName: reverser?.name ?? null,
+    reversalReason: r.reversal_reason ?? null,
   };
 }
 
@@ -317,6 +328,7 @@ export const staffService = {
     note: string,
     method?: SalaryPaymentMethod | null,
     transactionId?: string | null,
+    paidAt?: string,
   ): Promise<StaffMember> {
     if (!Number.isFinite(amount) || amount <= 0) throw new Error('Amount must be positive');
     await apiStaff.paySalary({
@@ -324,10 +336,17 @@ export const staffService = {
       note:          note || undefined,
       method:        method ?? undefined,
       transactionId: transactionId ?? undefined,
+      paidAt:        paidAt || undefined,
     });
     const fresh = await this.getById(staffId);
     if (!fresh) throw new Error('Staff not found after pay');
     return fresh;
+  },
+
+  async reverseSalaryPayment(paymentId: string, reason: string): Promise<void> {
+    if (!reason.trim()) throw new Error('Reason is required');
+    await apiStaff.reverseSalary({ paymentId, reason: reason.trim() });
+    await logAudit('salary_payment_reversed', 'staff', paymentId, { reason });
   },
 
   // ─── Salary history (effective-from changes) ─────────────────────────────
@@ -381,11 +400,14 @@ export const staffService = {
   ): Promise<SalaryPayment[]> {
     const { data, error } = await supabase
       .from('salary_payments')
-      .select('id, staff_id, month, amount, paid_at, transaction_id, note, method')
+      .select(
+        'id, staff_id, month, amount, paid_at, created_at, transaction_id, note, method, ' +
+        'reversed_at, reversal_reason, users:reversed_by(name)'
+      )
       .eq('staff_id', staffId)
       .order('paid_at', { ascending: false });
     if (error) throw new Error(error.message);
-    return ((data ?? []) as SalaryRow[]).map(rowToSalary);
+    return ((data ?? []) as unknown as SalaryRow[]).map(rowToSalary);
   },
 
   // ─── Salary reminders for the dashboard widget ───────────────────────────

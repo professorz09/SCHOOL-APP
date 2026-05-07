@@ -49,10 +49,22 @@ staffRouter.post('/salary/pay', requireAuth, requireRole('PRINCIPAL'), async (re
     const body = requireBody<{
       staffId: string; month: string; amount: number;
       note?: string; method?: string; transactionId?: string;
+      paidAt?: string;
     }>(req, ['staffId', 'month', 'amount']);
 
     if (!Number.isFinite(body.amount) || body.amount <= 0)
       throw new ApiError(400, 'Amount must be positive');
+
+    // paid_at defaults to today server-side. Reject anything that doesn't
+    // look like an ISO date so a typo can't sneak past the RPC's future-
+    // date guard with garbage that pg coerces unexpectedly.
+    let paidAt: string | null = null;
+    if (body.paidAt) {
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(body.paidAt)) {
+        throw new ApiError(400, 'paidAt must be ISO yyyy-mm-dd');
+      }
+      paidAt = body.paidAt;
+    }
 
     const db = userDb(req.jwt);
     const { error } = await db.rpc('record_salary_payment', {
@@ -62,10 +74,27 @@ staffRouter.post('/salary/pay', requireAuth, requireRole('PRINCIPAL'), async (re
       p_note:     body.note ?? null,
       p_method:   body.method ?? null,
       p_txn_id:   body.transactionId ?? null,
+      p_paid_at:  paidAt,
     });
     if (error) throw new ApiError(500, error.message);
 
     ok(res, { staffId: body.staffId, month: body.month, amount: body.amount });
+  } catch (err) { fail(res, err); }
+});
+
+// POST /api/staff/salary/reverse — undo a recently-recorded payment
+staffRouter.post('/salary/reverse', requireAuth, requireRole('PRINCIPAL'), async (req, res) => {
+  try {
+    const body = requireBody<{ paymentId: string; reason: string }>(req, ['paymentId', 'reason']);
+    if (!body.reason?.trim()) throw new ApiError(400, 'reason is required');
+
+    const db = userDb(req.jwt);
+    const { error } = await db.rpc('reverse_salary_payment', {
+      p_payment_id: body.paymentId,
+      p_reason:     body.reason.trim(),
+    });
+    if (error) throw new ApiError(400, error.message);
+    ok(res, { paymentId: body.paymentId });
   } catch (err) { fail(res, err); }
 });
 

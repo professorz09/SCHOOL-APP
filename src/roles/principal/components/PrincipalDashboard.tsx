@@ -2,7 +2,7 @@ import React, { useEffect, useState } from 'react';
 import {
   Users, UserCheck, BookOpen, IndianRupee, Bus, CircleAlert,
   Wallet, MapPin, ChevronRight, Bell, ClipboardCheck, Clock,
-  BanknoteIcon, Settings, UserCog, CalendarCheck, Sparkles,
+  Settings, UserCog, CalendarCheck, Sparkles,
   Calendar, GraduationCap, ArrowRight, TrendingUp, AlertCircle, BarChart3,
   Library, Cake,
 } from 'lucide-react';
@@ -210,7 +210,11 @@ export const PrincipalDashboard: React.FC<Props> = ({ onNavigate }) => {
       items: [
         { icon: <Users size={20}/>,         label: 'Staff List',  view: 'STAFF',            tint: 'bg-blue-50 text-blue-600' },
         { icon: <CalendarCheck size={20}/>, label: 'Attendance',  view: 'STAFF_ATTENDANCE', tint: 'bg-teal-50 text-teal-600' },
-        { icon: <BanknoteIcon size={20}/>,  label: 'Salary',      view: 'SALARY_LEDGER',    tint: 'bg-lime-50 text-lime-600' },
+        // Salary tile removed — pay / edit-salary lives inside each staff
+        // profile's Salary tab now, so a separate ledger entry was just a
+        // duplicate route. SalaryLedger view itself stays mounted in the
+        // layout for backward compat with any deep-links + the Salary
+        // Reminder widget which still pushes here.
         { icon: <Wallet size={20}/>,        label: 'Expenses',    view: 'EXPENSES',         tint: 'bg-red-50 text-red-500' },
       ],
     },

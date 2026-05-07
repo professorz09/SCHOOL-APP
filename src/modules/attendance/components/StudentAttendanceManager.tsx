@@ -93,7 +93,7 @@ export const StudentAttendanceManager: React.FC<Props> = ({ onBack }) => {
   const [gridDates,   setGridDates]   = useState<string[]>([]);
   const [gridRecords, setGridRecords] = useState<GridDateRecord[]>([]);
   const [gridDetails, setGridDetails] = useState<GridStudentDetails>({});
-  const [gridStudents, setGridStudents] = useState<{ id: string; name: string; rollNo: string }[]>([]);
+  const [gridStudents, setGridStudents] = useState<{ id: string; name: string; rollNo: string; admissionDate: string }[]>([]);
   const [gridLoading, setGridLoading] = useState(false);
   const [gridSearch,  setGridSearch]  = useState('');
   const [editBuffer, setEditBuffer]   = useState<Record<string, Record<string, AttendanceCellStatus>>>({});
@@ -207,7 +207,13 @@ export const StudentAttendanceManager: React.FC<Props> = ({ onBack }) => {
       const sectionStudents = students
         .filter(s => s.className === cls && s.section === sec)
         .sort((a, b) => parseInt(a.rollNo || '0') - parseInt(b.rollNo || '0'))
-        .map(s => ({ id: s.id, name: s.name, rollNo: s.rollNo ?? '' }));
+        .map(s => ({
+          id: s.id, name: s.name, rollNo: s.rollNo ?? '',
+          // admission_date drives the N/E gate — dates before this for a
+          // mid-session admission show as "Not Enrolled" and stay out of
+          // both the percentage numerator and denominator.
+          admissionDate: s.admissionDate ?? '',
+        }));
       setGridStudents(sectionStudents);
     } catch (e) {
       showToast((e as Error).message || 'Failed to load grid', 'error');
@@ -240,26 +246,43 @@ export const StudentAttendanceManager: React.FC<Props> = ({ onBack }) => {
   //      cycle and the save handler routes through /update-students
   //      with a reason prompt. Without Editor Mode it stays read-only,
   //      again silently — the lock icon in the header already explains.
+  // True when this date falls before the student joined the school. Such
+  // cells show "N/E" (Not Enrolled), are non-editable, and are excluded
+  // from both the % numerator and denominator. Empty admissionDate is
+  // treated as "always enrolled" so legacy rows without the column don't
+  // accidentally lock out their entire history.
+  const isPreEnrollment = (admissionDate: string, date: string): boolean =>
+    !!admissionDate && date < admissionDate;
+
   const toggleCell = (date: string, stuId: string) => {
     if (!gridEditMode) return;
     if (date > todayStr()) return;
     const rec = recordMap[date];
+    // Locked (already-saved) records still require Editor Mode — the lock
+    // icon + amber banner explain why. Brand-new dates (no record yet) are
+    // editable freely, since there's nothing to overwrite.
     if (rec?.isLocked && !editorModeActive) return;
+    const stu = gridStudents.find(s => s.id === stuId);
+    if (stu && isPreEnrollment(stu.admissionDate, date)) return;
     setEditBuffer(prev => {
       const cur = prev[date]?.[stuId] ?? gridDetails[date]?.[stuId] ?? 'present';
       return { ...prev, [date]: { ...(prev[date] ?? {}), [stuId]: NEXT_STATUS(cur) } };
     });
   };
 
-  // Bulk button tap. Same silent-no-op rule as toggleCell — header /
-  // banner already explain the gate; toasts here just stacked noise.
   const bulkSetDate = (date: string, status: AttendanceCellStatus) => {
     if (!gridEditMode) return;
     if (date > todayStr()) return;
     const rec = recordMap[date];
     if (rec?.isLocked && !editorModeActive) return;
+    // Bulk skips students who weren't yet enrolled on this date — a class
+    // teacher hitting "All Present" for 1-Apr shouldn't mark a student
+    // admitted on 1-May as present.
     const entries: Record<string, AttendanceCellStatus> = {};
-    for (const s of gridStudents) entries[s.id] = status;
+    for (const s of gridStudents) {
+      if (isPreEnrollment(s.admissionDate, date)) continue;
+      entries[s.id] = status;
+    }
     setEditBuffer(prev => ({ ...prev, [date]: entries }));
   };
 
@@ -280,18 +303,26 @@ export const StudentAttendanceManager: React.FC<Props> = ({ onBack }) => {
     const rec = recordMap[date];
     const isLockedEdit = !!rec?.isLocked;
 
+    // Locked (already-saved) records can only be re-saved when global
+    // Editor Mode is active — the same gate we use for cell taps. New
+    // dates without a record skip this check entirely.
     if (isLockedEdit && !editorModeActive) {
-      showToast('Locked — enable Editor Mode in Settings first', 'error'); return;
+      showToast('Locked — enable Editor Mode in Settings to edit this date', 'error'); return;
     }
 
+    // Build the per-student payload, dropping anyone who wasn't enrolled
+    // yet on this date. Server also enforces the same filter as
+    // defence-in-depth, but pruning client-side keeps the UI roster honest.
     const stuRecords: import('@/modules/attendance/attendance.service').AttendanceStudentRecord[] =
-      gridStudents.map(s => ({
-        id: s.id,
-        name: s.name,
-        rollNo: s.rollNo,
-        isPresent: (edits[s.id] ?? gridDetails[date]?.[s.id] ?? 'present') !== 'absent',
-        status: edits[s.id] ?? gridDetails[date]?.[s.id] ?? 'present' as AttendanceCellStatus,
-      }));
+      gridStudents
+        .filter(s => !isPreEnrollment(s.admissionDate, date))
+        .map(s => ({
+          id: s.id,
+          name: s.name,
+          rollNo: s.rollNo,
+          isPresent: (edits[s.id] ?? gridDetails[date]?.[s.id] ?? 'present') !== 'absent',
+          status: edits[s.id] ?? gridDetails[date]?.[s.id] ?? 'present' as AttendanceCellStatus,
+        }));
 
     let reason: string | undefined;
     if (isLockedEdit) {
@@ -303,12 +334,21 @@ export const StudentAttendanceManager: React.FC<Props> = ({ onBack }) => {
     setIsSubmitting(true);
     try {
       const result = await editGuard.gate(
-        // Cast to void so the gate's union return type stays uniform —
-        // submitSection returns { attendanceId } whereas updateStudents
-        // returns void; we don't need the attendanceId here either way.
+        // Routing rule:
+        //   • Existing record (locked or not) → /update-students. Locked
+        //     branches need a reason; unlocked don't, but the route still
+        //     handles the upsert cleanly. Going through /submit on an
+        //     existing locked row triggers the "locked — contact principal"
+        //     403 even when the caller IS the principal, since the route
+        //     can't tell us-vs-them apart at that point.
+        //   • Brand-new date with no record → /submit. Auto-locks on save.
+        // Cast to void so editGuard.gate's union return stays uniform.
         async () => {
-          if (isLockedEdit && rec) await sharedAttendance.updateStudents(rec.id, stuRecords, reason);
-          else                     await sharedAttendance.submitSection(sectionId, date, stuRecords);
+          if (rec) {
+            await sharedAttendance.updateStudents(rec.id, stuRecords, reason);
+          } else {
+            await sharedAttendance.submitSection(sectionId, date, stuRecords);
+          }
         },
         { entityType: 'student_attendance', entityId: `${gridClass}/${gridSection}/${date}` },
       );
@@ -806,10 +846,9 @@ export const StudentAttendanceManager: React.FC<Props> = ({ onBack }) => {
                       const rec = recordMap[d];
                       const isLocked = !!rec?.isLocked;
                       const isFuture = d > todayStr();
-                      // Show bulk pills when the column is editable. With
-                      // Editor Mode on, locked columns are editable too —
-                      // a bulk press queues the change and saveDate routes
-                      // it through /update-students with a reason prompt.
+                      // Locked columns need global Editor Mode to edit (the
+                      // amber banner + lock icon explain why). Brand-new
+                      // dates with no record yet are always editable.
                       const showBulk = !isFuture && (!isLocked || editorModeActive);
                       return (
                         <th key={d} className="border-b border-r border-slate-100 px-0.5 py-1 text-center">
@@ -839,6 +878,9 @@ export const StudentAttendanceManager: React.FC<Props> = ({ onBack }) => {
                   {filteredGridStudents.map((stu, sidx) => {
                     let totalP = 0, totalA = 0, totalHalf = 0;
                     for (const d of gridDates) {
+                      // Pre-enrollment days are out of scope for this
+                      // student's percentage — they weren't on the roster.
+                      if (isPreEnrollment(stu.admissionDate, d)) continue;
                       const st = cellStatus(d, stu.id);
                       if (!st) continue;
                       if (st === 'present') totalP++;
@@ -858,10 +900,23 @@ export const StudentAttendanceManager: React.FC<Props> = ({ onBack }) => {
                           const st = cellStatus(d, stu.id);
                           const locked = !!rec?.isLocked;
                           const isFuture = d > todayStr();
-                          // A locked cell is only "frozen" when Editor Mode
-                          // is OFF. With Editor Mode on, the principal can
-                          // tap to cycle and saveDate routes the change
-                          // through /update-students with a reason prompt.
+                          const preEnroll = isPreEnrollment(stu.admissionDate, d);
+                          // Pre-enrollment cells render as a slate "N/E"
+                          // pill — non-clickable, neither absent nor a
+                          // pending tick. They short-circuit before the
+                          // locked/editable logic so an N/E cell never
+                          // tries to claim a tap-to-cycle.
+                          if (preEnroll) {
+                            return (
+                              <td key={d}
+                                className="border-b border-r border-slate-100 text-center px-0.5 py-1 cursor-not-allowed bg-slate-50/40"
+                                title={`Not enrolled until ${stu.admissionDate}`}>
+                                <span className="inline-flex items-center justify-center w-7 h-7 rounded-lg text-[8px] font-black text-slate-400 bg-slate-100/70 border border-dashed border-slate-200">
+                                  N/E
+                                </span>
+                              </td>
+                            );
+                          }
                           const editable = !isFuture && (!locked || editorModeActive);
                           const bg = st ? CELL_BG[st] : 'bg-slate-100 text-slate-300';
                           return (

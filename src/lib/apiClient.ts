@@ -175,7 +175,10 @@ export const apiStaff = {
   paySalary: (body: {
     staffId: string; month: string; amount: number;
     note?: string; method?: string; transactionId?: string;
+    paidAt?: string;
   }) => post<any>('/staff/salary/pay', body),
+  reverseSalary: (body: { paymentId: string; reason: string }) =>
+    post<{ paymentId: string }>('/staff/salary/reverse', body),
   updateSalary: (body: {
     staffId: string; newAmount: number; effectiveFrom: string; reason: string;
   }) => post<any>('/staff/salary/update', body),

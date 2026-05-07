@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useEffect, useState } from 'react';
 import { CheckCircle2, XCircle, AlertCircle, Info, X } from 'lucide-react';
 import { useUIStore, Toast as ToastType } from '@/store/uiStore';
 
@@ -24,22 +24,36 @@ const TEXT = {
 };
 
 export const ToastContainer: React.FC = () => {
+  // CRITICAL: every hook must run on every render. The earlier code
+  // returned `null` here BEFORE useViewportIsDesktop, so when toasts
+  // toggled on/off React saw a different hook count between renders and
+  // crashed with "Rendered fewer hooks than expected" — and because this
+  // container lives at the app root, every action that fired a toast (add,
+  // edit, delete, save, anything) blanked the whole app. Always call the
+  // hook first; gate output via the JSX below instead.
   const { toasts, dismissToast } = useUIStore();
-  if (toasts.length === 0) return null;
+  const isDesktop = useViewportIsDesktop();
+
+  // Drop empty-message toasts — those used to render as blank rose pills
+  // when an Error was thrown with `''` as its message.
+  const visible = toasts.filter(t => (t.message ?? '').trim().length > 0);
 
   // Positioning rules:
-  //   • Mobile  → bottom-centered band, sits above the bottom nav (bottom-24).
-  //   • Desktop → bottom-right pill stack with a fixed max-width so it
-  //     doesn't slide under the sidebar or stretch across the whole layout.
-  // Earlier this used `absolute`, which positioned the toast relative to
-  // whichever scroll container happened to be its ancestor — on desktop the
-  // bar slid behind the sidebar and looked like it was cut off mid-screen.
+  //   • Mobile  → bottom-centered band above the bottom nav.
+  //   • Desktop → bottom-right pill stack, max-width so it doesn't slide
+  //     under the sidebar or stretch across the whole layout.
+  // Inline style is intentional — Tailwind's lg: prefix variants kept
+  // losing on cached desktop reloads because CSS specificity ties were
+  // resolving to the unprefixed (full-width) rule.
+  const containerStyle: React.CSSProperties = isDesktop
+    ? { position: 'fixed', right: 24, bottom: 24, maxWidth: '24rem', width: 'calc(100% - 48px)', zIndex: 200 }
+    : { position: 'fixed', left: 16, right: 16, bottom: 96, zIndex: 200 };
+
+  if (visible.length === 0) return null;
+
   return (
-    <div
-      className="fixed z-[200] space-y-2 pointer-events-none
-                 bottom-24 left-4 right-4
-                 lg:bottom-6 lg:right-6 lg:left-auto lg:max-w-sm lg:w-full">
-      {toasts.map(toast => (
+    <div className="space-y-2 pointer-events-none" style={containerStyle}>
+      {visible.map(toast => (
         <div key={toast.id}
           role="alert"
           className={`flex items-start gap-3 px-4 py-3 rounded-2xl border shadow-lg pointer-events-auto animate-in slide-in-from-bottom-4 duration-300 ${BG[toast.type]}`}>
@@ -53,3 +67,17 @@ export const ToastContainer: React.FC = () => {
     </div>
   );
 };
+
+// Local viewport-size hook. Kept private to this file so we don't reach into
+// app-level layout state from a shared UI primitive.
+function useViewportIsDesktop(): boolean {
+  const [isDesktop, setIsDesktop] = useState(() =>
+    typeof window === 'undefined' ? false : window.innerWidth >= 1024,
+  );
+  useEffect(() => {
+    const handler = () => setIsDesktop(window.innerWidth >= 1024);
+    window.addEventListener('resize', handler);
+    return () => window.removeEventListener('resize', handler);
+  }, []);
+  return isDesktop;
+}

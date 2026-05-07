@@ -310,18 +310,31 @@ const [mainView, setMainView] = useState<MainView>(initialView ?? 'CLASSES');
         });
       }
 
-      setStudents(prev => [...prev, student]);
-      setSelected(student);
-      setForm(BLANK_FORM_WITH_PARENT);
-      setReligionIsOther(false);
-      setCasteIsOther(false);
-      setDocumentFiles(new Map());
-      setDocuments(prev => prev.map(d => ({ ...d, uploaded: false })));
-      // Land the user on the LIST (or PROFILE) — never leave them on a blank
-      // CREATE form. The admission-print is opt-in: only open it if school
-      // info is already loaded so we don't strand the user on a spinner.
-      setSubView('LIST');
-      if (schoolInfo) setShowAdmissionForm(true);
+      // Wrap the post-create UI updates so a render error in any one of
+      // the downstream components (admission-print, list refresh) doesn't
+      // leave the user on a hard crash with no recovery — toast surfaces
+      // the failure but the form state is still cleared and the user
+      // lands back on LIST.
+      try {
+        setStudents(prev => [...prev, student]);
+        setSelected(student);
+        setForm(BLANK_FORM_WITH_PARENT);
+        setReligionIsOther(false);
+        setCasteIsOther(false);
+        setDocumentFiles(new Map());
+        setDocuments(prev => prev.map(d => ({ ...d, uploaded: false })));
+        setSubView('LIST');
+        // Admission-print modal is rendered at a top-level branch which is
+        // unreachable while mainView==='ADMISSION', so flipping this flag
+        // here was a no-op that risked leaving the modal stuck open if the
+        // user later switched away. Kept off until the print flow is moved
+        // into the admission view itself.
+        // if (schoolInfo) setShowAdmissionForm(true);
+      } catch (uiErr) {
+        // eslint-disable-next-line no-console
+        console.error('[admission] post-create UI update failed', uiErr);
+        showToast('Student saved, but UI update failed — please refresh', 'error');
+      }
     } catch (e) {
       const msg = e instanceof Error ? e.message : 'Admission failed';
       showToast(msg, 'error');

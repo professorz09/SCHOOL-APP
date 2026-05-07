@@ -12,7 +12,9 @@ import {
   StaffSalaryHistoryEntry, StaffStatusHistoryEntry, StaffDocument, SalaryPayment,
 } from '@/modules/staff/staff.types';
 import { useUIStore } from '@/store/uiStore';
+import { useEditorModeStore } from '@/store/editorModeStore';
 import { apiPrincipal, apiStaff } from '@/lib/apiClient';
+import { ErrorBoundary } from '@/shared/components/ErrorBoundary';
 
 type View = 'LIST' | 'CREATE' | 'PROFILE' | 'EDIT';
 type Tab = 'INFO' | 'SALARY' | 'ATTENDANCE' | 'CLASSES' | 'DOCS' | 'LOG';
@@ -84,37 +86,63 @@ interface MonthRow {
   status: 'PAID' | 'PARTIAL' | 'PENDING';
 }
 
-/** Build an expected-vs-paid grid for the Salary tab. */
+/** Build an expected-vs-paid grid for the Salary tab. Hardened against
+ *  bad inputs: invalid dates, null/undefined salary, oversized ranges
+ *  (e.g. joining date set to 1970 by mistake) used to crash this tab
+ *  with a white screen the moment a payment landed and the memo recomputed.
+ */
 function buildMonthlyGrid(
   staff: StaffMember,
   history: StaffSalaryHistoryEntry[],
   payments: SalaryPayment[],
 ): MonthRow[] {
-  if (!staff.joiningDate) return [];
-  const fromDate = new Date(staff.joiningDate);
-  const today = new Date();
-  const toDate = staff.relievingDate && new Date(staff.relievingDate) < today
-    ? new Date(staff.relievingDate)
-    : today;
-  if (fromDate > toDate) return [];
+  try {
+    if (!staff.joiningDate) return [];
+    const fromDate = new Date(staff.joiningDate);
+    if (Number.isNaN(fromDate.getTime())) return [];
+    const today = new Date();
+    let toDate = today;
+    if (staff.relievingDate) {
+      const r = new Date(staff.relievingDate);
+      if (!Number.isNaN(r.getTime()) && r < today) toDate = r;
+    }
+    if (fromDate > toDate) return [];
 
-  const paidByMonth = new Map<string, number>();
-  for (const p of payments) {
-    paidByMonth.set(p.month, (paidByMonth.get(p.month) ?? 0) + p.amount);
-  }
+    // Sanity cap — refuse to build a 600-row grid because somebody typed
+    // 1970 as the joining date. Eight years is generous for a real career
+    // window and keeps the render cheap.
+    const maxMonths = 96;
+    const monthsApart =
+      (toDate.getFullYear() - fromDate.getFullYear()) * 12
+      + (toDate.getMonth() - fromDate.getMonth());
+    let effectiveFrom = fromDate;
+    if (monthsApart > maxMonths) {
+      effectiveFrom = new Date(toDate.getFullYear(), toDate.getMonth() - maxMonths, 1);
+    }
 
-  const rows: MonthRow[] = [];
-  for (const m of monthRange(fromDate, toDate)) {
-    const label = monthLabel(m);
-    const expected = expectedSalaryFor(m, history, staff.salary);
-    const paid = paidByMonth.get(label) ?? 0;
-    const status: MonthRow['status'] =
-      paid >= expected && expected > 0 ? 'PAID' :
-      paid > 0 ? 'PARTIAL' : 'PENDING';
-    rows.push({ label, expected, paid, status });
+    const paidByMonth = new Map<string, number>();
+    for (const p of payments ?? []) {
+      if (!p?.month) continue;
+      paidByMonth.set(p.month, (paidByMonth.get(p.month) ?? 0) + Number(p.amount || 0));
+    }
+
+    const baseSalary = Number(staff.salary) || 0;
+    const rows: MonthRow[] = [];
+    for (const m of monthRange(effectiveFrom, toDate)) {
+      const label = monthLabel(m);
+      const expected = expectedSalaryFor(m, history ?? [], baseSalary);
+      const paid = paidByMonth.get(label) ?? 0;
+      const status: MonthRow['status'] =
+        paid >= expected && expected > 0 ? 'PAID' :
+        paid > 0 ? 'PARTIAL' : 'PENDING';
+      rows.push({ label, expected, paid, status });
+    }
+    return rows.reverse();
+  } catch (err) {
+    // eslint-disable-next-line no-console
+    console.error('[staff salary] buildMonthlyGrid failed', err);
+    return [];
   }
-  // Most-recent month at top.
-  return rows.reverse();
 }
 
 // ──────────────────────────────────────────────────────────────────────────
@@ -140,10 +168,16 @@ interface SalaryTabProps {
   paymentHistory: SalaryPayment[];
   onEditSalary: () => void;
   onOpenPayModal: (month: string, expected: number) => void;
+  // Drives whether the "Edit Salary" link renders. Pay action stays open
+  // because that's a routine monthly disbursement, not a payroll rewrite.
+  canEdit: boolean;
+  /** Reverse a payment within the 24-hour window. Reason is collected by
+   *  the parent before this is called; SalaryTab just exposes the button. */
+  onReversePayment: (p: SalaryPayment) => void;
 }
 
 const SalaryTab: React.FC<SalaryTabProps> = ({
-  staff, salaryHistory, paymentHistory, onEditSalary, onOpenPayModal,
+  staff, salaryHistory, paymentHistory, onEditSalary, onOpenPayModal, canEdit, onReversePayment,
 }) => {
   const monthly = useMemo(
     () => buildMonthlyGrid(staff, salaryHistory, paymentHistory),
@@ -162,7 +196,7 @@ const SalaryTab: React.FC<SalaryTabProps> = ({
       <div className="bg-white rounded-2xl border border-slate-100 shadow-sm p-4">
         <div className="flex items-start justify-between mb-1">
           <p className="text-[10px] font-black uppercase tracking-widest text-slate-400">Current Salary</p>
-          {!isRelieved && (
+          {!isRelieved && canEdit && (
             <button onClick={onEditSalary} className="flex items-center gap-1 text-[10px] font-black text-blue-600">
               <Edit3 size={11} /> Edit Salary
             </button>
@@ -263,18 +297,59 @@ const SalaryTab: React.FC<SalaryTabProps> = ({
           <p className="text-xs font-bold text-slate-400 py-3 text-center">No payments yet.</p>
         ) : (
           <div className="space-y-2">
-            {paymentHistory.map(p => (
-              <div key={p.id} className="flex items-start justify-between bg-slate-50 rounded-xl p-3">
-                <div>
-                  <div className="font-black text-slate-800 text-sm">{p.month}</div>
-                  <div className="text-[10px] font-bold text-slate-400 mt-0.5">
-                    {fmtDate(p.paidAt)}{p.method ? ` · ${p.method.replace('_', ' ')}` : ''}{p.transactionId ? ` · ${p.transactionId}` : ''}
+            {paymentHistory.map(p => {
+              const isReversed = !!p.reversedAt;
+              // Within-24h check uses created_at (when the row was actually
+              // recorded) rather than paid_at, so a back-dated entry is
+              // still reversible immediately after it was typed in.
+              const within24h =
+                !isReversed
+                && p.createdAt
+                && (Date.now() - new Date(p.createdAt).getTime()) <= 24 * 60 * 60 * 1000;
+              return (
+                <div key={p.id}
+                  className={`bg-slate-50 rounded-xl p-3 ${isReversed ? 'border border-rose-100 bg-rose-50/40' : ''}`}>
+                  <div className="flex items-start justify-between">
+                    <div className="min-w-0 flex-1">
+                      <div className={`font-black text-sm ${isReversed ? 'text-slate-400 line-through' : 'text-slate-800'}`}>
+                        {p.month}
+                      </div>
+                      <div className={`text-[10px] font-bold mt-0.5 ${isReversed ? 'text-slate-400 line-through' : 'text-slate-400'}`}>
+                        {fmtDate(p.paidAt)}{p.method ? ` · ${p.method.replace('_', ' ')}` : ''}{p.transactionId ? ` · ${p.transactionId}` : ''}
+                      </div>
+                      {p.note && (
+                        <div className={`text-[10px] font-bold mt-0.5 ${isReversed ? 'text-slate-400 line-through' : 'text-slate-500'}`}>
+                          {p.note}
+                        </div>
+                      )}
+                    </div>
+                    <div className={`font-black text-sm shrink-0 ${isReversed ? 'text-slate-400 line-through' : 'text-emerald-600'}`}>
+                      {fmtIN(p.amount)}
+                    </div>
                   </div>
-                  {p.note && <div className="text-[10px] font-bold text-slate-500 mt-0.5">{p.note}</div>}
+
+                  {isReversed && (
+                    <div className="mt-2 pt-2 border-t border-rose-200 flex items-start gap-2">
+                      <span className="text-[9px] font-black uppercase tracking-widest bg-rose-100 text-rose-700 px-2 py-0.5 rounded-full shrink-0">
+                        Reversed
+                      </span>
+                      <div className="text-[10px] font-bold text-rose-700 leading-snug">
+                        {p.reversalReason || 'Reversed'}
+                        {p.reversedByName && <> · by {p.reversedByName}</>}
+                        {p.reversedAt && <> · {fmtDate(p.reversedAt.slice(0, 10))}</>}
+                      </div>
+                    </div>
+                  )}
+
+                  {!isReversed && within24h && canEdit && (
+                    <button onClick={() => onReversePayment(p)}
+                      className="mt-2 w-full py-2 bg-rose-50 hover:bg-rose-100 text-rose-700 text-[10px] font-black uppercase tracking-widest rounded-lg border border-rose-200 transition-colors">
+                      Revert (within 24h)
+                    </button>
+                  )}
                 </div>
-                <div className="font-black text-emerald-600 text-sm">{fmtIN(p.amount)}</div>
-              </div>
-            ))}
+              );
+            })}
           </div>
         )}
       </div>
@@ -307,16 +382,29 @@ const fmtDate = (s: string | null | undefined) =>
 
 export const StaffManager: React.FC<Props> = ({ onBack }) => {
   const { showToast } = useUIStore();
-  // Autocomplete suggestions for the "Subject" field — distinct values that
-  // are already used in this school (timetable_entries + staff). No central
-  // list to maintain; the more teachers added, the smarter the dropdown
-  // becomes. First entry is always free-text.
+  // Edit-mode gate. Edit / Suspend / Set Relieving / Edit Salary are
+  // structural changes that distort payroll + lifecycle history if done
+  // by accident, so we hide the controls behind the same Editor Mode flag
+  // used by attendance corrections. Pay (salary disbursement) stays open
+  // because that's a routine monthly action, not a rewrite of past data.
+  const editorModeActive = useEditorModeStore(s => s.isActive());
+  // Suggestions for the "Subject" field — distinct values already used in
+  // this school. The Add/Edit form renders a dropdown of these + an "Other"
+  // entry so the user picks from the existing list (typical case) or
+  // explicitly opts into typing a new one (rare). Earlier this was a
+  // datalist on a text input which kept popping up an autocomplete sheet
+  // every time the user tapped — annoying on mobile, and on desktop the
+  // dropdown appeared even when the user wanted to type a brand-new value.
   const [subjectOptions, setSubjectOptions] = useState<string[]>([]);
   useEffect(() => {
     apiPrincipal.subjectSuggestions()
       .then(setSubjectOptions)
       .catch(() => setSubjectOptions([]));
   }, []);
+  // Per-form "custom" toggles. When ON, a free-text input shows up next to
+  // the dropdown so the principal can type a subject not in the list.
+  const [createSubjectCustom, setCreateSubjectCustom] = useState(false);
+  const [editSubjectCustom, setEditSubjectCustom]     = useState(false);
 
   const [view, setView] = useState<View>('LIST');
   const [staff, setStaff] = useState<StaffMember[]>([]);
@@ -356,6 +444,12 @@ export const StaffManager: React.FC<Props> = ({ onBack }) => {
   const [payTxn, setPayTxn] = useState('');
   const [payNote, setPayNote] = useState('');
   const [payBusy, setPayBusy] = useState(false);
+  // Date defaults to today and stays hidden behind the Advanced disclosure
+  // — most payments are recorded on the same day they happen, so dragging
+  // the field into the primary form added friction. Open Advanced only
+  // when back-dating a cash payment that was disbursed earlier.
+  const [payDate, setPayDate] = useState(todayIso());
+  const [payAdvancedOpen, setPayAdvancedOpen] = useState(false);
 
   const [relieveOpen, setRelieveOpen] = useState(false);
   const [relieveDate, setRelieveDate] = useState(todayIso());
@@ -548,19 +642,46 @@ export const StaffManager: React.FC<Props> = ({ onBack }) => {
     if (!selected) return;
     const amt = Number(payAmt);
     if (!Number.isFinite(amt) || amt <= 0) { showToast('Enter a valid amount', 'error'); return; }
+    if (payDate && payDate > todayIso()) {
+      showToast('Paid on date cannot be in the future', 'error'); return;
+    }
     setPayBusy(true);
     try {
       await staffService.recordSalaryPayment(
         selected.id, payMonth, amt, payNote, payMethod, payTxn || null,
+        // Pass undefined when the user kept the default (today) so the
+        // server still falls through to CURRENT_DATE — no behaviour
+        // change vs the old flow if Advanced was never opened.
+        payDate && payDate !== todayIso() ? payDate : undefined,
       );
       await loadProfileTabs(selected.id);
       showToast(`${fmtIN(amt)} recorded for ${payMonth}`);
       setPayOpen(false);
       setPayAmt(''); setPayTxn(''); setPayNote('');
+      setPayDate(todayIso()); setPayAdvancedOpen(false);
     } catch (e) {
       showToast(e instanceof Error ? e.message : 'Payment failed', 'error');
     } finally {
       setPayBusy(false);
+    }
+  };
+
+  // Reverse a payment within the 24-hour window. Editor mode + reason are
+  // both required (server enforces; client mirrors so the user sees the
+  // gate before clicking).
+  const handleReversePayment = async (payment: SalaryPayment) => {
+    if (!selected) return;
+    if (!editorModeActive) {
+      showToast('Enable Editor Mode (Settings → Security) first', 'error'); return;
+    }
+    const reason = window.prompt('Reason for reversing this payment:')?.trim();
+    if (!reason) return;
+    try {
+      await staffService.reverseSalaryPayment(payment.id, reason);
+      await loadProfileTabs(selected.id);
+      showToast(`Reversed ${fmtIN(payment.amount)} for ${payment.month}`);
+    } catch (e) {
+      showToast(e instanceof Error ? e.message : 'Reversal failed', 'error');
     }
   };
 
@@ -587,13 +708,30 @@ export const StaffManager: React.FC<Props> = ({ onBack }) => {
     }
   };
 
+  const MAX_STAFF_DOCS = 5;
   const handleUpload = async (file: File) => {
     if (!selected) return;
+    // Per-staff cap. Earlier there was no UI gate — uploads kept piling up
+    // and the bucket cost crept silently. 5 covers the typical PAN /
+    // Aadhaar / resume / cert / photo set.
+    if (docs.length >= MAX_STAFF_DOCS) {
+      showToast(`Limit reached — max ${MAX_STAFF_DOCS} documents per staff. Delete an existing one first.`, 'error');
+      return;
+    }
     setDocBusy(true);
     try {
       const doc = await staffService.uploadDocument(selected.id, docType, file);
-      setDocs(prev => [doc, ...prev]);
-      showToast(`${file.name} uploaded`);
+      try {
+        setDocs(prev => [doc, ...prev]);
+        showToast(`${file.name} uploaded`);
+      } catch (uiErr) {
+        // Defensive: a render error in the docs list shouldn't crash the
+        // whole panel. The doc is already saved, so the list will pick it
+        // up on next reload.
+        // eslint-disable-next-line no-console
+        console.error('[staff doc upload] post-upload UI failed', uiErr);
+        showToast('Uploaded — please reopen profile to refresh list', 'info');
+      }
     } catch (e) {
       showToast(e instanceof Error ? e.message : 'Upload failed', 'error');
     } finally {
@@ -797,23 +935,54 @@ export const StaffManager: React.FC<Props> = ({ onBack }) => {
       {renderHeader('Add Staff', () => setView('LIST'))}
       <div className="flex-1 overflow-y-auto p-4  space-y-4">
         <div className="bg-white rounded-2xl border border-slate-100 shadow-sm p-4 space-y-4">
-          {STAFF_TEXT_FIELDS.map(({ label, key, placeholder }) => (
+          {STAFF_TEXT_FIELDS.filter(f => f.key !== 'subject').map(({ label, key, placeholder }) => (
             <div key={key}>
               <label className="block text-[10px] font-black uppercase tracking-widest text-slate-500 mb-1.5">{label}</label>
               <input
                 value={(form[key] ?? '') as string}
                 onChange={e => setForm(f => ({ ...f, [key]: e.target.value }))}
                 placeholder={placeholder}
-                {...(key === 'subject' ? { list: 'staff-subject-suggestions' } : {})}
                 className="w-full border border-slate-200 bg-slate-50 rounded-xl px-4 py-3 font-bold text-sm outline-none focus:border-blue-500 focus:bg-white transition-colors" />
             </div>
           ))}
-          {/* One <datalist> per form, shared by the Subject input above.
-              Suggestions come from existing distinct subject values across
-              the school — populated as teachers are added. */}
-          <datalist id="staff-subject-suggestions">
-            {subjectOptions.map(s => <option key={s} value={s} />)}
-          </datalist>
+
+          {/* Subject — dropdown of existing values + explicit "Other"
+              opt-in for a brand-new one. Replaces the datalist that kept
+              auto-popping while the user was trying to type. */}
+          <div>
+            <label className="block text-[10px] font-black uppercase tracking-widest text-slate-500 mb-1.5">Subject</label>
+            {createSubjectCustom ? (
+              <div className="flex gap-2">
+                <input
+                  value={form.subject ?? ''}
+                  onChange={e => setForm(f => ({ ...f, subject: e.target.value }))}
+                  placeholder="Type subject name"
+                  autoFocus
+                  className="flex-1 border border-slate-200 bg-slate-50 rounded-xl px-4 py-3 font-bold text-sm outline-none focus:border-blue-500 focus:bg-white transition-colors" />
+                <button type="button"
+                  onClick={() => { setCreateSubjectCustom(false); setForm(f => ({ ...f, subject: '' })); }}
+                  className="px-3 py-3 bg-slate-100 text-slate-600 rounded-xl text-[10px] font-black uppercase tracking-widest">
+                  List
+                </button>
+              </div>
+            ) : (
+              <select
+                value={form.subject ?? ''}
+                onChange={e => {
+                  if (e.target.value === '__OTHER__') {
+                    setForm(f => ({ ...f, subject: '' }));
+                    setCreateSubjectCustom(true);
+                  } else {
+                    setForm(f => ({ ...f, subject: e.target.value }));
+                  }
+                }}
+                className="w-full border border-slate-200 bg-slate-50 rounded-xl px-3 py-3 font-bold text-sm outline-none focus:border-blue-500 focus:bg-white transition-colors">
+                <option value="">— Select subject (optional) —</option>
+                {subjectOptions.map(s => <option key={s} value={s}>{s}</option>)}
+                <option value="__OTHER__">+ Other (type a new one)…</option>
+              </select>
+            )}
+          </div>
           <div className="grid grid-cols-2 gap-3">
             <div>
               <label className="block text-[10px] font-black uppercase tracking-widest text-slate-500 mb-1.5">Role</label>
@@ -840,23 +1009,40 @@ export const StaffManager: React.FC<Props> = ({ onBack }) => {
 
         {/* Optional documents — queued and uploaded after staff is created */}
         <div className="bg-white rounded-2xl border border-slate-100 shadow-sm p-4 space-y-3">
-          <div>
-            <p className="text-[10px] font-black uppercase tracking-widest text-slate-500">Documents (optional)</p>
-            <p className="text-[10px] font-bold text-slate-400 mt-0.5">Add PAN, Aadhaar, resume etc. — uploaded after staff is created. You can also add later from the profile.</p>
+          <div className="flex items-center justify-between">
+            <div>
+              <p className="text-[10px] font-black uppercase tracking-widest text-slate-500">Documents (optional)</p>
+              <p className="text-[10px] font-bold text-slate-400 mt-0.5">Add PAN, Aadhaar, resume etc. — uploaded after staff is created. You can also add later from the profile.</p>
+            </div>
+            <span className={`text-[10px] font-black px-2 py-0.5 rounded-full border shrink-0 ${
+              pendingDocs.length >= MAX_STAFF_DOCS
+                ? 'bg-rose-50 text-rose-600 border-rose-200'
+                : 'bg-slate-50 text-slate-500 border-slate-200'
+            }`}>
+              {pendingDocs.length}/{MAX_STAFF_DOCS}
+            </span>
           </div>
 
           <div className="grid grid-cols-2 gap-2">
             <select value={docType} onChange={e => setDocType(e.target.value)}
-              className="border border-slate-200 bg-slate-50 rounded-xl px-3 py-2.5 text-xs font-bold outline-none focus:border-blue-500">
+              disabled={pendingDocs.length >= MAX_STAFF_DOCS}
+              className="border border-slate-200 bg-slate-50 rounded-xl px-3 py-2.5 text-xs font-bold outline-none focus:border-blue-500 disabled:opacity-60">
               {DOC_TYPES.map(t => <option key={t} value={t}>{t.replace('_', ' ')}</option>)}
             </select>
-            <label className="flex items-center justify-center gap-1.5 bg-blue-50 border border-blue-200 text-blue-700 font-black text-xs rounded-xl px-3 py-2.5 cursor-pointer hover:bg-blue-100 transition-colors">
+            <label className={`flex items-center justify-center gap-1.5 bg-blue-50 border border-blue-200 text-blue-700 font-black text-xs rounded-xl px-3 py-2.5 cursor-pointer hover:bg-blue-100 transition-colors ${pendingDocs.length >= MAX_STAFF_DOCS ? 'opacity-60 pointer-events-none' : ''}`}>
               <Upload size={13}/>
               <span>Add File</span>
               <input type="file" accept="image/*,application/pdf" className="hidden"
+                disabled={pendingDocs.length >= MAX_STAFF_DOCS}
                 onChange={e => {
                   const f = e.target.files?.[0];
-                  if (f) setPendingDocs(p => [...p, { type: docType, file: f }]);
+                  if (!f) { e.target.value = ''; return; }
+                  if (pendingDocs.length >= MAX_STAFF_DOCS) {
+                    showToast(`Limit reached — max ${MAX_STAFF_DOCS} documents`, 'error');
+                    e.target.value = '';
+                    return;
+                  }
+                  setPendingDocs(p => [...p, { type: docType, file: f }]);
                   e.target.value = '';
                 }} />
             </label>
@@ -897,23 +1083,62 @@ export const StaffManager: React.FC<Props> = ({ onBack }) => {
       {renderHeader('Edit Staff', () => setView('PROFILE'))}
       <div className="flex-1 overflow-y-auto p-4  space-y-4">
         <div className="bg-white rounded-2xl border border-slate-100 shadow-sm p-4 space-y-4">
-          {STAFF_TEXT_FIELDS.map(({ label, key, placeholder }) => (
+          {STAFF_TEXT_FIELDS.filter(f => f.key !== 'subject').map(({ label, key, placeholder }) => (
             <div key={key}>
               <label className="block text-[10px] font-black uppercase tracking-widest text-slate-500 mb-1.5">{label}</label>
               <input
                 value={(editForm[key] ?? '') as string}
                 onChange={e => setEditForm(f => ({ ...f, [key]: e.target.value }))}
                 placeholder={placeholder}
-                {...(key === 'subject' ? { list: 'staff-subject-suggestions' } : {})}
                 className="w-full border border-slate-200 bg-slate-50 rounded-xl px-4 py-3 font-bold text-sm outline-none focus:border-blue-500 focus:bg-white transition-colors" />
             </div>
           ))}
-          {/* Edit form shares the same datalist id as Create. Re-declared
-              here so the input still has options if the user opens Edit
-              without ever touching Create in the same session. */}
-          <datalist id="staff-subject-suggestions">
-            {subjectOptions.map(s => <option key={s} value={s} />)}
-          </datalist>
+
+          {/* Subject dropdown + Other (mirrors the Create form). The
+              "Other" toggle lets the principal type a brand-new subject
+              when the existing list doesn't cover it. */}
+          <div>
+            <label className="block text-[10px] font-black uppercase tracking-widest text-slate-500 mb-1.5">Subject</label>
+            {(() => {
+              // Auto-flip into custom mode if the saved subject isn't in
+              // the suggestions list — covers the case where edit opens
+              // and the value was typed historically as Other.
+              const showCustom =
+                editSubjectCustom
+                || (!!editForm.subject && !subjectOptions.includes(editForm.subject));
+              return showCustom ? (
+                <div className="flex gap-2">
+                  <input
+                    value={editForm.subject ?? ''}
+                    onChange={e => setEditForm(f => ({ ...f, subject: e.target.value }))}
+                    placeholder="Type subject name"
+                    autoFocus
+                    className="flex-1 border border-slate-200 bg-slate-50 rounded-xl px-4 py-3 font-bold text-sm outline-none focus:border-blue-500 focus:bg-white transition-colors" />
+                  <button type="button"
+                    onClick={() => { setEditSubjectCustom(false); setEditForm(f => ({ ...f, subject: '' })); }}
+                    className="px-3 py-3 bg-slate-100 text-slate-600 rounded-xl text-[10px] font-black uppercase tracking-widest">
+                    List
+                  </button>
+                </div>
+              ) : (
+                <select
+                  value={editForm.subject ?? ''}
+                  onChange={e => {
+                    if (e.target.value === '__OTHER__') {
+                      setEditForm(f => ({ ...f, subject: '' }));
+                      setEditSubjectCustom(true);
+                    } else {
+                      setEditForm(f => ({ ...f, subject: e.target.value }));
+                    }
+                  }}
+                  className="w-full border border-slate-200 bg-slate-50 rounded-xl px-3 py-3 font-bold text-sm outline-none focus:border-blue-500 focus:bg-white transition-colors">
+                  <option value="">— Select subject (optional) —</option>
+                  {subjectOptions.map(s => <option key={s} value={s}>{s}</option>)}
+                  <option value="__OTHER__">+ Other (type a new one)…</option>
+                </select>
+              );
+            })()}
+          </div>
           <div className="grid grid-cols-2 gap-3">
             <div>
               <label className="block text-[10px] font-black uppercase tracking-widest text-slate-500 mb-1.5">Role</label>
@@ -954,6 +1179,27 @@ export const StaffManager: React.FC<Props> = ({ onBack }) => {
 
   // ─── PROFILE view (6 tabs) ─────────────────────────────────────────────────
   if (view === 'PROFILE' && selected) {
+    // Wrap the whole profile so a render error in any tab falls back to
+    // an error card instead of blanking the app.
+    //
+    // CRITICAL: we INVOKE renderStaffProfileBody() instead of using
+    // <StaffProfileBody /> as a component. Earlier the JSX form created
+    // a fresh function reference every render of StaffManager, which
+    // React treats as a different component type → unmount+remount the
+    // whole subtree on each keystroke → input loses focus and the
+    // mobile keyboard collapses. Calling it as a plain function returns
+    // an already-built JSX tree that reconciles cleanly.
+    return (
+      <ErrorBoundary label="Staff profile">
+        {renderStaffProfileBody()}
+      </ErrorBoundary>
+    );
+  }
+
+  // Note this is a regular helper, not a component. It accesses the parent
+  // hooks via closure but doesn't itself call any hooks — verified safe.
+  function renderStaffProfileBody(): React.ReactElement | null {
+    if (!selected) return null;
     const TABS: { id: Tab; label: string; icon: React.ReactNode }[] = [
       { id: 'INFO',       label: 'Info',       icon: <UserCheck size={14} /> },
       { id: 'SALARY',     label: 'Salary',     icon: <IndianRupee size={14} /> },
@@ -966,10 +1212,13 @@ export const StaffManager: React.FC<Props> = ({ onBack }) => {
     return (
       <div className="w-full bg-slate-50 flex flex-col animate-in slide-in-from-right-8 duration-300">
         {renderHeader(selected.name, () => setView('LIST'),
-          <button onClick={() => { setEditForm({ ...selected }); setView('EDIT'); }}
-            className="p-2 bg-slate-100 rounded-full text-slate-600">
-            <Edit3 size={18} />
-          </button>
+          editorModeActive ? (
+            <button onClick={() => { setEditForm({ ...selected }); setView('EDIT'); }}
+              title="Edit staff (Editor Mode)"
+              className="p-2 bg-slate-100 rounded-full text-slate-600">
+              <Edit3 size={18} />
+            </button>
+          ) : null,
         )}
 
         {/* Identity card */}
@@ -1047,7 +1296,7 @@ export const StaffManager: React.FC<Props> = ({ onBack }) => {
               )}
 
               <div className="space-y-2">
-                {selected.status !== 'RELIEVED' && (
+                {selected.status !== 'RELIEVED' && editorModeActive && (
                   <>
                     <button onClick={() => { setRelieveDate(todayIso()); setRelieveReason(''); setRelieveOpen(true); }}
                       className="w-full py-3 rounded-2xl font-black text-sm bg-amber-50 text-amber-700 border border-amber-200 active:scale-95 transition-transform">
@@ -1062,6 +1311,11 @@ export const StaffManager: React.FC<Props> = ({ onBack }) => {
                       {selected.status === 'SUSPENDED' ? 'Reinstate Staff Member' : 'Suspend Staff Member'}
                     </button>
                   </>
+                )}
+                {selected.status !== 'RELIEVED' && !editorModeActive && (
+                  <p className="text-[10px] font-bold text-slate-400 bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 text-center">
+                    Enable Editor Mode (Settings → Security) to suspend or set relieving date.
+                  </p>
                 )}
                 {selected.status === 'RELIEVED' && (
                   <>
@@ -1086,10 +1340,19 @@ export const StaffManager: React.FC<Props> = ({ onBack }) => {
           )}
 
           {tab === 'SALARY' && !tabLoading && (
+            // ErrorBoundary keeps the white-screen on a render error confined
+            // to this tab. Earlier a corrupted salary-history entry (one
+            // pre-prod row had a non-ISO effective_from) tripped buildMonthlyGrid
+            // and the entire app blanked out the moment a payment was recorded
+            // — the pay POST succeeded but the optimistic re-render killed
+            // everything.
+            <ErrorBoundary label="Salary tab">
             <SalaryTab
               staff={selected}
               salaryHistory={salaryHistory}
               paymentHistory={paymentHistory}
+              canEdit={editorModeActive}
+              onReversePayment={handleReversePayment}
               onEditSalary={() => { setEditSalaryAmt(String(selected.salary)); setEditSalaryFrom(todayIso()); setEditSalaryReason(''); setEditSalaryOpen(true); }}
               onOpenPayModal={(month, expected) => {
                 setPayMonth(month);
@@ -1099,6 +1362,7 @@ export const StaffManager: React.FC<Props> = ({ onBack }) => {
                 setPayOpen(true);
               }}
             />
+            </ErrorBoundary>
           )}
 
           {tab === 'ATTENDANCE' && !tabLoading && (() => {
@@ -1186,20 +1450,33 @@ export const StaffManager: React.FC<Props> = ({ onBack }) => {
           {tab === 'DOCS' && !tabLoading && (
             <>
               <div className="bg-white rounded-2xl border border-slate-100 shadow-sm p-4 space-y-3">
-                <p className="text-[10px] font-black uppercase tracking-widest text-slate-400">Upload Document</p>
+                <div className="flex items-center justify-between">
+                  <p className="text-[10px] font-black uppercase tracking-widest text-slate-400">Upload Document</p>
+                  <span className={`text-[10px] font-black px-2 py-0.5 rounded-full border ${
+                    docs.length >= MAX_STAFF_DOCS
+                      ? 'bg-rose-50 text-rose-600 border-rose-200'
+                      : 'bg-slate-50 text-slate-500 border-slate-200'
+                  }`}>
+                    {docs.length}/{MAX_STAFF_DOCS}
+                  </span>
+                </div>
                 <div className="grid grid-cols-2 gap-2">
                   <select value={docType} onChange={e => setDocType(e.target.value)}
-                    className="border border-slate-200 bg-slate-50 rounded-xl px-3 py-2.5 font-bold text-sm outline-none">
+                    disabled={docs.length >= MAX_STAFF_DOCS}
+                    className="border border-slate-200 bg-slate-50 rounded-xl px-3 py-2.5 font-bold text-sm outline-none disabled:opacity-60">
                     {DOC_TYPES.map(t => <option key={t} value={t}>{t.replace('_', ' ')}</option>)}
                   </select>
-                  <label className={`flex items-center justify-center gap-2 bg-blue-600 text-white text-xs font-black rounded-xl px-4 py-2.5 cursor-pointer active:scale-95 transition-transform ${docBusy ? 'opacity-60 pointer-events-none' : ''}`}>
+                  <label className={`flex items-center justify-center gap-2 bg-blue-600 text-white text-xs font-black rounded-xl px-4 py-2.5 cursor-pointer active:scale-95 transition-transform ${(docBusy || docs.length >= MAX_STAFF_DOCS) ? 'opacity-60 pointer-events-none' : ''}`}>
                     {docBusy ? <Loader2 size={14} className="animate-spin" /> : <Upload size={14} />}
                     <span>{docBusy ? 'Uploading…' : 'Choose File'}</span>
                     <input type="file" accept="image/*,application/pdf" className="hidden"
+                      disabled={docs.length >= MAX_STAFF_DOCS}
                       onChange={e => { const f = e.target.files?.[0]; if (f) handleUpload(f); e.target.value = ''; }} />
                   </label>
                 </div>
-                <p className="text-[10px] font-bold text-slate-400">JPG/PNG/WEBP/HEIC/PDF · photo 1 MB · others 2 MB</p>
+                <p className="text-[10px] font-bold text-slate-400">
+                  JPG/PNG/WEBP/HEIC/PDF · photo 1 MB · others 2 MB · max {MAX_STAFF_DOCS} per staff
+                </p>
               </div>
 
               <div className="bg-white rounded-2xl border border-slate-100 shadow-sm p-4">
@@ -1259,8 +1536,8 @@ export const StaffManager: React.FC<Props> = ({ onBack }) => {
 
         {/* ─── Edit Salary modal ───────────────────────────────────────────── */}
         {editSalaryOpen && (
-          <div className="absolute inset-0 z-50 bg-slate-900/60 flex items-end">
-            <div className="w-full bg-white rounded-t-3xl p-6 pb-8 animate-in slide-in-from-bottom-8">
+          <div className="fixed inset-0 z-50 bg-slate-900/60 flex items-end justify-center sm:items-center">
+            <div className="w-full sm:max-w-lg bg-white rounded-t-3xl sm:rounded-2xl p-6 pb-8 animate-in slide-in-from-bottom-8 max-h-[90vh] overflow-y-auto">
               <div className="flex justify-between items-center mb-4">
                 <h3 className="text-lg font-black text-slate-900">Edit Salary</h3>
                 <button onClick={() => setEditSalaryOpen(false)} className="w-8 h-8 bg-slate-100 rounded-full flex items-center justify-center text-slate-500"><X size={16} /></button>
@@ -1294,8 +1571,13 @@ export const StaffManager: React.FC<Props> = ({ onBack }) => {
 
         {/* ─── Pay modal ───────────────────────────────────────────────────── */}
         {payOpen && (
-          <div className="absolute inset-0 z-50 bg-slate-900/60 flex items-end">
-            <div className="w-full bg-white rounded-t-3xl p-6 pb-8 animate-in slide-in-from-bottom-8">
+          // fixed (not absolute) so the modal renders over the whole
+          // viewport — including the sidebar — instead of being clipped
+          // to the staff panel's bounds. On desktop the sheet centres
+          // itself with a max-width so it doesn't sprawl across the
+          // entire screen; on mobile it stays a bottom sheet.
+          <div className="fixed inset-0 z-50 bg-slate-900/60 flex items-end justify-center sm:items-center">
+            <div className="w-full sm:max-w-lg bg-white rounded-t-3xl sm:rounded-2xl p-6 pb-8 animate-in slide-in-from-bottom-8 max-h-[90vh] overflow-y-auto">
               <div className="flex justify-between items-center mb-4">
                 <h3 className="text-lg font-black text-slate-900">Record Payment</h3>
                 <button onClick={() => setPayOpen(false)} className="w-8 h-8 bg-slate-100 rounded-full flex items-center justify-center text-slate-500"><X size={16} /></button>
@@ -1333,6 +1615,30 @@ export const StaffManager: React.FC<Props> = ({ onBack }) => {
                   <input value={payNote} onChange={e => setPayNote(e.target.value)}
                     className="w-full border border-slate-200 bg-slate-50 rounded-xl px-4 py-3 font-bold text-sm outline-none focus:border-blue-500" />
                 </div>
+
+                {/* Advanced — back-date a payment that was actually given
+                    earlier (e.g. cash on the 1st but recorded on the 3rd).
+                    Default stays today so the common path is one click. */}
+                <button type="button"
+                  onClick={() => setPayAdvancedOpen(v => !v)}
+                  className="w-full text-left text-[10px] font-black uppercase tracking-widest text-slate-500 hover:text-slate-700 transition-colors flex items-center justify-between">
+                  <span>Advanced</span>
+                  <span className="text-slate-400">{payAdvancedOpen ? '−' : '+'}</span>
+                </button>
+                {payAdvancedOpen && (
+                  <div>
+                    <label className="block text-[10px] font-black uppercase tracking-widest text-slate-500 mb-1.5">Paid on</label>
+                    <input
+                      type="date"
+                      value={payDate}
+                      max={todayIso()}
+                      onChange={e => setPayDate(e.target.value)}
+                      className="w-full border border-slate-200 bg-slate-50 rounded-xl px-3 py-3 font-bold text-sm outline-none focus:border-blue-500" />
+                    <p className="text-[10px] font-bold text-slate-400 mt-1">
+                      Defaults to today. Change only if the payment was actually disbursed on a different date.
+                    </p>
+                  </div>
+                )}
               </div>
               <button onClick={handlePay} disabled={payBusy || !payAmt}
                 className="mt-5 w-full py-3 bg-emerald-600 text-white font-black text-sm rounded-xl disabled:opacity-40 flex items-center justify-center gap-2">
@@ -1345,8 +1651,8 @@ export const StaffManager: React.FC<Props> = ({ onBack }) => {
 
         {/* ─── Relieving date modal ───────────────────────────────────────── */}
         {relieveOpen && (
-          <div className="absolute inset-0 z-50 bg-slate-900/60 flex items-end">
-            <div className="w-full bg-white rounded-t-3xl p-6 pb-8 animate-in slide-in-from-bottom-8">
+          <div className="fixed inset-0 z-50 bg-slate-900/60 flex items-end justify-center sm:items-center">
+            <div className="w-full sm:max-w-lg bg-white rounded-t-3xl sm:rounded-2xl p-6 pb-8 animate-in slide-in-from-bottom-8 max-h-[90vh] overflow-y-auto">
               <div className="flex justify-between items-center mb-4">
                 <h3 className="text-lg font-black text-slate-900">Set Relieving Date</h3>
                 <button onClick={() => setRelieveOpen(false)} className="w-8 h-8 bg-slate-100 rounded-full flex items-center justify-center text-slate-500"><X size={16} /></button>

@@ -113,8 +113,12 @@ export const storageService = {
       .createSignedUrl(storagePath, ttlSeconds);
     if (error) {
       // eslint-disable-next-line no-console
-      console.warn('[student-documents] signed URL failed', error.message);
-      return null;
+      console.warn('[student-documents] signed URL failed', error.message, 'path:', storagePath);
+      // Throwing instead of returning null lets callers surface the real
+      // RLS / not-found message via toast. Earlier this swallowed the
+      // error silently and the user got a generic "Could not open" with
+      // no path forward.
+      throw new Error(error.message || 'Could not load document');
     }
     return data?.signedUrl ?? null;
   },

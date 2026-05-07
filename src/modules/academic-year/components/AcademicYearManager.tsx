@@ -209,7 +209,8 @@ export const AcademicYearManager: React.FC<Props> = ({ onBack, onNavigateToStaff
       showToast(`${yearToClose.name} closed (read-only). Naya year wizard se open karein.`);
       setClosingYearId(null);
     } catch (e) {
-      showToast(e instanceof Error ? e.message : 'Year close mein error', 'error');
+      const raw = e instanceof Error ? e.message : '';
+      showToast((raw && raw.trim()) || 'Year close mein error', 'error');
     } finally {
       setClosing(false);
     }

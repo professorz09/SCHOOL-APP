@@ -270,7 +270,7 @@ export const StudentClassAssignmentModal: React.FC<Props> = ({ student, onClose,
 
   return (
     <div className="fixed inset-0 z-50 bg-black/60 flex items-end sm:items-center justify-center p-0 sm:p-4">
-      <div className="bg-white w-full sm:max-w-lg sm:rounded-2xl rounded-t-2xl shadow-2xl max-h-[92vh] flex flex-col">
+      <div className="bg-white w-full sm:max-w-lg lg:max-w-3xl sm:rounded-2xl rounded-t-2xl shadow-2xl max-h-[92vh] flex flex-col">
         {/* Header */}
         <div className="flex items-center justify-between px-4 py-3 border-b border-slate-100 sticky top-0 bg-white rounded-t-2xl">
           <div>
@@ -284,12 +284,16 @@ export const StudentClassAssignmentModal: React.FC<Props> = ({ student, onClose,
           </button>
         </div>
 
-        {/* Body */}
-        <div className="flex-1 overflow-y-auto p-4 space-y-4">
+        {/* Body — single column on mobile, 2-column grid from lg upward.
+            Transport / annual-fee summary span full width via lg:col-span-2.
+            Earlier this was a vertical stack at every breakpoint, which on a
+            wide desktop modal forced the principal to scroll past basic
+            class fields just to reach the Allot button. */}
+        <div className="flex-1 overflow-y-auto p-4 space-y-4 lg:space-y-0 lg:grid lg:grid-cols-2 lg:gap-x-6 lg:gap-y-4">
 
           {/* Active year badge */}
           {activeYear && (
-            <div className="flex items-center gap-2 bg-indigo-50 rounded-xl px-3 py-2">
+            <div className="flex items-center gap-2 bg-indigo-50 rounded-xl px-3 py-2 lg:col-span-2">
               <Calendar size={12} className="text-indigo-600" />
               <span className="text-[10px] font-black text-indigo-700">
                 Academic Year: {activeYear.name}
@@ -457,7 +461,7 @@ export const StudentClassAssignmentModal: React.FC<Props> = ({ student, onClose,
           </div>
 
           {/* Computed annual total */}
-          <div className="flex items-center justify-between px-3 py-2.5 bg-indigo-50 rounded-xl">
+          <div className="flex items-center justify-between px-3 py-2.5 bg-indigo-50 rounded-xl lg:col-span-2">
             <span className="text-xs font-black uppercase text-indigo-600 flex items-center gap-1">
               <IndianRupee size={12} /> Annual Fee (discount ke baad)
             </span>
@@ -466,8 +470,9 @@ export const StudentClassAssignmentModal: React.FC<Props> = ({ student, onClose,
             </span>
           </div>
 
-          {/* Transport (optional) */}
-          <div className="border border-slate-200 rounded-xl p-3 space-y-3">
+          {/* Transport (optional) — full-width since the inner grid is
+              already 2-column at desktop sizes. */}
+          <div className="border border-slate-200 rounded-xl p-3 space-y-3 lg:col-span-2">
             <label className="flex items-center gap-2 cursor-pointer">
               <input
                 type="checkbox"
