@@ -2,7 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { useUIStore } from '@/store/uiStore';
 import {
   FileCheck2, ClipboardList, ScrollText, CircleAlert,
-  Bell, CalendarDays, Clock, Users, Sparkles, Play,
+  Bell, CalendarDays, Clock, Users, Sparkles, Play, BookOpen,
 } from 'lucide-react';
 import { teacherService } from '@/roles/teacher/teacher.service';
 import { AttendanceManager } from '@/modules/attendance/components/TeacherAttendanceManager';
@@ -47,17 +47,35 @@ export const TeacherLayout: React.FC = () => {
   const goBack = () => { setView('DASHBOARD'); setSubView(false); };
 
   useEffect(() => { setSubView(false); }, []);
-  // When footer HOME pressed, isSubView becomes false → reset to dashboard
   useEffect(() => { if (!isSubView) setView('DASHBOARD'); }, [isSubView]);
 
   const session = useAuthStore(state => state.session);
   const teacherName = session?.name ?? 'Teacher';
   const initials = teacherName.split(' ').map(w => w[0]).join('').slice(0, 2).toUpperCase();
+  const firstName = teacherName.split(' ')[0];
 
   const [todayClasses, setTodayClasses] = useState<TodayEntry[]>([]);
+  // Hero stats — derived from the same in-memory data as the modules so the
+  // dashboard stays one round-trip per page-load.
+  const [assignedClassCount, setAssignedClassCount] = useState<number | null>(null);
+  const [studentCount, setStudentCount] = useState<number | null>(null);
+  const [pendingTestCount, setPendingTestCount] = useState<number | null>(null);
 
   useEffect(() => {
     teacherService.getTodayClasses().then(setTodayClasses).catch(() => setTodayClasses([]));
+    teacherService.getClasses().then(list => {
+      setAssignedClassCount(list.length);
+      // Sum unique student count across classes — same student in two
+      // subjects shouldn't be double-counted.
+      const ids = new Set<string>();
+      for (const c of list) for (const s of c.students) ids.add(s.id);
+      setStudentCount(ids.size);
+    }).catch(() => { setAssignedClassCount(0); setStudentCount(0); });
+    teacherService.getTests().then(list => {
+      // "Pending" = results not yet uploaded. Best signal for "what needs
+      // my attention" without an extra schema.
+      setPendingTestCount(list.filter(t => !t.resultsUploaded).length);
+    }).catch(() => setPendingTestCount(0));
   }, []);
 
   if (view === 'ATTENDANCE')  return <AttendanceManager      onBack={goBack} />;
@@ -68,9 +86,10 @@ export const TeacherLayout: React.FC = () => {
   if (view === 'TIMETABLE')   return <TeacherTimetableView   onBack={goBack} />;
   if (view === 'STUDENTS')    return <TeacherStudentList     onBack={goBack} />;
 
-  // 8 tiles in a 4×2 grid. Picked the most-used teacher actions; everything
-  // else (e.g. profile/settings) lives in the bottom-nav YOU tab.
-  const modules: Array<{
+  // Module grid — 7 daily-use teacher actions. 4-cols on mobile means tile
+  // 8 sits on row 2 by itself; that's fine since "Helpdesk" is rare. Desktop
+  // expands to 7-cols so all tiles fit on a single row.
+  const MODULES: Array<{
     icon: React.ComponentType<{ size?: number; className?: string }>;
     label: string;
     view: TeacherView;
@@ -88,50 +107,80 @@ export const TeacherLayout: React.FC = () => {
   return (
     <div className="flex flex-col gap-6 lg:gap-8 animate-in fade-in duration-300 px-5 lg:px-10 xl:px-16 max-w-7xl mx-auto w-full pt-4 lg:pt-8 pb-8 lg:pb-12">
 
-      {/* ── Header ─────────────────────────────────────────────────────── */}
-      <div className="flex items-center justify-between">
-        <div className="flex items-center gap-3 min-w-0">
-          <div className="w-12 h-12 lg:w-14 lg:h-14 rounded-full bg-blue-100 text-blue-600 border-2 border-blue-200 flex items-center justify-center font-black text-lg shrink-0">
-            {initials}
+      {/* ── Hero card — matches Student/Principal layout pattern.
+          Dark slate, avatar + greeting, bell, then a 3-stat row that
+          gives the teacher a one-glance summary of their day. ───────── */}
+      <div className="bg-slate-900 text-white rounded-2xl p-5 lg:p-6 shadow-lg">
+        <div className="flex items-center justify-between gap-3">
+          <div className="flex items-center gap-3 min-w-0">
+            <div className="w-12 h-12 rounded-full bg-white/15 border-2 border-white/25 flex items-center justify-center font-black text-base shrink-0">
+              {initials}
+            </div>
+            <div className="min-w-0">
+              <h2 className="text-xl lg:text-2xl font-black uppercase tracking-tight leading-none truncate">
+                Hi, {firstName}
+              </h2>
+              <p className="text-[10px] lg:text-xs font-black uppercase tracking-widest text-white/60 mt-1.5">
+                Teacher · EduGrow
+              </p>
+            </div>
           </div>
-          <div className="min-w-0">
-            <h2 className="text-2xl lg:text-3xl font-black text-slate-900 uppercase tracking-tight leading-none truncate">
-              Hi, {teacherName.split(' ')[0]}
-            </h2>
-            <p className="text-[10px] lg:text-xs font-black uppercase tracking-widest text-slate-400 mt-1">
-              Welcome to EduGrow
-            </p>
-          </div>
+          <button onClick={() => goTo('NOTICES')}
+            className="w-10 h-10 bg-white/10 rounded-full border border-white/20 flex items-center justify-center shrink-0 hover:bg-white/20 transition-colors">
+            <Bell size={16} className="text-white" />
+          </button>
         </div>
-        <button onClick={() => goTo('NOTICES')}
-          className="relative w-11 h-11 bg-white rounded-full border border-slate-200 shadow-sm flex items-center justify-center shrink-0 hover:bg-slate-50 transition-colors">
-          <Bell size={18} className="text-slate-600" />
-          {todayClasses.length > 0 && (
-            <span className="absolute -top-1 -right-1 min-w-[20px] h-5 px-1 bg-rose-500 rounded-full flex items-center justify-center">
-              <span className="text-[9px] font-black text-white">{todayClasses.length}</span>
-            </span>
-          )}
-        </button>
+
+        {/* 3-stat row. Tapping each stat opens the matching module so the
+            hero acts as both summary and shortcut. */}
+        <div className="grid grid-cols-3 gap-2.5 lg:gap-3 mt-5">
+          <button onClick={() => goTo('TIMETABLE')}
+            className="bg-white/10 rounded-xl px-3 py-3 text-left hover:bg-white/15 transition-colors">
+            <div className="text-[9px] font-black uppercase tracking-widest text-white/60">Today</div>
+            <div className="text-2xl font-black mt-1 tabular-nums">
+              {todayClasses.length}
+            </div>
+            <div className="text-[9px] font-bold text-white/50 mt-0.5">classes</div>
+          </button>
+          <button onClick={() => goTo('STUDENTS')}
+            className="bg-white/10 rounded-xl px-3 py-3 text-left hover:bg-white/15 transition-colors">
+            <div className="text-[9px] font-black uppercase tracking-widest text-white/60">My Classes</div>
+            <div className="text-2xl font-black mt-1 tabular-nums">
+              {assignedClassCount ?? '—'}
+            </div>
+            <div className="text-[9px] font-bold text-white/50 mt-0.5">
+              {studentCount !== null ? `${studentCount} students` : ' '}
+            </div>
+          </button>
+          <button onClick={() => goTo('TESTS')}
+            className="bg-white/10 rounded-xl px-3 py-3 text-left hover:bg-white/15 transition-colors">
+            <div className="text-[9px] font-black uppercase tracking-widest text-white/60">Tests</div>
+            <div className="text-2xl font-black mt-1 tabular-nums">
+              {pendingTestCount ?? '—'}
+            </div>
+            <div className="text-[9px] font-bold text-white/50 mt-0.5">pending</div>
+          </button>
+        </div>
       </div>
 
       {/* ── Module grid ────────────────────────────────────────────────── */}
-      <div className="grid grid-cols-4 gap-3 lg:gap-4">
-        {modules.map(({ icon: Icon, label, view: v, color }) => (
+      <div className="grid grid-cols-4 lg:grid-cols-7 gap-2.5 lg:gap-3">
+        {MODULES.map(({ icon: Icon, label, view: v, color }) => (
           <button key={label} onClick={() => goTo(v)}
-            className="aspect-square flex flex-col items-center justify-center gap-2 lg:gap-3 bg-white border border-slate-200 rounded-2xl shadow-sm active:scale-95 hover:shadow-md hover:border-slate-300 hover:-translate-y-0.5 transition-all">
-            <Icon size={26} className={color} />
-            <span className="text-[9px] lg:text-[11px] font-black uppercase tracking-widest text-slate-600 text-center leading-tight px-1">
+            className="flex flex-col items-center justify-center gap-2 py-4 px-1 bg-white border border-slate-100 rounded-2xl shadow-sm active:scale-95 hover:shadow-md hover:border-slate-200 hover:-translate-y-0.5 transition-all">
+            <Icon size={24} className={color} strokeWidth={2} />
+            <span className="text-[10px] font-black uppercase tracking-wide text-slate-700 text-center leading-none whitespace-nowrap">
               {label}
             </span>
           </button>
         ))}
       </div>
 
-      {/* ── Upcoming classes ───────────────────────────────────────────── */}
+      {/* ── Today's Classes ────────────────────────────────────────────── */}
       <section>
         <div className="flex items-center justify-between mb-3">
           <h3 className="text-lg lg:text-xl font-black text-slate-900 uppercase tracking-tight">
-            Upcoming Classes
+            Today's Classes
           </h3>
           <button onClick={() => goTo('TIMETABLE')}
             className="text-[10px] lg:text-xs font-black text-blue-600 uppercase tracking-widest hover:text-blue-700 transition-colors">
@@ -146,28 +195,36 @@ export const TeacherLayout: React.FC = () => {
             <p className="text-[11px] font-bold text-slate-400 mt-1">Enjoy the day!</p>
           </div>
         ) : (
-          // Dashboard preview — keep it short; full schedule lives in the
-          // Timetable view linked above.
           <div className="bg-white rounded-2xl border border-slate-100 shadow-sm divide-y divide-slate-50 overflow-hidden">
-            {todayClasses.slice(0, 3).map(entry => {
+            {todayClasses.slice(0, 4).map((entry, idx) => {
               const live = isCurrentPeriod(entry.slot.startTime, entry.slot.endTime);
               const done = isPast(entry.slot.endTime);
-              const barColor = live
-                ? 'bg-emerald-500'
-                : done
-                  ? 'bg-slate-200'
-                  : 'bg-slate-300';
               return (
-                <div key={entry.id} className={`flex items-stretch gap-3 px-4 py-4 ${live ? 'bg-emerald-50/30' : ''}`}>
-                  <div className={`w-1.5 rounded-full shrink-0 ${barColor}`} />
+                <div key={entry.id}
+                  className={`flex items-center gap-3 lg:gap-4 px-4 py-4 ${live ? 'bg-emerald-50/40' : ''}`}>
+                  {/* Period badge — same vocabulary as Student dashboard so
+                      the visual language stays consistent across roles. */}
+                  <div className={`w-12 h-12 rounded-xl flex flex-col items-center justify-center shrink-0 border ${
+                    live   ? 'bg-emerald-50 text-emerald-700 border-emerald-200' :
+                    done   ? 'bg-slate-50 text-slate-400 border-slate-100'      :
+                            'bg-blue-50 text-blue-700 border-blue-200'
+                  }`}>
+                    <span className="text-[8px] font-black uppercase tracking-widest opacity-70 leading-none">Per</span>
+                    <span className="text-base font-black leading-none mt-0.5">{idx + 1}</span>
+                  </div>
+
                   <div className="flex-1 min-w-0">
-                    <div className={`font-black text-sm lg:text-base uppercase tracking-tight ${done ? 'text-slate-400' : 'text-slate-900'}`}>
-                      Class {entry.className}-{entry.section} ({entry.subject})
+                    <div className={`font-black text-sm lg:text-base uppercase tracking-tight truncate ${done ? 'text-slate-400' : 'text-slate-900'}`}>
+                      {entry.subject}
                     </div>
-                    <div className="flex items-center gap-1.5 mt-1">
-                      <Clock size={12} className="text-slate-400" />
+                    <div className="flex items-center gap-1.5 mt-1 flex-wrap">
                       <span className="text-[11px] lg:text-xs font-bold text-slate-500">
-                        {entry.slot.startTime} – {entry.slot.endTime}
+                        Class {entry.className}-{entry.section}
+                      </span>
+                      <span className="text-slate-300">·</span>
+                      <Clock size={11} className="text-slate-400" />
+                      <span className="text-[11px] lg:text-xs font-bold text-slate-500 tabular-nums">
+                        {entry.slot.startTime}–{entry.slot.endTime}
                       </span>
                       {entry.room && (
                         <>
@@ -177,31 +234,67 @@ export const TeacherLayout: React.FC = () => {
                       )}
                     </div>
                   </div>
+
                   <div className="flex items-center shrink-0">
                     {live ? (
-                      // Play tap = "I'm here, mark attendance now". Earlier
-                      // this button had no handler — looked active but did
-                      // nothing. Wire it to the attendance flow so the
-                      // teacher's live class lands them on the marker.
                       <button
                         onClick={() => goTo('ATTENDANCE')}
                         title="Mark attendance for this class"
-                        className="w-10 h-10 rounded-full bg-blue-50 text-blue-600 flex items-center justify-center hover:bg-blue-100 transition-colors">
-                        <Play size={16} className="ml-0.5 fill-current" />
+                        className="flex items-center gap-1 bg-emerald-600 hover:bg-emerald-700 text-white text-[10px] font-black uppercase tracking-widest px-3 py-2 rounded-lg active:scale-95 transition-transform">
+                        <Play size={11} className="fill-current" /> Mark
                       </button>
                     ) : done ? (
-                      <span className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Done</span>
+                      <span className="text-[9px] font-black text-slate-400 uppercase tracking-widest">Done</span>
                     ) : (
-                      <span className="text-[10px] font-black text-slate-300 uppercase tracking-widest">Up next</span>
+                      <span className="text-[9px] font-black text-slate-300 uppercase tracking-widest">Up next</span>
                     )}
                   </div>
                 </div>
               );
             })}
+            {todayClasses.length > 4 && (
+              <button onClick={() => goTo('TIMETABLE')}
+                className="w-full py-2.5 text-[11px] font-black text-slate-500 hover:bg-slate-50 transition-colors uppercase tracking-widest">
+                + {todayClasses.length - 4} more
+              </button>
+            )}
           </div>
         )}
       </section>
 
+      {/* ── My Classes — quick reference roster of assigned class+sections.
+          Skips on first paint (loading) so the empty state doesn't flash.
+          Hidden entirely if the teacher has no class assignments yet. ─── */}
+      {assignedClassCount !== null && assignedClassCount > 0 && (
+        <section>
+          <div className="flex items-center justify-between mb-3">
+            <h3 className="text-lg lg:text-xl font-black text-slate-900 uppercase tracking-tight">
+              My Classes
+            </h3>
+            <button onClick={() => goTo('STUDENTS')}
+              className="text-[10px] lg:text-xs font-black text-blue-600 uppercase tracking-widest hover:text-blue-700 transition-colors">
+              View Students →
+            </button>
+          </div>
+          <button onClick={() => goTo('STUDENTS')}
+            className="w-full bg-white rounded-2xl border border-slate-100 shadow-sm p-4 flex items-center gap-3 lg:gap-4 hover:shadow-md hover:border-slate-200 transition-all text-left">
+            <div className="w-12 h-12 rounded-xl bg-indigo-50 text-indigo-600 border border-indigo-200 flex items-center justify-center shrink-0">
+              <BookOpen size={22} />
+            </div>
+            <div className="flex-1 min-w-0">
+              <div className="font-black text-sm lg:text-base uppercase tracking-tight text-slate-900">
+                {assignedClassCount} class{assignedClassCount === 1 ? '' : 'es'} assigned
+              </div>
+              <div className="text-[11px] lg:text-xs font-bold text-slate-500 mt-1">
+                {studentCount} student{studentCount === 1 ? '' : 's'} across all sections
+              </div>
+            </div>
+            <span className="text-[10px] font-black text-indigo-600 uppercase tracking-widest shrink-0">
+              Open →
+            </span>
+          </button>
+        </section>
+      )}
     </div>
   );
 };

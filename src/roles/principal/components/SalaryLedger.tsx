@@ -1,9 +1,11 @@
 import React, { useEffect, useState } from 'react';
-import { ArrowLeft, IndianRupee, CheckCircle2, Clock, AlertTriangle, Loader2, Download } from 'lucide-react';
+import { ArrowLeft, IndianRupee, CheckCircle2, Clock, AlertTriangle, Loader2, Download, Calendar, Pencil } from 'lucide-react';
 import { exportCsv } from '@/shared/utils/csv';
 import { staffService } from '@/modules/staff/staff.service';
 import { StaffMember, SalaryPaymentMethod } from '@/modules/staff/staff.types';
 import { useUIStore } from '@/store/uiStore';
+import { supabase } from '@/lib/supabase';
+import { useAuthStore } from '@/store/authStore';
 
 const PAY_METHODS: SalaryPaymentMethod[] = ['CASH', 'BANK_TRANSFER', 'UPI', 'CHEQUE', 'OTHER'];
 
@@ -61,6 +63,47 @@ export const SalaryLedger: React.FC<Props> = ({ onBack }) => {
   const [payBusy, setPayBusy] = useState(false);
   const [search, setSearch] = useState('');
 
+  // School-level salary day (1-28). One setting for the entire school —
+  // used to flag overdue rows and shown as an editable header chip. NULL
+  // = not configured yet (no overdue calculation, no chip).
+  const [salaryPayDay, setSalaryPayDay] = useState<number | null>(null);
+  const [editingDay, setEditingDay] = useState(false);
+  const [dayDraft, setDayDraft] = useState('');
+  const [savingDay, setSavingDay] = useState(false);
+
+  const loadSalaryDay = async () => {
+    const schoolId = useAuthStore.getState().session?.schoolId;
+    if (!schoolId) return;
+    const { data } = await supabase
+      .from('schools').select('salary_pay_day').eq('id', schoolId).maybeSingle();
+    const d = (data as { salary_pay_day: number | null } | null)?.salary_pay_day ?? null;
+    setSalaryPayDay(d);
+  };
+
+  const saveSalaryDay = async () => {
+    const schoolId = useAuthStore.getState().session?.schoolId;
+    if (!schoolId) return;
+    const raw = dayDraft.trim();
+    const parsed = raw === '' ? null : Math.round(Number(raw));
+    if (parsed !== null && (!Number.isFinite(parsed) || parsed < 1 || parsed > 28)) {
+      showToast('Salary day must be 1–28', 'error');
+      return;
+    }
+    setSavingDay(true);
+    try {
+      const { error } = await supabase
+        .from('schools').update({ salary_pay_day: parsed }).eq('id', schoolId);
+      if (error) throw new Error(error.message);
+      setSalaryPayDay(parsed);
+      setEditingDay(false);
+      showToast(parsed === null ? 'Salary day cleared' : `Salary day set to ${parsed}`);
+    } catch (e) {
+      showToast(e instanceof Error ? e.message : 'Could not save', 'error');
+    } finally {
+      setSavingDay(false);
+    }
+  };
+
   const reload = async () => {
     try {
       const data = await staffService.getSalaryLedger();
@@ -72,7 +115,11 @@ export const SalaryLedger: React.FC<Props> = ({ onBack }) => {
     }
   };
 
-  useEffect(() => { reload(); /* eslint-disable-next-line react-hooks/exhaustive-deps */ }, []);
+  useEffect(() => {
+    reload();
+    void loadSalaryDay();
+    /* eslint-disable-next-line react-hooks/exhaustive-deps */
+  }, []);
 
   const selected = selectedId ? profiles.find(p => p.staff.id === selectedId) ?? null : null;
 
@@ -153,13 +200,34 @@ export const SalaryLedger: React.FC<Props> = ({ onBack }) => {
               <p className="text-[10px] font-bold text-slate-300 mt-1">Months appear once their joining date falls inside the active academic year.</p>
             </div>
           )}
-          {[...selected.schedule].reverse().map(row => (
+          {[...selected.schedule].reverse().map(row => {
+            // School-level salary pay day drives the due date for every staff
+            // member's monthly row. If unset, no overdue badge is shown.
+            const dueDay = salaryPayDay;
+            const monthDate = new Date(`${row.month} 1`);
+            const lastDay = new Date(monthDate.getFullYear(), monthDate.getMonth() + 1, 0).getDate();
+            const effectiveDueDay = dueDay && dueDay <= lastDay ? dueDay : lastDay;
+            const dueDate = new Date(monthDate.getFullYear(), monthDate.getMonth(), effectiveDueDay);
+            const isOverdue = dueDay !== null && row.status !== 'PAID' && new Date() > dueDate;
+            return (
             <div key={row.month} className="bg-white rounded-2xl border border-slate-100 shadow-sm p-4">
               <div className="flex items-start justify-between gap-3">
                 <div>
                   <div className="font-extrabold text-slate-900">{row.month}</div>
-                  <div className={`inline-flex items-center gap-1.5 text-[10px] font-black px-2.5 py-1 rounded-full border mt-1.5 ${statusColor[row.status]}`}>
-                    {statusIcon(row.status)} {row.status}
+                  <div className="flex flex-wrap items-center gap-1.5 mt-1.5">
+                    <div className={`inline-flex items-center gap-1.5 text-[10px] font-black px-2.5 py-1 rounded-full border ${statusColor[row.status]}`}>
+                      {statusIcon(row.status)} {row.status}
+                    </div>
+                    {dueDay && (
+                      <div className="text-[10px] font-black text-slate-500 bg-slate-100 px-2 py-1 rounded-full">
+                        Due {dueDay}<sup>th</sup>
+                      </div>
+                    )}
+                    {isOverdue && (
+                      <div className="text-[10px] font-black text-rose-700 bg-rose-50 border border-rose-200 px-2 py-1 rounded-full">
+                        Overdue
+                      </div>
+                    )}
                   </div>
                 </div>
                 <div className="text-right">
@@ -180,7 +248,8 @@ export const SalaryLedger: React.FC<Props> = ({ onBack }) => {
                 </button>
               )}
             </div>
-          ))}
+            );
+          })}
         </div>
 
         {payModal && (
@@ -259,6 +328,49 @@ export const SalaryLedger: React.FC<Props> = ({ onBack }) => {
         <input value={search} onChange={e => setSearch(e.target.value)}
           placeholder="Search staff name or role..."
           className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-2.5 text-sm font-bold outline-none focus:border-blue-500" />
+
+        {/* School-wide salary day — single setting that drives the
+            "Due Xth / Overdue" badge on every staff member's monthly
+            row. Editable inline so principal doesn't have to dig
+            through Settings. */}
+        <div className="mt-3 flex items-center justify-between gap-2 bg-blue-50 border border-blue-200 rounded-xl px-3 py-2">
+          <div className="flex items-center gap-2 text-[11px] font-black text-blue-800">
+            <Calendar size={13} />
+            <span className="uppercase tracking-wider">Salary Day</span>
+            {!editingDay && (
+              <span className="bg-white text-blue-700 px-2 py-0.5 rounded-md tabular-nums">
+                {salaryPayDay !== null
+                  ? <>{salaryPayDay}<sup>th</sup> of every month</>
+                  : 'not set'}
+              </span>
+            )}
+          </div>
+          {editingDay ? (
+            <div className="flex items-center gap-1.5">
+              <input
+                type="number" min={1} max={28}
+                value={dayDraft}
+                onChange={e => setDayDraft(e.target.value)}
+                placeholder="1–28"
+                className="w-16 bg-white border border-blue-300 rounded-md px-2 py-1 text-[11px] font-black text-slate-900 text-center outline-none focus:border-blue-500"
+              />
+              <button onClick={saveSalaryDay} disabled={savingDay}
+                className="px-2.5 py-1 bg-blue-600 text-white text-[10px] font-black rounded-md disabled:opacity-50">
+                {savingDay ? '…' : 'Save'}
+              </button>
+              <button onClick={() => setEditingDay(false)} disabled={savingDay}
+                className="px-2 py-1 bg-white border border-slate-200 text-slate-600 text-[10px] font-black rounded-md">
+                ×
+              </button>
+            </div>
+          ) : (
+            <button
+              onClick={() => { setDayDraft(salaryPayDay !== null ? String(salaryPayDay) : ''); setEditingDay(true); }}
+              className="flex items-center gap-1 text-[10px] font-black text-blue-700 px-2 py-1 hover:bg-blue-100 rounded-md transition-colors">
+              <Pencil size={10} /> {salaryPayDay !== null ? 'Edit' : 'Set'}
+            </button>
+          )}
+        </div>
       </div>
 
       <div className="flex-1 overflow-y-auto p-4  space-y-3">

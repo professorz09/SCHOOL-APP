@@ -23,7 +23,7 @@ import { supabase } from '@/lib/supabase';
 import { useAuthStore } from '@/store/authStore';
 import { useEditingYearStore } from '@/store/editingYearStore';
 import { logAudit } from '@/lib/audit';
-import { generateText, stripJsonFence, GeminiUnavailableError } from '@/lib/gemini';
+import { generateText, generateFromImages, stripJsonFence, GeminiUnavailableError } from '@/lib/gemini';
 import type { PublishResultsInput, FinalExamPublishInput } from '@/roles/teacher/teacher.types';
 import type {
   TeacherClass,
@@ -869,6 +869,135 @@ export const teacherService = {
       sections,
     };
     return paper;
+  },
+
+  /**
+   * Extract structured exam paper from one-or-more uploaded image(s) of a
+   * physical/printed paper (handwritten or typed). Sends the images to
+   * Gemini Vision with a strict JSON schema prompt; persists the parsed
+   * paper so it shows up alongside prompt-generated ones in Saved Papers.
+   *
+   * `meta` carries the same fields the request would have if the user had
+   * generated via prompt — these aren't visible in the image, so the
+   * teacher fills them once on the form.
+   */
+  async extractPaperFromImages(
+    images: Array<{ mimeType: string; data: string }>,
+    meta: {
+      className: string; subject: string; totalMarks: number; duration: number;
+      difficulty: ExamPaperRequest['difficulty']; testType?: ExamPaperRequest['testType'];
+    },
+  ): Promise<GeneratedExamPaper> {
+    if (images.length === 0) throw new Error('At least one image required');
+
+    const prompt = `You are an OCR + exam-paper parser.
+Given the attached image(s) of a question paper, EXTRACT every question into structured JSON.
+
+Return ONLY valid JSON with this shape (no prose, no markdown fence):
+{
+  "sections": [
+    {
+      "title": "Section A — Multiple Choice",
+      "instructions": "Choose the correct option…",
+      "questions": [
+        { "no": 1, "text": "What is …?", "marks": 1, "type": "MCQ" }
+      ]
+    }
+  ]
+}
+
+Rules:
+- Preserve the original question wording verbatim. Don't summarise, don't translate.
+- "type" must be one of MCQ | SHORT | LONG | DIAGRAM. Infer from context (multiple-choice → MCQ, 2-3 line questions → SHORT, essay-style → LONG, "draw/label" → DIAGRAM).
+- If marks are not explicitly written, distribute the section's total marks evenly across its questions. If neither is shown, default to 1 mark per question.
+- If sections aren't labelled in the paper, group questions by type into reasonable sections.
+- If the image is blurry/unreadable in places, do your best — never invent questions that aren't on the page.
+
+Subject: ${meta.subject}
+Class: ${meta.className}
+`;
+
+    let raw: string;
+    try {
+      raw = await generateFromImages(prompt, images);
+    } catch (err) {
+      if (err instanceof GeminiUnavailableError) throw err;
+      throw new Error(err instanceof Error ? err.message : 'AI extraction failed');
+    }
+
+    const cleaned = stripJsonFence(raw);
+    let parsed: { sections: Array<{ title: string; instructions?: string; questions: Array<{ no?: number; text: string; marks: number; type?: string }> }> };
+    try { parsed = JSON.parse(cleaned); }
+    catch { throw new Error('AI returned an unparseable response — please retry with a clearer image'); }
+
+    const sections: ExamSection[] = (parsed.sections ?? []).map(sec => {
+      const qs: ExamQuestion[] = (sec.questions ?? []).map((q, i) => ({
+        no: q.no ?? i + 1,
+        text: q.text,
+        marks: q.marks,
+        type: ((['MCQ', 'SHORT', 'LONG', 'DIAGRAM']).includes(q.type ?? '') ? q.type : 'SHORT') as ExamQuestion['type'],
+      }));
+      return {
+        title: sec.title,
+        instructions: sec.instructions ?? '',
+        marks: qs.reduce((a, q) => a + q.marks, 0),
+        questions: qs,
+      };
+    });
+
+    if (sections.length === 0 || sections.every(s => s.questions.length === 0)) {
+      throw new Error('No questions detected in the image — try a clearer photo');
+    }
+
+    // Build a synthetic request so the persisted row matches the shape used
+    // by prompt-generated papers; "topics" carries a marker so the UI/admin
+    // can tell scanned papers apart from generated ones.
+    const request: ExamPaperRequest = {
+      className: meta.className,
+      subject: meta.subject,
+      testType: meta.testType ?? 'UNIT_TEST',
+      totalMarks: meta.totalMarks,
+      duration: meta.duration,
+      difficulty: meta.difficulty,
+      topics: '__scanned__',
+    };
+
+    const schoolId = getSchoolId();
+    const userId = getUserId();
+    const { data: row, error: insErr } = await supabase
+      .from('generated_question_papers')
+      .insert({
+        school_id: schoolId,
+        created_by: userId,
+        subject: request.subject,
+        class_name: request.className,
+        request: request as unknown as Record<string, unknown>,
+        sections: sections as unknown as Record<string, unknown>[],
+      })
+      .select('id, created_at')
+      .single();
+    if (insErr) throw new Error(insErr.message);
+    const persisted = row as { id: string; created_at: string };
+
+    return {
+      id: persisted.id,
+      request,
+      generatedAt: persisted.created_at,
+      sections,
+    };
+  },
+
+  /**
+   * Persist user edits to a previously-generated/scanned paper. Writes the
+   * (edited) sections array back; `request` shape stays untouched so
+   * downstream consumers (saved-papers list, print) keep rendering.
+   */
+  async updateGeneratedPaper(paperId: string, sections: ExamSection[]): Promise<void> {
+    const { error } = await supabase
+      .from('generated_question_papers')
+      .update({ sections: sections as unknown as Record<string, unknown>[] })
+      .eq('id', paperId);
+    if (error) throw new Error(error.message);
   },
 
   /** Rich student profiles for My Students view — includes admission no, phone, father name. */

@@ -29,6 +29,40 @@ export async function generateText(prompt: string): Promise<string> {
   }
 }
 
+/**
+ * Multimodal call: prompt + one or more images. Images must be supplied as
+ * base64-encoded strings WITHOUT the `data:image/...;base64,` prefix —
+ * use the helper below to convert a File. Returns the raw model text.
+ */
+export async function generateFromImages(
+  prompt: string,
+  images: Array<{ mimeType: string; data: string }>,
+): Promise<string> {
+  try {
+    const { text } = await apiFetch<{ text: string }>('POST', '/ai/generate', { prompt, images });
+    return text;
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e);
+    if (msg.toLowerCase().includes('not configured')) throw new GeminiUnavailableError();
+    throw e;
+  }
+}
+
+/** Read a browser File into the `{ mimeType, data }` shape Gemini expects.
+ *  Strips the `data:...;base64,` prefix so the server gets pure base64. */
+export async function fileToInlineImage(file: File): Promise<{ mimeType: string; data: string }> {
+  const buf = await file.arrayBuffer();
+  // btoa works on binary strings, so chunk the bytes to avoid call-stack limits
+  // on large files.
+  const bytes = new Uint8Array(buf);
+  const CHUNK = 0x8000;
+  let binary = '';
+  for (let i = 0; i < bytes.length; i += CHUNK) {
+    binary += String.fromCharCode.apply(null, Array.from(bytes.subarray(i, i + CHUNK)));
+  }
+  return { mimeType: file.type || 'image/jpeg', data: btoa(binary) };
+}
+
 /** Strip markdown fences ```json … ``` if Gemini wraps its JSON output. */
 export function stripJsonFence(raw: string): string {
   const trimmed = raw.trim();

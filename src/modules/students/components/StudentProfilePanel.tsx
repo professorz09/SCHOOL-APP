@@ -132,8 +132,14 @@ export const StudentProfilePanel: React.FC<Props> = ({ student, onBack, onStuden
     setFeeInstallments(feesRes.status === 'fulfilled' ? feesRes.value : []);
     setAcademicRecord(recordRes.status === 'fulfilled' ? recordRes.value : null);
 
-    // Current transport assignment: read from in-memory store (no network)
+    // Current transport assignment. Force-refresh the in-memory cache first
+    // so a freshly-assigned vehicle (e.g. principal hit "Assign Transport"
+    // a second ago) shows up immediately. Earlier this read straight from
+    // _assignmentsCache, which was empty whenever the principal jumped into
+    // the profile without first visiting Dashboard / Transport — the row
+    // existed in the DB but the panel kept saying "No Transport Assigned".
     try {
+      await transportService.refreshAll();
       const assignment = transportService.getAssignmentForStudent(s.id);
       if (assignment) {
         const vehicle = transportService.getVehicleById(assignment.vehicleId);

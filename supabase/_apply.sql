@@ -8882,3 +8882,108 @@ BEGIN
 END $$;
 
 GRANT EXECUTE ON FUNCTION public.pay_installment(UUID, BIGINT, BIGINT, TEXT, DATE, TEXT, BOOLEAN) TO authenticated;
+
+
+-- =============================================================
+-- 0076_school_salary_pay_day.sql
+-- =============================================================
+-- Single school-wide salary pay day (1-28). Drives the
+-- "Due Xth / Overdue" badge in the Salary Ledger.
+ALTER TABLE public.schools
+  ADD COLUMN IF NOT EXISTS salary_pay_day SMALLINT;
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint WHERE conname = 'schools_salary_pay_day_chk'
+  ) THEN
+    ALTER TABLE public.schools
+      ADD CONSTRAINT schools_salary_pay_day_chk
+      CHECK (salary_pay_day IS NULL OR (salary_pay_day BETWEEN 1 AND 28));
+  END IF;
+END $$;
+
+
+-- =============================================================
+-- 0077_approvals_leave_parent_insert.sql
+-- =============================================================
+DROP POLICY IF EXISTS approvals_write ON public.approvals;
+CREATE POLICY approvals_write_principal ON public.approvals
+  FOR ALL
+  USING (public.is_super_admin()
+         OR (public.is_principal() AND school_id = public.current_user_school_id()))
+  WITH CHECK (public.is_super_admin()
+         OR (public.is_principal() AND school_id = public.current_user_school_id()));
+CREATE POLICY approvals_insert_leave ON public.approvals
+  FOR INSERT
+  WITH CHECK (
+    request_type = 'LEAVE'
+    AND entity_type = 'student'
+    AND requested_by = auth.uid()
+    AND (
+      (public.current_user_role() IN ('PARENT','STUDENT')
+        AND entity_id = ANY (public.linked_student_ids()))
+      OR
+      (public.current_user_role() = 'TEACHER'
+        AND school_id = public.current_user_school_id())
+    )
+  );
+
+
+-- =============================================================
+-- 0078_complaints_teacher_insert.sql
+-- =============================================================
+DROP POLICY IF EXISTS complaints_teacher_insert ON public.complaints;
+CREATE POLICY complaints_teacher_insert ON public.complaints
+  FOR INSERT
+  WITH CHECK (
+    public.current_user_role() = 'TEACHER'
+    AND from_user_id = auth.uid()
+    AND school_id = public.current_user_school_id()
+  );
+
+
+-- =============================================================
+-- 0079_test_schedules_teacher_rules.sql
+-- =============================================================
+CREATE UNIQUE INDEX IF NOT EXISTS test_schedules_one_final_per_year
+  ON public.test_schedules (school_id, academic_year_id)
+  WHERE exam_type = 'FINAL';
+
+DROP POLICY IF EXISTS test_schedules_teacher_write ON public.test_schedules;
+CREATE POLICY test_schedules_teacher_write ON public.test_schedules
+  FOR ALL
+  USING (
+    public.current_user_role() = 'TEACHER'
+    AND school_id = public.current_user_school_id()
+    AND teacher_id IN (SELECT id FROM public.staff WHERE user_id = auth.uid())
+    AND academic_year_id IN (
+      SELECT id FROM public.academic_years
+       WHERE school_id = public.current_user_school_id() AND is_active = true
+    )
+  )
+  WITH CHECK (
+    public.current_user_role() = 'TEACHER'
+    AND school_id = public.current_user_school_id()
+    AND teacher_id IN (SELECT id FROM public.staff WHERE user_id = auth.uid())
+    AND academic_year_id IN (
+      SELECT id FROM public.academic_years
+       WHERE school_id = public.current_user_school_id() AND is_active = true
+    )
+  );
+
+
+-- =============================================================
+-- 0080_school_branding.sql
+-- =============================================================
+ALTER TABLE public.schools
+  ADD COLUMN IF NOT EXISTS logo_path                TEXT,
+  ADD COLUMN IF NOT EXISTS principal_signature_path TEXT,
+  ADD COLUMN IF NOT EXISTS accent_color             TEXT;
+DO $$
+BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'schools_accent_color_chk') THEN
+    ALTER TABLE public.schools
+      ADD CONSTRAINT schools_accent_color_chk
+      CHECK (accent_color IS NULL OR accent_color ~ '^#[0-9A-Fa-f]{6}$');
+  END IF;
+END $$;

@@ -1537,7 +1537,7 @@ export const FeeLedger: React.FC<Props> = ({ onBack }) => {
           const goesToAdvance = Math.max(0, cash + disc - totalDueNow);
           const remainingAfter = Math.max(0, totalDueNow - cash - disc);
           return (
-          <div className="absolute inset-0 bg-slate-900/60 backdrop-blur-sm z-50 flex items-end">
+          <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-50 flex items-end justify-center sm:items-center">
             <div className="w-full max-w-lg mx-auto bg-white rounded-t-3xl p-5 pb-7 animate-in slide-in-from-bottom-8 max-h-[92vh] overflow-y-auto">
               {/* Header */}
               <div className="flex justify-between items-start mb-4">
@@ -1701,8 +1701,8 @@ export const FeeLedger: React.FC<Props> = ({ onBack }) => {
 
         {/* ── GOVT PAY MODAL ─────────────────────────────────────────────────── */}
         {govtPayModal && (
-          <div className="absolute inset-0 bg-slate-900/60 backdrop-blur-sm z-50 flex items-end">
-            <div className="w-full bg-white rounded-t-3xl p-6 pb-8 animate-in slide-in-from-bottom-8">
+          <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-50 flex items-end justify-center sm:items-center">
+            <div className="w-full sm:max-w-lg bg-white rounded-t-3xl sm:rounded-2xl p-6 pb-8 animate-in slide-in-from-bottom-8 max-h-[85vh] overflow-y-auto">
               <div className="flex justify-between items-center mb-3">
                 <div>
                   <h3 className="text-lg font-black text-slate-900">RTE Government Payment</h3>
@@ -1733,8 +1733,8 @@ export const FeeLedger: React.FC<Props> = ({ onBack }) => {
 
         {/* ── RECEIPT MODAL ────────────────────────────────────────────────── */}
         {receiptModal && (
-          <div className="absolute inset-0 bg-slate-900/60 backdrop-blur-sm z-50 flex items-end">
-            <div className="w-full bg-white rounded-t-3xl p-6 pb-8 animate-in slide-in-from-bottom-8 max-h-[85vh] overflow-y-auto">
+          <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-50 flex items-end justify-center sm:items-center">
+            <div className="w-full sm:max-w-lg bg-white rounded-t-3xl sm:rounded-2xl p-6 pb-8 animate-in slide-in-from-bottom-8 max-h-[85vh] overflow-y-auto">
               <div className="flex justify-between items-center mb-5">
                 <h3 className="text-lg font-black text-slate-900">Fee Receipt</h3>
                 <button onClick={() => setReceiptModal(null)} className="w-8 h-8 bg-slate-100 rounded-full flex items-center justify-center">
@@ -1861,7 +1861,7 @@ export const FeeLedger: React.FC<Props> = ({ onBack }) => {
 
         {/* ── REVERSE CONFIRMATION MODAL ──────────────────────────────────── */}
         {reverseTarget && (
-          <div className="absolute inset-0 bg-slate-900/70 backdrop-blur-sm z-[60] flex items-center justify-center p-4">
+          <div className="fixed inset-0 bg-slate-900/70 backdrop-blur-sm z-[60] flex items-center justify-center p-4">
             <div className="w-full max-w-md bg-white rounded-2xl p-5 shadow-2xl animate-in zoom-in-95 duration-200">
               <div className="flex items-start gap-3 mb-4">
                 <div className="w-10 h-10 rounded-xl bg-rose-100 text-rose-600 flex items-center justify-center shrink-0">
@@ -1961,8 +1961,8 @@ export const FeeLedger: React.FC<Props> = ({ onBack }) => {
 
         {/* ── PER-ROW PAY MODAL (strict pay_installment) ────────────────────── */}
         {rowPayModal && (
-          <div className="absolute inset-0 bg-slate-900/60 backdrop-blur-sm z-50 flex items-end">
-            <div className="w-full bg-white rounded-t-3xl p-6 pb-8 animate-in slide-in-from-bottom-8 max-h-[85vh] overflow-y-auto">
+          <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-50 flex items-end justify-center sm:items-center">
+            <div className="w-full sm:max-w-lg bg-white rounded-t-3xl sm:rounded-2xl p-6 pb-8 animate-in slide-in-from-bottom-8 max-h-[85vh] overflow-y-auto">
               <div className="flex justify-between items-center mb-4">
                 <div>
                   <h3 className="text-lg font-black text-slate-900">Pay this installment</h3>
@@ -2143,8 +2143,8 @@ export const FeeLedger: React.FC<Props> = ({ onBack }) => {
 
         {/* ── REGENERATE SCHEDULE MODAL ─────────────────────────────────────── */}
         {regenModal && (
-          <div className="absolute inset-0 bg-slate-900/60 backdrop-blur-sm z-50 flex items-end">
-            <div className="w-full bg-white rounded-t-3xl p-6 pb-8 animate-in slide-in-from-bottom-8 max-h-[85vh] overflow-y-auto">
+          <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-50 flex items-end justify-center sm:items-center">
+            <div className="w-full sm:max-w-lg bg-white rounded-t-3xl sm:rounded-2xl p-6 pb-8 animate-in slide-in-from-bottom-8 max-h-[85vh] overflow-y-auto">
               <div className="flex justify-between items-center mb-4">
                 <div>
                   <h3 className="text-lg font-black text-slate-900">Regenerate Schedule</h3>

@@ -3,19 +3,19 @@ import { downloadNodeAsPdf, downloadNodesAsPdf, printCurrentPage } from '@/share
 import {
   ArrowLeft, Sparkles, FileText, IdCard, Award, Ticket,
   FileCheck, Download, Printer, Eye, ChevronRight,
-  GraduationCap, ClipboardList, ScrollText, BadgeCheck,
+  ClipboardList, ScrollText, BadgeCheck,
 } from 'lucide-react';
 import { studentService } from '@/modules/students/student.service';
 import { Student } from '@/modules/students/student.types';
 import { schoolInfoService, type SchoolInfo } from '@/shared/utils/schoolInfo.service';
 import { AdmissionFormPrint } from '@/shared/components/AdmissionFormPrint';
 import { teacherService } from '@/roles/teacher/teacher.service';
-import type { GeneratedExamPaper } from '@/roles/teacher/teacher.types';
-import { isGeminiConfigured, GeminiUnavailableError } from '@/lib/gemini';
+import type { GeneratedExamPaper, ExamSection, ExamQuestion } from '@/roles/teacher/teacher.types';
+import { isGeminiConfigured, GeminiUnavailableError, fileToInlineImage } from '@/lib/gemini';
 import { useUIStore } from '@/store/uiStore';
 import { apiExams } from '@/lib/apiClient';
 
-type ToolView = 'DASHBOARD' | 'PAPERS' | 'TC' | 'IDCARD' | 'MARKSHEET' | 'ADMIT' | 'BONAFIDE' | 'ADMISSION';
+type ToolView = 'DASHBOARD' | 'PAPERS' | 'TC' | 'IDCARD' | 'MARKSHEET' | 'ADMIT' | 'BONAFIDE' | 'ADMISSION' | 'BRANDING';
 
 interface Props {
   onBack: () => void;
@@ -122,6 +122,245 @@ export const ToolsManager: React.FC<Props> = ({ onBack }) => {
     );
   };
 
+  // ── PAPER PREVIEW + INLINE EDITOR ────────────────────────────────────────
+  // Renders the generated/scanned paper read-only by default. "Edit Paper"
+  // flips into a per-question editor: text/marks/type are typeable, sections
+  // can be added/removed, questions can be reordered (delete + add). Save
+  // writes back via teacherService.updateGeneratedPaper().
+  const PaperPreview: React.FC<{
+    paper: GeneratedExamPaper;
+    onClose: () => void;
+    onSaved: (updated: GeneratedExamPaper) => void;
+  }> = ({ paper, onClose, onSaved }) => {
+    const { showToast } = useUIStore();
+    const [editing, setEditing] = useState(false);
+    const [draft, setDraft] = useState<ExamSection[]>(paper.sections);
+    const [busy, setBusy] = useState(false);
+
+    React.useEffect(() => { setDraft(paper.sections); }, [paper]);
+
+    // Keep section.marks in sync with sum(question.marks) so the header
+    // total never drifts when the user edits per-question marks.
+    const recompute = (sections: ExamSection[]): ExamSection[] =>
+      sections.map(s => ({
+        ...s,
+        marks: s.questions.reduce((a, q) => a + (Number(q.marks) || 0), 0),
+      }));
+
+    const renumberAll = (sections: ExamSection[]): ExamSection[] => {
+      let n = 0;
+      return sections.map(s => ({
+        ...s,
+        questions: s.questions.map(q => { n += 1; return { ...q, no: n }; }),
+      }));
+    };
+
+    const updateSection = (sIdx: number, patch: Partial<ExamSection>) =>
+      setDraft(prev => recompute(prev.map((s, i) => i === sIdx ? { ...s, ...patch } : s)));
+
+    const updateQuestion = (sIdx: number, qIdx: number, patch: Partial<ExamQuestion>) =>
+      setDraft(prev => recompute(prev.map((s, i) =>
+        i === sIdx ? { ...s, questions: s.questions.map((q, j) => j === qIdx ? { ...q, ...patch } : q) } : s)));
+
+    const addQuestion = (sIdx: number) =>
+      setDraft(prev => renumberAll(recompute(prev.map((s, i) =>
+        i === sIdx ? { ...s, questions: [...s.questions, { no: 0, text: '', marks: 1, type: 'SHORT' as const }] } : s))));
+
+    const removeQuestion = (sIdx: number, qIdx: number) =>
+      setDraft(prev => renumberAll(recompute(prev.map((s, i) =>
+        i === sIdx ? { ...s, questions: s.questions.filter((_, j) => j !== qIdx) } : s))));
+
+    const addSection = () =>
+      setDraft(prev => renumberAll(recompute([...prev, {
+        title: `Section ${String.fromCharCode(65 + prev.length)}`,
+        instructions: '',
+        marks: 0,
+        questions: [],
+      }])));
+
+    const removeSection = (sIdx: number) => {
+      if (!confirm('Remove this section and all its questions?')) return;
+      setDraft(prev => renumberAll(recompute(prev.filter((_, i) => i !== sIdx))));
+    };
+
+    const handleSave = async () => {
+      const cleaned = draft
+        .map(s => ({ ...s, questions: s.questions.filter(q => q.text.trim().length > 0) }))
+        .filter(s => s.questions.length > 0);
+      if (cleaned.length === 0) {
+        showToast('Add at least one question before saving', 'error');
+        return;
+      }
+      setBusy(true);
+      try {
+        const finalSections = renumberAll(recompute(cleaned));
+        await teacherService.updateGeneratedPaper(paper.id, finalSections);
+        onSaved({ ...paper, sections: finalSections });
+        setEditing(false);
+        showToast('Paper updated');
+      } catch (e) {
+        showToast(e instanceof Error ? e.message : 'Save failed', 'error');
+      } finally {
+        setBusy(false);
+      }
+    };
+
+    const handleCancelEdit = () => {
+      setDraft(paper.sections);
+      setEditing(false);
+    };
+
+    const sections = editing ? draft : paper.sections;
+
+    return (
+      <div className="w-full flex flex-col">
+        <ToolHeader title={editing ? 'Edit Paper' : 'Question Paper'} onBackPress={editing ? handleCancelEdit : onClose} />
+        <div className="p-5 space-y-4">
+          <div className="bg-white border-2 border-slate-200 rounded-2xl p-5 lg:p-6 shadow-sm">
+            <div className="text-center mb-5 pb-4 border-b-2 border-slate-200">
+              <h3 className="text-lg font-black text-slate-900">{paper.request.subject.toUpperCase()}</h3>
+              <p className="text-sm font-bold text-slate-500 mt-1">
+                {paper.request.className} | Time: {Math.round(paper.request.duration / 60)} Hours | Total Marks: {paper.request.totalMarks}
+              </p>
+              <p className="text-[10px] font-bold text-slate-400 mt-1">
+                {new Date(paper.generatedAt).toLocaleString()}
+              </p>
+            </div>
+
+            <div className="space-y-6">
+              {sections.map((section, sIdx) => (
+                <div key={sIdx} className={editing ? 'bg-slate-50/50 border border-slate-200 rounded-xl p-3' : ''}>
+                  {editing ? (
+                    <div className="space-y-2 mb-3">
+                      <div className="flex items-center gap-2">
+                        <input
+                          value={section.title}
+                          onChange={e => updateSection(sIdx, { title: e.target.value })}
+                          placeholder="Section title"
+                          className="flex-1 border border-slate-200 bg-white rounded-lg px-3 py-2 font-black text-sm outline-none focus:border-violet-500"
+                        />
+                        <span className="text-[11px] font-black text-slate-500 bg-slate-100 px-2 py-1 rounded-md tabular-nums">
+                          {section.marks} marks
+                        </span>
+                        <button onClick={() => removeSection(sIdx)}
+                          className="w-8 h-8 flex items-center justify-center bg-rose-50 text-rose-600 hover:bg-rose-100 rounded-lg text-sm font-black">
+                          ×
+                        </button>
+                      </div>
+                      <input
+                        value={section.instructions ?? ''}
+                        onChange={e => updateSection(sIdx, { instructions: e.target.value })}
+                        placeholder="Instructions (optional)"
+                        className="w-full border border-slate-200 bg-white rounded-lg px-3 py-2 text-[12px] font-bold italic text-slate-700 outline-none focus:border-violet-500"
+                      />
+                    </div>
+                  ) : (
+                    <>
+                      <h4 className="font-black text-sm text-slate-900 mb-1">
+                        {section.title} <span className="text-slate-500 font-bold">({section.marks} marks)</span>
+                      </h4>
+                      {section.instructions && (
+                        <p className="text-[11px] font-bold text-slate-500 italic mb-3">{section.instructions}</p>
+                      )}
+                    </>
+                  )}
+
+                  <div className="space-y-2">
+                    {section.questions.map((q, qIdx) => (
+                      <div key={qIdx} className={editing ? 'bg-white rounded-lg border border-slate-200 p-2.5' : 'text-sm font-semibold text-slate-700'}>
+                        {editing ? (
+                          <div className="flex items-start gap-2">
+                            <span className="text-[11px] font-black text-slate-400 mt-2 tabular-nums shrink-0 w-6 text-right">{q.no}.</span>
+                            <textarea
+                              value={q.text}
+                              onChange={e => updateQuestion(sIdx, qIdx, { text: e.target.value })}
+                              rows={2}
+                              placeholder="Question text"
+                              className="flex-1 border border-slate-200 rounded-lg px-2.5 py-1.5 text-sm font-semibold text-slate-700 outline-none focus:border-violet-500 resize-none"
+                            />
+                            <div className="flex flex-col gap-1 shrink-0">
+                              <input
+                                type="number" min={0} max={100}
+                                value={q.marks}
+                                onChange={e => updateQuestion(sIdx, qIdx, { marks: Number(e.target.value) || 0 })}
+                                className="w-14 border border-slate-200 rounded-md px-1.5 py-1 text-[11px] font-black text-center tabular-nums outline-none focus:border-violet-500"
+                                title="Marks"
+                              />
+                              <select
+                                value={q.type}
+                                onChange={e => updateQuestion(sIdx, qIdx, { type: e.target.value as ExamQuestion['type'] })}
+                                className="w-14 border border-slate-200 rounded-md px-1 py-1 text-[10px] font-black outline-none focus:border-violet-500">
+                                {(['MCQ', 'SHORT', 'LONG', 'DIAGRAM'] as const).map(t => (
+                                  <option key={t} value={t}>{t}</option>
+                                ))}
+                              </select>
+                            </div>
+                            <button onClick={() => removeQuestion(sIdx, qIdx)}
+                              className="w-8 h-8 flex items-center justify-center bg-rose-50 text-rose-600 hover:bg-rose-100 rounded-md text-sm font-black shrink-0">
+                              ×
+                            </button>
+                          </div>
+                        ) : (
+                          <div className="flex items-start justify-between gap-3">
+                            <span className="flex-1 whitespace-pre-wrap">{q.no}. {q.text}</span>
+                            <span className="text-[10px] font-black text-slate-400 shrink-0 mt-0.5">[{q.marks}]</span>
+                          </div>
+                        )}
+                      </div>
+                    ))}
+
+                    {editing && (
+                      <button onClick={() => addQuestion(sIdx)}
+                        className="w-full py-2 border border-dashed border-violet-300 text-violet-600 font-black text-[11px] uppercase tracking-wider rounded-lg hover:bg-violet-50 transition-colors">
+                        + Add Question
+                      </button>
+                    )}
+                  </div>
+                </div>
+              ))}
+
+              {editing && (
+                <button onClick={addSection}
+                  className="w-full py-3 border-2 border-dashed border-violet-300 text-violet-600 font-black text-xs uppercase tracking-wider rounded-xl hover:bg-violet-50 transition-colors">
+                  + Add Section
+                </button>
+              )}
+            </div>
+          </div>
+
+          {/* Action bar */}
+          {editing ? (
+            <div className="grid grid-cols-2 gap-3">
+              <button onClick={handleCancelEdit} disabled={busy}
+                className="flex items-center justify-center gap-2 bg-slate-100 text-slate-700 font-black text-sm uppercase py-3 rounded-2xl active:scale-95 transition-transform disabled:opacity-50">
+                Cancel
+              </button>
+              <button onClick={handleSave} disabled={busy}
+                className="flex items-center justify-center gap-2 bg-violet-600 hover:bg-violet-700 text-white font-black text-sm uppercase py-3 rounded-2xl active:scale-95 transition-transform disabled:opacity-60 shadow-md">
+                {busy ? 'Saving…' : 'Save Changes'}
+              </button>
+            </div>
+          ) : (
+            <div className="grid grid-cols-3 gap-2">
+              <button onClick={() => window.print()}
+                className="flex items-center justify-center gap-1.5 bg-indigo-600 text-white font-black text-xs uppercase py-3 rounded-2xl active:scale-95 transition-transform">
+                <Printer size={14} /> Print
+              </button>
+              <button onClick={() => setEditing(true)}
+                className="flex items-center justify-center gap-1.5 bg-violet-600 text-white font-black text-xs uppercase py-3 rounded-2xl active:scale-95 transition-transform">
+                <Eye size={14} /> Edit
+              </button>
+              <button onClick={onClose}
+                className="flex items-center justify-center gap-1.5 bg-slate-100 text-slate-700 font-black text-xs uppercase py-3 rounded-2xl active:scale-95 transition-transform">
+                <Sparkles size={14} /> New
+              </button>
+            </div>
+          )}
+        </div>
+      </div>
+    );
+  };
+
   // ── QUESTION PAPER GENERATOR (AI) ────────────────────────────────────────
   const QuestionPaperGenerator = () => {
     const showToast = useUIStore(s => s.showToast);
@@ -135,6 +374,22 @@ export const ToolsManager: React.FC<Props> = ({ onBack }) => {
     const [savedPapers, setSavedPapers] = useState<GeneratedExamPaper[]>([]);
     const [savedLoading, setSavedLoading] = useState(false);
     const aiAvailable = isGeminiConfigured();
+
+    // Mode toggle: PROMPT (text-only AI generation) vs SCAN (upload photo
+    // of an existing paper → Gemini Vision OCR → structured paper). Both
+    // paths land on the same GeneratedExamPaper preview/persist flow.
+    const [mode, setMode] = useState<'PROMPT' | 'SCAN'>('PROMPT');
+    const [scanFiles, setScanFiles] = useState<File[]>([]);
+    const [scanPreviews, setScanPreviews] = useState<string[]>([]);
+    const [isScanning, setIsScanning] = useState(false);
+
+    // Object URLs need to be revoked when previews change so the browser
+    // doesn't leak blob memory across upload cycles.
+    React.useEffect(() => {
+      const urls = scanFiles.map(f => URL.createObjectURL(f));
+      setScanPreviews(urls);
+      return () => { urls.forEach(URL.revokeObjectURL); };
+    }, [scanFiles]);
 
     React.useEffect(() => {
       setSavedLoading(true);
@@ -172,92 +427,81 @@ export const ToolsManager: React.FC<Props> = ({ onBack }) => {
       }
     };
 
+    const handleScanExtract = async () => {
+      if (!aiAvailable) { showToast('AI is not configured. Set GEMINI_API_KEY to enable.', 'error'); return; }
+      if (scanFiles.length === 0) { showToast('Pick or take at least one photo of the paper first', 'error'); return; }
+      setIsScanning(true);
+      try {
+        const inline = await Promise.all(scanFiles.map(fileToInlineImage));
+        const result = await teacherService.extractPaperFromImages(inline, {
+          className: `Class ${config.class}`,
+          subject: config.subject,
+          totalMarks: config.totalMarks,
+          duration: 180,
+          difficulty: config.difficulty === 'MIXED' ? 'MEDIUM' : config.difficulty,
+        });
+        setPaper(result);
+        setScanFiles([]);
+        teacherService.getGeneratedPapers().then(setSavedPapers).catch(() => {});
+      } catch (e) {
+        if (e instanceof GeminiUnavailableError) {
+          showToast('AI is not configured. Set GEMINI_API_KEY to enable.', 'error');
+        } else {
+          showToast(e instanceof Error ? e.message : 'Could not extract questions', 'error');
+        }
+      } finally {
+        setIsScanning(false);
+      }
+    };
+
     const handlePrint = () => window.print();
 
     if (paper) {
-      return (
-        <div className="w-full flex flex-col">
-          <ToolHeader title="Question Paper" onBackPress={() => setPaper(null)} />
-          <div className="p-5 space-y-4">
-            <div className="bg-white border-2 border-slate-200 rounded-2xl p-6 shadow-sm">
-              <div className="text-center mb-6 pb-4 border-b-2 border-slate-200">
-                <h3 className="text-lg font-black text-slate-900">{paper.request.subject.toUpperCase()}</h3>
-                <p className="text-sm font-bold text-slate-500 mt-1">
-                  {paper.request.className} | Time: {Math.round(paper.request.duration / 60)} Hours | Total Marks: {paper.request.totalMarks}
-                </p>
-                <p className="text-[10px] font-bold text-slate-400 mt-1">
-                  Generated {new Date(paper.generatedAt).toLocaleString()}
-                </p>
-              </div>
-              <div className="space-y-6">
-                {paper.sections.map((section, sIdx) => (
-                  <div key={sIdx}>
-                    <h4 className="font-black text-sm text-slate-900 mb-1">
-                      {section.title} <span className="text-slate-500 font-bold">({section.marks} marks)</span>
-                    </h4>
-                    {section.instructions && (
-                      <p className="text-[11px] font-bold text-slate-500 italic mb-3">{section.instructions}</p>
-                    )}
-                    <div className="space-y-3">
-                      {section.questions.map(q => (
-                        <div key={q.no} className="text-sm font-semibold text-slate-700">
-                          <div className="flex items-start justify-between gap-3">
-                            <span className="flex-1 whitespace-pre-wrap">{q.no}. {q.text}</span>
-                            <span className="text-[10px] font-black text-slate-400 shrink-0 mt-0.5">[{q.marks}]</span>
-                          </div>
-                        </div>
-                      ))}
-                    </div>
-                  </div>
-                ))}
-              </div>
-            </div>
-            <div className="grid grid-cols-2 gap-3">
-              <button onClick={handlePrint} className="flex items-center justify-center gap-2 bg-indigo-600 text-white font-black text-sm uppercase py-3 rounded-2xl active:scale-95 transition-transform">
-                <Printer size={16} /> Print
-              </button>
-              <button onClick={() => setPaper(null)} className="flex items-center justify-center gap-2 bg-slate-100 text-slate-700 font-black text-sm uppercase py-3 rounded-2xl active:scale-95 transition-transform">
-                <Sparkles size={16} /> Regenerate
-              </button>
-            </div>
-          </div>
-        </div>
-      );
+      return <PaperPreview paper={paper} onClose={() => setPaper(null)}
+        onSaved={updated => {
+          setPaper(updated);
+          teacherService.getGeneratedPapers().then(setSavedPapers).catch(() => {});
+        }} />;
     }
 
     return (
       <div className="w-full flex flex-col">
         <ToolHeader title="AI Question Paper" onBackPress={() => setView('DASHBOARD')} />
         <div className="p-5 space-y-4">
-          {aiAvailable ? (
-            <div className="bg-purple-50 border border-purple-200 rounded-2xl p-4 flex items-start gap-3">
-              <Sparkles size={20} className="text-purple-600 shrink-0 mt-0.5" />
-              <div>
-                <p className="font-black text-purple-900 text-sm">AI Powered Generator</p>
-                <p className="text-xs font-bold text-purple-700 mt-0.5">Generates real question papers via Gemini AI</p>
-              </div>
-            </div>
-          ) : (
+          {!aiAvailable && (
             <div className="bg-amber-50 border border-amber-200 rounded-2xl p-4 flex items-start gap-3">
               <Sparkles size={20} className="text-amber-600 shrink-0 mt-0.5" />
               <div>
                 <p className="font-black text-amber-900 text-sm">AI Not Configured</p>
-                <p className="text-xs font-bold text-amber-700 mt-0.5">Set GEMINI_API_KEY in environment to enable real AI generation.</p>
+                <p className="text-xs font-bold text-amber-700 mt-0.5">Set GEMINI_API_KEY in environment to enable AI features.</p>
               </div>
             </div>
           )}
+
+          {/* Mode toggle — Generate via prompt OR scan an existing paper. */}
+          <div className="bg-slate-100 rounded-2xl p-1 flex">
+            <button onClick={() => setMode('PROMPT')}
+              className={`flex-1 py-2.5 rounded-xl text-[11px] font-black uppercase tracking-wider transition-all ${mode === 'PROMPT' ? 'bg-white text-violet-600 shadow-sm' : 'text-slate-500'}`}>
+              ✨ Generate (AI)
+            </button>
+            <button onClick={() => setMode('SCAN')}
+              className={`flex-1 py-2.5 rounded-xl text-[11px] font-black uppercase tracking-wider transition-all ${mode === 'SCAN' ? 'bg-white text-violet-600 shadow-sm' : 'text-slate-500'}`}>
+              📷 Scan Paper
+            </button>
+          </div>
+
           <div className="space-y-3">
             <div>
               <label className="text-xs font-black uppercase tracking-widest text-slate-400 mb-1.5 block">Class</label>
               <select value={config.class} onChange={e => setConfig({ ...config, class: e.target.value })}
-                className="w-full border border-slate-200 bg-white rounded-xl px-4 py-3 font-bold text-sm outline-none focus:border-purple-500">
+                className="w-full border border-slate-200 bg-white rounded-xl px-4 py-3 font-bold text-sm outline-none focus:border-violet-500">
                 {['8', '9', '10', '11', '12'].map(c => <option key={c} value={c}>Class {c}</option>)}
               </select>
             </div>
             <div>
               <label className="text-xs font-black uppercase tracking-widest text-slate-400 mb-1.5 block">Subject</label>
               <select value={config.subject} onChange={e => setConfig({ ...config, subject: e.target.value })}
-                className="w-full border border-slate-200 bg-white rounded-xl px-4 py-3 font-bold text-sm outline-none focus:border-purple-500">
+                className="w-full border border-slate-200 bg-white rounded-xl px-4 py-3 font-bold text-sm outline-none focus:border-violet-500">
                 {['Mathematics', 'Science', 'English', 'History', 'Geography', 'Hindi', 'Physics', 'Chemistry', 'Biology'].map(s => (
                   <option key={s} value={s}>{s}</option>
                 ))}
@@ -267,35 +511,96 @@ export const ToolsManager: React.FC<Props> = ({ onBack }) => {
               <label className="text-xs font-black uppercase tracking-widest text-slate-400 mb-1.5 block">Total Marks</label>
               <input type="number" value={config.totalMarks}
                 onChange={e => setConfig({ ...config, totalMarks: parseInt(e.target.value) || 0 })}
-                className="w-full border border-slate-200 bg-white rounded-xl px-4 py-3 font-bold text-sm outline-none focus:border-purple-500" />
+                className="w-full border border-slate-200 bg-white rounded-xl px-4 py-3 font-bold text-sm outline-none focus:border-violet-500" />
             </div>
-            <div>
-              <label className="text-xs font-black uppercase tracking-widest text-slate-400 mb-1.5 block">Topics (optional)</label>
-              <textarea value={config.topics} rows={2}
-                placeholder="e.g. Quadratic equations, Trigonometry, Coordinate geometry"
-                onChange={e => setConfig({ ...config, topics: e.target.value })}
-                className="w-full border border-slate-200 bg-white rounded-xl px-4 py-3 font-bold text-sm outline-none focus:border-purple-500 resize-none" />
-            </div>
-            <div>
-              <label className="text-xs font-black uppercase tracking-widest text-slate-400 mb-2 block">Difficulty</label>
-              <div className="grid grid-cols-3 gap-2">
-                {(['EASY', 'MIXED', 'HARD'] as const).map(d => (
-                  <button key={d} onClick={() => setConfig({ ...config, difficulty: d })}
-                    className={`py-2.5 rounded-xl font-black text-xs uppercase tracking-wide transition-all ${
-                      config.difficulty === d ? 'bg-purple-600 text-white' : 'bg-slate-100 text-slate-600 border border-slate-200'
-                    }`}>
-                    {d}
-                  </button>
-                ))}
+            {mode === 'PROMPT' && (
+              <>
+                <div>
+                  <label className="text-xs font-black uppercase tracking-widest text-slate-400 mb-1.5 block">Topics (optional)</label>
+                  <textarea value={config.topics} rows={2}
+                    placeholder="e.g. Quadratic equations, Trigonometry, Coordinate geometry"
+                    onChange={e => setConfig({ ...config, topics: e.target.value })}
+                    className="w-full border border-slate-200 bg-white rounded-xl px-4 py-3 font-bold text-sm outline-none focus:border-violet-500 resize-none" />
+                </div>
+                <div>
+                  <label className="text-xs font-black uppercase tracking-widest text-slate-400 mb-2 block">Difficulty</label>
+                  <div className="grid grid-cols-3 gap-2">
+                    {(['EASY', 'MIXED', 'HARD'] as const).map(d => (
+                      <button key={d} onClick={() => setConfig({ ...config, difficulty: d })}
+                        className={`py-2.5 rounded-xl font-black text-xs uppercase tracking-wide transition-all ${
+                          config.difficulty === d ? 'bg-violet-600 text-white' : 'bg-slate-100 text-slate-600 border border-slate-200'
+                        }`}>
+                        {d}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              </>
+            )}
+
+            {mode === 'SCAN' && (
+              <div>
+                <label className="text-xs font-black uppercase tracking-widest text-slate-400 mb-1.5 block">
+                  Photo of paper · {scanFiles.length}/4
+                </label>
+                <p className="text-[10px] font-bold text-slate-400 mb-2">
+                  Capture or upload up to 4 clear photos of the printed/handwritten question paper. AI will extract every question into editable form.
+                </p>
+                <input
+                  id="scan-paper-input"
+                  type="file" accept="image/*" multiple
+                  capture="environment"
+                  onChange={e => {
+                    const list = Array.from(e.target.files ?? []).slice(0, 4);
+                    setScanFiles(list);
+                    e.target.value = ''; // allow re-picking same file
+                  }}
+                  className="hidden"
+                />
+                <label htmlFor="scan-paper-input"
+                  className="block w-full border-2 border-dashed border-violet-300 bg-violet-50/30 hover:bg-violet-50 rounded-xl px-4 py-6 text-center cursor-pointer transition-colors">
+                  <div className="text-violet-600 text-2xl mb-1">📷</div>
+                  <p className="text-xs font-black text-violet-700">Tap to take photo or upload</p>
+                  <p className="text-[10px] font-bold text-violet-500 mt-0.5">JPG / PNG / WEBP · max 6 MB each · up to 4</p>
+                </label>
+
+                {scanPreviews.length > 0 && (
+                  <div className="mt-3 grid grid-cols-2 gap-2">
+                    {scanPreviews.map((url, i) => (
+                      <div key={url} className="relative">
+                        <img src={url} alt={`Page ${i + 1}`}
+                          className="w-full h-32 object-cover rounded-lg border border-slate-200" />
+                        <button
+                          onClick={() => setScanFiles(files => files.filter((_, idx) => idx !== i))}
+                          className="absolute top-1 right-1 w-6 h-6 bg-rose-600 text-white rounded-full text-xs font-black shadow-md">
+                          ×
+                        </button>
+                        <span className="absolute bottom-1 left-1 bg-slate-900/80 text-white text-[9px] font-black px-1.5 py-0.5 rounded">
+                          Page {i + 1}
+                        </span>
+                      </div>
+                    ))}
+                  </div>
+                )}
               </div>
-            </div>
+            )}
           </div>
-          <button onClick={handleGenerate} disabled={isGenerating || !aiAvailable}
-            className="w-full flex items-center justify-center gap-2 bg-purple-600 text-white font-black text-sm uppercase py-4 rounded-2xl active:scale-95 transition-transform disabled:opacity-60 shadow-md">
-            {isGenerating
-              ? <><div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" /> Generating...</>
-              : <><Sparkles size={16} /> Generate Paper</>}
-          </button>
+
+          {mode === 'PROMPT' ? (
+            <button onClick={handleGenerate} disabled={isGenerating || !aiAvailable}
+              className="w-full flex items-center justify-center gap-2 bg-violet-600 hover:bg-violet-700 text-white font-black text-sm uppercase py-4 rounded-2xl active:scale-95 transition-transform disabled:opacity-60 shadow-md">
+              {isGenerating
+                ? <><div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" /> Generating…</>
+                : <><Sparkles size={16} /> Generate Paper</>}
+            </button>
+          ) : (
+            <button onClick={handleScanExtract} disabled={isScanning || !aiAvailable || scanFiles.length === 0}
+              className="w-full flex items-center justify-center gap-2 bg-violet-600 hover:bg-violet-700 text-white font-black text-sm uppercase py-4 rounded-2xl active:scale-95 transition-transform disabled:opacity-60 shadow-md">
+              {isScanning
+                ? <><div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" /> Reading paper…</>
+                : <><Sparkles size={16} /> Extract Questions</>}
+            </button>
+          )}
 
           {/* Saved papers — reopen previously generated AI papers */}
           <div className="pt-2">
@@ -334,6 +639,10 @@ export const ToolsManager: React.FC<Props> = ({ onBack }) => {
     const { showToast } = useUIStore();
     const student = students.find(s => s.id === picked);
 
+    const accent = schoolInfo?.accentColor || '#2563eb';
+    const logoUrl = schoolInfo?.logoPath ? schoolInfoService.getAssetUrl(schoolInfo.logoPath) : null;
+    const signatureUrl = schoolInfo?.principalSignaturePath ? schoolInfoService.getAssetUrl(schoolInfo.principalSignaturePath) : null;
+
     const handleDownload = async () => {
       if (!printRef.current || !student) return;
       try { await downloadNodeAsPdf(printRef.current, `tc-${student.admissionNo}.pdf`); }
@@ -345,11 +654,16 @@ export const ToolsManager: React.FC<Props> = ({ onBack }) => {
         <div className="w-full flex flex-col">
           <ToolHeader title="Transfer Certificate" onBackPress={() => setPreview(false)} />
           <div className="p-5">
-            <div ref={printRef} className="bg-white border-2 border-slate-300 rounded-2xl p-6 shadow-sm">
-              <div className="text-center border-b-2 border-slate-300 pb-5 mb-5">
-                <p className="text-xs font-black text-slate-400 uppercase tracking-widest mb-1">{schoolInfo.name || 'School Name'}</p>
-                <h3 className="text-xl font-black text-slate-900 uppercase tracking-wide">Transfer Certificate</h3>
-                <p className="text-xs font-bold text-slate-400 mt-1">TC No: {student.tcNumber || 'TC-' + new Date().getFullYear() + '-001'}</p>
+            <div ref={printRef} className="bg-white border-2 rounded-2xl p-6 shadow-sm" style={{ borderColor: accent }}>
+              <div className="text-center border-b-2 pb-5 mb-5 flex items-center gap-3 justify-center" style={{ borderColor: accent }}>
+                {logoUrl && (
+                  <img src={logoUrl} alt="School logo" className="w-14 h-14 object-contain shrink-0" crossOrigin="anonymous" />
+                )}
+                <div>
+                  <p className="text-xs font-black text-slate-400 uppercase tracking-widest mb-1">{schoolInfo.name || 'School Name'}</p>
+                  <h3 className="text-xl font-black uppercase tracking-wide" style={{ color: accent }}>Transfer Certificate</h3>
+                  <p className="text-xs font-bold text-slate-400 mt-1">TC No: {student.tcNumber || 'TC-' + new Date().getFullYear() + '-001'}</p>
+                </div>
               </div>
               <div className="space-y-4 text-sm">
                 <div className="grid grid-cols-2 gap-4">
@@ -382,8 +696,12 @@ export const ToolsManager: React.FC<Props> = ({ onBack }) => {
                 </div>
                 <div className="pt-5 border-t-2 border-slate-200 flex items-end justify-between">
                   <div>
-                    <p className="text-xs font-bold text-slate-500">Principal Signature</p>
-                    <div className="h-10 w-24 border-t border-slate-400 mt-4" />
+                    <div className="h-10 w-24 mb-1 flex items-end">
+                      {signatureUrl && (
+                        <img src={signatureUrl} alt="Principal signature" className="max-h-10 object-contain" crossOrigin="anonymous" />
+                      )}
+                    </div>
+                    <p className="text-xs font-bold text-slate-500 border-t border-slate-400 pt-1">Principal Signature</p>
                   </div>
                   <p className="text-xs font-bold text-slate-500">Date: {new Date().toLocaleDateString('en-IN')}</p>
                 </div>
@@ -426,78 +744,183 @@ export const ToolsManager: React.FC<Props> = ({ onBack }) => {
     );
   };
 
-  // ── ID CARD GENERATOR ─────────────────────────────────────────────────────
+  // ── ID CARD GENERATOR — single + bulk-by-class ────────────────────────────
   const IDCardGenerator = () => {
+    const [mode, setMode] = useState<'SINGLE' | 'BULK'>('BULK');
     const [picked, setPicked] = useState('');
+    const [pickedClass, setPickedClass] = useState('');
     const [preview, setPreview] = useState(false);
-    const printRef = useRef<HTMLDivElement>(null);
+    const [downloadingPdf, setDownloadingPdf] = useState(false);
+    // Per-card refs for bulk PDF generation — same pattern as admit cards.
+    const cardRefs = useRef<Array<HTMLDivElement | null>>([]);
     const { showToast } = useUIStore();
-    const student = students.find(s => s.id === picked);
+    const student = students.find(s => s.id === picked) ?? null;
 
-    const handleDownload = async () => {
-      if (!printRef.current || !student) return;
-      try { await downloadNodeAsPdf(printRef.current, `idcard-${student.admissionNo}.pdf`); }
-      catch (e) { showToast(e instanceof Error ? e.message : 'PDF export failed', 'error'); }
+    const accent = schoolInfo?.accentColor || '#4f46e5';
+    const logoUrl = schoolInfo?.logoPath ? schoolInfoService.getAssetUrl(schoolInfo.logoPath) : null;
+
+    // Unique class+section pairs from the roster.
+    const classes = React.useMemo(() => {
+      const set = new Map<string, { className: string; section: string }>();
+      for (const s of students) set.set(`${s.className}|${s.section}`, { className: s.className, section: s.section });
+      return Array.from(set.entries()).map(([k, v]) => ({ id: k, ...v }))
+        .sort((a, b) => `${a.className}-${a.section}`.localeCompare(`${b.className}-${b.section}`));
+    }, []);
+
+    const targetClassName = mode === 'SINGLE' ? student?.className : pickedClass.split('|')[0];
+    const targetSection   = mode === 'SINGLE' ? student?.section   : pickedClass.split('|')[1];
+
+    const printList: Student[] = mode === 'SINGLE'
+      ? (student ? [student] : [])
+      : students.filter(s => s.className === targetClassName && s.section === targetSection);
+
+    const handleDownloadAllPdf = async () => {
+      setDownloadingPdf(true);
+      try {
+        await new Promise(r => requestAnimationFrame(() => r(undefined)));
+        const nodes = cardRefs.current.filter((n): n is HTMLDivElement => !!n);
+        if (nodes.length === 0) {
+          throw new Error('Cards not ready yet — wait a moment and tap Download again.');
+        }
+        const filename = nodes.length === 1
+          ? `idcard-${printList[0]?.admissionNo ?? 'card'}.pdf`
+          : `idcards-${(targetClassName ?? 'class').replace(/\s+/g, '-')}-${targetSection ?? ''}.pdf`;
+        await downloadNodesAsPdf(nodes, filename);
+        showToast(`PDF saved · ${nodes.length} card${nodes.length > 1 ? 's' : ''}`);
+      } catch (e) {
+        console.error('[id-card] PDF export failed:', e);
+        showToast(e instanceof Error ? e.message : 'PDF export failed', 'error');
+      } finally {
+        setDownloadingPdf(false);
+      }
     };
 
-    if (preview && student && schoolInfo) {
+    if (preview && schoolInfo && printList.length > 0) {
+      cardRefs.current = cardRefs.current.slice(0, printList.length);
       return (
         <div className="w-full flex flex-col">
-          <ToolHeader title="ID Card" onBackPress={() => setPreview(false)} />
-          <div className="p-5 space-y-4">
-            <div ref={printRef} className="bg-gradient-to-br from-indigo-600 to-purple-700 rounded-2xl p-5 text-white max-w-xs mx-auto shadow-lg">
-              <div className="text-center mb-3">
-                <p className="text-[9px] font-black uppercase tracking-widest text-white/70">{schoolInfo.name || 'School Name'}</p>
-                <p className="text-[8px] font-bold text-white/50 mt-0.5">STUDENT IDENTITY CARD</p>
-              </div>
-              <div className="flex gap-4 items-start">
-                <div className="w-16 h-20 rounded-xl bg-white/20 flex items-center justify-center font-black text-2xl text-white shrink-0">
-                  {student.name.split(' ').map(w => w[0]).join('').slice(0, 2).toUpperCase()}
-                </div>
-                <div className="flex-1 min-w-0">
-                  <div className="font-black text-base leading-tight">{student.name}</div>
-                  <div className="text-[10px] font-bold text-white/70 mt-1">{student.className}-{student.section}</div>
-                  <div className="text-[10px] font-bold text-white/70">Roll: {student.rollNo}</div>
-                  <div className="text-[10px] font-bold text-white/60 mt-2 font-mono">{student.admissionNo}</div>
-                </div>
-              </div>
-              {student.fatherName && (
-                <div className="mt-3 pt-3 border-t border-white/20">
-                  <div className="text-[9px] font-bold text-white/50">Father: {student.fatherName}</div>
-                  {student.fatherPhone && <div className="text-[9px] font-bold text-white/50">Ph: {student.fatherPhone}</div>}
-                </div>
+          {/* Two-row toolbar — same mobile-friendly layout as admit cards. */}
+          <div className="no-print sticky top-0 bg-white px-4 py-3 border-b border-slate-100 z-10 space-y-2">
+            <div className="flex items-center gap-2">
+              <button onClick={() => setPreview(false)}
+                className="py-2 px-3 bg-slate-100 text-slate-700 font-black text-xs uppercase rounded-xl">
+                ← Back
+              </button>
+              <span className="py-2 px-3 bg-green-50 text-green-700 border border-green-200 font-black text-[11px] uppercase rounded-xl flex items-center gap-1.5">
+                {printList.length} Card{printList.length > 1 ? 's' : ''}
+              </span>
+              {targetClassName && (
+                <span className="py-2 px-3 bg-slate-50 text-slate-600 border border-slate-200 font-black text-[11px] uppercase rounded-xl ml-auto truncate">
+                  {targetClassName}{targetSection ? `-${targetSection}` : ''}
+                </span>
               )}
             </div>
-            <div className="grid grid-cols-2 gap-3">
-              <button onClick={printCurrentPage} className="flex items-center justify-center gap-2 bg-indigo-600 hover:bg-indigo-700 text-white font-black text-sm uppercase py-3 rounded-2xl active:scale-95 transition-all">
-                <Printer size={16} /> Print
+            <div className="flex gap-2">
+              <button onClick={handleDownloadAllPdf} disabled={downloadingPdf}
+                className="flex-1 py-2.5 bg-emerald-600 hover:bg-emerald-700 text-white font-black text-xs uppercase rounded-xl flex items-center justify-center gap-1.5 disabled:opacity-60 active:scale-[0.98] transition-transform">
+                <Download size={13} /> {downloadingPdf ? 'Saving PDF…' : 'Download PDF'}
               </button>
-              <button onClick={handleDownload} className="flex items-center justify-center gap-2 bg-slate-100 hover:bg-slate-200 text-slate-700 font-black text-sm uppercase py-3 rounded-2xl active:scale-95 transition-all">
-                <Download size={16} /> Download PDF
+              <button onClick={() => window.print()}
+                className="flex-1 py-2.5 bg-rose-600 hover:bg-rose-700 text-white font-black text-xs uppercase rounded-xl flex items-center justify-center gap-1.5 active:scale-[0.98] transition-transform">
+                <Printer size={13} /> Print
               </button>
             </div>
+          </div>
+
+          <div className="printable bg-white">
+            {printList.map((s, idx) => (
+              <div key={s.id} className="print-page p-6 font-sans">
+                <div ref={el => { cardRefs.current[idx] = el; }}
+                  className="rounded-2xl p-5 text-white max-w-xs mx-auto shadow-lg"
+                  style={{ background: `linear-gradient(135deg, ${accent} 0%, ${accent}cc 100%)` }}>
+                  <div className="text-center mb-3 flex items-center gap-2 justify-center">
+                    {logoUrl && (
+                      <img src={logoUrl} alt="Logo" className="w-8 h-8 object-contain" crossOrigin="anonymous" />
+                    )}
+                    <div>
+                      <p className="text-[10px] font-black uppercase tracking-widest text-white">{schoolInfo.name || 'School Name'}</p>
+                      <p className="text-[8px] font-bold text-white/70 mt-0.5">STUDENT IDENTITY CARD</p>
+                    </div>
+                  </div>
+                  <div className="flex gap-4 items-start">
+                    <div className="w-16 h-20 rounded-xl bg-white/20 flex items-center justify-center font-black text-2xl text-white shrink-0">
+                      {s.name.split(' ').map(w => w[0]).join('').slice(0, 2).toUpperCase()}
+                    </div>
+                    <div className="flex-1 min-w-0">
+                      <div className="font-black text-base leading-tight">{s.name}</div>
+                      <div className="text-[10px] font-bold text-white/70 mt-1">{s.className}-{s.section}</div>
+                      <div className="text-[10px] font-bold text-white/70">Roll: {s.rollNo || '—'}</div>
+                      <div className="text-[10px] font-bold text-white/60 mt-2 font-mono">{s.admissionNo}</div>
+                    </div>
+                  </div>
+                  {s.fatherName && (
+                    <div className="mt-3 pt-3 border-t border-white/20">
+                      <div className="text-[9px] font-bold text-white/50">Father: {s.fatherName}</div>
+                      {s.fatherPhone && <div className="text-[9px] font-bold text-white/50">Ph: {s.fatherPhone}</div>}
+                    </div>
+                  )}
+                </div>
+              </div>
+            ))}
           </div>
         </div>
       );
     }
 
+    const canPreview = mode === 'SINGLE' ? !!student : printList.length > 0;
+
     return (
       <div className="w-full flex flex-col">
         <ToolHeader title="ID Cards" onBackPress={() => setView('DASHBOARD')} />
-        <div className="p-5 space-y-4">
+        <div className="p-5 space-y-4 lg:max-w-2xl lg:mx-auto lg:w-full">
           <div className="bg-green-50 border border-green-200 rounded-2xl p-4 flex items-start gap-3">
             <IdCard size={20} className="text-green-600 shrink-0 mt-0.5" />
             <div>
-              <p className="font-black text-green-900 text-sm">Student ID Card</p>
-              <p className="text-xs font-bold text-green-700 mt-0.5">Generate official ID card for student</p>
+              <p className="font-black text-green-900 text-sm">Student ID Cards</p>
+              <p className="text-xs font-bold text-green-700 mt-0.5">
+                Pick a class for bulk printing or one student — all cards inherit your branding.
+              </p>
             </div>
           </div>
-          <StudentPicker value={picked} onChange={setPicked} />
-          {student && <SelectedCard student={student} />}
-          {picked && (
+
+          {/* Mode toggle — bulk default. */}
+          <div className="flex gap-2 bg-slate-100 p-1 rounded-2xl">
+            <button onClick={() => { setMode('BULK'); setPicked(''); }}
+              className={`flex-1 py-2.5 rounded-xl text-xs font-black uppercase tracking-widest transition-colors ${mode === 'BULK' ? 'bg-white text-green-700 shadow-sm' : 'text-slate-500'}`}>
+              Bulk by Class
+            </button>
+            <button onClick={() => { setMode('SINGLE'); setPickedClass(''); }}
+              className={`flex-1 py-2.5 rounded-xl text-xs font-black uppercase tracking-widest transition-colors ${mode === 'SINGLE' ? 'bg-white text-green-700 shadow-sm' : 'text-slate-500'}`}>
+              Single Student
+            </button>
+          </div>
+
+          {mode === 'BULK' ? (
+            <div>
+              <label className="text-xs font-black uppercase tracking-widest text-slate-400 mb-2 block">Select Class</label>
+              <select value={pickedClass} onChange={e => setPickedClass(e.target.value)}
+                className="w-full border border-slate-200 bg-white rounded-xl px-4 py-3 font-bold text-sm outline-none focus:border-green-400">
+                <option value="">Class chunein…</option>
+                {classes.map(c => {
+                  const count = students.filter(s => s.className === c.className && s.section === c.section).length;
+                  return <option key={c.id} value={c.id}>{c.className}-{c.section} · {count} students</option>;
+                })}
+              </select>
+              {pickedClass && printList.length > 0 && (
+                <p className="text-[10px] font-bold text-slate-500 mt-1.5">{printList.length} ID card{printList.length > 1 ? 's' : ''} will be generated</p>
+              )}
+            </div>
+          ) : (
+            <>
+              <StudentPicker value={picked} onChange={setPicked} />
+              {student && <SelectedCard student={student} />}
+            </>
+          )}
+
+          {canPreview && (
             <button onClick={() => setPreview(true)}
               className="w-full flex items-center justify-center gap-2 bg-green-600 text-white font-black text-sm uppercase py-4 rounded-2xl active:scale-95 transition-transform shadow-md">
-              <Eye size={16} /> Preview ID Card
+              <Eye size={16} /> Preview {printList.length > 1 ? `${printList.length} ID Cards` : 'ID Card'}
             </button>
           )}
         </div>
@@ -513,6 +936,9 @@ export const ToolsManager: React.FC<Props> = ({ onBack }) => {
     const printRef = useRef<HTMLDivElement>(null);
     const { showToast } = useUIStore();
     const student = students.find(s => s.id === picked);
+    const accent = schoolInfo?.accentColor || '#4f46e5';
+    const logoUrl = schoolInfo?.logoPath ? schoolInfoService.getAssetUrl(schoolInfo.logoPath) : null;
+    const signatureUrl = schoolInfo?.principalSignaturePath ? schoolInfoService.getAssetUrl(schoolInfo.principalSignaturePath) : null;
 
     const handleDownload = async () => {
       if (!printRef.current || !student) return;
@@ -525,10 +951,15 @@ export const ToolsManager: React.FC<Props> = ({ onBack }) => {
         <div className="w-full flex flex-col">
           <ToolHeader title="Bonafide Certificate" onBackPress={() => setPreview(false)} />
           <div className="p-5">
-            <div ref={printRef} className="bg-white border-2 border-slate-300 rounded-2xl p-6 shadow-sm">
-              <div className="text-center pb-5 mb-5 border-b-2 border-slate-200">
-                <p className="text-xs font-black text-slate-500 uppercase tracking-widest">{schoolInfo.name || 'School Name'}</p>
-                <h3 className="text-xl font-black text-slate-900 mt-1 uppercase tracking-wide">Bonafide Certificate</h3>
+            <div ref={printRef} className="bg-white border-2 rounded-2xl p-6 shadow-sm" style={{ borderColor: accent }}>
+              <div className="text-center pb-5 mb-5 border-b-2 flex items-center gap-3 justify-center" style={{ borderColor: accent }}>
+                {logoUrl && (
+                  <img src={logoUrl} alt="School logo" className="w-14 h-14 object-contain shrink-0" crossOrigin="anonymous" />
+                )}
+                <div>
+                  <p className="text-xs font-black text-slate-500 uppercase tracking-widest">{schoolInfo.name || 'School Name'}</p>
+                  <h3 className="text-xl font-black mt-1 uppercase tracking-wide" style={{ color: accent }}>Bonafide Certificate</h3>
+                </div>
               </div>
               <p className="text-sm font-bold text-slate-700 leading-relaxed text-justify">
                 This is to certify that <strong>{student.name}</strong>, son/daughter of <strong>{student.fatherName || '___'}</strong>,
@@ -537,8 +968,12 @@ export const ToolsManager: React.FC<Props> = ({ onBack }) => {
               </p>
               <div className="pt-6 mt-6 border-t-2 border-slate-200 flex items-end justify-between">
                 <div>
-                  <p className="text-xs font-bold text-slate-500">Principal Signature & Seal</p>
-                  <div className="h-10 w-24 border-t border-slate-400 mt-4" />
+                  <div className="h-10 w-24 mb-1 flex items-end">
+                    {signatureUrl && (
+                      <img src={signatureUrl} alt="Principal signature" className="max-h-10 object-contain" crossOrigin="anonymous" />
+                    )}
+                  </div>
+                  <p className="text-xs font-bold text-slate-500 border-t border-slate-400 pt-1">Principal Signature &amp; Seal</p>
                 </div>
                 <p className="text-xs font-bold text-slate-500">Date: {new Date().toLocaleDateString('en-IN')}</p>
               </div>
@@ -600,6 +1035,13 @@ export const ToolsManager: React.FC<Props> = ({ onBack }) => {
     const { showToast: msToast } = useUIStore();
 
     const student = students.find(s => s.id === picked) ?? null;
+
+    // Branding — logo + signature embedded into the printed marksheet,
+    // accent color used for the header rule + title. Defaults so the
+    // doc still looks finished when branding hasn't been configured.
+    const accent = schoolInfo?.accentColor || '#0f172a';
+    const logoUrl = schoolInfo?.logoPath ? schoolInfoService.getAssetUrl(schoolInfo.logoPath) : null;
+    const signatureUrl = schoolInfo?.principalSignaturePath ? schoolInfoService.getAssetUrl(schoolInfo.principalSignaturePath) : null;
 
     const handleDownload = async () => {
       if (!printRef.current || !student) return;
@@ -674,16 +1116,21 @@ export const ToolsManager: React.FC<Props> = ({ onBack }) => {
 
           {/* ── Printable marksheet ── */}
           <div ref={printRef} className="p-6 bg-white min-h-screen font-sans">
-            {/* School header */}
-            <div className="text-center border-b-2 border-slate-800 pb-4 mb-4">
-              <div className="text-xl font-black text-slate-900 uppercase tracking-wide">
-                {schoolInfo?.name ?? 'EduGrow School'}
-              </div>
-              {schoolInfo?.address && (
-                <div className="text-[10px] font-bold text-slate-500 mt-0.5">{schoolInfo.address}</div>
+            {/* School header — accent + logo from school branding. */}
+            <div className="border-b-2 pb-4 mb-4 flex items-center gap-3 justify-center" style={{ borderColor: accent }}>
+              {logoUrl && (
+                <img src={logoUrl} alt="School logo" className="w-14 h-14 object-contain shrink-0" crossOrigin="anonymous" />
               )}
-              <div className="text-sm font-black text-slate-700 mt-2 uppercase tracking-widest">
-                Academic Marksheet
+              <div className="text-center">
+                <div className="text-xl font-black text-slate-900 uppercase tracking-wide">
+                  {schoolInfo?.name ?? 'EduGrow School'}
+                </div>
+                {schoolInfo?.address && (
+                  <div className="text-[10px] font-bold text-slate-500 mt-0.5">{schoolInfo.address}</div>
+                )}
+                <div className="text-sm font-black mt-2 uppercase tracking-widest" style={{ color: accent }}>
+                  Academic Marksheet
+                </div>
               </div>
             </div>
 
@@ -751,10 +1198,16 @@ export const ToolsManager: React.FC<Props> = ({ onBack }) => {
               {passed ? '✓ PASS' : '✗ FAIL'} — {pct}% ({totalObtained}/{totalMax})
             </div>
 
-            {/* Signature strip */}
+            {/* Signature strip — Principal slot embeds the uploaded
+                signature image when configured. */}
             <div className="grid grid-cols-3 gap-4 mt-8 pt-4 border-t border-slate-200">
-              {['Class Teacher', 'Parent / Guardian', 'Principal'].map(label => (
+              {(['Class Teacher', 'Parent / Guardian', 'Principal'] as const).map(label => (
                 <div key={label} className="text-center">
+                  <div className="h-10 mb-1 flex items-end justify-center">
+                    {label === 'Principal' && signatureUrl && (
+                      <img src={signatureUrl} alt="Principal signature" className="max-h-10 max-w-full object-contain" crossOrigin="anonymous" />
+                    )}
+                  </div>
                   <div className="border-t-2 border-slate-300 pt-2 text-[10px] font-bold text-slate-400">{label}</div>
                 </div>
               ))}
@@ -895,8 +1348,17 @@ export const ToolsManager: React.FC<Props> = ({ onBack }) => {
     const handleDownloadAllPdf = async () => {
       setDownloadingPdf(true);
       try {
+        // Yield one paint frame so any layout pending from the click
+        // (sticky toolbar, button state) settles BEFORE html2canvas walks
+        // the DOM. Earlier the export occasionally captured a half-styled
+        // first card on the very first click and the user just saw the
+        // PDF "fail to download" with no obvious reason.
+        await new Promise(r => requestAnimationFrame(() => r(undefined)));
+
         const nodes = cardRefs.current.filter((n): n is HTMLDivElement => !!n);
-        if (nodes.length === 0) throw new Error('Nothing to export');
+        if (nodes.length === 0) {
+          throw new Error('Cards not ready yet — wait a moment and tap Download again.');
+        }
         const filename = nodes.length === 1
           ? `admit-card-${printList[0]?.admissionNo ?? 'card'}.pdf`
           : `admit-cards-${(targetClassName ?? 'class').replace(/\s+/g, '-')}-${targetSection ?? ''}.pdf`;
@@ -951,6 +1413,13 @@ export const ToolsManager: React.FC<Props> = ({ onBack }) => {
 
     const cleanInstructions = instructions.split(/\r?\n/).map(s => s.trim()).filter(Boolean);
 
+    // Branding assets — resolved once so the URL is stable across the
+    // bulk render (avoid recomputing per card and triggering N image loads
+    // for the same asset).
+    const accent = schoolInfo?.accentColor || '#9f1239'; // fallback to rose
+    const logoUrl = schoolInfo?.logoPath ? schoolInfoService.getAssetUrl(schoolInfo.logoPath) : null;
+    const signatureUrl = schoolInfo?.principalSignaturePath ? schoolInfoService.getAssetUrl(schoolInfo.principalSignaturePath) : null;
+
     // Students to print admit cards for
     const printList: Student[] = mode === 'SINGLE'
       ? (student ? [student] : [])
@@ -961,22 +1430,37 @@ export const ToolsManager: React.FC<Props> = ({ onBack }) => {
       cardRefs.current = cardRefs.current.slice(0, printList.length);
       return (
         <div className="w-full flex flex-col">
-          <div className="no-print sticky top-0 bg-white px-4 py-3 border-b border-slate-100 flex gap-2 z-10">
-            <button onClick={() => setShowPrint(false)}
-              className="py-2.5 px-4 bg-slate-100 text-slate-700 font-black text-xs uppercase rounded-xl">
-              ← Back
-            </button>
-            <span className="py-2.5 px-3 bg-rose-50 text-rose-700 border border-rose-200 font-black text-xs uppercase rounded-xl flex items-center justify-center gap-1.5">
-              {printList.length} Card{printList.length > 1 ? 's' : ''}
-            </span>
-            <button onClick={handleDownloadAllPdf} disabled={downloadingPdf}
-              className="flex-1 py-2.5 bg-emerald-600 hover:bg-emerald-700 text-white font-black text-xs uppercase rounded-xl flex items-center justify-center gap-1.5 disabled:opacity-60">
-              <Download size={13} /> {downloadingPdf ? 'Saving…' : 'Download PDF'}
-            </button>
-            <button onClick={() => window.print()}
-              className="flex-1 py-2.5 bg-rose-600 hover:bg-rose-700 text-white font-black text-xs uppercase rounded-xl flex items-center justify-center gap-1.5">
-              <Printer size={13} /> Print
-            </button>
+          {/* Two-row toolbar so on mobile every action is visible. Top row =
+              Back + count chip; bottom row = Download + Print, each
+              flex-1 so they stay full-width and tap-friendly. Earlier the
+              4 buttons crammed onto one row got cut off the right edge on
+              phones — the user couldn't see Download PDF and assumed
+              "nothing happens, goes back". */}
+          <div className="no-print sticky top-0 bg-white px-4 py-3 border-b border-slate-100 z-10 space-y-2">
+            <div className="flex items-center gap-2">
+              <button onClick={() => setShowPrint(false)}
+                className="py-2 px-3 bg-slate-100 text-slate-700 font-black text-xs uppercase rounded-xl">
+                ← Back
+              </button>
+              <span className="py-2 px-3 bg-rose-50 text-rose-700 border border-rose-200 font-black text-[11px] uppercase rounded-xl flex items-center gap-1.5">
+                {printList.length} Card{printList.length > 1 ? 's' : ''}
+              </span>
+              {targetClassName && (
+                <span className="py-2 px-3 bg-slate-50 text-slate-600 border border-slate-200 font-black text-[11px] uppercase rounded-xl ml-auto truncate">
+                  {targetClassName}{targetSection ? `-${targetSection}` : ''}
+                </span>
+              )}
+            </div>
+            <div className="flex gap-2">
+              <button onClick={handleDownloadAllPdf} disabled={downloadingPdf}
+                className="flex-1 py-2.5 bg-emerald-600 hover:bg-emerald-700 text-white font-black text-xs uppercase rounded-xl flex items-center justify-center gap-1.5 disabled:opacity-60 active:scale-[0.98] transition-transform">
+                <Download size={13} /> {downloadingPdf ? 'Saving PDF…' : 'Download PDF'}
+              </button>
+              <button onClick={() => window.print()}
+                className="flex-1 py-2.5 bg-rose-600 hover:bg-rose-700 text-white font-black text-xs uppercase rounded-xl flex items-center justify-center gap-1.5 active:scale-[0.98] transition-transform">
+                <Printer size={13} /> Print
+              </button>
+            </div>
           </div>
 
           {/* Printable admit cards — one per page (printable class hides app shell) */}
@@ -984,22 +1468,28 @@ export const ToolsManager: React.FC<Props> = ({ onBack }) => {
             {printList.map((s, idx) => (
               <div key={s.id} className="print-page p-6 font-sans">
                 <div ref={el => { cardRefs.current[idx] = el; }}
-                  className="border-4 border-double border-slate-800 rounded-2xl p-5 max-w-md mx-auto space-y-4">
-                  <div className="text-center border-b-2 border-slate-200 pb-3">
-                    <div className="text-base font-black text-slate-900 uppercase tracking-wide">
-                      {schoolInfo?.name ?? 'EduGrow School'}
-                    </div>
-                    {schoolInfo?.address && (
-                      <div className="text-[10px] font-bold text-slate-500 mt-0.5">{schoolInfo.address}</div>
+                  className="border-4 border-double rounded-2xl p-5 max-w-md mx-auto space-y-4"
+                  style={{ borderColor: accent }}>
+                  <div className="text-center border-b-2 border-slate-200 pb-3 flex items-center gap-3 justify-center">
+                    {logoUrl && (
+                      <img src={logoUrl} alt="School logo" className="w-12 h-12 object-contain shrink-0" crossOrigin="anonymous" />
                     )}
-                    <div className="text-sm font-black text-rose-700 mt-2 uppercase tracking-widest">
-                      Admit Card / प्रवेश पत्र
+                    <div className="min-w-0">
+                      <div className="text-base font-black text-slate-900 uppercase tracking-wide">
+                        {schoolInfo?.name ?? 'EduGrow School'}
+                      </div>
+                      {schoolInfo?.address && (
+                        <div className="text-[10px] font-bold text-slate-500 mt-0.5">{schoolInfo.address}</div>
+                      )}
+                      <div className="text-sm font-black mt-2 uppercase tracking-widest" style={{ color: accent }}>
+                        Admit Card / प्रवेश पत्र
+                      </div>
                     </div>
                   </div>
 
-                  <div className="bg-rose-50 border border-rose-200 rounded-xl p-3 text-center">
-                    <div className="text-sm font-black text-rose-900 uppercase">{pickedExam.title}</div>
-                    <div className="text-[10px] font-bold text-rose-600 mt-0.5">
+                  <div className="rounded-xl p-3 text-center" style={{ backgroundColor: `${accent}15`, border: `1px solid ${accent}40` }}>
+                    <div className="text-sm font-black uppercase" style={{ color: accent }}>{pickedExam.title}</div>
+                    <div className="text-[10px] font-bold mt-0.5" style={{ color: accent, opacity: 0.85 }}>
                       {pickedExam.test_type} · {pickedExam.subject}
                     </div>
                   </div>
@@ -1045,9 +1535,15 @@ export const ToolsManager: React.FC<Props> = ({ onBack }) => {
 
                   <div className="grid grid-cols-2 gap-4 pt-3 border-t border-slate-200">
                     <div className="text-center">
+                      <div className="h-10 mb-1" />
                       <div className="border-t-2 border-slate-300 pt-2 text-[9px] font-bold text-slate-400 uppercase">Student Signature</div>
                     </div>
                     <div className="text-center">
+                      <div className="h-10 mb-1 flex items-end justify-center">
+                        {signatureUrl && (
+                          <img src={signatureUrl} alt="Principal signature" className="max-h-10 max-w-full object-contain" crossOrigin="anonymous" />
+                        )}
+                      </div>
                       <div className="border-t-2 border-slate-300 pt-2 text-[9px] font-bold text-slate-400 uppercase">Principal Seal &amp; Sign</div>
                     </div>
                   </div>
@@ -1283,155 +1779,348 @@ export const ToolsManager: React.FC<Props> = ({ onBack }) => {
     );
   }
 
+  // ── BRANDING TOOL — school identity for documents ────────────────────────
+  // Logo, principal signature, accent color. All three feed into the printed
+  // admit cards / ID cards / marksheets. Empty values fall back to the
+  // existing default theme so nothing breaks for schools that haven't set
+  // up branding yet.
+  const BrandingTool = () => {
+    const { showToast } = useUIStore();
+    const [draft, setDraft] = useState<SchoolInfo | null>(schoolInfo);
+    const [busy, setBusy] = useState<'logo' | 'sig' | 'save' | null>(null);
+
+    React.useEffect(() => { setDraft(schoolInfo); }, []);
+    if (!draft) {
+      return (
+        <div className="w-full flex flex-col">
+          <ToolHeader title="Branding" onBackPress={() => setView('DASHBOARD')} />
+          <div className="p-5 text-center text-sm font-bold text-slate-400">Loading…</div>
+        </div>
+      );
+    }
+
+    const logoUrl = schoolInfoService.getAssetUrl(draft.logoPath);
+    const sigUrl  = schoolInfoService.getAssetUrl(draft.principalSignaturePath);
+
+    const handleUpload = async (file: File, kind: 'logo' | 'sig') => {
+      setBusy(kind);
+      try {
+        const path = kind === 'logo'
+          ? await schoolInfoService.uploadLogo(file)
+          : await schoolInfoService.uploadPrincipalSignature(file);
+        const fresh = await schoolInfoService.save(
+          kind === 'logo' ? { logoPath: path } : { principalSignaturePath: path }
+        );
+        setDraft(fresh);
+        setSchoolInfo(fresh);
+        showToast(kind === 'logo' ? 'Logo uploaded' : 'Signature uploaded');
+      } catch (e) {
+        showToast(e instanceof Error ? e.message : 'Upload failed', 'error');
+      } finally {
+        setBusy(null);
+      }
+    };
+
+    const handleClear = async (kind: 'logo' | 'sig') => {
+      try {
+        const fresh = await schoolInfoService.save(
+          kind === 'logo' ? { logoPath: '' } : { principalSignaturePath: '' }
+        );
+        setDraft(fresh);
+        setSchoolInfo(fresh);
+        showToast('Removed');
+      } catch (e) {
+        showToast(e instanceof Error ? e.message : 'Could not remove', 'error');
+      }
+    };
+
+    const handleAccentSave = async (hex: string) => {
+      setBusy('save');
+      try {
+        const fresh = await schoolInfoService.save({ accentColor: hex });
+        setDraft(fresh);
+        setSchoolInfo(fresh);
+        showToast(hex ? `Accent set to ${hex}` : 'Accent cleared');
+      } catch (e) {
+        showToast(e instanceof Error ? e.message : 'Save failed', 'error');
+      } finally {
+        setBusy(null);
+      }
+    };
+
+    return (
+      <div className="w-full flex flex-col">
+        <ToolHeader title="Branding" onBackPress={() => setView('DASHBOARD')} />
+        <div className="p-5 lg:p-6 space-y-5 lg:max-w-2xl lg:mx-auto lg:w-full">
+          <div className="bg-blue-50 border border-blue-200 rounded-2xl p-4 flex items-start gap-3">
+            <Sparkles size={18} className="text-blue-600 shrink-0 mt-0.5" />
+            <div>
+              <p className="font-black text-blue-900 text-sm">School Branding</p>
+              <p className="text-xs font-bold text-blue-700 mt-0.5">
+                Logo, signature, accent color — show up on every printed admit card, ID card, and marksheet.
+              </p>
+            </div>
+          </div>
+
+          {/* Logo card */}
+          <div className="bg-white border border-slate-200 rounded-2xl p-4 space-y-3">
+            <div className="flex items-center justify-between gap-2">
+              <div>
+                <p className="text-xs font-black uppercase tracking-widest text-slate-700">School Logo</p>
+                <p className="text-[10px] font-bold text-slate-400 mt-0.5">PNG / JPG · max 4 MB · square recommended</p>
+              </div>
+              {draft.logoPath && (
+                <button onClick={() => handleClear('logo')}
+                  className="text-[10px] font-black text-rose-600 px-2 py-1 hover:bg-rose-50 rounded-md">
+                  Remove
+                </button>
+              )}
+            </div>
+            <div className="flex items-center gap-4">
+              <div className="w-24 h-24 rounded-xl border-2 border-dashed border-slate-200 flex items-center justify-center overflow-hidden bg-slate-50 shrink-0">
+                {logoUrl ? (
+                  <img src={logoUrl} alt="School logo" className="w-full h-full object-contain" />
+                ) : (
+                  <span className="text-[10px] font-bold text-slate-400 text-center">No logo</span>
+                )}
+              </div>
+              <div className="flex-1">
+                <input id="logo-input" type="file" accept="image/*" className="hidden"
+                  onChange={async e => {
+                    const f = e.target.files?.[0];
+                    e.target.value = '';
+                    if (f) await handleUpload(f, 'logo');
+                  }} />
+                <label htmlFor="logo-input"
+                  className={`block w-full py-2.5 text-center bg-blue-600 text-white font-black text-xs uppercase tracking-wider rounded-xl cursor-pointer hover:bg-blue-700 transition-colors ${busy === 'logo' ? 'opacity-60 pointer-events-none' : ''}`}>
+                  {busy === 'logo' ? 'Uploading…' : draft.logoPath ? 'Replace Logo' : 'Upload Logo'}
+                </label>
+              </div>
+            </div>
+          </div>
+
+          {/* Principal signature card */}
+          <div className="bg-white border border-slate-200 rounded-2xl p-4 space-y-3">
+            <div className="flex items-center justify-between gap-2">
+              <div>
+                <p className="text-xs font-black uppercase tracking-widest text-slate-700">Principal Signature</p>
+                <p className="text-[10px] font-bold text-slate-400 mt-0.5">PNG with transparent background looks cleanest</p>
+              </div>
+              {draft.principalSignaturePath && (
+                <button onClick={() => handleClear('sig')}
+                  className="text-[10px] font-black text-rose-600 px-2 py-1 hover:bg-rose-50 rounded-md">
+                  Remove
+                </button>
+              )}
+            </div>
+            <div className="flex items-center gap-4">
+              <div className="w-32 h-16 rounded-xl border-2 border-dashed border-slate-200 flex items-center justify-center overflow-hidden bg-slate-50 shrink-0">
+                {sigUrl ? (
+                  <img src={sigUrl} alt="Signature" className="w-full h-full object-contain" />
+                ) : (
+                  <span className="text-[10px] font-bold text-slate-400">No signature</span>
+                )}
+              </div>
+              <div className="flex-1">
+                <input id="sig-input" type="file" accept="image/*" className="hidden"
+                  onChange={async e => {
+                    const f = e.target.files?.[0];
+                    e.target.value = '';
+                    if (f) await handleUpload(f, 'sig');
+                  }} />
+                <label htmlFor="sig-input"
+                  className={`block w-full py-2.5 text-center bg-blue-600 text-white font-black text-xs uppercase tracking-wider rounded-xl cursor-pointer hover:bg-blue-700 transition-colors ${busy === 'sig' ? 'opacity-60 pointer-events-none' : ''}`}>
+                  {busy === 'sig' ? 'Uploading…' : draft.principalSignaturePath ? 'Replace Signature' : 'Upload Signature'}
+                </label>
+              </div>
+            </div>
+          </div>
+
+          {/* Accent color card */}
+          <div className="bg-white border border-slate-200 rounded-2xl p-4 space-y-3">
+            <div>
+              <p className="text-xs font-black uppercase tracking-widest text-slate-700">Accent Color</p>
+              <p className="text-[10px] font-bold text-slate-400 mt-0.5">
+                Used as the highlight color on document borders and headers.
+              </p>
+            </div>
+            <div className="grid grid-cols-3 sm:grid-cols-6 gap-2">
+              {[
+                { name: 'Indigo',  hex: '#4f46e5' },
+                { name: 'Blue',    hex: '#2563eb' },
+                { name: 'Emerald', hex: '#059669' },
+                { name: 'Rose',    hex: '#e11d48' },
+                { name: 'Amber',   hex: '#d97706' },
+                { name: 'Slate',   hex: '#475569' },
+              ].map(opt => {
+                const active = (draft.accentColor || '').toLowerCase() === opt.hex;
+                return (
+                  <button key={opt.hex}
+                    onClick={() => handleAccentSave(opt.hex)}
+                    disabled={busy === 'save'}
+                    className={`flex flex-col items-center gap-1 p-2 rounded-xl border-2 transition-all ${active ? 'border-slate-900' : 'border-slate-200 hover:border-slate-300'}`}>
+                    <div className="w-8 h-8 rounded-full" style={{ backgroundColor: opt.hex }} />
+                    <span className="text-[9px] font-black text-slate-600 uppercase tracking-wider">{opt.name}</span>
+                  </button>
+                );
+              })}
+            </div>
+            <div className="flex items-center gap-2">
+              <input
+                type="color"
+                value={draft.accentColor || '#4f46e5'}
+                onChange={e => setDraft({ ...draft, accentColor: e.target.value })}
+                className="w-12 h-10 rounded-lg border border-slate-200 cursor-pointer"
+              />
+              <input
+                type="text" value={draft.accentColor}
+                onChange={e => setDraft({ ...draft, accentColor: e.target.value })}
+                placeholder="#4f46e5"
+                className="flex-1 border border-slate-200 rounded-xl px-3 py-2 font-black text-sm tabular-nums outline-none focus:border-blue-500"
+              />
+              <button
+                onClick={() => handleAccentSave(draft.accentColor)}
+                disabled={busy === 'save'}
+                className="px-4 py-2 bg-slate-900 text-white font-black text-xs uppercase rounded-xl disabled:opacity-50">
+                {busy === 'save' ? '…' : 'Save'}
+              </button>
+              {draft.accentColor && (
+                <button onClick={() => handleAccentSave('')}
+                  className="px-3 py-2 bg-slate-100 text-slate-600 font-black text-xs uppercase rounded-xl">
+                  Clear
+                </button>
+              )}
+            </div>
+          </div>
+
+          <p className="text-center text-[10px] font-bold text-slate-400">
+            Branding shows up on Admit Cards, ID Cards, Marksheets, Bonafide, and Transfer Certificates.
+          </p>
+        </div>
+      </div>
+    );
+  };
+
   if (view === 'ADMISSION') return <AdmissionFormTool />;
   if (view === 'PAPERS')    return <QuestionPaperGenerator />;
   if (view === 'TC')        return <TCGenerator />;
   if (view === 'IDCARD')    return <IDCardGenerator />;
   if (view === 'BONAFIDE')  return <BonafideGenerator />;
   if (view === 'MARKSHEET') return <MarksheetTool />;
+  if (view === 'BRANDING')  return <BrandingTool />;
 
   if (view === 'ADMIT') return <AdmitCardTool />;
 
   // ── MAIN DASHBOARD ────────────────────────────────────────────────────────
-  const TOOLS = [
+  // Tools grouped by intent so the dashboard reads top-to-bottom as
+  // "Identity & Records" → "Academic" → "AI". Earlier the 7 tools sat in
+  // one flat 7-pastel grid — visually busy and impossible to scan. Each
+  // group now uses a single accent color; the card itself stays neutral
+  // white so the dashboard feels designed, not chaotic.
+  type ToolDef = { icon: typeof Sparkles; label: string; desc: string; view: ToolView };
+  const TOOL_GROUPS: Array<{ label: string; iconBg: string; rail: string; tools: ToolDef[] }> = [
     {
-      icon: ClipboardList,
-      label: 'Admission Form',
-      desc: 'Generate & print admission form',
-      view: 'ADMISSION' as ToolView,
-      card: 'bg-teal-50 border-teal-200',
-      icon_: 'text-teal-600 bg-teal-100',
+      label: 'Identity & Records',
+      iconBg: 'bg-blue-50 text-blue-600',
+      rail:   'bg-blue-500',
+      tools: [
+        { icon: ClipboardList, label: 'Admission Form', desc: 'New admission form', view: 'ADMISSION' },
+        { icon: IdCard,        label: 'ID Cards',       desc: 'Student ID cards',   view: 'IDCARD' },
+        { icon: FileCheck,     label: 'Transfer Cert',  desc: 'TC for a student',   view: 'TC' },
+        { icon: BadgeCheck,    label: 'Bonafide',       desc: 'Bonafide cert',      view: 'BONAFIDE' },
+      ],
     },
     {
-      icon: FileCheck,
-      label: 'Transfer Cert',
-      desc: 'Generate TC for a student',
-      view: 'TC' as ToolView,
-      card: 'bg-blue-50 border-blue-200',
-      icon_: 'text-blue-600 bg-blue-100',
+      label: 'Academic',
+      iconBg: 'bg-emerald-50 text-emerald-600',
+      rail:   'bg-emerald-500',
+      tools: [
+        { icon: Award,  label: 'Marksheets',  desc: 'Subject-wise marksheet',  view: 'MARKSHEET' },
+        { icon: Ticket, label: 'Admit Cards', desc: 'Class-wise admit cards', view: 'ADMIT' },
+      ],
     },
     {
-      icon: IdCard,
-      label: 'ID Cards',
-      desc: 'Print official ID cards',
-      view: 'IDCARD' as ToolView,
-      card: 'bg-green-50 border-green-200',
-      icon_: 'text-green-600 bg-green-100',
+      label: 'AI & Smart Tools',
+      iconBg: 'bg-violet-50 text-violet-600',
+      rail:   'bg-violet-500',
+      tools: [
+        { icon: Sparkles, label: 'AI Question Paper', desc: 'Auto-generate test paper', view: 'PAPERS' },
+      ],
     },
     {
-      icon: Award,
-      label: 'Marksheets',
-      desc: 'Generate academic marksheets',
-      view: 'MARKSHEET' as ToolView,
-      card: 'bg-amber-50 border-amber-200',
-      icon_: 'text-amber-600 bg-amber-100',
-    },
-    {
-      icon: Ticket,
-      label: 'Admit Cards',
-      desc: 'Generate exam admit cards',
-      view: 'ADMIT' as ToolView,
-      card: 'bg-rose-50 border-rose-200',
-      icon_: 'text-rose-600 bg-rose-100',
-    },
-    {
-      icon: BadgeCheck,
-      label: 'Bonafide',
-      desc: 'Issue bonafide certificates',
-      view: 'BONAFIDE' as ToolView,
-      card: 'bg-indigo-50 border-indigo-200',
-      icon_: 'text-indigo-600 bg-indigo-100',
-    },
-    {
-      icon: Sparkles,
-      label: 'AI Papers',
-      desc: 'AI question paper generator',
-      view: 'PAPERS' as ToolView,
-      card: 'bg-purple-50 border-purple-200',
-      icon_: 'text-purple-600 bg-purple-100',
+      label: 'Setup',
+      iconBg: 'bg-amber-50 text-amber-600',
+      rail:   'bg-amber-500',
+      tools: [
+        { icon: Sparkles, label: 'Branding', desc: 'Logo, signature, accent color', view: 'BRANDING' },
+      ],
     },
   ];
 
   return (
     <div className="w-full flex flex-col lg:max-w-6xl lg:mx-auto">
 
-      {/* Sticky header + school info */}
-      <div className="sticky top-0 bg-white z-10 border-b border-slate-100 shadow-sm">
-        <div className="px-4 lg:px-6 pt-4 lg:pt-6 pb-3 lg:pb-4 flex items-center gap-3">
+      {/* Sticky header — slim. The bulky dark school banner used to live
+          here and ate ~150px of viewport on mobile before the user saw any
+          tool. School identity now lives in a one-line strip below. */}
+      <div className="sticky top-0 bg-white z-10 border-b border-slate-100">
+        <div className="px-4 lg:px-6 py-3 lg:py-4 flex items-center gap-3">
           <button onClick={onBack} className="p-2 -ml-2 bg-slate-100 rounded-full hover:bg-slate-200 transition-colors">
             <ArrowLeft size={20} className="text-slate-600" />
           </button>
-          <h2 className="text-xl lg:text-2xl font-black text-slate-900 uppercase tracking-tight">Tools & Generators</h2>
+          <div className="min-w-0">
+            <h2 className="text-lg lg:text-xl font-black text-slate-900 uppercase tracking-tight">Tools</h2>
+            {schoolInfo?.name && (
+              <p className="text-[10px] font-bold text-slate-400 truncate">{schoolInfo.name}</p>
+            )}
+          </div>
         </div>
-
-        {/* School info banner */}
-        {schoolInfo?.name ? (
-          <div className="mx-4 lg:mx-6 mb-4 lg:mb-5 bg-gradient-to-r from-slate-800 to-slate-900 rounded-2xl p-4 lg:p-5 text-white">
-            <div className="flex items-start gap-3 lg:gap-4">
-              <div className="w-10 h-10 lg:w-12 lg:h-12 rounded-xl bg-white/10 flex items-center justify-center shrink-0">
-                <GraduationCap size={22} className="text-white/80" />
-              </div>
-              <div className="min-w-0 flex-1">
-                <h3 className="font-black text-sm lg:text-lg leading-snug text-white">{schoolInfo.name}</h3>
-                {schoolInfo.address && (
-                  <p className="text-[10px] lg:text-xs font-medium text-white/60 mt-1 leading-snug">
-                    {schoolInfo.address}{schoolInfo.city ? `, ${schoolInfo.city}` : ''}
-                    {schoolInfo.state ? `, ${schoolInfo.state}` : ''}
-                  </p>
-                )}
-                <div className="flex flex-wrap gap-x-3 gap-y-0.5 mt-1.5">
-                  {schoolInfo.phone && (
-                    <span className="text-[10px] lg:text-[11px] font-bold text-white/50">📞 {schoolInfo.phone}</span>
-                  )}
-                  {schoolInfo.email && (
-                    <span className="text-[10px] lg:text-[11px] font-bold text-white/50">✉ {schoolInfo.email}</span>
-                  )}
-                  {schoolInfo.affiliationBoard && (
-                    <span className="text-[10px] lg:text-[11px] font-bold text-white/40">{schoolInfo.affiliationBoard}</span>
-                  )}
-                </div>
-              </div>
-            </div>
-          </div>
-        ) : (
-          <div className="mx-4 lg:mx-6 mb-4 lg:mb-5 bg-amber-50 border border-amber-200 rounded-2xl p-3 lg:p-4 flex items-start gap-2">
-            <span className="text-amber-500 text-sm">⚠</span>
-            <p className="text-xs lg:text-sm font-bold text-amber-700">
-              School info not set — go to Settings to add your school name and details.
-            </p>
-          </div>
-        )}
       </div>
 
-      {/* Tool cards grid */}
-      <div className="p-4 lg:p-6 space-y-3 lg:space-y-4">
-        <p className="text-[10px] lg:text-xs font-black uppercase tracking-widest text-slate-400 px-1">Document Tools</p>
-
-        <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 lg:gap-4">
-          {TOOLS.map(tool => {
-            const Icon = tool.icon;
-            return (
-              <button key={tool.label} onClick={() => setView(tool.view)}
-                className={`flex flex-col items-start gap-3 lg:gap-4 p-4 lg:p-5 rounded-2xl border-2 active:scale-95 hover:scale-[1.02] hover:shadow-md transition-all ${tool.card}`}>
-                <div className={`w-10 h-10 lg:w-12 lg:h-12 rounded-xl flex items-center justify-center ${tool.icon_}`}>
-                  <Icon size={20} className="lg:hidden"/>
-                  <Icon size={24} className="hidden lg:block"/>
-                </div>
-                <div className="min-w-0 w-full">
-                  <p className="text-xs lg:text-sm font-black text-slate-900 leading-tight">{tool.label}</p>
-                  <p className="text-[9px] lg:text-[11px] font-bold text-slate-500 mt-0.5 leading-snug">{tool.desc}</p>
-                </div>
-                <div className="self-end">
-                  <ChevronRight size={14} className="text-slate-400" />
-                </div>
-              </button>
-            );
-          })}
+      {/* School-info missing nudge — only when nothing's configured. */}
+      {!schoolInfo?.name && (
+        <div className="mx-4 lg:mx-6 mt-4 bg-amber-50 border border-amber-200 rounded-2xl p-3 flex items-start gap-2">
+          <span className="text-amber-600 font-black">⚠</span>
+          <p className="text-xs font-bold text-amber-700">
+            School info not set — go to Settings to add school name & details before generating documents.
+          </p>
         </div>
+      )}
 
-        <div className="bg-slate-100 rounded-2xl p-3 lg:p-4 text-center mt-2">
-          <p className="text-[9px] lg:text-[11px] font-black text-slate-400 uppercase tracking-widest">More tools coming soon</p>
-          <p className="text-[9px] lg:text-[11px] font-bold text-slate-300 mt-0.5">Hall passes, attendance reports & more</p>
+      {/* Grouped tool sections */}
+      <div className="p-4 lg:p-6 space-y-6 lg:space-y-7">
+        {TOOL_GROUPS.map(group => (
+          <div key={group.label}>
+            <div className="flex items-center gap-2 mb-3 px-1">
+              <span className={`w-1 h-3.5 rounded-full ${group.rail}`} />
+              <h3 className="text-[11px] font-black text-slate-700 uppercase tracking-wider">{group.label}</h3>
+              <span className="text-[10px] font-black text-slate-400 bg-slate-100 px-1.5 py-0.5 rounded-md">{group.tools.length}</span>
+            </div>
+
+            <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
+              {group.tools.map(tool => {
+                const Icon = tool.icon;
+                return (
+                  <button key={tool.label} onClick={() => setView(tool.view)}
+                    className="flex flex-col items-start gap-3 p-4 rounded-2xl bg-white border border-slate-200 hover:border-slate-300 active:scale-[0.98] hover:shadow-sm transition-all text-left">
+                    <div className={`w-10 h-10 rounded-xl flex items-center justify-center ${group.iconBg}`}>
+                      <Icon size={20} />
+                    </div>
+                    <div className="min-w-0 w-full">
+                      <p className="text-sm font-black text-slate-900 leading-tight">{tool.label}</p>
+                      <p className="text-[10px] font-bold text-slate-500 mt-0.5 leading-snug">{tool.desc}</p>
+                    </div>
+                    <ChevronRight size={14} className="text-slate-400 self-end" />
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+        ))}
+
+        <div className="bg-slate-50 border border-dashed border-slate-200 rounded-2xl p-4 text-center">
+          <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest">More tools coming soon</p>
+          <p className="text-[10px] font-bold text-slate-300 mt-0.5">Hall passes, attendance reports & more</p>
         </div>
       </div>
     </div>
