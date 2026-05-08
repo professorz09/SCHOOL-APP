@@ -1,6 +1,7 @@
 import React, { useEffect, useState, useRef } from 'react';
 import { ArrowLeft, Plus, Trash2, ChevronDown, ChevronUp, Save, QrCode, CreditCard, CheckCircle2, Lock, Eye, EyeOff, ShieldCheck, IndianRupee, Edit2, Building2, BookOpen, ChevronRight, X, Download, Database, History, ShieldOff, Unlock, Users, Search, KeyRound, AlertTriangle, Calendar } from 'lucide-react';
 import { apiPrincipal } from '@/lib/apiClient';
+import { BackupCard } from '@/shared/components/BackupCard';
 import { supabase } from '@/lib/supabase';
 import { principalService } from '@/roles/principal/principal.service';
 import { feeService } from '@/modules/fees/fee.service';
@@ -814,10 +815,35 @@ export const SettingsManager: React.FC<Props> = ({ onBack, initialView }) => {
   if (view === 'ACTIVITY_LOG') return <AuditLogsViewer onBack={() => setView('MENU')} />;
 
   // DATA EXPORT VIEW
-  if (view === 'DATA_EXPORT') return <DataExportPanel onBack={() => setView('MENU')} schoolId={session?.schoolId ?? null} showToast={showToast} />;
+  if (view === 'DATA_EXPORT') return <BackupView onBack={() => setView('MENU')} />;
 
   return null;
 };
+
+// ─── Backup view (Settings → Download Data) ─────────────────────────────────
+// Replaces the old client-side JSON dump. The server handles fetching,
+// zipping, rate-limiting and (for Full archives) bundling photos +
+// signatures + QR codes. Streams directly to the browser — Supabase
+// storage cost is zero.
+const BackupView: React.FC<{ onBack: () => void }> = ({ onBack }) => (
+  <div className="w-full bg-slate-50 flex flex-col animate-in slide-in-from-right-8 duration-300 min-h-[60vh] lg:min-h-[80vh]">
+    <div className="bg-white border-b border-slate-100 px-4 lg:px-6 pt-4 lg:pt-6 pb-4 sticky top-0 z-10 shadow-sm">
+      <div className="flex items-center gap-3">
+        <button onClick={onBack} className="p-2 -ml-2 bg-slate-100 rounded-full text-slate-600 hover:bg-slate-200 transition-colors">
+          <ArrowLeft size={20} />
+        </button>
+        <div>
+          <h2 className="text-xl lg:text-2xl font-black text-slate-900 uppercase tracking-tight">Backup &amp; Download</h2>
+          <p className="text-[10px] lg:text-xs font-bold text-slate-400">Server-zipped · streamed to your device</p>
+        </div>
+      </div>
+    </div>
+
+    <div className="flex-1 p-4 lg:p-6 max-w-2xl mx-auto w-full">
+      <BackupCard apiPath="/api/principal/backup" />
+    </div>
+  </div>
+);
 
 // ─── Data Export Panel ──────────────────────────────────────────────────────
 // Fetches every school-scoped table the principal has read access to and

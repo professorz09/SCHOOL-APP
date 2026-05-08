@@ -13,6 +13,7 @@ import { useUIStore } from '@/store/uiStore';
 import { School, CreateSchoolInput } from '@/roles/super-admin/school.types';
 import { SchoolStatus, BillingPlan, STATUS_COLORS, PLAN_COLORS } from '@/shared/config/constants';
 import { schoolService } from '@/shared/utils/school.service';
+import { BackupCard } from '@/shared/components/BackupCard';
 import { billingService, ANNUAL_PLAN_PRICES } from '@/roles/super-admin/billing.service';
 import { platformSettings, DEFAULT_PLAN_PRICING, PlanPricing } from '@/roles/super-admin/platformSettings.service';
 import { BillingYear } from '@/roles/super-admin/billing.types';
@@ -622,6 +623,12 @@ export const SchoolsManager: React.FC<Props> = ({ onBack }) => {
             school={selected}
             onSaved={(patch) => setSelected(prev => prev ? { ...prev, ...patch } : null)}
           />
+
+          {/* Backup — Quick (daily) + Full (weekly). Streams a ZIP
+              directly to the SUPER_ADMIN's browser, nothing is stored
+              on Supabase. Rate limits are enforced server-side via
+              audit_logs so a refresh-spam can't bypass them. */}
+          <BackupCard schoolId={selected.id} apiPath={`/api/admin/schools/${selected.id}/backup`} />
 
           {/* Billing snapshot */}
           {billing && (

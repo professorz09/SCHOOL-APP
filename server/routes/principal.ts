@@ -3,6 +3,10 @@ import rateLimit from 'express-rate-limit';
 import { adminDb, userDb } from '../lib/db';
 import { ok, fail, ApiError, requireBody } from '../lib/helpers';
 import { requireAuth, requireRole } from '../middleware/auth';
+import {
+  generateSchoolBackup, assertBackupAllowed, logBackupSuccess,
+  type BackupKind,
+} from '../lib/backup';
 
 export const principalRouter = Router();
 
@@ -22,6 +26,29 @@ const PRINCIPAL = requireRole('PRINCIPAL');
 //   ?search  — case-insensitive ILIKE match on name OR mobile_number
 //   ?role    — exact role filter ('TEACHER' | 'PARENT' | …) — narrows
 //              before the count, so the badge in the UI stays accurate
+// ─── GET /api/principal/backup?kind=quick|full ───────────────────────────────
+// Same shape as the SuperAdmin route — but the school comes from the
+// caller's session, not URL params. Quick = 1/24h, Full = 1/7d.
+principalRouter.get('/backup', requireAuth, PRINCIPAL, async (req, res) => {
+  try {
+    const schoolId = req.user.school_id;
+    if (!schoolId) throw new ApiError(403, 'No school in session');
+    const rawKind = String(req.query.kind ?? 'quick').toUpperCase() as BackupKind;
+    if (rawKind !== 'QUICK' && rawKind !== 'FULL') {
+      throw new ApiError(400, 'kind must be "quick" or "full"');
+    }
+
+    await assertBackupAllowed(schoolId, rawKind);
+    const result = await generateSchoolBackup(schoolId, rawKind);
+    await logBackupSuccess(schoolId, req.user.id, rawKind, result.zipBytes.length);
+
+    res.setHeader('Content-Type', 'application/zip');
+    res.setHeader('Content-Disposition', `attachment; filename="${result.filename}"`);
+    res.setHeader('Content-Length', String(result.zipBytes.length));
+    res.send(result.zipBytes);
+  } catch (err) { fail(res, err); }
+});
+
 principalRouter.get('/users/list', requireAuth, PRINCIPAL, async (req, res) => {
   try {
     const offset = Math.max(0, parseInt(String(req.query.offset ?? '0'), 10) || 0);

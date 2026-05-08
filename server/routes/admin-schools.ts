@@ -2,10 +2,37 @@ import { Router } from 'express';
 import { adminDb } from '../lib/db';
 import { ok, fail, ApiError, requireBody } from '../lib/helpers';
 import { requireAuth, requireRole } from '../middleware/auth';
+import {
+  generateSchoolBackup, assertBackupAllowed, logBackupSuccess,
+  type BackupKind,
+} from '../lib/backup';
 
 export const adminSchoolsRouter = Router();
 
 const SA = requireRole('SUPER_ADMIN');
+
+// ─── GET /api/admin/schools/:id/backup?kind=quick|full ───────────────────────
+// Per-school ZIP backup. Streamed to the caller (not stored on Supabase).
+// Rate-limited via audit_logs: QUICK = 1 / 24h, FULL = 1 / 7d.
+adminSchoolsRouter.get('/:id/backup', requireAuth, SA, async (req, res) => {
+  try {
+    const schoolId = String(req.params.id ?? '');
+    if (!schoolId) throw new ApiError(400, 'school id required');
+    const rawKind = String(req.query.kind ?? 'quick').toUpperCase() as BackupKind;
+    if (rawKind !== 'QUICK' && rawKind !== 'FULL') {
+      throw new ApiError(400, 'kind must be "quick" or "full"');
+    }
+
+    await assertBackupAllowed(schoolId, rawKind);
+    const result = await generateSchoolBackup(schoolId, rawKind);
+    await logBackupSuccess(schoolId, req.user.id, rawKind, result.zipBytes.length);
+
+    res.setHeader('Content-Type', 'application/zip');
+    res.setHeader('Content-Disposition', `attachment; filename="${result.filename}"`);
+    res.setHeader('Content-Length', String(result.zipBytes.length));
+    res.send(result.zipBytes);
+  } catch (err) { fail(res, err); }
+});
 
 // ─── PUT /api/admin/schools/:id/billing ──────────────────────────────────────
 // Set / update the fixed monthly billing amount for a school.
