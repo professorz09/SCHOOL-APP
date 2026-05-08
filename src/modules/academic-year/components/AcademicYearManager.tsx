@@ -17,6 +17,7 @@ export const AcademicYearManager: React.FC<Props> = ({ onBack, onNavigateToStaff
   const {
     academicYears, activeYear, isYearLocked, refresh: refreshAY, setActiveYear,
     setCurrentEditingYear,
+    newYearCreationEnabled,
   } = useAcademicYear();
   const { showToast } = useUIStore();
 
@@ -387,22 +388,37 @@ export const AcademicYearManager: React.FC<Props> = ({ onBack, onNavigateToStaff
                     </p>
                   </div>
                 </div>
+                {/* CTA only fires when SUPER_ADMIN has enabled the feature for
+                    this school. When disabled, the button is muted + a hint
+                    explains why so the principal isn't left guessing. */}
                 <button
                   onClick={() => openWizard()}
-                  className="w-full text-white font-black text-sm rounded-xl py-3 bg-rose-600 hover:bg-rose-700 flex items-center justify-center gap-2"
+                  disabled={!newYearCreationEnabled}
+                  className="w-full text-white font-black text-sm rounded-xl py-3 bg-rose-600 hover:bg-rose-700 disabled:bg-slate-300 disabled:cursor-not-allowed flex items-center justify-center gap-2"
                 >
                   <Sparkles size={16} /> Naya Academic Year Start Karein
                 </button>
+                {!newYearCreationEnabled && (
+                  <p className="text-[10px] font-bold text-rose-600 text-center mt-2">
+                    Platform admin needs to enable new-year creation for your school first.
+                  </p>
+                )}
               </div>
             )}
 
             {/* ─── Add new year button ──────────────────────────────── */}
             <button
               onClick={() => openWizard()}
-              className="w-full bg-white border-2 border-dashed border-indigo-300 hover:border-indigo-500 text-indigo-600 font-black text-sm rounded-2xl py-3 flex items-center justify-center gap-2"
+              disabled={!newYearCreationEnabled}
+              className="w-full bg-white border-2 border-dashed border-indigo-300 hover:border-indigo-500 disabled:border-slate-200 disabled:text-slate-400 disabled:cursor-not-allowed text-indigo-600 font-black text-sm rounded-2xl py-3 flex items-center justify-center gap-2"
             >
-              <Plus size={16} /> Add Academic Year
+              <Plus size={16} /> {newYearCreationEnabled ? 'Add Academic Year' : 'Add Academic Year — disabled'}
             </button>
+            {!newYearCreationEnabled && (
+              <p className="text-[10px] font-bold text-slate-500 text-center -mt-1">
+                Platform admin needs to enable new-year creation for your school first.
+              </p>
+            )}
 
             {/* ─── Promotion info note ──────────────────────────────── */}
             <button

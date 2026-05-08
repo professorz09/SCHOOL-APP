@@ -8987,3 +8987,181 @@ BEGIN
       CHECK (accent_color IS NULL OR accent_color ~ '^#[0-9A-Fa-f]{6}$');
   END IF;
 END $$;
+-- =============================================================
+-- 0079_final_exam_single_per_class.sql
+-- =============================================================
+-- Promotion is driven by a single FINAL exam per class per
+-- academic year. Enforce uniqueness at the DB layer so race
+-- conditions (two teachers tapping "Create" simultaneously)
+-- can't produce two FINAL rows for the same class.
+--
+-- Edit / delete window for FINAL exam:
+--   • While the AY is open  → any TEACHER assigned to the class
+--     OR the principal can change it (existing RLS handles this).
+--   • After AY is closed    → only PRINCIPAL with editor_mode_until
+--     in the future may modify (existing reverse_payment-style
+--     guard pattern). Enforced via a trigger that compares the
+--     row's academic_year_id.is_closed with the caller's role +
+--     editor_mode window.
+-- =============================================================
+
+-- Partial unique index: only one FINAL test per (year, class, section).
+-- WHERE clause keeps the index lean — non-FINAL tests are unaffected.
+CREATE UNIQUE INDEX IF NOT EXISTS test_schedules_one_final_per_class_idx
+  ON public.test_schedules (academic_year_id, class_name, section)
+  WHERE test_type = 'FINAL';
+
+-- Edit / delete guard for FINAL after AY close.
+CREATE OR REPLACE FUNCTION public.guard_final_exam_modification() RETURNS TRIGGER
+LANGUAGE plpgsql AS $$
+DECLARE
+  v_target RECORD;
+  v_year   RECORD;
+  v_caller UUID := auth.uid();
+  v_role   TEXT;
+  v_editor TIMESTAMPTZ;
+BEGIN
+  -- Service-role inserts/updates (server adminDb) bypass auth.uid() — let them through.
+  IF v_caller IS NULL THEN
+    RETURN COALESCE(NEW, OLD);
+  END IF;
+
+  v_target := COALESCE(NEW, OLD);
+
+  -- Only guard FINAL rows.
+  IF v_target.test_type IS DISTINCT FROM 'FINAL' THEN
+    RETURN COALESCE(NEW, OLD);
+  END IF;
+
+  SELECT is_closed INTO v_year
+    FROM public.academic_years WHERE id = v_target.academic_year_id;
+  IF NOT FOUND OR NOT v_year.is_closed THEN
+    -- AY still open — normal RLS rules apply.
+    RETURN COALESCE(NEW, OLD);
+  END IF;
+
+  -- AY is closed → require principal with active editor mode.
+  SELECT role, editor_mode_until INTO v_role, v_editor
+    FROM public.users WHERE id = v_caller;
+
+  IF v_role <> 'PRINCIPAL' OR v_editor IS NULL OR v_editor <= NOW() THEN
+    RAISE EXCEPTION 'Final exam can only be modified after year close with editor mode on'
+      USING ERRCODE = 'check_violation';
+  END IF;
+
+  RETURN COALESCE(NEW, OLD);
+END;
+$$;
+
+DROP TRIGGER IF EXISTS final_exam_modification_guard ON public.test_schedules;
+CREATE TRIGGER final_exam_modification_guard
+  BEFORE UPDATE OR DELETE ON public.test_schedules
+  FOR EACH ROW EXECUTE FUNCTION public.guard_final_exam_modification();
+-- =============================================================
+-- 0080_school_fee_aggregate.sql
+-- =============================================================
+-- Server-side fee summary aggregate for the principal FeeLedger.
+-- Replaces the client-side cache walk that summed across every
+-- student's installments — which is what forced FeeLedger to
+-- pre-load the entire school's fee_installments cache. With this
+-- RPC the principal can render the Total/Due/Collected tiles
+-- without ever pulling individual student rows.
+--
+-- Authorisation: principal of the school (or super_admin).
+-- =============================================================
+
+CREATE OR REPLACE FUNCTION public.get_school_fee_aggregate()
+RETURNS TABLE (
+  total_students          BIGINT,
+  pending_count           BIGINT,  -- active students with no installments at all
+  due_count               BIGINT,  -- students with ≥1 outstanding installment
+  cleared_count           BIGINT,  -- students with ≥1 installment, all settled
+  total_collected         BIGINT,  -- sum of paid_amount across all installments
+  total_parent_due        BIGINT,
+  total_govt_due          BIGINT
+)
+LANGUAGE plpgsql SECURITY DEFINER SET search_path = public AS $$
+DECLARE
+  v_school_id UUID;
+BEGIN
+  IF NOT (public.is_super_admin() OR public.is_principal()) THEN
+    RAISE EXCEPTION 'forbidden';
+  END IF;
+
+  v_school_id := public.current_user_school_id();
+  IF v_school_id IS NULL AND NOT public.is_super_admin() THEN
+    RAISE EXCEPTION 'no school in session';
+  END IF;
+
+  RETURN QUERY
+  WITH
+  active_students AS (
+    SELECT id FROM public.students
+     WHERE school_id = v_school_id AND is_active = TRUE
+  ),
+  -- Per-student installment summary so we can bucket students into
+  -- pending / due / cleared in a single pass.
+  per_student AS (
+    SELECT
+      fi.student_id,
+      COUNT(*)                                                                    AS inst_count,
+      SUM(GREATEST(0, fi.amount - fi.paid_amount - fi.write_off_amount))          AS outstanding_all,
+      SUM(CASE WHEN fi.payer_type = 'PARENT'
+               THEN GREATEST(0, fi.amount - fi.paid_amount - fi.write_off_amount)
+               ELSE 0 END)                                                        AS parent_due,
+      SUM(CASE WHEN fi.payer_type = 'GOVERNMENT'
+               THEN GREATEST(0, fi.amount - fi.paid_amount - fi.write_off_amount)
+               ELSE 0 END)                                                        AS govt_due,
+      SUM(fi.paid_amount)                                                         AS total_paid
+    FROM public.fee_installments fi
+    JOIN active_students s ON s.id = fi.student_id
+    GROUP BY fi.student_id
+  )
+  SELECT
+    (SELECT COUNT(*) FROM active_students)                                         AS total_students,
+    -- Pending: active students that don't appear in fee_installments at all.
+    (SELECT COUNT(*) FROM active_students s
+        WHERE NOT EXISTS (SELECT 1 FROM per_student p WHERE p.student_id = s.id)) AS pending_count,
+    (SELECT COUNT(*) FROM per_student WHERE outstanding_all > 0)                  AS due_count,
+    (SELECT COUNT(*) FROM per_student WHERE outstanding_all = 0)                  AS cleared_count,
+    COALESCE((SELECT SUM(total_paid)  FROM per_student), 0)::BIGINT                AS total_collected,
+    COALESCE((SELECT SUM(parent_due)  FROM per_student), 0)::BIGINT                AS total_parent_due,
+    COALESCE((SELECT SUM(govt_due)    FROM per_student), 0)::BIGINT                AS total_govt_due;
+END $$;
+
+GRANT EXECUTE ON FUNCTION public.get_school_fee_aggregate() TO authenticated;
+-- =============================================================
+-- 0081_school_new_year_creation_toggle.sql
+-- =============================================================
+-- Per-school feature flag controlled by SUPER_ADMIN. When FALSE
+-- (default), the principal's "Add Academic Year" wizard is gated
+-- and the create RPC rejects with a friendly error so it can't be
+-- bypassed via crafted requests. SUPER_ADMIN flips this to TRUE
+-- when a school is ready to start a new AY (typically once per
+-- year, around year-end planning).
+-- =============================================================
+
+ALTER TABLE public.schools
+  ADD COLUMN IF NOT EXISTS new_year_creation_enabled BOOLEAN NOT NULL DEFAULT FALSE;
+
+-- Server-side guard for the principal's create-year flow. Any RPC
+-- that inserts into academic_years for a school must call this
+-- helper first; UI gating alone is not sufficient.
+CREATE OR REPLACE FUNCTION public.assert_new_year_creation_allowed(p_school_id UUID)
+RETURNS VOID
+LANGUAGE plpgsql STABLE SECURITY DEFINER SET search_path = public AS $$
+DECLARE
+  v_enabled BOOLEAN;
+BEGIN
+  -- Super-admins bypass — they manage the toggle themselves.
+  IF public.is_super_admin() THEN RETURN; END IF;
+
+  SELECT new_year_creation_enabled INTO v_enabled
+    FROM public.schools WHERE id = p_school_id;
+  IF NOT COALESCE(v_enabled, FALSE) THEN
+    RAISE EXCEPTION 'New academic year creation is disabled for this school. Please contact your platform administrator.'
+      USING ERRCODE = 'check_violation';
+  END IF;
+END $$;
+
+GRANT EXECUTE ON FUNCTION public.assert_new_year_creation_allowed(UUID) TO authenticated;

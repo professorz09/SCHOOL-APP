@@ -32,6 +32,34 @@ function getSchoolId(): string {
 // from this module. Empty array — yearClosing has its own load path.
 export const MOCK_STUDENTS: Student[] = [];
 
+/**
+ * Slim shape used by list/search views (FeeLedger left rail,
+ * Students search bar). Has only the columns actually rendered in a
+ * row, so a 5,000-student school doesn't ship 30+ fields × N to the
+ * client. Open the full Student via getById() when the user taps.
+ */
+export interface StudentListItem {
+  id: string;
+  name: string;
+  admissionNo: string;
+  rollNo: string;
+  className: string;
+  section: string;
+  isRte: boolean;
+  photo: string;
+  attendancePercent: number;
+  feeStatus: string;
+  totalFee: number;
+  paidFee: number;
+}
+
+export interface StudentListPage {
+  items: StudentListItem[];
+  total: number;
+  hasMore: boolean;
+  nextOffset: number;
+}
+
 const STU_FIELDS =
   'id, school_id, user_id, name, admission_no, roll_no, dob, gender, blood_group, ' +
   'aadhaar_no, phone, email, address, photo, ' +
@@ -177,7 +205,11 @@ export const studentService = {
     const { data: stuData, error } = await supabase
       .from('students').select(STU_FIELDS)
       .eq('school_id', schoolId).eq('is_active', true)
-      .order('admission_no');
+      .order('admission_no')
+      // Safety cap. Above 5000 active students per school the in-memory
+      // pattern stops being practical; consumers should switch to the
+      // paginated `getList()` accessor below + on-demand profile fetch.
+      .limit(5000);
     if (error) throw new Error(error.message);
     const stu = (stuData ?? []) as unknown as StudentRow[];
     if (!stu.length || !ayId) return stu.map(s => recordToStudent(s));
@@ -190,6 +222,108 @@ export const studentService = {
     const arMap = new Map<string, AcademicRecordRow>();
     ((arData ?? []) as AcademicRecordRow[]).forEach(r => arMap.set(r.student_id, r));
     return stu.map(s => recordToStudent(s, arMap.get(s.id)));
+  },
+
+  /**
+   * Server-paginated student list — slim columns only. Use for the
+   * FeeLedger left rail, principal "Students" list, and any view that
+   * shows ≥50 students at a time. Server-side search across name +
+   * admission_no avoids pulling all students just to filter client-side.
+   *
+   *   offset      — start row index (0 for first page)
+   *   limit       — page size (default 50, max 200)
+   *   search      — case-insensitive ILIKE match on name OR admission_no
+   *   classFilter — exact "{class}-{section}" filter (active year)
+   */
+  async getList(opts: {
+    offset?: number; limit?: number;
+    search?: string; classFilter?: string;
+  } = {}): Promise<StudentListPage> {
+    const schoolId = getSchoolId();
+    const ayId = await activeYearId(schoolId);
+    const offset = Math.max(0, opts.offset ?? 0);
+    const limit  = Math.max(1, Math.min(200, opts.limit ?? 50));
+    const search = (opts.search ?? '').trim();
+
+    // Two-step query — first apply student-table filters and the count,
+    // then enrich with the active year's academic record. Keeping the
+    // search on `students` (not the AR table) means a class-switched
+    // student is still findable by their admission_no even if the AR
+    // row hasn't been generated for the new year yet.
+    let q = supabase
+      .from('students')
+      .select(
+        'id, name, admission_no, roll_no, photo, is_rte',
+        { count: 'exact' },
+      )
+      .eq('school_id', schoolId).eq('is_active', true);
+
+    if (search) {
+      // Escape % and _ so a literal phone number / admission code with
+      // those chars doesn't accidentally widen the match.
+      const safe = search.replace(/[%_]/g, ch => `\\${ch}`);
+      q = q.or(`name.ilike.%${safe}%,admission_no.ilike.%${safe}%`);
+    }
+
+    const { data, count, error } = await q
+      .order('admission_no')
+      .range(offset, offset + limit - 1);
+    if (error) throw new Error(error.message);
+
+    type StuRow = {
+      id: string; name: string; admission_no: string;
+      roll_no: string | null; photo: string | null; is_rte: boolean;
+    };
+    let items = (data ?? []) as unknown as StuRow[];
+
+    // Class filter happens AFTER the page is fetched (acceptable here —
+    // class is on the AR table, joining server-side would force every
+    // page to also fetch all of student_academic_records). Most schools
+    // don't filter by class on the global list; when they do, results
+    // are post-filtered in-page.
+    let arMap = new Map<string, AcademicRecordRow>();
+    if (ayId && items.length > 0) {
+      const { data: arData } = await supabase
+        .from('student_academic_records')
+        .select('id, student_id, academic_year_id, class_name, section, roll_no, fee_status, total_fee, paid_fee, attendance_percent, status')
+        .eq('academic_year_id', ayId)
+        .in('student_id', items.map(s => s.id));
+      ((arData ?? []) as AcademicRecordRow[]).forEach(r => arMap.set(r.student_id, r));
+    }
+
+    if (opts.classFilter) {
+      const [cls, sec] = opts.classFilter.split('-');
+      items = items.filter(s => {
+        const ar = arMap.get(s.id);
+        return ar?.class_name === cls && (sec ? ar?.section === sec : true);
+      });
+    }
+
+    const listItems: StudentListItem[] = items.map(s => {
+      const ar = arMap.get(s.id);
+      return {
+        id: s.id,
+        name: s.name ?? '',
+        admissionNo: s.admission_no ?? '',
+        rollNo: ar?.roll_no ?? s.roll_no ?? '',
+        className: ar?.class_name ?? '',
+        section: ar?.section ?? '',
+        isRte: !!s.is_rte,
+        photo: s.photo ?? '',
+        attendancePercent: Number(ar?.attendance_percent ?? 0),
+        feeStatus: ar?.fee_status ?? 'PENDING',
+        totalFee: Number(ar?.total_fee ?? 0),
+        paidFee: Number(ar?.paid_fee ?? 0),
+      };
+    });
+
+    const total = count ?? items.length;
+    return {
+      items: listItems,
+      total,
+      hasMore: offset + listItems.length < total,
+      nextOffset: offset + listItems.length,
+    };
   },
 
   async getById(id: string): Promise<Student | null> {

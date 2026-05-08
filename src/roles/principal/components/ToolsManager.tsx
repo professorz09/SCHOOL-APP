@@ -63,7 +63,7 @@ export const ToolsManager: React.FC<Props> = ({ onBack }) => {
 
   const ToolHeader = ({ title, onBackPress }: { title: string; onBackPress: () => void }) => (
     <div className="sticky top-0 bg-white px-4 pt-4 pb-4 flex items-center gap-3 border-b border-slate-100 z-10 shadow-sm">
-      <button onClick={onBackPress} className="p-2 -ml-2 bg-slate-100 rounded-full">
+      <button type="button" onClick={onBackPress} className="p-2 -ml-2 bg-slate-100 rounded-full">
         <ArrowLeft size={20} className="text-slate-600" />
       </button>
       <h2 className="text-xl font-black text-slate-900 uppercase tracking-tight">{title}</h2>
@@ -242,7 +242,7 @@ export const ToolsManager: React.FC<Props> = ({ onBack }) => {
                         <span className="text-[11px] font-black text-slate-500 bg-slate-100 px-2 py-1 rounded-md tabular-nums">
                           {section.marks} marks
                         </span>
-                        <button onClick={() => removeSection(sIdx)}
+                        <button type="button" onClick={() => removeSection(sIdx)}
                           className="w-8 h-8 flex items-center justify-center bg-rose-50 text-rose-600 hover:bg-rose-100 rounded-lg text-sm font-black">
                           ×
                         </button>
@@ -295,7 +295,7 @@ export const ToolsManager: React.FC<Props> = ({ onBack }) => {
                                 ))}
                               </select>
                             </div>
-                            <button onClick={() => removeQuestion(sIdx, qIdx)}
+                            <button type="button" onClick={() => removeQuestion(sIdx, qIdx)}
                               className="w-8 h-8 flex items-center justify-center bg-rose-50 text-rose-600 hover:bg-rose-100 rounded-md text-sm font-black shrink-0">
                               ×
                             </button>
@@ -310,7 +310,7 @@ export const ToolsManager: React.FC<Props> = ({ onBack }) => {
                     ))}
 
                     {editing && (
-                      <button onClick={() => addQuestion(sIdx)}
+                      <button type="button" onClick={() => addQuestion(sIdx)}
                         className="w-full py-2 border border-dashed border-violet-300 text-violet-600 font-black text-[11px] uppercase tracking-wider rounded-lg hover:bg-violet-50 transition-colors">
                         + Add Question
                       </button>
@@ -320,7 +320,7 @@ export const ToolsManager: React.FC<Props> = ({ onBack }) => {
               ))}
 
               {editing && (
-                <button onClick={addSection}
+                <button type="button" onClick={addSection}
                   className="w-full py-3 border-2 border-dashed border-violet-300 text-violet-600 font-black text-xs uppercase tracking-wider rounded-xl hover:bg-violet-50 transition-colors">
                   + Add Section
                 </button>
@@ -331,26 +331,26 @@ export const ToolsManager: React.FC<Props> = ({ onBack }) => {
           {/* Action bar */}
           {editing ? (
             <div className="grid grid-cols-2 gap-3">
-              <button onClick={handleCancelEdit} disabled={busy}
+              <button type="button" onClick={handleCancelEdit} disabled={busy}
                 className="flex items-center justify-center gap-2 bg-slate-100 text-slate-700 font-black text-sm uppercase py-3 rounded-2xl active:scale-95 transition-transform disabled:opacity-50">
                 Cancel
               </button>
-              <button onClick={handleSave} disabled={busy}
+              <button type="button" onClick={handleSave} disabled={busy}
                 className="flex items-center justify-center gap-2 bg-violet-600 hover:bg-violet-700 text-white font-black text-sm uppercase py-3 rounded-2xl active:scale-95 transition-transform disabled:opacity-60 shadow-md">
                 {busy ? 'Saving…' : 'Save Changes'}
               </button>
             </div>
           ) : (
             <div className="grid grid-cols-3 gap-2">
-              <button onClick={() => window.print()}
+              <button type="button" onClick={() => window.print()}
                 className="flex items-center justify-center gap-1.5 bg-indigo-600 text-white font-black text-xs uppercase py-3 rounded-2xl active:scale-95 transition-transform">
                 <Printer size={14} /> Print
               </button>
-              <button onClick={() => setEditing(true)}
+              <button type="button" onClick={() => setEditing(true)}
                 className="flex items-center justify-center gap-1.5 bg-violet-600 text-white font-black text-xs uppercase py-3 rounded-2xl active:scale-95 transition-transform">
                 <Eye size={14} /> Edit
               </button>
-              <button onClick={onClose}
+              <button type="button" onClick={onClose}
                 className="flex items-center justify-center gap-1.5 bg-slate-100 text-slate-700 font-black text-xs uppercase py-3 rounded-2xl active:scale-95 transition-transform">
                 <Sparkles size={14} /> New
               </button>
@@ -480,11 +480,11 @@ export const ToolsManager: React.FC<Props> = ({ onBack }) => {
 
           {/* Mode toggle — Generate via prompt OR scan an existing paper. */}
           <div className="bg-slate-100 rounded-2xl p-1 flex">
-            <button onClick={() => setMode('PROMPT')}
+            <button type="button" onClick={() => setMode('PROMPT')}
               className={`flex-1 py-2.5 rounded-xl text-[11px] font-black uppercase tracking-wider transition-all ${mode === 'PROMPT' ? 'bg-white text-violet-600 shadow-sm' : 'text-slate-500'}`}>
               ✨ Generate (AI)
             </button>
-            <button onClick={() => setMode('SCAN')}
+            <button type="button" onClick={() => setMode('SCAN')}
               className={`flex-1 py-2.5 rounded-xl text-[11px] font-black uppercase tracking-wider transition-all ${mode === 'SCAN' ? 'bg-white text-violet-600 shadow-sm' : 'text-slate-500'}`}>
               📷 Scan Paper
             </button>
@@ -587,14 +587,14 @@ export const ToolsManager: React.FC<Props> = ({ onBack }) => {
           </div>
 
           {mode === 'PROMPT' ? (
-            <button onClick={handleGenerate} disabled={isGenerating || !aiAvailable}
+            <button type="button" onClick={handleGenerate} disabled={isGenerating || !aiAvailable}
               className="w-full flex items-center justify-center gap-2 bg-violet-600 hover:bg-violet-700 text-white font-black text-sm uppercase py-4 rounded-2xl active:scale-95 transition-transform disabled:opacity-60 shadow-md">
               {isGenerating
                 ? <><div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" /> Generating…</>
                 : <><Sparkles size={16} /> Generate Paper</>}
             </button>
           ) : (
-            <button onClick={handleScanExtract} disabled={isScanning || !aiAvailable || scanFiles.length === 0}
+            <button type="button" onClick={handleScanExtract} disabled={isScanning || !aiAvailable || scanFiles.length === 0}
               className="w-full flex items-center justify-center gap-2 bg-violet-600 hover:bg-violet-700 text-white font-black text-sm uppercase py-4 rounded-2xl active:scale-95 transition-transform disabled:opacity-60 shadow-md">
               {isScanning
                 ? <><div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" /> Reading paper…</>
@@ -708,10 +708,10 @@ export const ToolsManager: React.FC<Props> = ({ onBack }) => {
               </div>
             </div>
             <div className="grid grid-cols-2 gap-3 mt-4">
-              <button onClick={printCurrentPage} className="flex items-center justify-center gap-2 bg-blue-600 hover:bg-blue-700 text-white font-black text-sm uppercase py-3 rounded-2xl active:scale-95 transition-all">
+              <button type="button" onClick={printCurrentPage} className="flex items-center justify-center gap-2 bg-blue-600 hover:bg-blue-700 text-white font-black text-sm uppercase py-3 rounded-2xl active:scale-95 transition-all">
                 <Printer size={16} /> Print
               </button>
-              <button onClick={handleDownload} className="flex items-center justify-center gap-2 bg-slate-100 hover:bg-slate-200 text-slate-700 font-black text-sm uppercase py-3 rounded-2xl active:scale-95 transition-all">
+              <button type="button" onClick={handleDownload} className="flex items-center justify-center gap-2 bg-slate-100 hover:bg-slate-200 text-slate-700 font-black text-sm uppercase py-3 rounded-2xl active:scale-95 transition-all">
                 <Download size={16} /> Download PDF
               </button>
             </div>
@@ -734,7 +734,7 @@ export const ToolsManager: React.FC<Props> = ({ onBack }) => {
           <StudentPicker value={picked} onChange={setPicked} />
           {student && <SelectedCard student={student} />}
           {picked && (
-            <button onClick={() => setPreview(true)}
+            <button type="button" onClick={() => setPreview(true)}
               className="w-full flex items-center justify-center gap-2 bg-blue-600 text-white font-black text-sm uppercase py-4 rounded-2xl active:scale-95 transition-transform shadow-md">
               <Eye size={16} /> Preview TC
             </button>
@@ -802,7 +802,7 @@ export const ToolsManager: React.FC<Props> = ({ onBack }) => {
           {/* Two-row toolbar — same mobile-friendly layout as admit cards. */}
           <div className="no-print sticky top-0 bg-white px-4 py-3 border-b border-slate-100 z-10 space-y-2">
             <div className="flex items-center gap-2">
-              <button onClick={() => setPreview(false)}
+              <button type="button" onClick={() => setPreview(false)}
                 className="py-2 px-3 bg-slate-100 text-slate-700 font-black text-xs uppercase rounded-xl">
                 ← Back
               </button>
@@ -816,11 +816,11 @@ export const ToolsManager: React.FC<Props> = ({ onBack }) => {
               )}
             </div>
             <div className="flex gap-2">
-              <button onClick={handleDownloadAllPdf} disabled={downloadingPdf}
+              <button type="button" onClick={handleDownloadAllPdf} disabled={downloadingPdf}
                 className="flex-1 py-2.5 bg-emerald-600 hover:bg-emerald-700 text-white font-black text-xs uppercase rounded-xl flex items-center justify-center gap-1.5 disabled:opacity-60 active:scale-[0.98] transition-transform">
                 <Download size={13} /> {downloadingPdf ? 'Saving PDF…' : 'Download PDF'}
               </button>
-              <button onClick={() => window.print()}
+              <button type="button" onClick={() => window.print()}
                 className="flex-1 py-2.5 bg-rose-600 hover:bg-rose-700 text-white font-black text-xs uppercase rounded-xl flex items-center justify-center gap-1.5 active:scale-[0.98] transition-transform">
                 <Printer size={13} /> Print
               </button>
@@ -885,11 +885,11 @@ export const ToolsManager: React.FC<Props> = ({ onBack }) => {
 
           {/* Mode toggle — bulk default. */}
           <div className="flex gap-2 bg-slate-100 p-1 rounded-2xl">
-            <button onClick={() => { setMode('BULK'); setPicked(''); }}
+            <button type="button" onClick={() => { setMode('BULK'); setPicked(''); }}
               className={`flex-1 py-2.5 rounded-xl text-xs font-black uppercase tracking-widest transition-colors ${mode === 'BULK' ? 'bg-white text-green-700 shadow-sm' : 'text-slate-500'}`}>
               Bulk by Class
             </button>
-            <button onClick={() => { setMode('SINGLE'); setPickedClass(''); }}
+            <button type="button" onClick={() => { setMode('SINGLE'); setPickedClass(''); }}
               className={`flex-1 py-2.5 rounded-xl text-xs font-black uppercase tracking-widest transition-colors ${mode === 'SINGLE' ? 'bg-white text-green-700 shadow-sm' : 'text-slate-500'}`}>
               Single Student
             </button>
@@ -918,7 +918,7 @@ export const ToolsManager: React.FC<Props> = ({ onBack }) => {
           )}
 
           {canPreview && (
-            <button onClick={() => setPreview(true)}
+            <button type="button" onClick={() => setPreview(true)}
               className="w-full flex items-center justify-center gap-2 bg-green-600 text-white font-black text-sm uppercase py-4 rounded-2xl active:scale-95 transition-transform shadow-md">
               <Eye size={16} /> Preview {printList.length > 1 ? `${printList.length} ID Cards` : 'ID Card'}
             </button>
@@ -979,10 +979,10 @@ export const ToolsManager: React.FC<Props> = ({ onBack }) => {
               </div>
             </div>
             <div className="grid grid-cols-2 gap-3 mt-4">
-              <button onClick={printCurrentPage} className="flex items-center justify-center gap-2 bg-indigo-600 hover:bg-indigo-700 text-white font-black text-sm uppercase py-3 rounded-2xl active:scale-95 transition-all">
+              <button type="button" onClick={printCurrentPage} className="flex items-center justify-center gap-2 bg-indigo-600 hover:bg-indigo-700 text-white font-black text-sm uppercase py-3 rounded-2xl active:scale-95 transition-all">
                 <Printer size={16} /> Print
               </button>
-              <button onClick={handleDownload} className="flex items-center justify-center gap-2 bg-slate-100 hover:bg-slate-200 text-slate-700 font-black text-sm uppercase py-3 rounded-2xl active:scale-95 transition-all">
+              <button type="button" onClick={handleDownload} className="flex items-center justify-center gap-2 bg-slate-100 hover:bg-slate-200 text-slate-700 font-black text-sm uppercase py-3 rounded-2xl active:scale-95 transition-all">
                 <Download size={16} /> Download PDF
               </button>
             </div>
@@ -1011,7 +1011,7 @@ export const ToolsManager: React.FC<Props> = ({ onBack }) => {
               className="w-full border border-slate-200 bg-white rounded-xl px-4 py-3 font-bold text-sm outline-none focus:border-indigo-500" />
           </div>
           {picked && (
-            <button onClick={() => setPreview(true)}
+            <button type="button" onClick={() => setPreview(true)}
               className="w-full flex items-center justify-center gap-2 bg-indigo-600 text-white font-black text-sm uppercase py-4 rounded-2xl active:scale-95 transition-transform shadow-md">
               <Eye size={16} /> Preview Certificate
             </button>
@@ -1100,15 +1100,15 @@ export const ToolsManager: React.FC<Props> = ({ onBack }) => {
       return (
         <div className="w-full flex flex-col">
           <div className="sticky top-0 bg-white px-4 py-3 border-b border-slate-100 flex gap-2 z-10 print:hidden">
-            <button onClick={() => setShowPrint(false)}
+            <button type="button" onClick={() => setShowPrint(false)}
               className="flex-1 py-2.5 bg-slate-100 text-slate-700 font-black text-xs uppercase rounded-xl">
               ← Back
             </button>
-            <button onClick={() => window.print()}
+            <button type="button" onClick={() => window.print()}
               className="flex-1 py-2.5 bg-slate-900 text-white font-black text-xs uppercase rounded-xl flex items-center justify-center gap-1.5">
               <Printer size={13} /> Print
             </button>
-            <button onClick={handleDownload}
+            <button type="button" onClick={handleDownload}
               className="flex-1 py-2.5 bg-amber-600 text-white font-black text-xs uppercase rounded-xl flex items-center justify-center gap-1.5">
               <Download size={13} /> PDF
             </button>
@@ -1438,7 +1438,7 @@ export const ToolsManager: React.FC<Props> = ({ onBack }) => {
               "nothing happens, goes back". */}
           <div className="no-print sticky top-0 bg-white px-4 py-3 border-b border-slate-100 z-10 space-y-2">
             <div className="flex items-center gap-2">
-              <button onClick={() => setShowPrint(false)}
+              <button type="button" onClick={() => setShowPrint(false)}
                 className="py-2 px-3 bg-slate-100 text-slate-700 font-black text-xs uppercase rounded-xl">
                 ← Back
               </button>
@@ -1452,11 +1452,11 @@ export const ToolsManager: React.FC<Props> = ({ onBack }) => {
               )}
             </div>
             <div className="flex gap-2">
-              <button onClick={handleDownloadAllPdf} disabled={downloadingPdf}
+              <button type="button" onClick={handleDownloadAllPdf} disabled={downloadingPdf}
                 className="flex-1 py-2.5 bg-emerald-600 hover:bg-emerald-700 text-white font-black text-xs uppercase rounded-xl flex items-center justify-center gap-1.5 disabled:opacity-60 active:scale-[0.98] transition-transform">
                 <Download size={13} /> {downloadingPdf ? 'Saving PDF…' : 'Download PDF'}
               </button>
-              <button onClick={() => window.print()}
+              <button type="button" onClick={() => window.print()}
                 className="flex-1 py-2.5 bg-rose-600 hover:bg-rose-700 text-white font-black text-xs uppercase rounded-xl flex items-center justify-center gap-1.5 active:scale-[0.98] transition-transform">
                 <Printer size={13} /> Print
               </button>
@@ -1571,11 +1571,11 @@ export const ToolsManager: React.FC<Props> = ({ onBack }) => {
 
           {/* Mode toggle */}
           <div className="flex gap-2 bg-slate-100 p-1 rounded-2xl">
-            <button onClick={() => { setMode('BULK'); setPicked(''); setExamId(''); }}
+            <button type="button" onClick={() => { setMode('BULK'); setPicked(''); setExamId(''); }}
               className={`flex-1 py-2.5 rounded-xl text-xs font-black uppercase tracking-widest transition-colors ${mode === 'BULK' ? 'bg-white text-rose-700 shadow-sm' : 'text-slate-500'}`}>
               Bulk by Class
             </button>
-            <button onClick={() => { setMode('SINGLE'); setPickedClass(''); setExamId(''); }}
+            <button type="button" onClick={() => { setMode('SINGLE'); setPickedClass(''); setExamId(''); }}
               className={`flex-1 py-2.5 rounded-xl text-xs font-black uppercase tracking-widest transition-colors ${mode === 'SINGLE' ? 'bg-white text-rose-700 shadow-sm' : 'text-slate-500'}`}>
               Single Student
             </button>
@@ -1609,11 +1609,11 @@ export const ToolsManager: React.FC<Props> = ({ onBack }) => {
             <div>
               <label className="text-xs font-black uppercase tracking-widest text-slate-400 mb-2 block">Exam Details</label>
               <div className="flex gap-2 bg-slate-100 p-1 rounded-2xl mb-3">
-                <button onClick={() => setExamSource('SCHEDULED')}
+                <button type="button" onClick={() => setExamSource('SCHEDULED')}
                   className={`flex-1 py-2 rounded-xl text-[10px] font-black uppercase tracking-widest transition-colors ${examSource === 'SCHEDULED' ? 'bg-white text-rose-700 shadow-sm' : 'text-slate-500'}`}>
                   By Scheduled Exam
                 </button>
-                <button onClick={() => setExamSource('CUSTOM')}
+                <button type="button" onClick={() => setExamSource('CUSTOM')}
                   className={`flex-1 py-2 rounded-xl text-[10px] font-black uppercase tracking-widest transition-colors ${examSource === 'CUSTOM' ? 'bg-white text-rose-700 shadow-sm' : 'text-slate-500'}`}>
                   Custom (Type Manually)
                 </button>
@@ -1701,7 +1701,7 @@ export const ToolsManager: React.FC<Props> = ({ onBack }) => {
             <div>
               <div className="flex items-center justify-between mb-2">
                 <label className="text-xs font-black uppercase tracking-widest text-slate-400">Instructions</label>
-                <button onClick={() => setInstructions(DEFAULT_INSTRUCTIONS.join('\n'))}
+                <button type="button" onClick={() => setInstructions(DEFAULT_INSTRUCTIONS.join('\n'))}
                   className="text-[10px] font-black text-slate-400 hover:text-slate-600 uppercase tracking-widest">
                   Reset
                 </button>
@@ -1715,7 +1715,7 @@ export const ToolsManager: React.FC<Props> = ({ onBack }) => {
           )}
 
           {canGenerate && printList.length > 0 && (
-            <button onClick={() => setShowPrint(true)}
+            <button type="button" onClick={() => setShowPrint(true)}
               className="w-full flex items-center justify-center gap-2 bg-rose-600 text-white font-black text-sm uppercase py-4 rounded-2xl active:scale-95 hover:bg-rose-700 transition-all shadow-md">
               <Ticket size={16} /> Generate {printList.length === 1 ? 'Admit Card' : `${printList.length} Admit Cards`}
             </button>
@@ -1870,7 +1870,7 @@ export const ToolsManager: React.FC<Props> = ({ onBack }) => {
                 <p className="text-[10px] font-bold text-slate-400 mt-0.5">PNG / JPG · max 4 MB · square recommended</p>
               </div>
               {draft.logoPath && (
-                <button onClick={() => handleClear('logo')}
+                <button type="button" onClick={() => handleClear('logo')}
                   className="text-[10px] font-black text-rose-600 px-2 py-1 hover:bg-rose-50 rounded-md">
                   Remove
                 </button>
@@ -1907,7 +1907,7 @@ export const ToolsManager: React.FC<Props> = ({ onBack }) => {
                 <p className="text-[10px] font-bold text-slate-400 mt-0.5">PNG with transparent background looks cleanest</p>
               </div>
               {draft.principalSignaturePath && (
-                <button onClick={() => handleClear('sig')}
+                <button type="button" onClick={() => handleClear('sig')}
                   className="text-[10px] font-black text-rose-600 px-2 py-1 hover:bg-rose-50 rounded-md">
                   Remove
                 </button>
@@ -1985,7 +1985,7 @@ export const ToolsManager: React.FC<Props> = ({ onBack }) => {
                 {busy === 'save' ? '…' : 'Save'}
               </button>
               {draft.accentColor && (
-                <button onClick={() => handleAccentSave('')}
+                <button type="button" onClick={() => handleAccentSave('')}
                   className="px-3 py-2 bg-slate-100 text-slate-600 font-black text-xs uppercase rounded-xl">
                   Clear
                 </button>
@@ -2065,7 +2065,7 @@ export const ToolsManager: React.FC<Props> = ({ onBack }) => {
           tool. School identity now lives in a one-line strip below. */}
       <div className="sticky top-0 bg-white z-10 border-b border-slate-100">
         <div className="px-4 lg:px-6 py-3 lg:py-4 flex items-center gap-3">
-          <button onClick={onBack} className="p-2 -ml-2 bg-slate-100 rounded-full hover:bg-slate-200 transition-colors">
+          <button type="button" onClick={onBack} className="p-2 -ml-2 bg-slate-100 rounded-full hover:bg-slate-200 transition-colors">
             <ArrowLeft size={20} className="text-slate-600" />
           </button>
           <div className="min-w-0">

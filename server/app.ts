@@ -1,7 +1,7 @@
 import express from 'express';
 import helmet from 'helmet';
 import cors from 'cors';
-import rateLimit from 'express-rate-limit';
+import rateLimit, { ipKeyGenerator } from 'express-rate-limit';
 import { authRouter }         from './routes/auth';
 import { academicYearRouter } from './routes/academic-year';
 import { studentsRouter }     from './routes/students';
@@ -72,24 +72,33 @@ app.use(cors({
 app.use(express.json({ limit: '2mb' }));
 app.use(express.urlencoded({ extended: true, limit: '2mb' }));
 
+// Bucket IPv6 traffic into /64 subnets via the package's ipKeyGenerator
+// helper so a single client can't burn through the limit by rotating
+// addresses inside their assigned /64 (default IPv6 allocation size).
+// Inline arrow form is required — the validator scans the function's
+// stringified body for both `req.ip` and `ipKeyGenerator`, and a lifted
+// helper variable can fail the check on minified output.
+const buildLimiter = (windowMs: number, limit: number, message: string) =>
+  rateLimit({
+    windowMs,
+    limit,
+    standardHeaders: 'draft-7',
+    legacyHeaders: false,
+    keyGenerator: (req, _res) => ipKeyGenerator(req.ip ?? ''),
+    // Suppress the package's source-string validator — it scans the
+    // keyGenerator function body for the literal token `ipKeyGenerator`,
+    // which Vite renames during config-load bundling so the check
+    // false-positives even though the helper is wired correctly.
+    validate: { keyGeneratorIpFallback: false },
+    message: { ok: false, error: message },
+  });
+
 // Global rate limit — generous, just stops accidental flooding.
-app.use('/api/', rateLimit({
-  windowMs: 60_000,
-  limit: 300,
-  standardHeaders: 'draft-7',
-  legacyHeaders: false,
-  message: { ok: false, error: 'Too many requests — slow down' },
-}));
+app.use('/api/', buildLimiter(60_000, 300, 'Too many requests — slow down'));
 
 // Auth-specific rate limit — much tighter to block credential stuffing
 // and password-reset abuse.
-const authLimiter = rateLimit({
-  windowMs: 15 * 60_000,
-  limit: 20,
-  standardHeaders: 'draft-7',
-  legacyHeaders: false,
-  message: { ok: false, error: 'Too many auth attempts — try again later' },
-});
+const authLimiter = buildLimiter(15 * 60_000, 20, 'Too many auth attempts — try again later');
 
 app.get('/api/health', (_req, res) => {
   res.json({ ok: true, version: '1.0', ts: new Date().toISOString() });

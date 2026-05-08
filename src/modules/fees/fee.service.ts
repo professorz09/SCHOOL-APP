@@ -219,9 +219,125 @@ async function _loadInstallments(schoolId: string): Promise<void> {
   const { data, error } = await supabase
     .from('fee_installments').select(INST_FIELDS)
     .eq('school_id', schoolId)
-    .order('due_date', { ascending: true });
+    .order('due_date', { ascending: true })
+    // Safety cap. Above this (≈ 800 students × 12 months × 3 heads ≈ 28k)
+    // the cache pattern stops being practical and the app should switch
+    // to pagination + per-student fetch. Better to truncate visibly than
+    // silently OOM the browser.
+    .limit(50000);
   if (error) throw new Error(error.message);
   _installmentsCache = ((data ?? []) as InstallmentRow[]).map(rowToInstallment);
+}
+
+// Differential refresh — replace ONE student's installments + linked
+// payment-history rows in the in-memory cache instead of refetching the
+// whole school. Use after a write that affects a single student
+// (recordPayment, writeOff, regenerateSchedule for that student). Avoids
+// the O(school) reload cost on every payment, so the FeeLedger stays
+// snappy regardless of total student count.
+async function _refreshOneStudent(studentId: string): Promise<void> {
+  const schoolId = getSchoolId();
+  // 1. Pull this student's installments fresh.
+  const { data: instData, error: instErr } = await supabase
+    .from('fee_installments').select(INST_FIELDS)
+    .eq('school_id', schoolId)
+    .eq('student_id', studentId)
+    .order('due_date', { ascending: true });
+  if (instErr) throw new Error(instErr.message);
+  const fresh = ((instData ?? []) as InstallmentRow[]).map(rowToInstallment);
+
+  // Replace this student's rows in cache (preserve other students).
+  _installmentsCache = [
+    ..._installmentsCache.filter(i => i.studentId !== studentId),
+    ...fresh,
+  ];
+
+  // 2. Pull this student's recent payments (cap at 100 — UI never shows
+  // more) and rewire payment_installment_links for them.
+  const { data: payRows } = await supabase
+    .from('payment_records')
+    .select('id, student_id, amount, method, date, receipt_no, advance_amount, discount_amount, note, created_at, reverses_payment_id, reversed_at, reversed_by, reversal_reason, students(name, admission_no)')
+    .eq('school_id', schoolId).eq('student_id', studentId)
+    .order('date', { ascending: false }).order('created_at', { ascending: false })
+    .limit(100);
+
+  const payments = (payRows ?? []) as unknown as Array<{
+    id: string; student_id: string; amount: number; method: string;
+    date: string; receipt_no: string; advance_amount: number; discount_amount: number | null;
+    note: string | null; created_at: string;
+    reverses_payment_id: string | null; reversed_at: string | null;
+    reversed_by: string | null; reversal_reason: string | null;
+    students: { name: string; admission_no: string } | { name: string; admission_no: string }[] | null;
+  }>;
+  const flatPayments = payments.map(p => ({
+    ...p,
+    students: Array.isArray(p.students) ? (p.students[0] ?? null) : p.students,
+  }));
+
+  if (flatPayments.length) {
+    const ids = flatPayments.map(p => p.id);
+    const { data: linksData } = await supabase
+      .from('payment_installment_links')
+      .select('payment_id, installment_id, amount_applied, fee_installments(month, fee_type, amount)')
+      .in('payment_id', ids);
+    type LinkRow = {
+      payment_id: string; installment_id: string; amount_applied: number;
+      fee_installments: { month: string; fee_type: string; amount: number } | { month: string; fee_type: string; amount: number }[] | null;
+    };
+    const linksByPayment = new Map<string, Array<{ installment_id: string; amount_applied: number; fee_installments: { month: string; fee_type: string; amount: number } | null }>>();
+    for (const l of ((linksData ?? []) as LinkRow[])) {
+      const flat = { installment_id: l.installment_id, amount_applied: l.amount_applied,
+        fee_installments: Array.isArray(l.fee_installments) ? (l.fee_installments[0] ?? null) : l.fee_installments };
+      const arr = linksByPayment.get(l.payment_id) ?? [];
+      arr.push(flat);
+      linksByPayment.set(l.payment_id, arr);
+    }
+
+    const refreshedPayments: PaymentRecord[] = flatPayments.map(p => {
+      const lk = linksByPayment.get(p.id) ?? [];
+      return {
+        id: p.id,
+        studentId: p.student_id,
+        studentName: p.students?.name ?? '',
+        className: '',
+        admissionNo: p.students?.admission_no ?? '',
+        amount: Number(p.amount),
+        method: p.method,
+        date: p.date,
+        receiptNo: p.receipt_no,
+        installmentIds: lk.map(l => l.installment_id),
+        installmentDetails: lk.map(l => ({
+          month: l.fee_installments?.month ?? '',
+          feeType: (l.fee_installments?.fee_type as FeeType) ?? 'OTHER',
+          amount: Number(l.amount_applied),
+        })),
+        advanceAmount: Number(p.advance_amount),
+        discountAmount: Number(p.discount_amount ?? 0) || undefined,
+        note: p.note ?? undefined,
+        createdAt: p.created_at,
+        reversedAt: p.reversed_at ?? undefined,
+        reversedBy: p.reversed_by ?? undefined,
+        reversalReason: p.reversal_reason ?? undefined,
+        reversesPaymentId: p.reverses_payment_id ?? undefined,
+      };
+    });
+
+    // Replace this student's payments in cache, dedupe by id (a write may
+    // have produced a new row that wasn't in the previous cache).
+    const otherPayments = _paymentHistoryCache.filter(p => p.studentId !== studentId);
+    _paymentHistoryCache = [...refreshedPayments, ...otherPayments]
+      .sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
+  } else {
+    _paymentHistoryCache = _paymentHistoryCache.filter(p => p.studentId !== studentId);
+  }
+
+  // 3. Refresh advance for this student.
+  const { data: advRow } = await supabase
+    .from('advance_balances').select('amount')
+    .eq('student_id', studentId).maybeSingle();
+  const advAmt = (advRow as { amount: number } | null)?.amount ?? 0;
+  if (advAmt > 0) _advanceCache.set(studentId, advAmt);
+  else _advanceCache.delete(studentId);
 }
 
 async function _loadPaymentHistory(schoolId: string): Promise<void> {
@@ -340,6 +456,39 @@ export const feeService = {
   /** Load every fee table for the active school into memory. Call on mount + after writes.
    *  Concurrent calls coalesce into a single in-flight load so back-to-back writes
    *  don't fire 4×N parallel reads that can clobber each other. */
+  /** Server-side school-wide fee aggregate. Replaces the pattern of
+   *  walking every student's cached installments to compute summary
+   *  tiles — that walk forces FeeLedger to pre-load the entire school's
+   *  fee_installments cache. With this RPC, totals are one round-trip
+   *  regardless of school size. Use for the principal FeeLedger header
+   *  cards and the dashboard. */
+  async getSchoolAggregate(): Promise<{
+    totalStudents: number;
+    pendingCount: number;
+    dueCount: number;
+    clearedCount: number;
+    totalCollected: number;
+    totalParentDue: number;
+    totalGovtDue: number;
+  }> {
+    const { data, error } = await supabase.rpc('get_school_fee_aggregate');
+    if (error) throw new Error(error.message);
+    const row = (Array.isArray(data) ? data[0] : data) as {
+      total_students: number; pending_count: number; due_count: number;
+      cleared_count: number; total_collected: number;
+      total_parent_due: number; total_govt_due: number;
+    } | null;
+    return {
+      totalStudents:   Number(row?.total_students   ?? 0),
+      pendingCount:    Number(row?.pending_count    ?? 0),
+      dueCount:        Number(row?.due_count        ?? 0),
+      clearedCount:    Number(row?.cleared_count    ?? 0),
+      totalCollected:  Number(row?.total_collected  ?? 0),
+      totalParentDue:  Number(row?.total_parent_due ?? 0),
+      totalGovtDue:    Number(row?.total_govt_due   ?? 0),
+    };
+  },
+
   async refreshAll(): Promise<void> {
     if (_refreshInFlight) return _refreshInFlight;
     const schoolId = getSchoolId();
@@ -357,6 +506,35 @@ export const feeService = {
       }
     })();
     return _refreshInFlight;
+  },
+
+  /** Differential refresh — pulls fresh rows for ONE student and patches
+   *  the in-memory cache. Use after a write that affects exactly one
+   *  student (recordPayment, recordPaymentForInstallment, writeOff,
+   *  generateSchedule for a single student) AND for lazy on-selection
+   *  loading in views like FeeLedger. Always single-student; never
+   *  cascades to refreshAll, so it's safe to call on a fresh cache. */
+  async refreshStudent(studentId: string): Promise<void> {
+    try {
+      await _refreshOneStudent(studentId);
+    } catch (err) {
+      console.warn('[fees] per-student refresh failed', err);
+      throw err;
+    }
+  },
+
+  /** Lite refresh — loads only the school-wide payment history, govt
+   *  payments, and advances. Skips the school-wide installment load
+   *  (the biggest blob, scales with student × month × heads). Use this
+   *  on FeeLedger mount; per-student installments are then fetched
+   *  lazily via refreshStudent() when the principal taps a student. */
+  async refreshLite(): Promise<void> {
+    const schoolId = getSchoolId();
+    await Promise.all([
+      _loadPaymentHistory(schoolId),
+      _loadGovtPayments(schoolId),
+      _loadAdvances(schoolId),
+    ]);
   },
 
   // ── Sync read accessors (assume refreshAll() was called) ────────────────
@@ -587,7 +765,9 @@ export const feeService = {
     }[];
     const applied = links.reduce((s, r) => s + Number(r.amount_applied ?? 0), 0);
 
-    await this.refreshAll();
+    // Only the paying student's cache needs to refresh — the rest of the
+    // school is unchanged. Was triggering a full refreshAll() before.
+    await this.refreshStudent(studentId);
 
     const afterAdv = this.getAdvanceBalance(studentId);
     const advance = Math.max(0, afterAdv - (useAdvance ? 0 : beforeAdv));
@@ -621,7 +801,11 @@ export const feeService = {
     const result = await apiFees.payInstallment({
       installmentId, amount, discount, method, date, note, useAdvance,
     });
-    await this.refreshAll();
+    // Differential refresh — only the affected student needs fresh data.
+    // Look up student_id from the in-memory cache (we know the installment).
+    const inst = _installmentsCache.find(i => i.id === installmentId);
+    if (inst) await this.refreshStudent(inst.studentId);
+    else      await this.refreshAll();
     return { paymentId: (result as any).paymentId as string };
   },
 
@@ -648,7 +832,8 @@ export const feeService = {
 
     await apiFees.writeoff({ installmentId, amount: writeOff, reason });
     await logAudit('fee_writeoff', 'fee_installment', installmentId, { amount: writeOff, reason });
-    await this.refreshAll();
+    // Single-student differential refresh — same reason as recordPayment.
+    await this.refreshStudent(inst.studentId);
     return true;
   },
 
@@ -688,7 +873,8 @@ export const feeService = {
     const { installmentCount } = await apiFees.generateSchedule({
       studentId, yearId: academicYearId, heads, dueDates, isRte, discountAmount, discountPct,
     });
-    await this.refreshAll();
+    // generateSchedule mutates one student's installments only.
+    await this.refreshStudent(studentId);
     return Number(installmentCount) || 0;
   },
 

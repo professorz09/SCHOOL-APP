@@ -3,8 +3,10 @@ import {
   ArrowLeft, Plus, Search, Building2, MapPin, Phone, Users,
   Edit2, CheckCircle2, Save, UserCheck,
   IndianRupee, Copy, ChevronRight, BookOpen, TrendingUp, AlertCircle,
-  Wallet, CreditCard, RefreshCw,
+  Wallet, CreditCard, RefreshCw, Key, X,
 } from 'lucide-react';
+import { adminApi } from '@/lib/adminApi';
+import { supabase } from '@/lib/supabase';
 import { useSchoolStore } from '@/roles/super-admin/schoolStore';
 import { useBillingStore } from '@/roles/super-admin/billingStore';
 import { useUIStore } from '@/store/uiStore';
@@ -89,6 +91,43 @@ export const SchoolsManager: React.FC<Props> = ({ onBack }) => {
   const [payDate, setPayDate]               = useState(() => new Date().toISOString().split('T')[0]);
   const [payNote, setPayNote]               = useState('');
   const [addingPay, setAddingPay]           = useState(false);
+
+  // Principal password reset — two-stage flow with explicit confirmation.
+  //   1. Confirm dialog ("you sure?") — explains what will happen and why
+  //      the principal will be logged out everywhere.
+  //   2. Server generates a fresh random one-time password; we show it
+  //      once. 24h cooldown enforced server-side so the same principal
+  //      can't be reset repeatedly by mistake (or maliciously).
+  // The previous "type-or-generate-then-submit" flow let an admin choose
+  // a weak password; this new flow makes the password server-generated
+  // (always strong) and adds the cooldown + audit tags.
+  const [resetSchoolId, setResetSchoolId]   = useState<string | null>(null);
+  const [resetSubmitting, setResetSubmitting] = useState(false);
+  const [resetDone, setResetDone]   = useState<{ password: string; principalName: string; mobile: string } | null>(null);
+
+  const openResetModal = (schoolId: string) => {
+    setResetSchoolId(schoolId);
+    setResetDone(null);
+  };
+
+  const submitReset = async () => {
+    if (!resetSchoolId) return;
+    setResetSubmitting(true);
+    try {
+      const res = await adminApi.resetPrincipalPassword(resetSchoolId);
+      setResetDone({ password: res.tempPassword, principalName: res.name, mobile: res.mobile });
+      showToast('Password reset · share with principal');
+    } catch (e) {
+      showToast(e instanceof Error ? e.message : 'Reset failed', 'error');
+    } finally {
+      setResetSubmitting(false);
+    }
+  };
+
+  const closeResetModal = () => {
+    setResetSchoolId(null);
+    setResetDone(null);
+  };
 
   const blankForm: Partial<CreateSchoolInput> = {
     name: '', code: '', location: '', address: '', phone: '',
@@ -519,7 +558,14 @@ export const SchoolsManager: React.FC<Props> = ({ onBack }) => {
 
           {/* Principal */}
           <div className="bg-white rounded-2xl border border-slate-100 shadow-sm p-4">
-            <p className="text-[10px] font-black uppercase tracking-widest text-slate-400 mb-3">Principal</p>
+            <div className="flex items-center justify-between mb-3">
+              <p className="text-[10px] font-black uppercase tracking-widest text-slate-400">Principal</p>
+              <button
+                onClick={() => openResetModal(selected.id)}
+                className="flex items-center gap-1.5 text-[10px] font-black text-rose-600 bg-rose-50 hover:bg-rose-100 border border-rose-200 px-2.5 py-1 rounded-lg uppercase tracking-wider transition-colors">
+                <Key size={10} /> Reset Password
+              </button>
+            </div>
             <div className="flex items-center gap-3">
               <div className="w-10 h-10 rounded-xl bg-rose-50 text-rose-600 flex items-center justify-center font-black text-sm">
                 {selected.principalName.split(' ').map(w => w[0]).join('').slice(0, 2)}
@@ -529,6 +575,42 @@ export const SchoolsManager: React.FC<Props> = ({ onBack }) => {
                 <div className="text-[10px] font-bold text-slate-400">{selected.principalEmail}</div>
                 <div className="text-[10px] font-bold text-slate-400">{selected.principalPhone}</div>
               </div>
+            </div>
+          </div>
+
+          {/* New Academic Year creation toggle — SUPER_ADMIN-only.
+              When ON, the school's principal sees an active "Add Year"
+              wizard. When OFF, the wizard's CTA is disabled and the
+              server-side guard rejects any direct RPC. Default OFF
+              so schools opt-in for year-end planning windows only. */}
+          <div className="bg-white rounded-2xl border border-slate-100 shadow-sm p-4">
+            <div className="flex items-start justify-between gap-3">
+              <div className="min-w-0">
+                <p className="text-[10px] font-black uppercase tracking-widest text-slate-400">New Academic Year</p>
+                <div className="text-sm font-black text-slate-900 mt-1">
+                  {selected.newYearCreationEnabled ? 'Creation enabled' : 'Creation disabled'}
+                </div>
+                <p className="text-[11px] font-bold text-slate-500 mt-1 leading-relaxed">
+                  {selected.newYearCreationEnabled
+                    ? 'Principal can create a new academic year from Settings.'
+                    : 'Principal cannot create a new academic year. Turn this on a few days before the school plans year-end rollover.'}
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={async () => {
+                  const next = !selected.newYearCreationEnabled;
+                  try {
+                    await updateSchool(selected.id, { newYearCreationEnabled: next });
+                    showToast(next ? 'New AY creation enabled' : 'New AY creation disabled');
+                  } catch (e) {
+                    showToast(e instanceof Error ? e.message : 'Toggle failed', 'error');
+                  }
+                }}
+                className={`shrink-0 w-12 h-7 rounded-full relative transition-colors ${selected.newYearCreationEnabled ? 'bg-emerald-500' : 'bg-slate-300'}`}
+                aria-label="Toggle new academic year creation">
+                <span className={`absolute top-0.5 w-6 h-6 bg-white rounded-full shadow transition-all ${selected.newYearCreationEnabled ? 'left-[22px]' : 'left-0.5'}`} />
+              </button>
             </div>
           </div>
 
@@ -808,6 +890,89 @@ export const SchoolsManager: React.FC<Props> = ({ onBack }) => {
             </>
           )}
         </div>
+
+        {/* ── PRINCIPAL PASSWORD RESET MODAL ──────────────────────────────── */}
+        {/* Two-stage flow: confirm first ("are you sure"), then show the
+            server-generated temp password once. Server enforces a 24h
+            cooldown per school + force-logout on the principal so the
+            old session can't keep working. */}
+        {resetSchoolId && (
+          <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-50 flex items-end sm:items-center justify-center p-0 sm:p-4">
+            <div className="w-full sm:max-w-md bg-white rounded-t-3xl sm:rounded-3xl p-6 pb-8 animate-in slide-in-from-bottom-8">
+              <div className="flex justify-between items-center mb-4">
+                <div className="flex items-start gap-3">
+                  <div className="w-10 h-10 rounded-xl bg-rose-100 text-rose-600 flex items-center justify-center shrink-0">
+                    <AlertCircle size={20} />
+                  </div>
+                  <div>
+                    <h3 className="text-lg font-black text-slate-900">
+                      {resetDone ? 'Password Reset' : 'Reset Principal Password?'}
+                    </h3>
+                    <p className="text-[11px] font-bold text-slate-400 mt-0.5">{selected.name}</p>
+                  </div>
+                </div>
+                <button onClick={closeResetModal} className="w-8 h-8 bg-slate-100 rounded-full flex items-center justify-center shrink-0">
+                  <X size={16} className="text-slate-500" />
+                </button>
+              </div>
+
+              {!resetDone ? (
+                <>
+                  <p className="text-[12px] font-bold text-slate-700 leading-relaxed mb-3">
+                    The principal of <span className="font-black text-slate-900">{selected.name}</span> ({selected.principalName || 'principal'}) will:
+                  </p>
+                  <ul className="space-y-2 text-[12px] font-bold text-slate-600 mb-4 list-none">
+                    <li className="flex gap-2"><span className="text-rose-600">•</span> Be logged out of all active sessions immediately.</li>
+                    <li className="flex gap-2"><span className="text-rose-600">•</span> Receive a one-time temporary password (shown to you once).</li>
+                    <li className="flex gap-2"><span className="text-rose-600">•</span> Be forced to set a new password on next login.</li>
+                  </ul>
+                  <div className="bg-amber-50 border border-amber-200 rounded-xl p-3 mb-5 flex gap-2">
+                    <AlertCircle size={14} className="text-amber-600 shrink-0 mt-0.5" />
+                    <p className="text-[11px] font-bold text-amber-800 leading-relaxed">
+                      A principal can be reset only once every 24 hours. Make sure the principal is reachable
+                      to receive the temp password.
+                    </p>
+                  </div>
+
+                  <div className="flex gap-2">
+                    <button onClick={closeResetModal}
+                      className="flex-1 py-3 bg-slate-100 hover:bg-slate-200 text-slate-700 font-black rounded-xl text-sm transition-colors">
+                      Cancel
+                    </button>
+                    <button onClick={submitReset} disabled={resetSubmitting}
+                      className="flex-1 py-3 bg-rose-600 hover:bg-rose-700 text-white font-black rounded-xl text-sm disabled:opacity-50 active:scale-[0.98] transition-all">
+                      {resetSubmitting ? 'Resetting…' : 'Confirm Reset'}
+                    </button>
+                  </div>
+                </>
+              ) : (
+                <>
+                  <div className="bg-emerald-50 border border-emerald-200 rounded-xl p-3 mb-4 flex gap-2">
+                    <CheckCircle2 size={14} className="text-emerald-600 shrink-0 mt-0.5" />
+                    <p className="text-[11px] font-bold text-emerald-800 leading-relaxed">
+                      Password reset for <span className="font-black">{resetDone.principalName}</span> (mobile {resetDone.mobile}).
+                      Share this immediately — it will not be shown again.
+                    </p>
+                  </div>
+                  <label className="text-[10px] font-black text-slate-500 uppercase tracking-wider">Temporary Password</label>
+                  <div className="mt-1 flex gap-2">
+                    <div className="flex-1 bg-slate-50 border border-slate-200 rounded-xl px-3 py-3 font-black text-slate-900 text-sm tabular-nums break-all">
+                      {resetDone.password}
+                    </div>
+                    <button onClick={() => { navigator.clipboard.writeText(resetDone.password); showToast('Copied!'); }}
+                      className="px-3 py-3 bg-slate-100 hover:bg-slate-200 rounded-xl">
+                      <Copy size={14} className="text-slate-600" />
+                    </button>
+                  </div>
+                  <button onClick={closeResetModal}
+                    className="w-full mt-5 py-3 bg-emerald-600 hover:bg-emerald-700 text-white font-black rounded-xl text-sm">
+                    Done
+                  </button>
+                </>
+              )}
+            </div>
+          </div>
+        )}
       </div>
     );
   }

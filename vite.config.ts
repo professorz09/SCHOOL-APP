@@ -18,6 +18,13 @@ export default defineConfig(({mode}) => {
       'import.meta.env.VITE_SUPABASE_URL': JSON.stringify(supabaseUrl),
       'import.meta.env.VITE_SUPABASE_ANON_KEY': JSON.stringify(supabaseAnonKey),
     },
+    // Production hardening — strip console.* and debugger statements from
+    // the prod bundle. console.warn/error stay in dev for debugging but
+    // are dropped in `vite build` so internal state doesn't leak to a
+    // user opening DevTools, and the bundle is a touch smaller.
+    esbuild: mode === 'production'
+      ? { drop: ['console', 'debugger'] }
+      : undefined,
     resolve: {
       alias: {
         '@': path.resolve(__dirname, 'src'),

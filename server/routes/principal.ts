@@ -10,18 +10,54 @@ const PRINCIPAL = requireRole('PRINCIPAL');
 
 // ─── Connected Users (students + staff) — for the Settings → Users screen ──
 
-// GET /api/principal/users/list — every public.user that belongs to this school
-// (PRINCIPAL itself excluded so the principal can't accidentally reset themselves).
+// GET /api/principal/users/list — server-paginated. Used by Settings → Users
+// where a school can have ~2000+ rows (students × 2 parents + staff). Same
+// pattern as the slim list endpoint in studentService.getList — bounded
+// page size and ILIKE search keep this constant-cost regardless of school
+// size. Excludes the calling principal's own row so they can't accidentally
+// reset their own password from this screen.
+//
+//   ?offset  — start row (default 0)
+//   ?limit   — page size, capped server-side (default 50, max 200)
+//   ?search  — case-insensitive ILIKE match on name OR mobile_number
+//   ?role    — exact role filter ('TEACHER' | 'PARENT' | …) — narrows
+//              before the count, so the badge in the UI stays accurate
 principalRouter.get('/users/list', requireAuth, PRINCIPAL, async (req, res) => {
   try {
-    const { data, error } = await adminDb
+    const offset = Math.max(0, parseInt(String(req.query.offset ?? '0'), 10) || 0);
+    const limit  = Math.max(1, Math.min(200, parseInt(String(req.query.limit ?? '50'), 10) || 50));
+    const search = String(req.query.search ?? '').trim();
+    const role   = String(req.query.role ?? '').trim();
+
+    let q = adminDb
       .from('users')
-      .select('id, name, mobile_number, role, email, is_active, first_login_changed, last_login')
+      .select('id, name, mobile_number, role, email, is_active, first_login_changed, last_login',
+              { count: 'exact' })
       .eq('school_id', req.user.school_id!)
-      .neq('id', req.user.id)
-      .order('role').order('name');
+      .neq('id', req.user.id);
+
+    if (role) q = q.eq('role', role);
+    if (search) {
+      // Escape ILIKE wildcards so a literal % / _ in a phone number can't
+      // widen the match (defence-in-depth — Supabase parameterises these,
+      // but explicit escaping makes the intent obvious in the logs).
+      const safe = search.replace(/[%_]/g, ch => `\\${ch}`);
+      q = q.or(`name.ilike.%${safe}%,mobile_number.ilike.%${safe}%`);
+    }
+
+    const { data, count, error } = await q
+      .order('role').order('name')
+      .range(offset, offset + limit - 1);
     if (error) throw new ApiError(500, error.message);
-    ok(res, data ?? []);
+
+    const items = data ?? [];
+    const total = count ?? items.length;
+    ok(res, {
+      items,
+      total,
+      hasMore:    offset + items.length < total,
+      nextOffset: offset + items.length,
+    });
   } catch (err) { fail(res, err); }
 });
 

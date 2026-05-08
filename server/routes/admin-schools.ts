@@ -122,3 +122,96 @@ adminSchoolsRouter.get('/:id/payments', requireAuth, SA, async (req, res) => {
     });
   } catch (err) { fail(res, err); }
 });
+
+// ─── POST /api/admin/schools/:id/reset-principal-password ───────────────────
+// SUPER_ADMIN-only: generate a one-time temporary password for the named
+// PRINCIPAL of any school. Mirrors the per-school principal reset flow but
+// targets a role (PRINCIPAL) the principal-side route deliberately excludes.
+//
+// Guards:
+//   1. Caller must be SUPER_ADMIN (decorator above).
+//   2. Target user MUST be the principal of the URL-named school. Cross-
+//      school targeting is impossible: lookup is scoped by school_id.
+//   3. Rate limit — same target principal can only be reset once per 24h.
+//   4. Force logout on the target so the old JWT can't keep working.
+//   5. Audit log captures admin id + IP + target id (NOT the temp password).
+//
+// The temp password is returned in the response and never persisted.
+adminSchoolsRouter.post('/:id/reset-principal-password', requireAuth, SA, async (req, res) => {
+  try {
+    const schoolId = req.params.id;
+
+    // Find the principal of THIS school. There can only be one in our model;
+    // if zero, fail loudly so the caller knows the school has no principal yet.
+    const { data: target, error: te } = await adminDb
+      .from('users')
+      .select('id, name, mobile_number, email')
+      .eq('school_id', schoolId)
+      .eq('role', 'PRINCIPAL')
+      .eq('is_active', true)
+      .maybeSingle();
+    if (te) throw new ApiError(500, te.message);
+    const t = target as { id: string; name: string; mobile_number: string; email: string | null } | null;
+    if (!t) throw new ApiError(404, 'No active principal found for this school');
+
+    // Rate limit: 24h per target principal across all admins.
+    const dayAgo = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
+    const { data: recent } = await adminDb
+      .from('audit_logs')
+      .select('id, created_at')
+      .eq('action', 'admin_reset_principal_password')
+      .eq('entity_id', t.id)
+      .gte('created_at', dayAgo)
+      .limit(1);
+    if ((recent ?? []).length > 0) {
+      const last = (recent as { created_at: string }[])[0].created_at;
+      const nextAvailable = new Date(new Date(last).getTime() + 24 * 60 * 60 * 1000)
+        .toLocaleString('en-IN', { dateStyle: 'medium', timeStyle: 'short' });
+      throw new ApiError(429, `${t.name} ka principal password 24 ghante me ek baar hi reset ho sakta hai. Next available: ${nextAvailable}.`);
+    }
+
+    // Generate a fresh random temp password — same complexity rule as the
+    // principal-side reset so the user can immediately replace it without
+    // a "weaker than current" rejection.
+    const alphabet = 'ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnpqrstuvwxyz23456789';
+    const buf = new Uint8Array(10);
+    (globalThis.crypto ?? require('node:crypto').webcrypto).getRandomValues(buf);
+    let raw = '';
+    for (let i = 0; i < buf.length; i++) raw += alphabet[buf[i] % alphabet.length];
+    const tempPassword = raw.slice(0, 8) + '7Aa';
+
+    const { error: pwErr } = await adminDb.auth.admin.updateUserById(t.id, {
+      password: tempPassword,
+    });
+    if (pwErr) throw new ApiError(500, `Password reset failed: ${pwErr.message}`);
+
+    const { error: flagErr } = await adminDb
+      .from('users')
+      .update({ first_login_changed: false, updated_at: new Date().toISOString() })
+      .eq('id', t.id);
+    if (flagErr) throw new ApiError(500, `Flag flip failed: ${flagErr.message}`);
+
+    // Best-effort force logout. If sign-out fails the password is still reset.
+    try { await adminDb.auth.admin.signOut(t.id); }
+    catch (e) { console.warn('[admin-reset-principal] signOut failed', e); }
+
+    const ip = (req.headers['x-forwarded-for'] as string | undefined)?.split(',')[0].trim()
+            ?? req.socket.remoteAddress
+            ?? null;
+    await adminDb.from('audit_logs').insert({
+      user_id:     req.user.id,
+      school_id:   schoolId,
+      action:      'admin_reset_principal_password',
+      entity_type: 'user',
+      entity_id:   t.id,
+      details:     { targetName: t.name, targetMobile: t.mobile_number, ip },
+    });
+
+    ok(res, {
+      ok: true,
+      name:         t.name,
+      mobile:       t.mobile_number,
+      tempPassword,
+    });
+  } catch (err) { fail(res, err); }
+});

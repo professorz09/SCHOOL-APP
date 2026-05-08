@@ -17,6 +17,7 @@ const SCHOOL_FIELDS = [
   'principal_name', 'principal_email', 'principal_phone',
   'status', 'plan', 'student_count', 'teacher_count',
   'payment_status', 'payment_start_date', 'created_at',
+  'new_year_creation_enabled',
 ].join(', ');
 
 interface SchoolRow {
@@ -27,6 +28,7 @@ interface SchoolRow {
   student_count: number; teacher_count: number;
   payment_status: string; payment_start_date: string | null;
   created_at: string;
+  new_year_creation_enabled: boolean | null;
 }
 
 function rowToSchool(r: SchoolRow): School {
@@ -48,6 +50,7 @@ function rowToSchool(r: SchoolRow): School {
     paymentStartDate: r.payment_start_date ?? '',
     createdAt: (r.created_at ?? '').slice(0, 10),
     academicYears: [],
+    newYearCreationEnabled: !!r.new_year_creation_enabled,
   };
 }
 
@@ -57,9 +60,50 @@ export const schoolService = {
       .from('schools')
       .select(SCHOOL_FIELDS)
       .eq('is_deleted', false)
-      .order('created_at', { ascending: false });
+      .order('created_at', { ascending: false })
+      // Safety cap so a runaway tenant base doesn't blow up the SuperAdmin
+      // Schools view in one shot. Above 500 schools the consumer should
+      // switch to getList() with offset/limit pagination.
+      .limit(500);
     if (error) throw new Error(error.message);
     return (data ?? []).map((r) => rowToSchool(r as unknown as SchoolRow));
+  },
+
+  /** Server-paginated schools list — slim columns, optional search +
+   *  status filter. Use this when the SuperAdmin tenant base grows past
+   *  ~100 schools. Returns total/hasMore so the caller can render a
+   *  "Load more · N remaining" CTA without a separate count query. */
+  async getList(opts: {
+    offset?: number; limit?: number;
+    search?: string; status?: string;
+  } = {}): Promise<{
+    items: School[]; total: number; hasMore: boolean; nextOffset: number;
+  }> {
+    const offset = Math.max(0, opts.offset ?? 0);
+    const limit  = Math.max(1, Math.min(200, opts.limit ?? 50));
+    let q = supabase
+      .from('schools')
+      .select(SCHOOL_FIELDS, { count: 'exact' })
+      .eq('is_deleted', false);
+    if (opts.status) q = q.eq('status', opts.status);
+    if (opts.search?.trim()) {
+      const s = opts.search.trim().replace(/[%_]/g, ch => `\\${ch}`);
+      // Match against the most-search-friendly columns. PostgREST `or`
+      // handles each clause as ILIKE-against-pattern.
+      q = q.or(`name.ilike.%${s}%,code.ilike.%${s}%,location.ilike.%${s}%,principal_name.ilike.%${s}%`);
+    }
+    const { data, count, error } = await q
+      .order('created_at', { ascending: false })
+      .range(offset, offset + limit - 1);
+    if (error) throw new Error(error.message);
+    const items = (data ?? []).map(r => rowToSchool(r as unknown as SchoolRow));
+    const total = count ?? items.length;
+    return {
+      items,
+      total,
+      hasMore:    offset + items.length < total,
+      nextOffset: offset + items.length,
+    };
   },
 
   async getById(id: string): Promise<School | null> {
@@ -119,6 +163,7 @@ export const schoolService = {
     if (input.status !== undefined) updates.status = input.status;
     if (input.plan !== undefined) updates.plan = input.plan;
     if (input.paymentStartDate !== undefined) updates.payment_start_date = input.paymentStartDate;
+    if (input.newYearCreationEnabled !== undefined) updates.new_year_creation_enabled = input.newYearCreationEnabled;
 
     const { data, error } = await supabase
       .from('schools')
@@ -182,15 +227,25 @@ export const schoolService = {
   }> {
     const now = new Date();
     const startOfMonth = new Date(now.getFullYear(), now.getMonth(), 1).toISOString().slice(0, 10);
-    const startOfYear  = new Date(now.getFullYear(), 0, 1).toISOString().slice(0, 10);
 
-    const [stuCount, staffRows, ayRow, payMonth, payYear, expMonth, expYear, salMonth] = await Promise.all([
+    // Resolve the active academic year FIRST so the year-scoped totals use
+    // the AY start date, not the calendar Jan-1. School operators think in
+    // academic years (Apr→Mar in India); the old calendar-year cutoff
+    // showed an incomplete number until April every year and double-counted
+    // April–Dec from the previous AY.
+    const { data: ayDataRaw } = await supabase
+      .from('academic_years')
+      .select('id, label, start_date')
+      .eq('school_id', schoolId).eq('is_active', true).maybeSingle();
+    const ay = ayDataRaw as { id: string; label: string; start_date: string | null } | null;
+    const startOfYear = ay?.start_date
+      ?? new Date(now.getFullYear(), 0, 1).toISOString().slice(0, 10);
+
+    const [stuCount, staffRows, payMonth, payYear, expMonth, expYear, salMonth] = await Promise.all([
       supabase.from('students').select('id', { count: 'exact', head: true })
         .eq('school_id', schoolId).eq('is_active', true),
       supabase.from('staff').select('role, salary, status')
         .eq('school_id', schoolId).eq('is_active', true),
-      supabase.from('academic_years').select('id, label')
-        .eq('school_id', schoolId).eq('is_active', true).maybeSingle(),
       supabase.from('payment_records').select('amount')
         .eq('school_id', schoolId).is('reversed_at', null).gte('date', startOfMonth),
       supabase.from('payment_records').select('amount')
@@ -203,7 +258,6 @@ export const schoolService = {
         .eq('school_id', schoolId).gte('paid_at', startOfMonth),
     ]);
 
-    const ay = (ayRow.data ?? null) as { id: string; label: string } | null;
     const totalStudents = stuCount.count ?? 0;
 
     let rteStudents = 0;

@@ -21,6 +21,11 @@ export interface AcademicYear {
 interface AcademicYearContextType {
   academicYears: AcademicYear[];
   activeYear: AcademicYear | null;
+  /** SUPER_ADMIN-controlled per-school feature flag. When FALSE, the
+   *  principal's "Add Academic Year" wizard is disabled; the server
+   *  RPC also rejects with a friendly error so direct API calls
+   *  cannot bypass it. */
+  newYearCreationEnabled: boolean;
   /**
    * The year that editing surfaces (attendance, tests, timetable, staff
    * attendance) should bind to. Equals `activeYear` by default. When
@@ -70,21 +75,35 @@ export const AcademicYearProvider: React.FC<{ children: ReactNode }> = ({ childr
   const schoolId = session?.schoolId ?? null;
   const [academicYears, setAcademicYears] = useState<AcademicYear[]>([]);
   const [isLoading, setIsLoading] = useState(false);
+  const [newYearCreationEnabled, setNewYearCreationEnabled] = useState(false);
 
   const refresh = useCallback(async () => {
     if (!schoolId) {
       setAcademicYears([]);
+      setNewYearCreationEnabled(false);
       return;
     }
     setIsLoading(true);
     try {
-      const { data, error } = await supabase
-        .from('academic_years')
-        .select('id, label, start_date, end_date, is_active, is_closed, board')
-        .eq('school_id', schoolId)
-        .order('start_date', { ascending: false });
-      if (error) throw new Error(error.message);
-      setAcademicYears(((data ?? []) as AYRow[]).map(rowToYear));
+      // Two reads in parallel — the AY list AND the school-level toggle
+      // that gates new-year creation. Surfaced on the context so any
+      // wizard/CTA can read it without re-querying.
+      const [yearsRes, schoolRes] = await Promise.all([
+        supabase
+          .from('academic_years')
+          .select('id, label, start_date, end_date, is_active, is_closed, board')
+          .eq('school_id', schoolId)
+          .order('start_date', { ascending: false }),
+        supabase
+          .from('schools')
+          .select('new_year_creation_enabled')
+          .eq('id', schoolId)
+          .maybeSingle(),
+      ]);
+      if (yearsRes.error) throw new Error(yearsRes.error.message);
+      setAcademicYears(((yearsRes.data ?? []) as AYRow[]).map(rowToYear));
+      const schoolRow = schoolRes.data as { new_year_creation_enabled: boolean | null } | null;
+      setNewYearCreationEnabled(!!schoolRow?.new_year_creation_enabled);
     } finally {
       setIsLoading(false);
     }
@@ -169,6 +188,7 @@ export const AcademicYearProvider: React.FC<{ children: ReactNode }> = ({ childr
     <AcademicYearContext.Provider
       value={{
         academicYears, activeYear, currentYear, currentEditingYearId,
+        newYearCreationEnabled,
         setCurrentEditingYear, isLoading, refresh,
         addAcademicYear, setActiveYear, lockYear, removeAcademicYear, isYearLocked,
       }}

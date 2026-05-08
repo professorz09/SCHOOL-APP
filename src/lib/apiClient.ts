@@ -379,12 +379,23 @@ export const apiPrincipal = {
   noticeList: () => get<any[]>('/principal/notice/list'),
   noticeCreate: (body: { title: string; body: string; audience: string; pinned?: boolean; sentBy?: string; targetStudentId?: string | null }) =>
     post<any>('/principal/notice/create', body),
-  // Connected users (Settings → Users)
-  usersList: () => get<Array<{
-    id: string; name: string; mobile_number: string; role: string;
-    email: string | null; is_active: boolean; first_login_changed: boolean;
-    last_login: string | null;
-  }>>('/principal/users/list'),
+  // Connected users (Settings → Users) — server-paginated.
+  usersList: (params: { offset?: number; limit?: number; search?: string; role?: string } = {}) => {
+    const qs = new URLSearchParams();
+    if (params.offset)        qs.set('offset', String(params.offset));
+    if (params.limit)         qs.set('limit',  String(params.limit));
+    if (params.search?.trim()) qs.set('search', params.search.trim());
+    if (params.role?.trim())   qs.set('role',   params.role.trim());
+    const q = qs.toString();
+    return get<{
+      items: Array<{
+        id: string; name: string; mobile_number: string; role: string;
+        email: string | null; is_active: boolean; first_login_changed: boolean;
+        last_login: string | null;
+      }>;
+      total: number; hasMore: boolean; nextOffset: number;
+    }>(`/principal/users/list${q ? `?${q}` : ''}`);
+  },
   resetUserPassword: (userId: string) =>
     post<{ ok: true; name: string; mobile: string; tempPassword: string }>('/principal/users/reset-password', { userId }),
   noticeDelete: (noticeId: string) =>

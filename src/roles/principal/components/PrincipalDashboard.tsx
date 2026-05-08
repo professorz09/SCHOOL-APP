@@ -274,11 +274,10 @@ export const PrincipalDashboard: React.FC<Props> = ({ onNavigate }) => {
             <p className="text-[10px] lg:text-xs font-black uppercase tracking-widest text-white/85">
               Total Collection · This Month
             </p>
-            {activeYear && (
-              <span className="flex items-center gap-1 bg-white/20 backdrop-blur-sm border border-white/30 px-2 py-0.5 rounded-full text-[10px] font-black text-white tabular-nums shrink-0">
-                <Calendar size={10}/> {activeYear.name}
-              </span>
-            )}
+            {/* Active-year chip removed from the hero (per request) — the
+                same year, plus lock state and the new-year-creation toggle
+                hint, now lives in Settings → Academic Year so the hero
+                stays focused on the headline metric. */}
           </div>
           <div className="text-4xl lg:text-6xl font-black tabular-nums mt-1 mb-4 lg:mb-5">
             ₹{stats.monthlyCollection.toLocaleString('en-IN')}

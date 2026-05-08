@@ -109,4 +109,14 @@ export const adminApi = {
   setSchoolUserActive(userId: string, isActive: boolean) {
     return authedPost<OkResponse>('/api/admin/set-school-user-active', { userId, isActive });
   },
+
+  /** Generate a one-time temp password for the active principal of a
+   *  given school. The temp password is returned in the response and
+   *  never stored anywhere — surface it to the super-admin once and
+   *  hand it over personally. Subject to a 24-hour cooldown per school. */
+  resetPrincipalPassword(schoolId: string) {
+    return authedPost<{
+      ok: true; name: string; mobile: string; tempPassword: string;
+    }>(`/api/admin/schools/${schoolId}/reset-principal-password`, {});
+  },
 };

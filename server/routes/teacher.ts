@@ -197,7 +197,14 @@ teacherRouter.post('/test/create', requireAuth, requireRole('TEACHER'), async (r
       })
       .select('id, section_id, class_name, section, subject, test_type, title, scheduled_date, duration, max_marks, syllabus, results_uploaded, result_status')
       .single();
-    if (error) throw new ApiError(500, error.message);
+    if (error) {
+      // Friendly message when the partial unique index for a single FINAL
+      // exam per class trips. Pg error code 23505 = unique_violation.
+      if ((error as { code?: string }).code === '23505' && body.testType === 'FINAL') {
+        throw new ApiError(409, 'A final exam already exists for this class — edit the existing one instead of creating a new entry.');
+      }
+      throw new ApiError(500, error.message);
+    }
     ok(res, data, 201);
   } catch (err) { fail(res, err); }
 });

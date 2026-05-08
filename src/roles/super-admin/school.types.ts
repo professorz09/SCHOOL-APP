@@ -18,6 +18,11 @@ export interface School {
   paymentStartDate: string;
   createdAt: string;
   academicYears: SchoolAcademicYear[];
+  /** SUPER_ADMIN-controlled toggle. When FALSE, the principal cannot
+   *  create a new academic year — the wizard's button is disabled and
+   *  the server RPC rejects with a friendly error. Default FALSE so
+   *  schools opt-in explicitly when ready for year-end planning. */
+  newYearCreationEnabled: boolean;
 }
 
 export interface SchoolAcademicYear {

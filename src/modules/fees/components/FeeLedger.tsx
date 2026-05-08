@@ -8,6 +8,7 @@ import {
 import { feeService, FeeInstallment, FeeStatus, FeeType, PaymentRecord, GovernmentPaymentRecord } from '@/modules/fees/fee.service';
 import { exportCsv } from '@/shared/utils/csv';
 import { studentService } from '@/modules/students/student.service';
+import { useStudentList } from '@/modules/students/useStudentList';
 import type { FeeStructureRecord } from '@/modules/fees/fees.types';
 import { useUIStore } from '@/store/uiStore';
 import { useEditorModeStore } from '@/store/editorModeStore';
@@ -201,17 +202,51 @@ export const FeeLedger: React.FC<Props> = ({ onBack }) => {
   // Only one open at a time so the timeline stays scannable.
   const [expandedInstId, setExpandedInstId] = useState<string | null>(null);
 
+  // Server-side school aggregate placeholder — the rest of this comment
+  // continues below. The block below introduces stuList + the aggregate. — replaces the client-side walk that
+  // had to load every student's installments to compute summary tiles.
+  // Refetched on mount + after every write. One round-trip regardless
+  // of school size, so the summary tiles render at constant cost.
+  const [aggregate, setAggregate] = useState<Awaited<ReturnType<typeof feeService.getSchoolAggregate>> | null>(null);
+  const refreshAggregate = async () => {
+    try { setAggregate(await feeService.getSchoolAggregate()); }
+    catch (e) { console.warn('[FeeLedger] aggregate refresh failed', e); }
+  };
+
+  // Server-paginated student list. Replaces studentService.getAll() so the
+  // initial page fetches only ~50 slim rows instead of the entire school.
+  // The hook handles debounced server-side search + Load More automatically.
+  const stuList = useStudentList({ pageSize: PAGE_SIZE });
+
+  // Build StudentFeeProfile rows from the slim list + cached installments.
+  // The installment cache is loaded by feeService.refreshAll() on mount; for
+  // any student already in cache we get their full schedule, otherwise the
+  // profile shows up empty-installments and the principal can still tap to
+  // open the detail view (which lazy-fetches via getStudentInstallmentsDirect).
+  useEffect(() => {
+    if (stuList.items.length === 0 && stuList.loading) return;
+    const profiles = stuList.items.map(s =>
+      feeService.getStudentFeeProfile(
+        s.id, s.name, `${s.className}-${s.section}`, s.admissionNo, s.isRte,
+      ),
+    );
+    setStudents(profiles);
+  }, [stuList.items, stuList.loading]);
+
   useEffect(() => {
     (async () => {
       try {
-        await feeService.refreshAll();
-        const all = await studentService.getAll();
-        const profiles = all.map(s =>
-          feeService.getStudentFeeProfile(s.id, s.name ?? '', `${s.className ?? ''}-${s.section ?? ''}`, s.admissionNo ?? '', s.rte)
-        );
-        setStudents(profiles);
-        setPaymentTransactions(feeService.getPaymentHistory());
-        setGovtTransactions(feeService.getGovernmentPayments());
+        // refreshLite skips the school-wide installment cache (the heaviest
+        // blob, scales with school size). Installments for a specific
+        // student are fetched lazily via feeService.refreshStudent on
+        // selection — see the selection-handler effect below.
+        await Promise.all([
+          feeService.refreshLite().then(() => {
+            setPaymentTransactions(feeService.getPaymentHistory());
+            setGovtTransactions(feeService.getGovernmentPayments());
+          }),
+          refreshAggregate(),
+        ]);
       } catch (e) {
         console.error('[FeeLedger] load error', e);
       } finally {
@@ -219,6 +254,35 @@ export const FeeLedger: React.FC<Props> = ({ onBack }) => {
       }
     })();
   }, []);
+
+  // Lazy per-student installment fetch — fires whenever the user opens a
+  // student's detail panel. The fee_installments cache will then have just
+  // this student's rows (plus whoever else has been opened in this session).
+  // Existing helpers (getStudentInstallments, getParentDueSummary, etc.)
+  // continue to work because they read from the same cache.
+  useEffect(() => {
+    if (!selected) return;
+    let cancelled = false;
+    (async () => {
+      try {
+        await feeService.refreshStudent(selected.studentId);
+        if (cancelled) return;
+        // Re-derive the selected profile from the now-populated cache.
+        const fresh = feeService.getStudentFeeProfile(
+          selected.studentId, selected.name, selected.className,
+          selected.admissionNo, selected.isRte,
+        );
+        setSelected(fresh);
+        setStudents(prev => prev.map(s => s.studentId === fresh.studentId ? fresh : s));
+        setPaymentTransactions(feeService.getPaymentHistory());
+        await reloadYearGroups(selected.studentId);
+      } catch (e) {
+        if (!cancelled) console.warn('[FeeLedger] prime selected failed', e);
+      }
+    })();
+    return () => { cancelled = true; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selected?.studentId]);
 
   const updateStudent = (updated: StudentFeeProfile) => {
     setStudents(prev => prev.map(s => s.studentId === updated.studentId ? updated : s));
@@ -388,7 +452,7 @@ export const FeeLedger: React.FC<Props> = ({ onBack }) => {
         selected.admissionNo, selected.isRte,
       );
       updateStudent(updated);
-      setPaymentTransactions(feeService.getPaymentHistory());
+      setPaymentTransactions(feeService.getPaymentHistory()); void refreshAggregate();
       await reloadYearGroups(selected.studentId);
       setRowPayModal(null);
       showToast('Payment recorded');
@@ -459,7 +523,7 @@ export const FeeLedger: React.FC<Props> = ({ onBack }) => {
           );
         }
       }
-      setPaymentTransactions(feeService.getPaymentHistory());
+      setPaymentTransactions(feeService.getPaymentHistory()); void refreshAggregate();
       if (selected) {
         const updated = feeService.getStudentFeeProfile(
           selected.studentId, selected.name, selected.className,
@@ -567,7 +631,7 @@ export const FeeLedger: React.FC<Props> = ({ onBack }) => {
         const recent = feeService.getPaymentHistory(selected.studentId)[0];
         if (recent) canonical = recent;
       }
-      setPaymentTransactions(feeService.getPaymentHistory());
+      setPaymentTransactions(feeService.getPaymentHistory()); void refreshAggregate();
       await reloadYearGroups(selected.studentId);
       setPayAmount('');
       setPaymentNote('');
@@ -711,11 +775,16 @@ export const FeeLedger: React.FC<Props> = ({ onBack }) => {
   const pendingStudents = students.filter(s => s.installments.length === 0);
   const dueStudents     = students.filter(s => s.installments.length > 0 && hasDue(s));
   const clearedStudents = students.filter(s => s.installments.length > 0 && !hasDue(s));
-  const totalParentDue  = dueStudents.reduce((a, s) => a + getParentDue(s.studentId).total, 0);
-  const totalGovtDue    = dueStudents.filter(s => s.isRte).reduce((a, s) => a + getGovtDue(s.studentId).total, 0);
-  const totalCollected  = students.reduce((a, s) => {
-    return a + s.installments.reduce((b, i) => b + i.paidAmount, 0);
-  }, 0);
+  // Prefer the server aggregate when it has loaded — accurate even if
+  // the in-memory cache is mid-refresh. Falls back to the client walk
+  // for the brief window before the first aggregate fetch returns and
+  // for anyone who lost the connection mid-session.
+  const totalParentDue  = aggregate?.totalParentDue
+                          ?? dueStudents.reduce((a, s) => a + getParentDue(s.studentId).total, 0);
+  const totalGovtDue    = aggregate?.totalGovtDue
+                          ?? dueStudents.filter(s => s.isRte).reduce((a, s) => a + getGovtDue(s.studentId).total, 0);
+  const totalCollected  = aggregate?.totalCollected
+                          ?? students.reduce((a, s) => a + s.installments.reduce((b, i) => b + i.paidAmount, 0), 0);
 
   const visibleStudents = students.filter(s => {
     if (!searchMatch(s)) return false;
@@ -2262,8 +2331,8 @@ export const FeeLedger: React.FC<Props> = ({ onBack }) => {
         <div className="px-4 lg:px-6 pb-3 lg:pb-4 space-y-2 lg:space-y-0 lg:flex lg:items-center lg:gap-3 border-t border-slate-100 pt-3 lg:pt-4">
           <div className="relative lg:flex-1">
             <Search size={14} className="absolute left-3.5 top-1/2 -translate-y-1/2 text-slate-400" />
-            <input value={search} onChange={e => setSearch(e.target.value)}
-              placeholder="Search by name, class, admission no…"
+            <input value={search} onChange={e => { setSearch(e.target.value); stuList.setSearch(e.target.value); }}
+              placeholder="Search by name or admission no…"
               className="w-full bg-slate-50 border border-slate-200 rounded-2xl pl-10 pr-4 py-2.5 lg:py-3 text-sm font-bold outline-none focus:border-blue-500 transition-colors" />
           </div>
           <div className="flex gap-2 shrink-0 overflow-x-auto">
@@ -2363,17 +2432,24 @@ export const FeeLedger: React.FC<Props> = ({ onBack }) => {
           })}
         </div>
 
-        {hasMore && (
+        {/* Server-paginated Load More — pulls the next slim page from the
+            DB. Local-tab filter still narrows the visible page client-side
+            (Pending/Due/Cleared) but the underlying source list grows
+            incrementally so we never download the whole school upfront. */}
+        {stuList.hasMore && (
           <button
-            onClick={() => setShowCount(c => c + PAGE_SIZE)}
-            className="w-full py-3 lg:py-4 mt-3 lg:mt-4 bg-white border border-slate-200 rounded-2xl text-xs font-black text-slate-500 uppercase tracking-widest active:scale-95 hover:bg-slate-50 transition-all">
-            Load More ({visibleStudents.length - showCount} remaining)
+            onClick={() => { void stuList.loadMore(); }}
+            disabled={stuList.loading}
+            className="w-full py-3 lg:py-4 mt-3 lg:mt-4 bg-white border border-slate-200 rounded-2xl text-xs font-black text-slate-500 uppercase tracking-widest active:scale-95 hover:bg-slate-50 transition-all disabled:opacity-60">
+            {stuList.loading
+              ? 'Loading…'
+              : `Load More (${stuList.total - stuList.items.length} remaining)`}
           </button>
         )}
 
-        {!hasMore && visibleStudents.length > PAGE_SIZE && (
+        {!stuList.hasMore && stuList.items.length > PAGE_SIZE && (
           <p className="text-center text-[9px] font-bold text-slate-300 py-3 lg:py-4">
-            All {visibleStudents.length} students shown
+            All {stuList.total} students shown
           </p>
         )}
       </div>

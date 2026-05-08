@@ -1,5 +1,5 @@
-import React, { useEffect, useState } from 'react';
-import { ArrowLeft, Plus, Trash2, ChevronDown, ChevronUp, Save, QrCode, CreditCard, CheckCircle2, Lock, Eye, EyeOff, ShieldCheck, IndianRupee, Edit2, Building2, BookOpen, ChevronRight, X, Download, Database, History, ShieldOff, Unlock, Users, Search, KeyRound, AlertTriangle } from 'lucide-react';
+import React, { useEffect, useState, useRef } from 'react';
+import { ArrowLeft, Plus, Trash2, ChevronDown, ChevronUp, Save, QrCode, CreditCard, CheckCircle2, Lock, Eye, EyeOff, ShieldCheck, IndianRupee, Edit2, Building2, BookOpen, ChevronRight, X, Download, Database, History, ShieldOff, Unlock, Users, Search, KeyRound, AlertTriangle, Calendar } from 'lucide-react';
 import { apiPrincipal } from '@/lib/apiClient';
 import { supabase } from '@/lib/supabase';
 import { principalService } from '@/roles/principal/principal.service';
@@ -22,7 +22,7 @@ interface Props { onBack: () => void; initialView?: View; }
 
 export const SettingsManager: React.FC<Props> = ({ onBack, initialView }) => {
   const { showToast } = useUIStore();
-  const { activeYear } = useAcademicYear();
+  const { activeYear, newYearCreationEnabled } = useAcademicYear();
   const [view, setView] = useState<View>(initialView ?? 'MENU');
   const [configs, setConfigs] = useState<AcademicYearConfig[]>([]);
   const [activeConfig, setActiveConfig] = useState<AcademicYearConfig | null>(null);
@@ -345,6 +345,36 @@ export const SettingsManager: React.FC<Props> = ({ onBack, initialView }) => {
             </div>
           </div>
         )}
+
+        {/* Academic Year summary — moved from the dashboard hero so the
+            chip lives where year-level configuration belongs. Shows the
+            active year + the SUPER_ADMIN-controlled new-year-creation
+            toggle state so the principal knows immediately whether the
+            wizard is gated. Non-interactive: year management still
+            happens from the dashboard's Year tile. */}
+        <div className="bg-gradient-to-r from-blue-50 to-indigo-50 border border-blue-200 rounded-2xl p-4 flex items-start gap-3">
+          <div className="w-11 h-11 rounded-xl bg-white flex items-center justify-center shrink-0 shadow-sm">
+            <Calendar size={20} className="text-blue-600" />
+          </div>
+          <div className="flex-1 min-w-0">
+            <div className="text-[10px] font-black uppercase tracking-widest text-blue-700">Academic Year</div>
+            <div className="font-extrabold text-slate-900 text-sm mt-0.5">
+              {activeYear ? activeYear.name : 'No active year'}
+            </div>
+            <div className={`text-[10px] font-black mt-1 inline-flex items-center gap-1 px-2 py-0.5 rounded-full ${
+              newYearCreationEnabled
+                ? 'bg-emerald-100 text-emerald-700'
+                : 'bg-slate-200 text-slate-600'
+            }`}>
+              {newYearCreationEnabled ? '● New-year creation ENABLED' : '○ New-year creation DISABLED'}
+            </div>
+            {!newYearCreationEnabled && (
+              <p className="text-[10px] font-bold text-slate-500 mt-1.5 leading-relaxed">
+                Platform admin will turn this on when it's time to start the next year.
+              </p>
+            )}
+          </div>
+        </div>
 
         {[
           { icon: Building2, title: 'School Info',    desc: 'School details & contact info',    iconBg: 'bg-blue-100',    iconColor: 'text-blue-600',    action: () => setView('SCHOOL_INFO') },
@@ -1119,25 +1149,64 @@ const ROLE_TONE: Record<string, string> = {
   STAFF:    'bg-emerald-50 text-emerald-700 border-emerald-200',
 };
 
+const PAGE_SIZE = 50;
 const UsersView: React.FC<{ onBack: () => void }> = ({ onBack }) => {
   const { showToast } = useUIStore();
-  const [users, setUsers] = useState<ConnectedUser[] | null>(null);
+  // Server-paginated users feed. `total` is the school-wide count for the
+  // current role/search filter — drives the "X accounts" header + tab badges.
+  const [users, setUsers]   = useState<ConnectedUser[]>([]);
+  const [total, setTotal]   = useState(0);
+  const [hasMore, setHasMore] = useState(false);
+  const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState('');
   const [roleFilter, setRoleFilter] = useState<string>('ALL');
   const [confirm, setConfirm] = useState<ConnectedUser | null>(null);
   const [resetting, setResetting] = useState(false);
   const [tempPwd, setTempPwd] = useState<{ name: string; mobile: string; tempPassword: string } | null>(null);
 
-  const reload = async () => {
+  // Drop newer responses if the user has typed again — same race-guard
+  // pattern as useStudentList.
+  const tokenRef = useRef(0);
+  const offsetRef = useRef(0);
+
+  const fetchPage = async (offset: number, q: string, role: string) => {
+    const token = ++tokenRef.current;
+    setLoading(true);
     try {
-      const list = await apiPrincipal.usersList();
-      setUsers(list);
+      const page = await apiPrincipal.usersList({
+        offset, limit: PAGE_SIZE,
+        search: q || undefined,
+        role: role !== 'ALL' ? role : undefined,
+      });
+      if (token !== tokenRef.current) return;
+      setTotal(page.total);
+      setHasMore(page.hasMore);
+      offsetRef.current = page.nextOffset;
+      setUsers(prev => offset === 0 ? page.items : [...prev, ...page.items]);
     } catch (e) {
-      showToast(e instanceof Error ? e.message : 'Failed to load users', 'error');
-      setUsers([]);
+      if (token === tokenRef.current) {
+        showToast(e instanceof Error ? e.message : 'Failed to load users', 'error');
+      }
+    } finally {
+      if (token === tokenRef.current) setLoading(false);
     }
   };
-  useEffect(() => { void reload(); /* eslint-disable-next-line */ }, []);
+
+  // Debounced reload on search/role change.
+  useEffect(() => {
+    const handle = setTimeout(() => {
+      offsetRef.current = 0;
+      void fetchPage(0, search, roleFilter);
+    }, 250);
+    return () => clearTimeout(handle);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [search, roleFilter]);
+
+  const refresh = () => fetchPage(0, search, roleFilter);
+  const loadMore = () => {
+    if (loading || !hasMore) return;
+    void fetchPage(offsetRef.current, search, roleFilter);
+  };
 
   const handleReset = async () => {
     if (!confirm) return;
@@ -1149,7 +1218,7 @@ const UsersView: React.FC<{ onBack: () => void }> = ({ onBack }) => {
       // else and can't be recovered after this dialog closes.
       setTempPwd({ name: res.name, mobile: res.mobile, tempPassword: res.tempPassword });
       setConfirm(null);
-      await reload();
+      await refresh();
     } catch (e) {
       showToast(e instanceof Error ? e.message : 'Reset failed', 'error');
     } finally {
@@ -1157,17 +1226,11 @@ const UsersView: React.FC<{ onBack: () => void }> = ({ onBack }) => {
     }
   };
 
-  const distinctRoles = users
-    ? Array.from(new Set<string>(users.map(u => u.role))).sort()
-    : [];
-  const q = search.trim().toLowerCase();
-  const filtered = (users ?? []).filter(u => {
-    if (roleFilter !== 'ALL' && u.role !== roleFilter) return false;
-    if (!q) return true;
-    return u.name.toLowerCase().includes(q)
-      || u.mobile_number.includes(search.trim())
-      || (u.email ?? '').toLowerCase().includes(q);
-  });
+  // Server returns a filtered page already, so client just renders.
+  const filtered = users;
+  // Static role list — derived from the current (filtered) page would
+  // collapse the tab strip every time the principal types a query.
+  const distinctRoles = ['STUDENT', 'PARENT', 'TEACHER', 'DRIVER', 'PEON', 'STAFF'];
 
   return (
     <div className="w-full bg-slate-50 flex flex-col animate-in slide-in-from-right-8 duration-300 min-h-[60vh] lg:min-h-[80vh]">
@@ -1178,7 +1241,7 @@ const UsersView: React.FC<{ onBack: () => void }> = ({ onBack }) => {
           </button>
           <div>
             <h2 className="text-xl lg:text-2xl font-black text-slate-900 uppercase tracking-tight">Connected Users</h2>
-            <p className="text-[10px] lg:text-xs font-bold text-slate-400">{users?.length ?? 0} accounts in this school</p>
+            <p className="text-[10px] lg:text-xs font-bold text-slate-400">{total} {roleFilter !== 'ALL' ? roleFilter.toLowerCase() : ''} account{total === 1 ? '' : 's'} in this school</p>
           </div>
         </div>
         <div className="relative mb-2">
@@ -1187,31 +1250,30 @@ const UsersView: React.FC<{ onBack: () => void }> = ({ onBack }) => {
             placeholder="Search by name, mobile, or email…"
             className="w-full pl-9 pr-3 py-2.5 border border-slate-200 bg-slate-50 rounded-xl text-sm font-bold text-slate-800 outline-none focus:border-indigo-400"/>
         </div>
-        {distinctRoles.length > 1 && (
-          <div className="flex gap-1.5 overflow-x-auto hide-scrollbar -mx-1 px-1">
-            <button onClick={() => setRoleFilter('ALL')}
+        <div className="flex gap-1.5 overflow-x-auto hide-scrollbar -mx-1 px-1">
+          {/* Tab strip uses the static role list — counts come from the
+              server-filtered total when a tab is active. Clicking a tab
+              fires a fresh paginated query so the count is school-wide
+              accurate (not just current page). */}
+          <button onClick={() => setRoleFilter('ALL')}
+            className={`shrink-0 px-3 py-1.5 rounded-full text-[10px] font-black uppercase tracking-widest border transition-colors ${
+              roleFilter === 'ALL' ? 'bg-slate-900 text-white border-slate-900' : 'bg-white text-slate-500 border-slate-200'
+            }`}>
+            All
+          </button>
+          {distinctRoles.map(r => (
+            <button key={r} onClick={() => setRoleFilter(r)}
               className={`shrink-0 px-3 py-1.5 rounded-full text-[10px] font-black uppercase tracking-widest border transition-colors ${
-                roleFilter === 'ALL' ? 'bg-slate-900 text-white border-slate-900' : 'bg-white text-slate-500 border-slate-200'
+                roleFilter === r ? 'bg-slate-900 text-white border-slate-900' : 'bg-white text-slate-500 border-slate-200'
               }`}>
-              All ({users?.length ?? 0})
+              {r}
             </button>
-            {distinctRoles.map(r => {
-              const count = (users ?? []).filter(u => u.role === r).length;
-              return (
-                <button key={r} onClick={() => setRoleFilter(r)}
-                  className={`shrink-0 px-3 py-1.5 rounded-full text-[10px] font-black uppercase tracking-widest border transition-colors ${
-                    roleFilter === r ? 'bg-slate-900 text-white border-slate-900' : 'bg-white text-slate-500 border-slate-200'
-                  }`}>
-                  {r} ({count})
-                </button>
-              );
-            })}
-          </div>
-        )}
+          ))}
+        </div>
       </div>
 
       <div className="flex-1 overflow-y-auto p-4 lg:p-6 space-y-2">
-        {users === null ? (
+        {loading && filtered.length === 0 ? (
           <p className="text-center text-sm font-bold text-slate-400 py-12">Loading…</p>
         ) : filtered.length === 0 ? (
           <p className="text-center text-sm font-bold text-slate-400 py-12">No users match.</p>
@@ -1256,6 +1318,20 @@ const UsersView: React.FC<{ onBack: () => void }> = ({ onBack }) => {
               </div>
             );
           })
+        )}
+
+        {/* Load More — fetches the next page from the server. Same shape
+            as FeeLedger / Students list, so the principal's mental model
+            for pagination stays consistent across screens. */}
+        {hasMore && (
+          <div className="pt-2 pb-4 flex justify-center">
+            <button
+              onClick={loadMore}
+              disabled={loading}
+              className="px-5 py-2.5 bg-slate-900 hover:bg-slate-800 text-white text-[11px] font-black uppercase tracking-widest rounded-xl disabled:opacity-50 transition-colors">
+              {loading ? 'Loading…' : `Load more · ${total - users.length} remaining`}
+            </button>
+          </div>
         )}
       </div>
 
