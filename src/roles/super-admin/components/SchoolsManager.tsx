@@ -614,6 +614,15 @@ export const SchoolsManager: React.FC<Props> = ({ onBack }) => {
             </div>
           </div>
 
+          {/* Capacity limits — hard caps on active students + active staff.
+              NULL = unlimited. The DB blocks lowering these below the
+              school's current active count, so the input rejects bad
+              values before they reach the server. */}
+          <SchoolLimitsCard
+            school={selected}
+            onSaved={(patch) => setSelected(prev => prev ? { ...prev, ...patch } : null)}
+          />
+
           {/* Billing snapshot */}
           {billing && (
             <div className="bg-white rounded-2xl border border-slate-100 shadow-sm p-4">
@@ -1237,4 +1246,135 @@ export const SchoolsManager: React.FC<Props> = ({ onBack }) => {
   }
 
   return null;
+};
+
+// ─── Capacity limits card ───────────────────────────────────────────────────
+// Hard caps on active students + active staff. Inline editable; the DB
+// rejects lowering below the school's current count (trigger added in
+// migration 0082) so this component just surfaces that error to the user.
+//
+// Inputs are blanked → NULL on save (= unlimited). Numbers must be ≥ 0.
+const SchoolLimitsCard: React.FC<{
+  school: School;
+  onSaved: (patch: Partial<School>) => void;
+}> = ({ school, onSaved }) => {
+  const { showToast } = useUIStore();
+  const [studentsLimit, setStudentsLimit] = useState<string>(
+    school.maxStudents !== null && school.maxStudents !== undefined ? String(school.maxStudents) : '',
+  );
+  const [staffLimit, setStaffLimit] = useState<string>(
+    school.maxStaff !== null && school.maxStaff !== undefined ? String(school.maxStaff) : '',
+  );
+  const [activeStudents, setActiveStudents] = useState<number | null>(null);
+  const [activeStaff, setActiveStaff]       = useState<number | null>(null);
+  const [saving, setSaving] = useState(false);
+
+  // Pull live counts on mount so the input help-text can show how low the
+  // SUPER_ADMIN is allowed to go ("min 1000 — currently 1000 active").
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      const [stuRes, staffRes] = await Promise.all([
+        supabase.from('students').select('id', { count: 'exact', head: true })
+          .eq('school_id', school.id).eq('is_active', true),
+        supabase.from('staff').select('id', { count: 'exact', head: true })
+          .eq('school_id', school.id).eq('is_active', true),
+      ]);
+      if (cancelled) return;
+      setActiveStudents(stuRes.count ?? 0);
+      setActiveStaff(staffRes.count ?? 0);
+    })();
+    return () => { cancelled = true; };
+  }, [school.id]);
+
+  const parseLimit = (raw: string): number | null => {
+    const t = raw.trim();
+    if (t === '') return null;
+    const n = Number(t);
+    if (!Number.isFinite(n) || n < 0 || !Number.isInteger(n)) return NaN as unknown as number;
+    return n;
+  };
+
+  const handleSave = async () => {
+    const stu = parseLimit(studentsLimit);
+    const stf = parseLimit(staffLimit);
+    if (Number.isNaN(stu) || Number.isNaN(stf)) {
+      showToast('Limits must be whole numbers (or blank for unlimited)', 'error');
+      return;
+    }
+    setSaving(true);
+    try {
+      await schoolService.update(school.id, { maxStudents: stu, maxStaff: stf });
+      onSaved({ maxStudents: stu, maxStaff: stf });
+      showToast('Limits saved');
+    } catch (e) {
+      showToast(e instanceof Error ? e.message : 'Save failed', 'error');
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const dirty = studentsLimit !== (school.maxStudents != null ? String(school.maxStudents) : '')
+              || staffLimit    !== (school.maxStaff    != null ? String(school.maxStaff)    : '');
+
+  return (
+    <div className="bg-white rounded-2xl border border-slate-100 shadow-sm p-4">
+      <div className="flex items-center justify-between mb-3">
+        <p className="text-[10px] font-black uppercase tracking-widest text-slate-400">Capacity Limits</p>
+        <span className="text-[10px] font-bold text-slate-400">Blank = unlimited</span>
+      </div>
+      <div className="grid grid-cols-2 gap-3">
+        <LimitInput
+          label="Max Students"
+          value={studentsLimit}
+          onChange={setStudentsLimit}
+          activeCount={activeStudents}
+          accent="indigo"
+        />
+        <LimitInput
+          label="Max Staff"
+          value={staffLimit}
+          onChange={setStaffLimit}
+          activeCount={activeStaff}
+          accent="emerald"
+        />
+      </div>
+      {dirty && (
+        <button
+          onClick={handleSave}
+          disabled={saving}
+          className="mt-3 w-full py-2.5 bg-slate-900 hover:bg-slate-800 text-white font-black text-xs uppercase tracking-widest rounded-xl active:scale-[0.98] transition-all disabled:opacity-50">
+          {saving ? 'Saving…' : 'Save Limits'}
+        </button>
+      )}
+    </div>
+  );
+};
+
+const LimitInput: React.FC<{
+  label: string;
+  value: string;
+  onChange: (v: string) => void;
+  activeCount: number | null;
+  accent: 'indigo' | 'emerald';
+}> = ({ label, value, onChange, activeCount, accent }) => {
+  const accentClass = accent === 'indigo' ? 'focus:border-indigo-500' : 'focus:border-emerald-500';
+  return (
+    <div>
+      <label className="text-[10px] font-black uppercase tracking-widest text-slate-500 mb-1.5 block">{label}</label>
+      <input
+        type="number"
+        min={0}
+        value={value}
+        onChange={e => onChange(e.target.value)}
+        placeholder="Unlimited"
+        className={`w-full border border-slate-200 bg-slate-50 rounded-xl px-3 py-2.5 font-black text-slate-900 text-base outline-none ${accentClass}`}
+      />
+      {activeCount !== null && (
+        <p className="text-[10px] font-bold text-slate-400 mt-1 tabular-nums">
+          Currently {activeCount} active · min allowed {activeCount}
+        </p>
+      )}
+    </div>
+  );
 };

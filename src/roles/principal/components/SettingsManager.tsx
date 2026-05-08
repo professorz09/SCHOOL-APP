@@ -376,6 +376,12 @@ export const SettingsManager: React.FC<Props> = ({ onBack, initialView }) => {
           </div>
         </div>
 
+        {/* Capacity meters — students + staff used vs school's hard cap.
+            Hidden when no cap is set. The DB rejects new rows once the
+            count hits the cap; this surface gives early warning so the
+            principal can request a higher limit before they're blocked. */}
+        <CapacityMeters />
+
         {[
           { icon: Building2, title: 'School Info',    desc: 'School details & contact info',    iconBg: 'bg-blue-100',    iconColor: 'text-blue-600',    action: () => setView('SCHOOL_INFO') },
           // Classes/sections are now set in the Academic Year wizard. The legacy
@@ -1138,6 +1144,91 @@ type ConnectedUser = {
   id: string; name: string; mobile_number: string; role: string;
   email: string | null; is_active: boolean; first_login_changed: boolean;
   last_login: string | null;
+};
+
+// ─── Capacity meters ────────────────────────────────────────────────────────
+// Renders only when the school has at least one cap configured. Hidden
+// entirely on unlimited schools so principals on small plans don't see
+// noise. Numbers come straight from the schools row + live counts so
+// the meter stays accurate without polling.
+const CapacityMeters: React.FC = () => {
+  const schoolId = useAuthStore.getState().session?.schoolId ?? null;
+  const [data, setData] = useState<{
+    maxStudents: number | null; maxStaff: number | null;
+    activeStudents: number; activeStaff: number;
+  } | null>(null);
+
+  useEffect(() => {
+    if (!schoolId) return;
+    let cancelled = false;
+    (async () => {
+      const [schoolRes, stuRes, staffRes] = await Promise.all([
+        supabase.from('schools').select('max_students, max_staff').eq('id', schoolId).maybeSingle(),
+        supabase.from('students').select('id', { count: 'exact', head: true })
+          .eq('school_id', schoolId).eq('is_active', true),
+        supabase.from('staff').select('id', { count: 'exact', head: true })
+          .eq('school_id', schoolId).eq('is_active', true),
+      ]);
+      if (cancelled) return;
+      const r = (schoolRes.data ?? null) as { max_students: number | null; max_staff: number | null } | null;
+      setData({
+        maxStudents:   r?.max_students ?? null,
+        maxStaff:      r?.max_staff ?? null,
+        activeStudents: stuRes.count ?? 0,
+        activeStaff:    staffRes.count ?? 0,
+      });
+    })();
+    return () => { cancelled = true; };
+  }, [schoolId]);
+
+  if (!data) return null;
+  // Hide the whole card if the school is unlimited on both axes — no
+  // point burning vertical space showing two "Unlimited" rows.
+  if (data.maxStudents === null && data.maxStaff === null) return null;
+
+  return (
+    <div className="bg-white rounded-2xl border border-slate-100 shadow-sm p-4 space-y-3">
+      <p className="text-[10px] font-black uppercase tracking-widest text-slate-400">Capacity</p>
+      {data.maxStudents !== null && (
+        <CapacityBar label="Students" used={data.activeStudents} cap={data.maxStudents} />
+      )}
+      {data.maxStaff !== null && (
+        <CapacityBar label="Staff" used={data.activeStaff} cap={data.maxStaff} />
+      )}
+      <p className="text-[9px] font-bold text-slate-400 leading-relaxed">
+        Limit reach hone par naya add nahi hoga. Higher limit chahiye to platform admin se contact karein.
+      </p>
+    </div>
+  );
+};
+
+const CapacityBar: React.FC<{ label: string; used: number; cap: number }> = ({ label, used, cap }) => {
+  const pct = cap > 0 ? Math.min(100, Math.round((used / cap) * 100)) : 100;
+  // Three-tier colour ramp: emerald < 75%, amber 75–94%, rose ≥ 95%.
+  // Same vocabulary as the FeeLedger progress bars so principals carry
+  // one mental model across screens.
+  const tone = pct >= 95 ? 'rose' : pct >= 75 ? 'amber' : 'emerald';
+  const barColor =
+    tone === 'rose'   ? 'bg-rose-500'   :
+    tone === 'amber'  ? 'bg-amber-400'  :
+                        'bg-emerald-500';
+  const numColor =
+    tone === 'rose'   ? 'text-rose-600'   :
+    tone === 'amber'  ? 'text-amber-600'  :
+                        'text-slate-900';
+  return (
+    <div>
+      <div className="flex items-baseline justify-between mb-1.5">
+        <span className="text-[11px] font-black uppercase tracking-wider text-slate-600">{label}</span>
+        <span className={`text-sm font-black tabular-nums ${numColor}`}>
+          {used.toLocaleString('en-IN')}<span className="text-slate-400 font-bold"> / {cap.toLocaleString('en-IN')}</span>
+        </span>
+      </div>
+      <div className="h-1.5 bg-slate-100 rounded-full overflow-hidden">
+        <div className={`h-full rounded-full transition-all ${barColor}`} style={{ width: `${pct}%` }} />
+      </div>
+    </div>
+  );
 };
 
 const ROLE_TONE: Record<string, string> = {

@@ -99,10 +99,24 @@ class AuthService {
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ mobile: cleaned, password }),
     });
-    const json = await res.json();
-    if (!res.ok) throw new Error(json?.error ?? 'Invalid mobile number or password');
 
-    const { accessToken, refreshToken } = json.data as { accessToken: string; refreshToken: string };
+    // Tolerate non-JSON / empty bodies (rate-limit edge cases, network blips,
+    // upstream proxy issues). Without this, the user saw an opaque
+    // "Failed to execute 'json' on 'Response': Unexpected end of JSON input"
+    // instead of the actual auth error. Read body as text first, then try
+    // to parse — same defensive pattern apiClient uses.
+    const raw = await res.text();
+    let json: { ok?: boolean; error?: string; data?: { accessToken: string; refreshToken: string } } | null = null;
+    if (raw) {
+      try { json = JSON.parse(raw); } catch { /* leave json null */ }
+    }
+    if (!res.ok) {
+      throw new Error(json?.error ?? `Invalid mobile number or password (HTTP ${res.status})`);
+    }
+    if (!json?.data?.accessToken || !json?.data?.refreshToken) {
+      throw new Error('Login server returned an unexpected response. Try again or contact support.');
+    }
+    const { accessToken, refreshToken } = json.data;
 
     // Step 2: Establish Supabase client session with returned tokens so RLS
     // reads (profile fetch, etc.) use the authenticated user context.

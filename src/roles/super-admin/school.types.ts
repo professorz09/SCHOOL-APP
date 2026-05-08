@@ -23,6 +23,11 @@ export interface School {
    *  the server RPC rejects with a friendly error. Default FALSE so
    *  schools opt-in explicitly when ready for year-end planning. */
   newYearCreationEnabled: boolean;
+  /** Hard cap on active students. NULL = unlimited. SUPER_ADMIN only.
+   *  Cannot be lowered below the school's current active count. */
+  maxStudents: number | null;
+  /** Same as maxStudents but for staff. */
+  maxStaff: number | null;
 }
 
 export interface SchoolAcademicYear {
