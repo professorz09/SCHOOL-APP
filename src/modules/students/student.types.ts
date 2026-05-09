@@ -44,6 +44,14 @@ export interface Student {
   guardianName: string;
   guardianPhone: string;
   guardianRelation: string;
+  /** Mobile the parent will use to LOG IN. Independent of father /
+   *  mother / guardian phones (those stay as plain contact info on
+   *  the record). On admission this drives users.mobile_number; on
+   *  the /students/update-login-phone path the principal can change
+   *  it later (editor-mode gated). Optional in the type because
+   *  Student rows fetched from the DB don't carry it directly — it
+   *  lives on the linked users row, surfaced separately when needed. */
+  loginPhone?: string;
   academicYearId: string;
   admissionDate: string;
   feeStatus: PaymentStatus;

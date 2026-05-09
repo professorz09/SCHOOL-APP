@@ -312,6 +312,71 @@ studentsRouter.post('/deactivate', requireAuth, requireRole('PRINCIPAL'), async 
   } catch (err) { fail(res, err); }
 });
 
+// POST /api/students/update-login-phone — change the parent's login mobile.
+// Editor-mode + principal-only because the new number becomes the
+// parent's auth identity. Updates the linked parent user's
+// mobile_number AND the auth_users email so the parent can keep
+// logging in. If the new number already belongs to another user
+// (parent, principal, teacher), the call fails with 409.
+studentsRouter.post('/update-login-phone', requireAuth, requireRole('PRINCIPAL'), requireEditorMode, async (req, res) => {
+  try {
+    const body = requireBody<{ studentId: string; newPhone: string }>(req, ['studentId', 'newPhone']);
+    const newPhone = body.newPhone.replace(/\D/g, '').slice(-10);
+    if (newPhone.length !== 10) {
+      throw new ApiError(400, 'Login mobile must be a 10-digit number');
+    }
+
+    // Resolve the parent currently linked to this student in the
+    // caller's school. If multiple links exist (siblings sharing a
+    // parent), they all share the same parent_user_id so updating
+    // once propagates everywhere — that's the intended behaviour.
+    const { data: links } = await adminDb.from('parent_student_links')
+      .select('parent_user_id, students!inner(school_id)')
+      .eq('student_id', body.studentId);
+    type Link = { parent_user_id: string; students: { school_id: string } | { school_id: string }[] };
+    const linkRows = ((links ?? []) as unknown as Link[]).filter(l => {
+      const s = Array.isArray(l.students) ? l.students[0] : l.students;
+      return s?.school_id === req.user.school_id;
+    });
+    if (linkRows.length === 0) throw new ApiError(404, 'No parent account linked to this student');
+    const parentUserId = linkRows[0].parent_user_id;
+
+    // Reject if another user (parent / principal / teacher / etc) already
+    // has the new number. The auth flow keys on mobile_number — collisions
+    // would silently lock one of the two accounts out.
+    const { data: clash } = await adminDb.from('users')
+      .select('id, role').eq('mobile_number', newPhone).maybeSingle();
+    if (clash && (clash as { id: string }).id !== parentUserId) {
+      throw new ApiError(409, `Mobile ${newPhone} pehle se kisi aur user (${(clash as { role: string }).role}) ke saath linked hai.`);
+    }
+
+    // Update users + the auth row's email (which mirrors the mobile)
+    // in one go. Any error rolls back nothing, so we update users LAST
+    // so a failed auth update doesn't desync.
+    const MOBILE_EMAIL_DOMAIN = '@edugrow.local';
+    const newEmail = `${newPhone}${MOBILE_EMAIL_DOMAIN}`;
+    const { error: authErr } = await adminDb.auth.admin.updateUserById(parentUserId, {
+      email: newEmail,
+      user_metadata: { mobile_number: newPhone },
+    });
+    if (authErr) throw new ApiError(500, `Auth update failed: ${authErr.message}`);
+
+    const { error: usrErr } = await adminDb.from('users')
+      .update({ mobile_number: newPhone, updated_at: new Date().toISOString() })
+      .eq('id', parentUserId);
+    if (usrErr) throw new ApiError(500, `User row update failed: ${usrErr.message}`);
+
+    // Audit log so the change is traceable later.
+    await adminDb.from('audit_logs').insert({
+      user_id: req.user.id, school_id: req.user.school_id,
+      action: 'parent_login_phone_changed', entity_type: 'user', entity_id: parentUserId,
+      details: { studentId: body.studentId, newPhone },
+    });
+
+    ok(res, { parentUserId, newPhone });
+  } catch (err) { fail(res, err); }
+});
+
 // POST /api/students/update — patch non-critical fields on students + academic record
 studentsRouter.post('/update', requireAuth, requireRole('PRINCIPAL'), async (req, res) => {
   try {
@@ -547,6 +612,12 @@ studentsRouter.post('/create', requireAuth, requireRole('PRINCIPAL'), async (req
       fatherOccupation?: string; fatherIncome?: number;
       motherName?: string; motherPhone?: string; motherOccupation?: string;
       guardianName?: string; guardianPhone?: string; guardianRelation?: string;
+      // Mobile the parent will log in with. Independent of
+      // fatherPhone / motherPhone (which are contact info on the
+      // record). Defaults to fatherPhone when not supplied so older
+      // clients keep working. Drives the users.mobile_number row
+      // that the auth flow looks up.
+      loginPhone?: string;
       religion?: string; caste?: string; penNumber?: string;
       birthCertNo?: string; tcNumber?: string; admissionDate?: string;
       className?: string; section?: string; academicYearId?: string; totalFee?: number;
@@ -578,18 +649,24 @@ studentsRouter.post('/create', requireAuth, requireRole('PRINCIPAL'), async (req
 
     // ── Provision parent auth account (upsertSchoolUser pattern) ─────────────
     const MOBILE_EMAIL_DOMAIN = '@edugrow.local';
+    // The login phone — explicit body field with father's phone as
+    // a sensible default (matches the historic behaviour). All the
+    // user-row provisioning below keys on this number, NOT on
+    // father/mother/guardian phones (those stay as contact info).
+    const loginPhoneRaw = (body.loginPhone ?? body.fatherPhone ?? '').replace(/\D/g, '').slice(-10);
+    const loginPhone = loginPhoneRaw;
     let parentUserId: string | null = null;
     let parentReused: boolean | null = null;
-    if (fatherPhone) {
+    if (loginPhone) {
       // Check if user already exists in public.users — even inactive ones,
       // because a TC-deactivated parent should be reactivated on transfer.
       const { data: existing } = await adminDb
         .from('users').select('id, school_id, role, is_active')
-        .eq('mobile_number', fatherPhone).maybeSingle();
+        .eq('mobile_number', loginPhone).maybeSingle();
       if (existing) {
         const ex = existing as { id: string; school_id: string | null; role: string; is_active: boolean };
         if (ex.role !== 'PARENT') {
-          throw new ApiError(409, `mobile ${fatherPhone} already registered as ${ex.role}`);
+          throw new ApiError(409, `mobile ${loginPhone} already registered as ${ex.role}`);
         }
         if (ex.school_id && ex.school_id !== schoolId) {
           // The parent has an account at a different school. Two cases:
@@ -618,7 +695,7 @@ studentsRouter.post('/create', requireAuth, requireRole('PRINCIPAL'), async (req
           }
           if (activeElsewhere > 0) {
             throw new ApiError(409,
-              `Parent ${fatherPhone} has ${activeElsewhere} active student${activeElsewhere === 1 ? '' : 's'} in another school. ` +
+              `Parent ${loginPhone} has ${activeElsewhere} active student${activeElsewhere === 1 ? '' : 's'} in another school. ` +
               `Issue TC for those students first; the account will then transfer here.`,
             );
           }
@@ -658,11 +735,11 @@ studentsRouter.post('/create', requireAuth, requireRole('PRINCIPAL'), async (req
           parentReused = true;
         }
       } else {
-        const parentEmail = `${fatherPhone}${MOBILE_EMAIL_DOMAIN}`;
-        const parentName = body.fatherName || 'Parent';
+        const parentEmail = `${loginPhone}${MOBILE_EMAIL_DOMAIN}`;
+        const parentName = body.fatherName || body.motherName || body.guardianName || 'Parent';
         const created = await adminDb.auth.admin.createUser({
-          email: parentEmail, password: fatherPhone, email_confirm: true,
-          user_metadata: { mobile_number: fatherPhone, name: parentName, role: 'PARENT' },
+          email: parentEmail, password: loginPhone, email_confirm: true,
+          user_metadata: { mobile_number: loginPhone, name: parentName, role: 'PARENT' },
         });
         let authUserId: string;
         let createdNew = false;
@@ -676,7 +753,7 @@ studentsRouter.post('/create', requireAuth, requireRole('PRINCIPAL'), async (req
           createdNew = true;
         }
         const { error: insErr } = await adminDb.from('users').insert({
-          id: authUserId, mobile_number: fatherPhone, role: 'PARENT',
+          id: authUserId, mobile_number: loginPhone, role: 'PARENT',
           name: parentName, email: body.fatherEmail ?? null,
           school_id: schoolId, first_login_changed: false, is_active: true,
         });
@@ -755,7 +832,7 @@ studentsRouter.post('/create', requireAuth, requireRole('PRINCIPAL'), async (req
     ok(res, {
       studentRow: stu,
       academicRecordRow: ar,
-      parent: fatherPhone && parentReused !== null ? { mobile: fatherPhone, reused: parentReused } : null,
+      parent: loginPhone && parentReused !== null ? { mobile: loginPhone, reused: parentReused } : null,
     }, 201);
   } catch (err) { fail(res, err); }
 });

@@ -390,6 +390,7 @@ export const studentService = {
       motherOccupation: input.motherOccupation,
       guardianName: input.guardianName, guardianPhone: input.guardianPhone,
       guardianRelation: input.guardianRelation,
+      loginPhone: input.loginPhone,
       religion: input.religion, caste: input.caste,
       penNumber: input.penNumber, birthCertNo: input.birthCertNo,
       tcNumber: input.tcNumber, admissionDate: input.admissionDate,
@@ -975,6 +976,12 @@ export const studentService = {
    * uses an off-app numbering system). Server-side enforces Editor
    * Mode + active-year + principal-only.
    */
+  async updateLoginPhone(studentId: string, newPhone: string): Promise<{ parentUserId: string; newPhone: string }> {
+    const result = await apiStudents.updateLoginPhone({ studentId, newPhone });
+    await logAudit('parent_login_phone_changed', 'student', studentId, { newPhone });
+    return result;
+  },
+
   async issueTC(studentId: string, reason?: string, tcNumberOverride?: string): Promise<{ tcNumber: string }> {
     const schoolId = getSchoolId();
     const { data: row } = await supabase

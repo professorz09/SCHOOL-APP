@@ -122,6 +122,8 @@ export const apiStudents = {
     post<{ studentId: string; tcNumber: string }>('/students/issue-tc', body),
   readmit: (body: { studentId: string; className: string; section?: string; rollNo?: string }) =>
     post<{ studentId: string }>('/students/readmit', body),
+  updateLoginPhone: (body: { studentId: string; newPhone: string }) =>
+    post<{ parentUserId: string; newPhone: string }>('/students/update-login-phone', body),
   addDocument: (body: { studentId: string; docType: string; docUrl: string }) =>
     post<any>('/students/document/add', body),
   removeDocument: (documentId: string) =>

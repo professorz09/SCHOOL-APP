@@ -71,6 +71,7 @@ const BLANK_FORM: CreateStudentInput = {
   religion: '', caste: '', penNumber: '', birthCertNo: '', tcNumber: '', rte: false,
   fatherOccupation: '', fatherIncome: '', fatherEmail: '', motherOccupation: '',
   guardianName: '', guardianPhone: '', guardianRelation: '',
+  loginPhone: '',
 };
 
 interface FormWithParent extends CreateStudentInput {
@@ -223,11 +224,12 @@ const [mainView, setMainView] = useState<MainView>(initialView ?? 'CLASSES');
       showToast('Name and admission no. required', 'error');
       return;
     }
-    // Login number is derived: prefer Father's Phone, fall back to Mother's.
-    // At least one must be present so the parent gets a login account.
-    const loginRaw = form.fatherPhone?.trim() || form.motherPhone?.trim() || '';
+    // Login Mobile is now an explicit field — separate from contact
+    // phones. Fall back to father / mother / guardian only if the
+    // user didn't fill it (gentle ramp for older muscle memory).
+    const loginRaw = (form.loginPhone || form.fatherPhone || form.motherPhone || form.guardianPhone || '').trim();
     if (!loginRaw) {
-      showToast("Father's Phone is required (used for login). Mother's Phone is a fallback.", 'error');
+      showToast('Login Mobile is required (parent uses this to log in)', 'error');
       return;
     }
     if (!form.fatherName?.trim() && !form.motherName?.trim()) {
@@ -268,22 +270,22 @@ const [mainView, setMainView] = useState<MainView>(initialView ?? 'CLASSES');
       // separate inputs but now they're computed from Father / Mother fields.
       const { parentMobileNumber: _pm, parentName: _pn, parentEmail: _pe, ...rest } = form;
       void _pm; void _pn; void _pe;
-      // Canonicalise the login mobile: prefer Father's Phone, fall back to
-      // Mother's Phone. Always last-10-digit so leading +91 / spaces / 0 are
-      // dropped consistently.
+      // Canonicalise the explicit Login Mobile (last-10-digit so leading
+      // +91 / spaces / 0 are dropped consistently). Falls back to
+      // father / mother / guardian phone if the user skipped the
+      // dedicated field.
       const canonicalLoginMobile = (
-        (form.fatherPhone || form.motherPhone || '').replace(/\D/g, '')
+        (form.loginPhone || form.fatherPhone || form.motherPhone || form.guardianPhone || '').replace(/\D/g, '')
       ).slice(-10);
       const studentData: CreateStudentInput = {
         ...rest,
         // Force class/section blank so the AR insert in create() is skipped
         // (UNASSIGNED bucket). totalFee is taken in the assignment modal.
         className: '', section: '', stream: undefined, totalFee: 0,
-        // The service treats fatherPhone as the canonical login mobile —
-        // backfill it from Mother's Phone when Father's is missing so the
-        // parent account is still created.
-        fatherPhone: canonicalLoginMobile,
-        fatherName: rest.fatherName || rest.motherName || 'Parent',
+        // Father / Mother / Guardian phones go through as plain
+        // contact info now. The dedicated loginPhone drives auth.
+        loginPhone: canonicalLoginMobile,
+        fatherName: rest.fatherName || rest.motherName || rest.guardianName || 'Parent',
       };
       const { student, parent } = await studentService.create(studentData);
 
@@ -728,18 +730,25 @@ const [mainView, setMainView] = useState<MainView>(initialView ?? 'CLASSES');
             <div>
               <p className="text-[10px] font-black uppercase tracking-widest text-slate-400">Parent Details</p>
               <p className="text-[10px] font-bold text-slate-500 mt-1">
-                Login mobile = Father's Phone (or Mother's if blank). A temporary password is created on admission.
+                Father / Mother phones are contact info only. Use the dedicated "Login Mobile" field below for the login number — it can be the same as Father's, Mother's, or anyone else's.
               </p>
             </div>
             {[
               { label: "Father's Name", key: 'fatherName', placeholder: 'Full name', req: true },
-              { label: "Father's Phone", key: 'fatherPhone', placeholder: '10-digit mobile', req: true, hint: 'Used for login by default' },
+              { label: "Father's Phone", key: 'fatherPhone', placeholder: '10-digit mobile (contact)', hint: 'Contact info only' },
               { label: "Father's Occupation", key: 'fatherOccupation', placeholder: 'Business / Service / Farmer / etc.' },
               { label: "Father's Income", key: 'fatherIncome', placeholder: 'e.g. 5-10 LPA' },
               { label: "Father's Email", key: 'fatherEmail', placeholder: 'father@email.com' },
               { label: "Mother's Name", key: 'motherName', placeholder: 'Full name' },
-              { label: "Mother's Phone", key: 'motherPhone', placeholder: '10-digit mobile', hint: 'Used for login if Father\'s phone is blank' },
+              { label: "Mother's Phone", key: 'motherPhone', placeholder: '10-digit mobile (contact)', hint: 'Contact info only' },
               { label: "Mother's Occupation", key: 'motherOccupation', placeholder: 'Occupation or Homemaker' },
+              {
+                label: 'Login Mobile',
+                key: 'loginPhone',
+                placeholder: '10-digit mobile parent uses to log in',
+                req: true,
+                hint: 'Parent will use this number + a temp password to log in. Can be same as Father / Mother / Guardian.',
+              },
             ].map(({ label, key, placeholder, req, hint }) => (
               <div key={key}>
                 <label className="block text-[10px] font-black uppercase tracking-widest text-slate-500 mb-1.5">
