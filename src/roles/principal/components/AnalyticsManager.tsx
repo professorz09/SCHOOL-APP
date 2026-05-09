@@ -439,7 +439,7 @@ export const AnalyticsManager: React.FC<Props> = ({ onBack }) => {
         </div>
       </div>
 
-      <div className="flex-1 overflow-y-auto p-4 lg:p-6 space-y-5 lg:space-y-7 lg:max-w-6xl lg:mx-auto lg:w-full">
+      <div className="flex-1 overflow-y-auto p-4 lg:p-6 space-y-5 lg:space-y-7 max-w-3xl lg:max-w-5xl mx-auto w-full">
 
         {loading ? (
           <div className="flex flex-col items-center py-24 text-slate-400">
