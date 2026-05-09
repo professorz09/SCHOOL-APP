@@ -4,20 +4,43 @@ const SUPABASE_URL  = process.env.SUPABASE_URL  ?? '';
 const SERVICE_KEY   = process.env.SUPABASE_SERVICE_ROLE_KEY ?? '';
 const ANON_KEY      = process.env.SUPABASE_ANON_KEY ?? '';
 
-// Hard fail at boot if the service role key is missing. Earlier this
-// just printed a console.warn — the server kept running with adminDb
-// silently degraded to anon, and every "service-role-only" insert
-// (leave/submit, notice/create, expense/add, …) would surface as
-// "new row violates row-level security policy". The error read like
-// a permissions bug in the app code, not an env-config issue.
+// Hard fail at boot if the service role key is missing OR if the
+// caller has accidentally pasted the ANON key into the SERVICE_ROLE
+// slot (very common Supabase setup mistake — both keys come from the
+// same Project Settings page).
 //
-// Loud-fail here so a missing env var is caught at boot, not at the
-// first user-facing write.
+// Supabase JWTs carry `"role": "service_role"` in their payload for
+// the real service key vs `"role": "anon"` for the public anon key.
+// We decode the middle JWT segment (no signature check needed; we
+// just need the role claim) and bail with a clear message if it's
+// not 'service_role'. Without this, the server boots fine, every
+// adminDb call silently behaves as anon, and every insert fails
+// with "new row violates row-level security policy".
+function decodeJwtRole(jwt: string): string | null {
+  try {
+    const parts = jwt.split('.');
+    if (parts.length !== 3) return null;
+    const payload = JSON.parse(Buffer.from(parts[1], 'base64').toString('utf-8'));
+    return typeof payload.role === 'string' ? payload.role : null;
+  } catch { return null; }
+}
+
 if (!SUPABASE_URL) {
   throw new Error('[api] SUPABASE_URL missing — set it in .env or .env.local');
 }
 if (!SERVICE_KEY) {
   throw new Error('[api] SUPABASE_SERVICE_ROLE_KEY missing — set it in .env or .env.local. Without it every server-side insert will fail with an RLS error.');
+}
+{
+  const role = decodeJwtRole(SERVICE_KEY);
+  if (role && role !== 'service_role') {
+    throw new Error(
+      `[api] SUPABASE_SERVICE_ROLE_KEY decodes to role="${role}", expected "service_role". ` +
+      `Looks like you've pasted the ANON key into the SERVICE_ROLE_KEY slot — ` +
+      `they look almost identical in the Supabase dashboard. ` +
+      `Open Project Settings → API and copy the *service_role* secret (NOT the anon key) into .env.local.`,
+    );
+  }
 }
 
 export const adminDb: SupabaseClient = createClient(SUPABASE_URL, SERVICE_KEY, {
