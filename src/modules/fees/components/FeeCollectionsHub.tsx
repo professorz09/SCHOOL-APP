@@ -159,51 +159,65 @@ const DuesPanel: React.FC = () => {
   const { showToast } = useUIStore();
   const [items, setItems]     = useState<DueItem[]>([]);
   const [search, setSearch]   = useState('');
-  const [shown, setShown]     = useState(DUE_PAGE);
   const [loading, setLoading] = useState(true);
+  const [loadingMore, setLoadingMore] = useState(false);
+  const [hasMore, setHasMore] = useState(false);
+  const [nextOffset, setNextOffset] = useState(0);
+  const [serverTotal, setServerTotal] = useState(0);
   const [phoneLoading, setPhoneLoading] = useState<string | null>(null);
 
-  // Pull the full student list (paginated server-side) and keep only those
-  // with outstanding dues. Status PENDING/PARTIAL maps to "owes money".
+  // Server-paginated fetch — pulls one page at a time so a 5000-student
+  // school doesn't ship the entire roster on tab open. The defaulter
+  // filter (paidFee < totalFee) runs after the slice so each Load More
+  // appends only the dues from THIS page; we keep paging until enough
+  // dues are surfaced to fill the visible window.
+  const appendPage = React.useCallback(async (offset: number, q: string) => {
+    const page = await studentService.getList({
+      offset, limit: DUE_PAGE, search: q || undefined,
+    });
+    const dues: DueItem[] = page.items
+      .filter(s => s.totalFee > 0 && s.paidFee < s.totalFee)
+      .map(s => ({
+        ...s,
+        due: Math.max(0, s.totalFee - s.paidFee),
+        oldestDue: null,
+        fatherPhone: null,
+      }));
+    setItems(prev => offset === 0 ? dues : [...prev, ...dues]);
+    setNextOffset(page.nextOffset);
+    setHasMore(page.hasMore);
+    setServerTotal(page.total);
+  }, []);
+
+  // Initial fetch + reload on search change (debounced).
   useEffect(() => {
-    (async () => {
-      try {
-        // Pull a generous first page; the student.service paginator caps at
-        // 200 rows server-side. Schools larger than that get a Load More
-        // pager below — we fetch additional pages on demand.
-        const page = await studentService.getList({ offset: 0, limit: 200 });
-        const dues: DueItem[] = page.items
-          .filter(s => s.totalFee > 0 && s.paidFee < s.totalFee)
-          .map(s => ({
-            ...s,
-            due: Math.max(0, s.totalFee - s.paidFee),
-            oldestDue: null,
-            fatherPhone: null,
-          }))
-          .sort((a, b) => b.due - a.due);
-        setItems(dues);
-      } catch (e) {
-        showToast(e instanceof Error ? e.message : 'Failed to load defaulters', 'error');
-      } finally {
-        setLoading(false);
-      }
-    })();
-  }, [showToast]);
+    setLoading(true);
+    setItems([]);
+    const t = setTimeout(() => {
+      appendPage(0, search)
+        .catch(e => showToast(e instanceof Error ? e.message : 'Failed to load defaulters', 'error'))
+        .finally(() => setLoading(false));
+    }, search ? 250 : 0);
+    return () => clearTimeout(t);
+  }, [search, appendPage, showToast]);
 
-  useEffect(() => { setShown(DUE_PAGE); }, [search]);
+  const loadMore = async () => {
+    if (loadingMore || !hasMore) return;
+    setLoadingMore(true);
+    try {
+      await appendPage(nextOffset, search);
+    } catch (e) {
+      showToast(e instanceof Error ? e.message : 'Failed to load more', 'error');
+    } finally { setLoadingMore(false); }
+  };
 
-  const filtered = useMemo(() => {
-    const q = search.trim().toLowerCase();
-    if (!q) return items;
-    return items.filter(s =>
-      s.name.toLowerCase().includes(q) ||
-      `${s.className}-${s.section}`.toLowerCase().includes(q) ||
-      s.admissionNo.toLowerCase().includes(q),
-    );
-  }, [items, search]);
-
-  const visible = filtered.slice(0, shown);
-  const remaining = filtered.length - visible.length;
+  // Sort largest dues first within the currently-loaded slice. Server-side
+  // ordering by due-amount would need a custom RPC; client-side sort on the
+  // in-memory page is fine here because we never hold more than a few pages.
+  const visible = useMemo(
+    () => [...items].sort((a, b) => b.due - a.due),
+    [items],
+  );
 
   // Lazy-fetch the parent phone on demand — the slim list endpoint doesn't
   // ship it. Update the row in-place so subsequent calls hit the cached value.
@@ -251,7 +265,7 @@ const DuesPanel: React.FC = () => {
           className="w-full bg-white border border-slate-200 rounded-2xl pl-11 pr-4 py-3 text-sm font-bold outline-none focus:border-violet-400 shadow-sm" />
       </div>
 
-      {filtered.length === 0 && (
+      {visible.length === 0 && !hasMore && (
         <div className="bg-white rounded-2xl border border-slate-100 p-8 text-center text-slate-400">
           <Users size={28} className="mx-auto mb-2 opacity-40" />
           <p className="font-bold text-sm">{search ? 'No matches' : 'All clear — no pending dues!'}</p>
@@ -290,15 +304,17 @@ const DuesPanel: React.FC = () => {
         ))}
       </div>
 
-      {remaining > 0 && (
-        <button onClick={() => setShown(s => s + DUE_PAGE)}
-          className="w-full py-3 bg-white border border-slate-200 rounded-2xl font-black text-xs text-violet-700 hover:bg-violet-50">
-          Load More ({remaining} remaining)
+      {hasMore && (
+        <button onClick={loadMore} disabled={loadingMore}
+          className="w-full py-3 bg-white border border-slate-200 rounded-2xl font-black text-xs text-violet-700 hover:bg-violet-50 disabled:opacity-60 flex items-center justify-center gap-2">
+          {loadingMore ? <Loader2 size={14} className="animate-spin" /> : null}
+          {loadingMore ? 'Loading…' : `Load More (${Math.max(0, serverTotal - nextOffset)} students remaining to scan)`}
         </button>
       )}
-      {filtered.length > 0 && (
+      {visible.length > 0 && (
         <p className="text-center text-[10px] font-bold text-slate-300">
-          Showing {visible.length} of {filtered.length} due students
+          Showing {visible.length} due student{visible.length === 1 ? '' : 's'}
+          {!hasMore && serverTotal > 0 ? ` from ${serverTotal} scanned` : ''}
         </p>
       )}
     </div>
