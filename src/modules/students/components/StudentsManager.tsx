@@ -98,6 +98,11 @@ export const StudentsManager: React.FC<Props> = ({ onBack, initialView }) => {
   const { activeYear, academicYears } = useAcademicYear();
 const [mainView, setMainView] = useState<MainView>(initialView ?? 'CLASSES');
   const [subView, setSubView] = useState<SubView>('LIST');
+  // Admission stepper — 3 steps to keep the form scannable on
+  // mobile. Earlier the entire form was one giant scroll which
+  // most principals found overwhelming. Order matches the user's
+  // mental model: Basic → Family → Documents.
+  const [admStep, setAdmStep] = useState<1 | 2 | 3>(1);
   const [students, setStudents] = useState<Student[]>([]);
   // Track whether the initial student fetch has completed. Without
   // this, the class card briefly renders "0" (empty array) before
@@ -537,9 +542,53 @@ const [mainView, setMainView] = useState<MainView>(initialView ?? 'CLASSES');
 
     if (subView === 'CREATE') return (
       <div className="w-full bg-slate-50 flex flex-col animate-in slide-in-from-right-8 duration-300">
-        {renderHeader('New Admission', () => setSubView('LIST'))}
-        <div className="flex-1 overflow-y-auto p-4 space-y-4">
+        {renderHeader('New Admission', () => { setAdmStep(1); setSubView('LIST'); })}
 
+        {/* Stepper progress — 3 dots with labels. Tap a completed
+            step to jump back; future steps are locked behind
+            validation. */}
+        <div className="bg-white border-b border-slate-100 px-4 py-3 flex items-center gap-2">
+          {([
+            { n: 1 as const, label: 'Basic' },
+            { n: 2 as const, label: 'Family' },
+            { n: 3 as const, label: 'Documents' },
+          ]).map((s, idx, arr) => {
+            const done = admStep > s.n;
+            const active = admStep === s.n;
+            const reachable = s.n <= admStep;
+            return (
+              <React.Fragment key={s.n}>
+                <button
+                  type="button"
+                  onClick={() => { if (reachable) setAdmStep(s.n); }}
+                  disabled={!reachable}
+                  className={`flex flex-col items-center gap-1 ${reachable ? 'cursor-pointer' : 'cursor-not-allowed opacity-50'}`}
+                >
+                  <div className={`w-7 h-7 rounded-full flex items-center justify-center text-[11px] font-black transition-colors ${
+                    active ? 'bg-indigo-600 text-white shadow-md shadow-indigo-200'
+                      : done ? 'bg-emerald-500 text-white'
+                      : 'bg-slate-100 text-slate-500'
+                  }`}>
+                    {done ? <CheckCircle2 size={14} /> : s.n}
+                  </div>
+                  <span className={`text-[9px] font-black uppercase tracking-wider ${
+                    active ? 'text-indigo-700' : done ? 'text-emerald-700' : 'text-slate-400'
+                  }`}>{s.label}</span>
+                </button>
+                {idx < arr.length - 1 && (
+                  <div className={`flex-1 h-0.5 rounded-full transition-colors ${
+                    done ? 'bg-emerald-400' : 'bg-slate-200'
+                  }`} />
+                )}
+              </React.Fragment>
+            );
+          })}
+        </div>
+
+        <div className="flex-1 overflow-y-auto p-4 space-y-4 pb-24">
+
+          {/* ─── STEP 1: BASIC INFO ─────────────────────────────────── */}
+          {admStep === 1 && (<>
           {/* Passport-size photo — top of form, dedicated upload with preview */}
           <div className="bg-white rounded-2xl border border-slate-100 shadow-sm p-4">
             <p className="text-[10px] font-black uppercase tracking-widest text-slate-400 mb-3">Passport-Size Photo</p>
@@ -716,16 +765,14 @@ const [mainView, setMainView] = useState<MainView>(initialView ?? 'CLASSES');
             ))}
           </div>
 
+          </>)}
+          {/* ─── /STEP 1 ──────────────────────────────────────────── */}
+
+          {/* ─── STEP 2: FAMILY ───────────────────────────────────── */}
+          {admStep === 2 && (<>
           {/* ── Parent details — single consolidated section ────────────
-              Earlier the form had a "Parent Mobile & Login" block ABOVE
-              this one that asked for a "Parent Mobile Number" + "Parent
-              Name" + "Parent Email", which duplicated Father's Phone /
-              Father's Name / Father's Email. That created two screens
-              of redundant fields and a real ambiguity ("which mobile is
-              the login?"). Login is now derived: Father's Phone is the
-              primary login; if that's blank we fall back to Mother's
-              Phone. handleCreate() reads form.fatherPhone || form.motherPhone
-              for the login mobile and surfaces the resulting credentials. */}
+              Login Mobile is now an explicit field separate from
+              father / mother / guardian contact phones. */}
           <div className="bg-white rounded-2xl border border-slate-100 shadow-sm p-4 space-y-4">
             <div>
               <p className="text-[10px] font-black uppercase tracking-widest text-slate-400">Parent Details</p>
@@ -767,6 +814,11 @@ const [mainView, setMainView] = useState<MainView>(initialView ?? 'CLASSES');
             </div>
           </div>
 
+          </>)}
+          {/* ─── /STEP 2 ──────────────────────────────────────────── */}
+
+          {/* ─── STEP 3: DOCUMENTS ────────────────────────────────── */}
+          {admStep === 3 && (<>
           <div className="bg-white rounded-2xl border border-slate-100 shadow-sm p-4 space-y-3">
             <div>
               <p className="text-[10px] font-black uppercase tracking-widest text-slate-400">Documents</p>
@@ -812,10 +864,62 @@ const [mainView, setMainView] = useState<MainView>(initialView ?? 'CLASSES');
             })}
           </div>
 
-          <button onClick={handleCreate} disabled={isSubmitting}
-            className="w-full flex items-center justify-center gap-2 bg-indigo-600 text-white font-black text-xs uppercase tracking-widest py-4 rounded-2xl active:scale-95 transition-transform shadow-lg disabled:opacity-60">
-            {isSubmitting ? 'Admitting…' : <><Plus size={16} /> Admit Student</>}
+          </>)}
+          {/* ─── /STEP 3 ──────────────────────────────────────────── */}
+        </div>
+
+        {/* Sticky stepper footer — Back / Next or Back / Admit
+            depending on which step we're on. Validation runs on
+            Next: per-step required-field check with toast pointing
+            at the missing piece. Earlier the form just had a single
+            Admit button at the bottom, so on a 30-field scroll a
+            principal could miss a required field and only learn
+            about it after tapping Admit. */}
+        <div className="sticky bottom-0 bg-white border-t border-slate-200 shadow-[0_-4px_12px_rgba(0,0,0,0.06)] px-4 py-3 flex items-center gap-2 z-20">
+          <button
+            type="button"
+            onClick={() => {
+              if (admStep === 1) { setSubView('LIST'); return; }
+              setAdmStep(s => (s - 1) as 1 | 2 | 3);
+            }}
+            className="flex items-center gap-1.5 px-4 py-2.5 bg-slate-100 hover:bg-slate-200 text-slate-700 font-black text-xs uppercase tracking-widest rounded-xl active:scale-95 transition-transform">
+            <ArrowLeft size={14} /> {admStep === 1 ? 'Cancel' : 'Back'}
           </button>
+          <div className="flex-1" />
+          {admStep < 3 ? (
+            <button
+              type="button"
+              onClick={() => {
+                // Per-step required-field validation. Step 1 needs
+                // name + admissionNo; step 2 needs at least one
+                // parent name + a login mobile.
+                if (admStep === 1) {
+                  if (!form.name?.trim()) { showToast('Full Name daalein', 'error'); return; }
+                  if (!form.admissionNo?.trim()) { showToast('Admission No. daalein', 'error'); return; }
+                }
+                if (admStep === 2) {
+                  if (!form.fatherName?.trim() && !form.motherName?.trim() && !form.guardianName?.trim()) {
+                    showToast('Kam se kam ek parent / guardian ka naam daalein', 'error'); return;
+                  }
+                  const login = (form.loginPhone || form.fatherPhone || form.motherPhone || form.guardianPhone || '').replace(/\D/g, '').slice(-10);
+                  if (login.length !== 10) {
+                    showToast('Login Mobile (10-digit) daalein', 'error'); return;
+                  }
+                }
+                setAdmStep(s => (s + 1) as 1 | 2 | 3);
+              }}
+              className="flex items-center gap-1.5 px-5 py-2.5 bg-indigo-600 hover:bg-indigo-700 text-white font-black text-xs uppercase tracking-widest rounded-xl active:scale-95 transition-transform shadow-md shadow-indigo-200">
+              Next <ArrowLeft size={14} className="rotate-180" />
+            </button>
+          ) : (
+            <button
+              type="button"
+              onClick={handleCreate}
+              disabled={isSubmitting}
+              className="flex items-center gap-1.5 px-5 py-2.5 bg-indigo-600 hover:bg-indigo-700 text-white font-black text-xs uppercase tracking-widest rounded-xl active:scale-95 transition-transform shadow-md shadow-indigo-200 disabled:opacity-60">
+              {isSubmitting ? 'Admitting…' : <><Plus size={14} /> Admit Student</>}
+            </button>
+          )}
         </div>
       </div>
     );
@@ -872,7 +976,7 @@ const [mainView, setMainView] = useState<MainView>(initialView ?? 'CLASSES');
                 className="flex items-center gap-1.5 px-3 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 font-black text-xs rounded-xl active:scale-95 transition-all disabled:opacity-40">
                 <Download size={13} /> CSV
               </button>
-              <button onClick={() => setSubView('CREATE')}
+              <button onClick={() => { setAdmStep(1); setSubView('CREATE'); }}
                 className="flex items-center gap-1.5 px-3 py-2 bg-indigo-600 text-white font-black text-xs rounded-xl shadow-md active:scale-95 transition-transform">
                 <Plus size={14} /> New
               </button>
