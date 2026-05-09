@@ -596,89 +596,128 @@ export const StudentProfilePanel: React.FC<Props> = ({ student, onBack, onStuden
               a doc-shaped action and clutters the top bar otherwise. */}
         </div>
 
-        {/* Hero card */}
+        {/* Hero card — replaced the indigo→violet gradient with a clean
+            white card. Same data (avatar / name / chips / 3-stat row)
+            but readable in any light condition and consistent with the
+            rest of the app's white-card aesthetic. Status chip
+            (ACTIVE / TC ISSUED) lives in-line with the name so the
+            principal sees it immediately. */}
         <div className="px-4 pb-4">
-          <div className="bg-gradient-to-r from-indigo-600 to-violet-700 rounded-2xl p-4 text-white">
-            <div className="flex items-start gap-4">
-              <div className="w-16 h-16 rounded-2xl bg-white/20 flex items-center justify-center font-black text-xl text-white shrink-0 border-2 border-white/30 overflow-hidden">
+          <div className="bg-white rounded-2xl border border-slate-100 shadow-sm p-4">
+            <div className="flex items-start gap-3">
+              <div className="w-14 h-14 rounded-2xl bg-slate-100 flex items-center justify-center font-black text-base text-slate-700 shrink-0 overflow-hidden">
                 {currentStudent.photo
                   ? <img src={currentStudent.photo} alt={currentStudent.name} className="w-full h-full object-cover" />
                   : <span>{initials}</span>
                 }
               </div>
               <div className="flex-1 min-w-0">
-                <h2 className="font-black text-base text-white leading-tight">{currentStudent.name}</h2>
-                <p className="text-[10px] font-bold text-white/60 mt-0.5">{currentStudent.admissionNo}</p>
+                <h2 className="font-black text-base text-slate-900 leading-tight truncate">
+                  {currentStudent.name}
+                </h2>
+                <p className="text-[10px] font-bold text-slate-400 mt-0.5">{currentStudent.admissionNo}</p>
                 <div className="flex flex-wrap gap-1.5 mt-2">
-                  <span className="text-[9px] font-black bg-white/20 text-white px-2 py-0.5 rounded-full">
+                  <span className="text-[9px] font-black bg-blue-50 text-blue-700 px-2 py-0.5 rounded-full">
                     {currentStudent.className ? `${currentStudent.className}-${currentStudent.section}` : 'Unassigned'}
                   </span>
                   {currentStudent.rollNo && (
-                    <span className="text-[9px] font-black bg-white/20 text-white px-2 py-0.5 rounded-full">
+                    <span className="text-[9px] font-black bg-slate-100 text-slate-600 px-2 py-0.5 rounded-full">
                       Roll #{currentStudent.rollNo}
                     </span>
                   )}
                   {currentStudent.stream && (
-                    <span className="text-[9px] font-black bg-white/20 text-white px-2 py-0.5 rounded-full">
+                    <span className="text-[9px] font-black bg-violet-50 text-violet-700 px-2 py-0.5 rounded-full">
                       {currentStudent.stream}
                     </span>
                   )}
                   {currentStudent.rte && (
-                    <span className="text-[9px] font-black bg-amber-400/80 text-white px-2 py-0.5 rounded-full">RTE</span>
+                    <span className="text-[9px] font-black bg-amber-50 text-amber-700 px-2 py-0.5 rounded-full">RTE</span>
+                  )}
+                  {currentStudent.isActive === false && (
+                    <span className="text-[9px] font-black bg-rose-50 text-rose-700 px-2 py-0.5 rounded-full">
+                      LEFT · TC ISSUED
+                    </span>
                   )}
                 </div>
               </div>
             </div>
 
-            <div className="grid grid-cols-3 gap-2 mt-3 pt-3 border-t border-white/20">
+            <div className="grid grid-cols-3 gap-2 mt-4 pt-3 border-t border-slate-100">
               <div className="text-center">
-                <div className={`text-lg font-black ${attGood ? 'text-emerald-300' : 'text-rose-300'}`}>
+                <div className={`text-lg font-black tabular-nums ${attGood ? 'text-emerald-600' : 'text-rose-600'}`}>
                   {currentStudent.attendancePercent}%
                 </div>
-                <div className="text-[8px] font-bold text-white/50 uppercase">Attend.</div>
+                <div className="text-[9px] font-black text-slate-400 uppercase tracking-wider mt-0.5">Attendance</div>
               </div>
               <div className="text-center">
-                <div className="text-lg font-black text-white">
+                <div className="text-lg font-black tabular-nums text-emerald-600">
                   ₹{(currentStudent.paidFee / 1000).toFixed(0)}K
                 </div>
-                <div className="text-[8px] font-bold text-white/50 uppercase">Paid</div>
+                <div className="text-[9px] font-black text-slate-400 uppercase tracking-wider mt-0.5">Paid</div>
               </div>
               <div className="text-center">
-                <div className="text-lg font-black text-rose-300">
+                <div className={`text-lg font-black tabular-nums ${currentStudent.totalFee - currentStudent.paidFee > 0 ? 'text-rose-600' : 'text-slate-300'}`}>
                   ₹{((currentStudent.totalFee - currentStudent.paidFee) / 1000).toFixed(0)}K
                 </div>
-                <div className="text-[8px] font-bold text-white/50 uppercase">Due</div>
+                <div className="text-[9px] font-black text-slate-400 uppercase tracking-wider mt-0.5">Due</div>
               </div>
             </div>
           </div>
         </div>
 
         {/* Lifecycle action — Issue TC (active) OR Re-admit (inactive).
-            Both gated on Editor Mode + an active academic year. The
-            buttons are hidden entirely when the gate is closed so the
-            principal isn't tempted by a disabled-looking control. */}
-        {lifecycleEnabled && (
-          <div className="px-4 pb-3">
-            {currentStudent.isActive ? (
-              <button
-                onClick={() => setTcModal(true)}
-                className="w-full flex items-center justify-center gap-2 bg-rose-50 hover:bg-rose-100 text-rose-700 border border-rose-200 font-black text-xs uppercase tracking-widest py-2.5 rounded-xl active:scale-[0.99] transition-all">
-                <LogOut size={14} /> Issue TC &amp; Mark as Left
-              </button>
-            ) : (
+            ALWAYS visible so the principal knows the action exists,
+            but disabled (and helpful tooltip) when editor mode is off
+            or no active year. Earlier the button was hidden entirely
+            when the gate was closed, so the principal couldn't even
+            tell that issuing a TC required Editor Mode. */}
+        <div className="px-4 pb-3">
+          {(() => {
+            const blockedReason = !activeYear
+              ? 'Active academic year is required'
+              : !editorModeActive
+                ? 'Editor Mode chalu karein (Settings me)'
+                : '';
+            const isBlocked = blockedReason !== '';
+            if (currentStudent.isActive) {
+              return (
+                <button
+                  onClick={() => {
+                    if (isBlocked) { showToast(blockedReason, 'error'); return; }
+                    setTcModal(true);
+                  }}
+                  title={isBlocked ? blockedReason : 'Issue Transfer Certificate and mark this student as left'}
+                  className={`w-full flex items-center justify-center gap-2 font-black text-xs uppercase tracking-widest py-2.5 rounded-xl active:scale-[0.99] transition-all border ${
+                    isBlocked
+                      ? 'bg-slate-50 text-slate-400 border-slate-200 cursor-not-allowed'
+                      : 'bg-rose-50 hover:bg-rose-100 text-rose-700 border-rose-200'
+                  }`}>
+                  <LogOut size={14} /> Issue TC &amp; Mark as Left
+                  {isBlocked && <Lock size={11} className="opacity-70" />}
+                </button>
+              );
+            }
+            return (
               <button
                 onClick={() => {
+                  if (isBlocked) { showToast(blockedReason, 'error'); return; }
                   setReadmitClass(currentStudent.className || '');
                   setReadmitSection(currentStudent.section || '');
                   setReadmitRoll(currentStudent.rollNo || '');
                   setReadmitModal(true);
                 }}
-                className="w-full flex items-center justify-center gap-2 bg-emerald-50 hover:bg-emerald-100 text-emerald-700 border border-emerald-200 font-black text-xs uppercase tracking-widest py-2.5 rounded-xl active:scale-[0.99] transition-all">
+                title={isBlocked ? blockedReason : 'Re-admit this student to the active year'}
+                className={`w-full flex items-center justify-center gap-2 font-black text-xs uppercase tracking-widest py-2.5 rounded-xl active:scale-[0.99] transition-all border ${
+                  isBlocked
+                    ? 'bg-slate-50 text-slate-400 border-slate-200 cursor-not-allowed'
+                    : 'bg-emerald-50 hover:bg-emerald-100 text-emerald-700 border-emerald-200'
+                }`}>
                 <UserPlus size={14} /> Re-admit to {activeYear?.name ?? 'Active Year'}
+                {isBlocked && <Lock size={11} className="opacity-70" />}
               </button>
-            )}
-          </div>
-        )}
+            );
+          })()}
+        </div>
 
         {/* Tabs */}
         <div className="flex gap-1 overflow-x-auto hide-scrollbar px-4 pb-3">
