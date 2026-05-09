@@ -1,5 +1,5 @@
 import React, { useRef, useState } from 'react';
-import { X, Printer, Download } from 'lucide-react';
+import { ArrowLeft, Printer, Download } from 'lucide-react';
 import { Student, STREAM_CLASSES } from '@/modules/students/student.types';
 import { SchoolInfo } from '@/shared/utils/schoolInfo.service';
 
@@ -167,26 +167,34 @@ export const AdmissionFormPrint: React.FC<Props> = ({ student, schoolInfo, onClo
     <div className="fixed inset-0 bg-slate-900/50 backdrop-blur-sm z-50 flex items-end justify-center">
       <div className="bg-white w-full sm:max-w-2xl rounded-t-3xl sm:rounded-2xl h-screen sm:h-auto max-h-screen sm:max-h-[95vh] overflow-hidden flex flex-col shadow-2xl animate-in slide-in-from-bottom-8">
 
-        {/* Modal Header */}
-        <div className="bg-white border-b border-slate-100 px-4 py-4 flex items-center justify-between sticky top-0 z-10 shadow-sm">
-          <div>
-            <h2 className="text-lg font-black text-slate-900">Admission Form</h2>
-            <p className="text-xs font-bold text-slate-400 mt-0.5">{student.name} · {student.admissionNo}</p>
+        {/* Modal Header — left-anchored Back button (←) so the user
+            doesn't have to hunt for an X tucked into a row of action
+            buttons. Earlier on phones the X got squeezed off-screen
+            after Download PDF + Print, leaving the user no way out
+            except killing the app. */}
+        <div className="bg-white border-b border-slate-100 px-3 py-3 flex items-center gap-2 sticky top-0 z-10 shadow-sm">
+          <button
+            onClick={onClose}
+            className="p-2 -ml-1 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-full active:scale-90 transition-transform shrink-0"
+            title="Back"
+            aria-label="Back"
+          >
+            <ArrowLeft size={20} />
+          </button>
+          <div className="flex-1 min-w-0">
+            <h2 className="text-base font-black text-slate-900 leading-tight">Admission Form</h2>
+            <p className="text-[10px] font-bold text-slate-400 mt-0.5 truncate">{student.name} · {student.admissionNo}</p>
           </div>
-          <div className="flex gap-2">
+          <div className="flex items-center gap-1.5 shrink-0">
             <button onClick={handleDownloadPdf} disabled={downloading}
-              className="flex items-center gap-1.5 px-3 py-2 bg-emerald-600 text-white font-black text-xs rounded-xl active:scale-90 transition-transform disabled:opacity-60"
+              className="flex items-center gap-1 px-2.5 py-2 bg-emerald-600 text-white font-black text-[10px] rounded-lg active:scale-90 transition-transform disabled:opacity-60 uppercase tracking-wider"
               title="Download as PDF">
-              <Download size={14} /> {downloading ? 'Saving…' : 'Download PDF'}
+              <Download size={12} /> {downloading ? '…' : 'PDF'}
             </button>
             <button onClick={handlePrint}
-              className="flex items-center gap-1.5 px-3 py-2 bg-blue-600 text-white font-black text-xs rounded-xl active:scale-90 transition-transform"
+              className="flex items-center gap-1 px-2.5 py-2 bg-blue-600 text-white font-black text-[10px] rounded-lg active:scale-90 transition-transform uppercase tracking-wider"
               title="Print">
-              <Printer size={14} /> Print
-            </button>
-            <button onClick={onClose}
-              className="p-2 bg-slate-100 text-slate-600 rounded-xl active:scale-90 transition-transform">
-              <X size={18} />
+              <Printer size={12} /> Print
             </button>
           </div>
         </div>
