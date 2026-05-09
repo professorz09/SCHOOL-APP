@@ -120,10 +120,24 @@ export const StudentAttendanceManager: React.FC<Props> = ({ onBack }) => {
 
   const session = useAuthStore(s => s.session);
 
-  // Clamp only the grid month picker to the active-year window so the
-  // grid never opens on a month with no dates. markDate is no longer
-  // clamped — the AY-window restriction was removed because it kept
-  // resetting the date out from under the user when AY ranges drifted.
+  // Clamp markDate into the active-year window. When correction mode
+  // shifts currentYear to a closed past year, today's date is outside
+  // that window — defaulting to today would let the principal mark
+  // attendance for a date that doesn't belong to the year. Snap to
+  // the year's endDate (most recent valid day) instead.
+  useEffect(() => {
+    if (!currentYear) return;
+    const today = todayStr();
+    const start = currentYear.startDate;
+    const end   = currentYear.endDate;
+    if (start && end) {
+      if (markDate < start || markDate > end) {
+        // Prefer today if it's inside the window; else snap to endDate.
+        setMarkDate(today >= start && today <= end ? today : end);
+      }
+    }
+  }, [currentYear?.id, currentYear?.startDate, currentYear?.endDate]); // eslint-disable-line react-hooks/exhaustive-deps
+
   useEffect(() => {
     if (!currentYear) return;
     const endYM   = currentYear.endDate   ? currentYear.endDate.slice(0, 7)   : currentYearMonth();
@@ -452,11 +466,22 @@ export const StudentAttendanceManager: React.FC<Props> = ({ onBack }) => {
   const submitMark = async () => {
     if (!markClass || !markSection || !markDate || markStudents.length === 0) return;
     if (!editGuard.canEdit) { showToast('Year closed — enable Correction Mode', 'error'); return; }
-    // Only temporal guard left: future dates are blocked. AY-window check
-    // was removed because it caused false negatives whenever the active
-    // year wasn't aligned with today (rollover gap, dev environments).
+    // Future-date block.
     if (markDate > todayStr()) {
       showToast('Future date — not allowed', 'error'); return;
+    }
+    // Hard year-window guard. In correction mode for a closed year
+    // the date strip already filters dates to the year, but a user
+    // could in principle hit submit through a stale state — the
+    // server-side year scoping would otherwise create an out-of-year
+    // record. Validate explicitly.
+    if (currentYear?.startDate && markDate < currentYear.startDate) {
+      showToast(`Date ${markDate} is before the academic year started (${currentYear.startDate})`, 'error');
+      return;
+    }
+    if (currentYear?.endDate && markDate > currentYear.endDate) {
+      showToast(`Date ${markDate} is after the academic year ended (${currentYear.endDate})`, 'error');
+      return;
     }
     if (markConflict && !editorModeActive) {
       showToast('Already marked. Enable Editor Mode to edit.', 'error');
@@ -1065,15 +1090,34 @@ export const StudentAttendanceManager: React.FC<Props> = ({ onBack }) => {
     // Edit-locked (conflict) → submittable only when Editor Mode is on.
     const canSubmit = !!(markClass && markSection && markDate && markStudents.length > 0
                         && (!markConflict || editorModeActive));
-    // Date strip: always render the last 14 days. The AY-window guard was
-    // removed — it was greying out the entire strip whenever the active
-    // year didn't perfectly cover today, which surfaced as "Outside the
-    // active academic year" on every button. The only remaining temporal
-    // restriction is "no future dates" (enforced in toggleCell / submit).
-    const dateStrip = Array.from({ length: 14 }, (_, i) => {
-      const d = new Date(); d.setDate(d.getDate() - (13 - i));
-      return istDateOf(d) ?? d.toISOString().split('T')[0];
-    });
+    // Date strip: 14-day window clamped to the current academic year.
+    // Anchor:
+    //   • If today is INSIDE the year → anchor on today (last 14 days)
+    //   • If today is AFTER year end (e.g. correction mode on a
+    //     closed year) → anchor on year endDate so the strip shows
+    //     the last 14 days of THAT year, not phantom dates after it
+    //   • If today is BEFORE year start → strip empty (year hasn't
+    //     begun for this user).
+    // Then drop any dates outside [startDate, endDate] so the
+    // principal can never tap a date that doesn't belong to the
+    // year in correction mode.
+    const yearStart = currentYear?.startDate ?? null;
+    const yearEnd   = currentYear?.endDate   ?? null;
+    const dateStrip = (() => {
+      const todayIso = todayStr();
+      let anchor = todayIso;
+      if (yearEnd && todayIso > yearEnd) anchor = yearEnd;
+      if (yearStart && todayIso < yearStart) return [];
+      const out: string[] = [];
+      for (let i = 13; i >= 0; i--) {
+        const d = new Date(anchor); d.setDate(d.getDate() - i);
+        const iso = istDateOf(d) ?? d.toISOString().split('T')[0];
+        if (yearStart && iso < yearStart) continue;
+        if (yearEnd && iso > yearEnd) continue;
+        out.push(iso);
+      }
+      return out;
+    })();
     return (
       <div className="w-full bg-slate-50 flex flex-col animate-in slide-in-from-right-8 duration-300">
         <div className="bg-white border-b border-slate-100 px-4 pt-4 pb-4 sticky top-0 z-10 shadow-sm">
