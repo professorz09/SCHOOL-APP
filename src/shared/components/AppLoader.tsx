@@ -108,40 +108,23 @@ export const AppLoader: React.FC<Props> = ({ variant = 'centered', label = 'Load
       </span>
     );
   }
-  // 'centered' — branded-mini. Used for route-chunk Suspense fallbacks
-  // and tab-body initial loads. Same visual language as the full
-  // splash (logo tile + sliding gradient bar) but compact, so the
-  // hand-off from splash → first tab → real content feels like one
-  // continuous brand moment instead of three different loaders.
+  // 'centered' — minimal three-dot bounce. Used for route-chunk
+  // Suspense fallbacks AFTER the first one (which is covered by the
+  // full splash overlay in App.tsx) and for tab-body initial loads.
+  // Kept tiny on purpose so it doesn't compete with page content
+  // — the full splash already does the brand moment on first boot.
   return (
-    <div className="flex flex-col items-center justify-center min-h-[60vh] gap-4">
+    <div className="flex flex-col items-center justify-center min-h-[60vh] gap-3">
       <style>{`
-        @keyframes el_shimmer {
-          0%   { transform: translateX(-110%); }
-          100% { transform: translateX(310%); }
-        }
-        @keyframes el_pulse {
-          0%, 100% { transform: scale(1);   opacity: 0.4; }
-          50%      { transform: scale(1.08); opacity: 0.7; }
+        @keyframes el_dot_bounce {
+          0%, 80%, 100% { transform: translateY(0);    opacity: 0.4; }
+          40%           { transform: translateY(-6px); opacity: 1; }
         }
       `}</style>
-      <div className="relative">
-        <div
-          className="absolute inset-0 rounded-2xl bg-gradient-to-br from-blue-400 to-blue-600 blur-xl"
-          style={{ animation: 'el_pulse 2.4s ease-in-out infinite' }}
-        />
-        <div className="relative w-12 h-12 rounded-2xl bg-gradient-to-br from-blue-600 via-blue-700 to-indigo-800 flex items-center justify-center shadow-md shadow-blue-200/50">
-          <svg viewBox="0 0 24 24" fill="none" className="w-6 h-6 text-white" aria-hidden="true">
-            <path d="M2 9.5L12 5l10 4.5-10 4.5L2 9.5z" stroke="currentColor" strokeWidth="2" strokeLinejoin="round" fill="rgba(255,255,255,0.15)"/>
-            <path d="M6 11.5v4.2c0 1.1 2.7 2.3 6 2.3s6-1.2 6-2.3v-4.2" stroke="currentColor" strokeWidth="2" strokeLinejoin="round"/>
-          </svg>
-        </div>
-      </div>
-      <div className="w-32 h-0.5 bg-slate-100 rounded-full overflow-hidden">
-        <div
-          className="h-full w-1/3 rounded-full bg-gradient-to-r from-rose-500 via-fuchsia-500 to-blue-600"
-          style={{ animation: 'el_shimmer 1.6s ease-in-out infinite' }}
-        />
+      <div className="flex items-center gap-1.5">
+        <span className="w-2 h-2 rounded-full bg-slate-400" style={{ animation: 'el_dot_bounce 1.2s ease-in-out infinite', animationDelay: '0ms' }} />
+        <span className="w-2 h-2 rounded-full bg-slate-400" style={{ animation: 'el_dot_bounce 1.2s ease-in-out infinite', animationDelay: '160ms' }} />
+        <span className="w-2 h-2 rounded-full bg-slate-400" style={{ animation: 'el_dot_bounce 1.2s ease-in-out infinite', animationDelay: '320ms' }} />
       </div>
       {label && label !== 'Loading…' && (
         <span className="text-[10px] font-black text-slate-400 uppercase tracking-widest">{label}</span>
