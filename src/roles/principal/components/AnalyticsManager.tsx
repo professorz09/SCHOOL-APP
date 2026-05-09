@@ -323,7 +323,7 @@ export const AnalyticsManager: React.FC<Props> = ({ onBack }) => {
   // ship the whole roster to the client. RLS already enforces school
   // isolation; we add an explicit school_id eq for clarity. The current
   // academic year scopes student_academic_records joins.
-  const [reportBusy, setReportBusy] = useState<null | 'RTE' | 'DUES' | 'ATT'>(null);
+  const [reportBusy, setReportBusy] = useState<null | 'RTE' | 'DUES' | 'ATT' | 'ALL' | 'NEW'>(null);
 
   const triggerCsvDownload = (filename: string, content: string) => {
     const blob = new Blob([content], { type: 'text/csv;charset=utf-8' });
@@ -504,6 +504,148 @@ export const AnalyticsManager: React.FC<Props> = ({ onBack }) => {
     } finally { setReportBusy(null); }
   };
 
+  // Full active-students export for the active academic year. One row per
+  // (student, AY) — same shape as the RTE export so a finance/auditor can
+  // diff or merge sheets later.
+  const downloadAllStudentsCsv = async () => {
+    if (!session?.schoolId || !currentYear?.id) {
+      showToast('Pick an academic year first', 'error'); return;
+    }
+    setReportBusy('ALL');
+    try {
+      const { data: rows, error } = await supabase
+        .from('students')
+        .select(`
+          id, name, admission_no, roll_no, dob, gender, phone, rte,
+          father_name, father_phone, mother_name, mother_phone, address,
+          admission_date,
+          student_academic_records(class_name, section, total_fee, paid_fee, attendance_percent, academic_year_id)
+        `)
+        .eq('school_id', session.schoolId)
+        .eq('is_active', true)
+        .order('name', { ascending: true });
+      if (error) throw new Error(error.message);
+      type Row = {
+        id: string; name: string; admission_no: string; roll_no: string | null;
+        dob: string | null; gender: string | null; phone: string | null; rte: boolean | null;
+        father_name: string | null; father_phone: string | null;
+        mother_name: string | null; mother_phone: string | null; address: string | null;
+        admission_date: string | null;
+        student_academic_records: Array<{
+          class_name: string | null; section: string | null;
+          total_fee: number | null; paid_fee: number | null;
+          attendance_percent: number | null; academic_year_id: string;
+        }> | null;
+      };
+      const flat = ((rows ?? []) as unknown as Row[]).map(r => {
+        const ar = (r.student_academic_records ?? []).find(a => a.academic_year_id === currentYear.id);
+        const total = Number(ar?.total_fee ?? 0);
+        const paid  = Number(ar?.paid_fee ?? 0);
+        return {
+          name: r.name,
+          admission_no: r.admission_no,
+          roll_no: r.roll_no ?? '',
+          class: ar ? `${ar.class_name ?? ''}-${ar.section ?? ''}` : '',
+          dob: r.dob ?? '',
+          gender: r.gender ?? '',
+          rte: r.rte ? 'YES' : 'NO',
+          phone: r.phone ?? '',
+          father_name: r.father_name ?? '',
+          father_phone: r.father_phone ?? '',
+          mother_name: r.mother_name ?? '',
+          mother_phone: r.mother_phone ?? '',
+          address: r.address ?? '',
+          admission_date: r.admission_date ?? '',
+          total_fee: total,
+          paid_fee: paid,
+          pending_fee: Math.max(0, total - paid),
+          attendance_percent: Number(ar?.attendance_percent ?? 0),
+        };
+      });
+      const headers = ['name','admission_no','roll_no','class','dob','gender','rte','phone',
+        'father_name','father_phone','mother_name','mother_phone','address','admission_date',
+        'total_fee','paid_fee','pending_fee','attendance_percent'];
+      triggerCsvDownload(
+        `all-students_${currentYear.name}_${new Date().toISOString().slice(0, 10)}.csv`,
+        toCsv(flat, headers),
+      );
+      showToast(`${flat.length} active student${flat.length === 1 ? '' : 's'} exported`);
+    } catch (e) {
+      showToast(e instanceof Error ? e.message : 'Export failed', 'error');
+    } finally { setReportBusy(null); }
+  };
+
+  // Recent admissions — students added in the last 30 days. Date filter is
+  // on `admission_date` (DATE column) so timezone wobble doesn't flip rows
+  // off the edge of the window.
+  const downloadNewAdmissionsCsv = async () => {
+    if (!session?.schoolId) { showToast('No school in session', 'error'); return; }
+    setReportBusy('NEW');
+    try {
+      const cutoff = new Date(); cutoff.setDate(cutoff.getDate() - 30);
+      const cutoffIso = cutoff.toISOString().slice(0, 10);
+      const yearId = currentYear?.id;
+      const selectAr = yearId
+        ? `student_academic_records(class_name, section, total_fee, paid_fee, academic_year_id)`
+        : ``;
+      const { data: rows, error } = await supabase
+        .from('students')
+        .select(`
+          id, name, admission_no, roll_no, dob, gender, phone, rte,
+          father_name, father_phone, address, admission_date
+          ${selectAr ? `, ${selectAr}` : ''}
+        `)
+        .eq('school_id', session.schoolId)
+        .gte('admission_date', cutoffIso)
+        .order('admission_date', { ascending: false });
+      if (error) throw new Error(error.message);
+      type Row = {
+        id: string; name: string; admission_no: string; roll_no: string | null;
+        dob: string | null; gender: string | null; phone: string | null; rte: boolean | null;
+        father_name: string | null; father_phone: string | null;
+        address: string | null; admission_date: string | null;
+        student_academic_records?: Array<{
+          class_name: string | null; section: string | null;
+          total_fee: number | null; paid_fee: number | null;
+          academic_year_id: string;
+        }>;
+      };
+      const flat = ((rows ?? []) as unknown as Row[]).map(r => {
+        const ar = yearId
+          ? (r.student_academic_records ?? []).find(a => a.academic_year_id === yearId)
+          : null;
+        const total = Number(ar?.total_fee ?? 0);
+        const paid  = Number(ar?.paid_fee ?? 0);
+        return {
+          name: r.name,
+          admission_no: r.admission_no,
+          roll_no: r.roll_no ?? '',
+          class: ar ? `${ar.class_name ?? ''}-${ar.section ?? ''}` : '',
+          admission_date: r.admission_date ?? '',
+          dob: r.dob ?? '',
+          gender: r.gender ?? '',
+          rte: r.rte ? 'YES' : 'NO',
+          phone: r.phone ?? '',
+          father_name: r.father_name ?? '',
+          father_phone: r.father_phone ?? '',
+          address: r.address ?? '',
+          total_fee: total,
+          paid_fee: paid,
+          pending_fee: Math.max(0, total - paid),
+        };
+      });
+      const headers = ['name','admission_no','roll_no','class','admission_date','dob','gender',
+        'rte','phone','father_name','father_phone','address','total_fee','paid_fee','pending_fee'];
+      triggerCsvDownload(
+        `new-admissions-30d_${new Date().toISOString().slice(0, 10)}.csv`,
+        toCsv(flat, headers),
+      );
+      showToast(`${flat.length} new admission${flat.length === 1 ? '' : 's'} in last 30 days`);
+    } catch (e) {
+      showToast(e instanceof Error ? e.message : 'Export failed', 'error');
+    } finally { setReportBusy(null); }
+  };
+
   const net = data ? data.income - data.expense : 0;
   const monthlyMax = useMemo(() => {
     if (!data) return 1;
@@ -618,7 +760,23 @@ export const AnalyticsManager: React.FC<Props> = ({ onBack }) => {
               CSV downloads
             </span>
           </div>
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
+            <button onClick={downloadAllStudentsCsv} disabled={!currentYear || reportBusy !== null}
+              className="bg-white border border-slate-100 hover:border-blue-300 rounded-2xl p-4 text-left shadow-sm active:scale-[0.99] transition-all disabled:opacity-50">
+              <div className="flex items-center justify-between mb-2">
+                <div className="w-10 h-10 rounded-xl bg-blue-50 text-blue-600 flex items-center justify-center">
+                  <Users size={18} />
+                </div>
+                {reportBusy === 'ALL'
+                  ? <Loader size={14} className="animate-spin text-slate-400" />
+                  : <Download size={14} className="text-slate-400" />}
+              </div>
+              <p className="font-black text-slate-900 text-sm">All Students</p>
+              <p className="text-[11px] font-bold text-slate-500 mt-0.5">
+                Full active roster — parents, class, fees, attendance
+              </p>
+            </button>
+
             <button onClick={downloadRteCsv} disabled={!currentYear || reportBusy !== null}
               className="bg-white border border-slate-100 hover:border-emerald-300 rounded-2xl p-4 text-left shadow-sm active:scale-[0.99] transition-all disabled:opacity-50">
               <div className="flex items-center justify-between mb-2">
@@ -632,6 +790,22 @@ export const AnalyticsManager: React.FC<Props> = ({ onBack }) => {
               <p className="font-black text-slate-900 text-sm">RTE Students</p>
               <p className="text-[11px] font-bold text-slate-500 mt-0.5">
                 Roll, parents, fees, attendance — full details
+              </p>
+            </button>
+
+            <button onClick={downloadNewAdmissionsCsv} disabled={reportBusy !== null}
+              className="bg-white border border-slate-100 hover:border-violet-300 rounded-2xl p-4 text-left shadow-sm active:scale-[0.99] transition-all disabled:opacity-50">
+              <div className="flex items-center justify-between mb-2">
+                <div className="w-10 h-10 rounded-xl bg-violet-50 text-violet-600 flex items-center justify-center">
+                  <Calendar size={18} />
+                </div>
+                {reportBusy === 'NEW'
+                  ? <Loader size={14} className="animate-spin text-slate-400" />
+                  : <Download size={14} className="text-slate-400" />}
+              </div>
+              <p className="font-black text-slate-900 text-sm">New Admissions · 30d</p>
+              <p className="text-[11px] font-bold text-slate-500 mt-0.5">
+                Students admitted in the last 30 days
               </p>
             </button>
 
