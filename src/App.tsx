@@ -8,7 +8,7 @@ import { useAuthStore } from '@/store/authStore';
 import { useUIStore } from '@/store/uiStore';
 import { studentService } from '@/modules/students/student.service';
 import { Student } from '@/modules/students/student.types';
-import { Bell, Loader, LogOut } from 'lucide-react';
+import { Bell, Loader, LogOut, ChevronRight } from 'lucide-react';
 import { ErrorBoundary }       from '@/shared/components/ErrorBoundary';
 import { ToastContainer }      from '@/shared/components/ui/Toast';
 
@@ -180,38 +180,81 @@ export default function App() {
   // ── Multi-student parent picker ──────────────────────────────────────────
   const parentLinkedStudents = session.linkedStudentIds || [];
   if (session.role === 'PARENT' && parentLinkedStudents.length > 1 && !selectedStudentId) {
+    // Clean white screen — earlier this was a tall blue card with a
+    // gradient header and a flex-justify-center body that left a
+    // big empty band between the header and the (often only 2-3)
+    // student cards. Now it's a simple top-anchored layout: small
+    // brand strip, instruction line, then the student cards stacked
+    // immediately below. Fits 1 / 2 / 5 children equally well.
     return (
-      <div className="h-dvh bg-gradient-to-br from-blue-600 to-blue-800 flex items-center justify-center p-4">
-        <div className="w-full max-w-sm bg-slate-50 rounded-2xl shadow-2xl flex flex-col overflow-hidden" style={{height: 'min(850px, calc(100dvh - 2rem))'}}>
-          <div className="bg-gradient-to-r from-blue-600 to-blue-700 px-6 pt-6 pb-8 text-white flex items-center justify-between">
-            <div>
-              <div className="text-2xl font-black">Select Student</div>
-              <div className="text-xs font-bold text-blue-100 mt-1">Choose which child to view</div>
+      <div className="min-h-dvh bg-slate-50 flex flex-col">
+        {/* Compact top strip — brand left, sign-out right. No
+            gradient hero, no empty space. */}
+        <div className="bg-white border-b border-slate-100 px-5 pt-5 pb-4 flex items-center justify-between">
+          <div className="flex items-center gap-2.5">
+            <div className="w-9 h-9 rounded-xl bg-gradient-to-br from-blue-600 to-indigo-700 flex items-center justify-center shadow-sm shadow-blue-200">
+              <span className="text-white font-black text-sm">E</span>
             </div>
-            <button
-              onClick={() => logout()}
-              className="text-blue-100 hover:text-white p-2"
-              title="Sign out"
-            >
-              <LogOut size={18} />
-            </button>
+            <div>
+              <div className="text-base font-black text-slate-900 leading-tight">EduGrow</div>
+              <div className="text-[9px] font-bold text-slate-400 uppercase tracking-widest">Parent Portal</div>
+            </div>
           </div>
-          <div className="flex-1 overflow-y-auto flex flex-col justify-center p-6 gap-3">
-            {parentLinkedStudents.map((sid) => {
-              const student = linkedStudents.find((s) => s.id === sid);
-              const displayName = student?.name ?? 'Loading…';
-              const subtitle = student
-                ? `${student.className} · Section ${student.section} · Roll ${student.rollNo}`
-                : 'Tap to view dashboard';
-              return (
-                <button key={sid} onClick={() => setSelectedStudentId(sid)}
-                  className="w-full p-4 bg-white rounded-xl border border-slate-200 shadow-sm active:scale-95 transition-transform text-left">
-                  <div className="font-black text-slate-900">{displayName}</div>
-                  <div className="text-[10px] font-bold text-slate-400 mt-1">{subtitle}</div>
-                </button>
-              );
-            })}
-          </div>
+          <button
+            onClick={() => logout()}
+            className="flex items-center gap-1 text-[10px] font-black text-rose-600 bg-rose-50 hover:bg-rose-100 px-3 py-1.5 rounded-full uppercase tracking-wide transition-colors"
+            title="Sign out"
+          >
+            <LogOut size={12} /> Sign out
+          </button>
+        </div>
+
+        {/* Title + instruction */}
+        <div className="px-5 pt-6 pb-3">
+          <h1 className="text-2xl font-black text-slate-900 leading-tight">Choose your child</h1>
+          <p className="text-xs font-bold text-slate-500 mt-1">
+            {parentLinkedStudents.length} student{parentLinkedStudents.length === 1 ? '' : 's'} linked to your number
+          </p>
+        </div>
+
+        {/* Student cards — top-anchored stack with avatars. Tap a
+            card to open that child's dashboard. */}
+        <div className="px-5 pb-6 space-y-2.5">
+          {parentLinkedStudents.map((sid) => {
+            const student = linkedStudents.find((s) => s.id === sid);
+            const displayName = student?.name ?? 'Loading…';
+            const initials = student
+              ? student.name.split(/\s+/).filter(Boolean).map(w => w[0]).join('').slice(0, 2).toUpperCase()
+              : '··';
+            const className = student?.className?.trim() || '';
+            const section = student?.section?.trim() || '';
+            const rollNo = student?.rollNo?.trim() || '';
+            // Build subtitle from only the parts we have so we don't
+            // print "· Section · Roll" with empty values.
+            const parts = [
+              className && (section ? `${className}-${section}` : className),
+              rollNo ? `Roll #${rollNo}` : '',
+            ].filter(Boolean);
+            const subtitle = student
+              ? (parts.join(' · ') || 'Unassigned')
+              : 'Loading details…';
+            return (
+              <button
+                key={sid}
+                onClick={() => setSelectedStudentId(sid)}
+                className="w-full bg-white rounded-2xl border border-slate-100 shadow-sm hover:border-blue-200 hover:shadow-md active:scale-[0.99] transition-all text-left p-4 flex items-center gap-3.5"
+              >
+                <div className="w-12 h-12 rounded-2xl bg-gradient-to-br from-blue-100 to-indigo-100 text-blue-700 flex items-center justify-center font-black text-base shrink-0">
+                  {initials}
+                </div>
+                <div className="flex-1 min-w-0">
+                  <div className="font-black text-slate-900 text-base truncate">{displayName}</div>
+                  <div className="text-[11px] font-bold text-slate-500 mt-0.5">{subtitle}</div>
+                </div>
+                <ChevronRight size={18} className="text-slate-300 shrink-0" />
+              </button>
+            );
+          })}
         </div>
       </div>
     );
