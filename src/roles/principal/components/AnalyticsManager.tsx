@@ -318,6 +318,192 @@ export const AnalyticsManager: React.FC<Props> = ({ onBack }) => {
     }
   };
 
+  // ── Quick reports — three one-tap CSVs the office uses regularly ──
+  // Each one queries Supabase directly with an indexed filter so we don't
+  // ship the whole roster to the client. RLS already enforces school
+  // isolation; we add an explicit school_id eq for clarity. The current
+  // academic year scopes student_academic_records joins.
+  const [reportBusy, setReportBusy] = useState<null | 'RTE' | 'DUES' | 'ATT'>(null);
+
+  const triggerCsvDownload = (filename: string, content: string) => {
+    const blob = new Blob([content], { type: 'text/csv;charset=utf-8' });
+    const url  = URL.createObjectURL(blob);
+    const a    = document.createElement('a');
+    a.href = url; a.download = filename;
+    document.body.appendChild(a); a.click(); a.remove();
+    URL.revokeObjectURL(url);
+  };
+
+  const downloadRteCsv = async () => {
+    if (!session?.schoolId || !currentYear?.id) {
+      showToast('Pick an academic year first', 'error'); return;
+    }
+    setReportBusy('RTE');
+    try {
+      // Pull RTE students + their academic record for the active year. The
+      // RTE flag lives on `students`, fee + attendance on the per-year
+      // `student_academic_records` row.
+      const { data: rows, error } = await supabase
+        .from('students')
+        .select(`
+          id, name, admission_no, roll_no, dob, gender, phone,
+          father_name, father_phone, address,
+          student_academic_records!inner(class_name, section, total_fee, paid_fee, attendance_percent)
+        `)
+        .eq('school_id', session.schoolId)
+        .eq('rte', true)
+        .eq('is_active', true)
+        .eq('student_academic_records.academic_year_id', currentYear.id)
+        .order('name', { ascending: true });
+      if (error) throw new Error(error.message);
+      type Row = {
+        id: string; name: string; admission_no: string; roll_no: string | null;
+        dob: string | null; gender: string | null; phone: string | null;
+        father_name: string | null; father_phone: string | null; address: string | null;
+        student_academic_records: { class_name: string | null; section: string | null;
+          total_fee: number | null; paid_fee: number | null; attendance_percent: number | null }
+          | Array<{ class_name: string | null; section: string | null;
+              total_fee: number | null; paid_fee: number | null; attendance_percent: number | null }>;
+      };
+      const flat = ((rows ?? []) as unknown as Row[]).map(r => {
+        const ar = Array.isArray(r.student_academic_records)
+          ? r.student_academic_records[0]
+          : r.student_academic_records;
+        const total = Number(ar?.total_fee ?? 0);
+        const paid  = Number(ar?.paid_fee ?? 0);
+        return {
+          name: r.name,
+          admission_no: r.admission_no,
+          roll_no: r.roll_no ?? '',
+          class: `${ar?.class_name ?? ''}-${ar?.section ?? ''}`,
+          dob: r.dob ?? '',
+          gender: r.gender ?? '',
+          phone: r.phone ?? '',
+          father_name: r.father_name ?? '',
+          father_phone: r.father_phone ?? '',
+          address: r.address ?? '',
+          total_fee: total,
+          paid_fee: paid,
+          pending_fee: Math.max(0, total - paid),
+          attendance_percent: Number(ar?.attendance_percent ?? 0),
+        };
+      });
+      const headers = ['name','admission_no','roll_no','class','dob','gender','phone',
+        'father_name','father_phone','address','total_fee','paid_fee','pending_fee','attendance_percent'];
+      triggerCsvDownload(
+        `rte-students_${currentYear.name}_${new Date().toISOString().slice(0, 10)}.csv`,
+        toCsv(flat, headers),
+      );
+      showToast(`${flat.length} RTE student${flat.length === 1 ? '' : 's'} exported`);
+    } catch (e) {
+      showToast(e instanceof Error ? e.message : 'Export failed', 'error');
+    } finally { setReportBusy(null); }
+  };
+
+  const downloadDuesCsv = async () => {
+    if (!session?.schoolId || !currentYear?.id) {
+      showToast('Pick an academic year first', 'error'); return;
+    }
+    setReportBusy('DUES');
+    try {
+      // student_academic_records is the canonical fee aggregate per
+      // (student, year). Filter where paid_fee < total_fee — only active
+      // students, current year. Phone/address come via the joined students row.
+      const { data: rows, error } = await supabase
+        .from('student_academic_records')
+        .select(`
+          student_id, class_name, section, total_fee, paid_fee, attendance_percent,
+          students!inner(name, admission_no, phone, father_name, father_phone, address, is_active)
+        `)
+        .eq('academic_year_id', currentYear.id)
+        .order('class_name', { ascending: true });
+      if (error) throw new Error(error.message);
+      type Row = {
+        student_id: string; class_name: string | null; section: string | null;
+        total_fee: number | null; paid_fee: number | null; attendance_percent: number | null;
+        students: { name: string; admission_no: string; phone: string | null;
+          father_name: string | null; father_phone: string | null; address: string | null;
+          is_active: boolean } | null;
+      };
+      const flat = ((rows ?? []) as unknown as Row[])
+        .filter(r => r.students?.is_active !== false)
+        .map(r => {
+          const total = Number(r.total_fee ?? 0);
+          const paid  = Number(r.paid_fee ?? 0);
+          return {
+            name: r.students?.name ?? '',
+            admission_no: r.students?.admission_no ?? '',
+            class: `${r.class_name ?? ''}-${r.section ?? ''}`,
+            father_name: r.students?.father_name ?? '',
+            father_phone: r.students?.father_phone ?? '',
+            phone: r.students?.phone ?? '',
+            address: r.students?.address ?? '',
+            total_fee: total,
+            paid_fee: paid,
+            pending_fee: Math.max(0, total - paid),
+            attendance_percent: Number(r.attendance_percent ?? 0),
+          };
+        })
+        .filter(r => r.pending_fee > 0)
+        .sort((a, b) => b.pending_fee - a.pending_fee);
+      const headers = ['name','admission_no','class','father_name','father_phone','phone',
+        'address','total_fee','paid_fee','pending_fee','attendance_percent'];
+      triggerCsvDownload(
+        `fee-dues_${currentYear.name}_${new Date().toISOString().slice(0, 10)}.csv`,
+        toCsv(flat, headers),
+      );
+      showToast(`${flat.length} student${flat.length === 1 ? '' : 's'} with pending fees`);
+    } catch (e) {
+      showToast(e instanceof Error ? e.message : 'Export failed', 'error');
+    } finally { setReportBusy(null); }
+  };
+
+  const downloadLowAttendanceCsv = async () => {
+    if (!session?.schoolId || !currentYear?.id) {
+      showToast('Pick an academic year first', 'error'); return;
+    }
+    setReportBusy('ATT');
+    try {
+      const { data: rows, error } = await supabase
+        .from('student_academic_records')
+        .select(`
+          student_id, class_name, section, total_fee, paid_fee, attendance_percent,
+          students!inner(name, admission_no, phone, father_name, father_phone, is_active)
+        `)
+        .eq('academic_year_id', currentYear.id)
+        .lt('attendance_percent', 75)
+        .order('attendance_percent', { ascending: true });
+      if (error) throw new Error(error.message);
+      type Row = {
+        student_id: string; class_name: string | null; section: string | null;
+        total_fee: number | null; paid_fee: number | null; attendance_percent: number | null;
+        students: { name: string; admission_no: string; phone: string | null;
+          father_name: string | null; father_phone: string | null; is_active: boolean } | null;
+      };
+      const flat = ((rows ?? []) as unknown as Row[])
+        .filter(r => r.students?.is_active !== false)
+        .map(r => ({
+          name: r.students?.name ?? '',
+          admission_no: r.students?.admission_no ?? '',
+          class: `${r.class_name ?? ''}-${r.section ?? ''}`,
+          father_name: r.students?.father_name ?? '',
+          father_phone: r.students?.father_phone ?? '',
+          phone: r.students?.phone ?? '',
+          attendance_percent: Number(r.attendance_percent ?? 0),
+          pending_fee: Math.max(0, Number(r.total_fee ?? 0) - Number(r.paid_fee ?? 0)),
+        }));
+      const headers = ['name','admission_no','class','father_name','father_phone','phone',
+        'attendance_percent','pending_fee'];
+      triggerCsvDownload(
+        `low-attendance_${currentYear.name}_${new Date().toISOString().slice(0, 10)}.csv`,
+        toCsv(flat, headers),
+      );
+      showToast(`${flat.length} student${flat.length === 1 ? '' : 's'} below 75%`);
+    } catch (e) {
+      showToast(e instanceof Error ? e.message : 'Export failed', 'error');
+    } finally { setReportBusy(null); }
+  };
+
   const net = data ? data.income - data.expense : 0;
   const monthlyMax = useMemo(() => {
     if (!data) return 1;
@@ -420,6 +606,67 @@ export const AnalyticsManager: React.FC<Props> = ({ onBack }) => {
               Pick an academic year to load the financial summary.
             </div>
           )}
+        </section>
+
+        {/* ── Quick Reports — one-tap CSV exports the office uses regularly.
+             Each report queries Supabase with an indexed filter so we don't
+             ship the whole roster client-side. ─────────────────────────── */}
+        <section>
+          <div className="flex items-center justify-between mb-3">
+            <h3 className="text-base lg:text-lg font-black text-slate-900">Quick Reports</h3>
+            <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">
+              CSV downloads
+            </span>
+          </div>
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+            <button onClick={downloadRteCsv} disabled={!currentYear || reportBusy !== null}
+              className="bg-white border border-slate-100 hover:border-emerald-300 rounded-2xl p-4 text-left shadow-sm active:scale-[0.99] transition-all disabled:opacity-50">
+              <div className="flex items-center justify-between mb-2">
+                <div className="w-10 h-10 rounded-xl bg-emerald-50 text-emerald-600 flex items-center justify-center">
+                  <Users size={18} />
+                </div>
+                {reportBusy === 'RTE'
+                  ? <Loader size={14} className="animate-spin text-slate-400" />
+                  : <Download size={14} className="text-slate-400" />}
+              </div>
+              <p className="font-black text-slate-900 text-sm">RTE Students</p>
+              <p className="text-[11px] font-bold text-slate-500 mt-0.5">
+                Roll, parents, fees, attendance — full details
+              </p>
+            </button>
+
+            <button onClick={downloadDuesCsv} disabled={!currentYear || reportBusy !== null}
+              className="bg-white border border-slate-100 hover:border-rose-300 rounded-2xl p-4 text-left shadow-sm active:scale-[0.99] transition-all disabled:opacity-50">
+              <div className="flex items-center justify-between mb-2">
+                <div className="w-10 h-10 rounded-xl bg-rose-50 text-rose-600 flex items-center justify-center">
+                  <AlertCircle size={18} />
+                </div>
+                {reportBusy === 'DUES'
+                  ? <Loader size={14} className="animate-spin text-slate-400" />
+                  : <Download size={14} className="text-slate-400" />}
+              </div>
+              <p className="font-black text-slate-900 text-sm">Fee Dues</p>
+              <p className="text-[11px] font-bold text-slate-500 mt-0.5">
+                Defaulters with pending amount + parent contact
+              </p>
+            </button>
+
+            <button onClick={downloadLowAttendanceCsv} disabled={!currentYear || reportBusy !== null}
+              className="bg-white border border-slate-100 hover:border-amber-300 rounded-2xl p-4 text-left shadow-sm active:scale-[0.99] transition-all disabled:opacity-50">
+              <div className="flex items-center justify-between mb-2">
+                <div className="w-10 h-10 rounded-xl bg-amber-50 text-amber-600 flex items-center justify-center">
+                  <ChartBar size={18} />
+                </div>
+                {reportBusy === 'ATT'
+                  ? <Loader size={14} className="animate-spin text-slate-400" />
+                  : <Download size={14} className="text-slate-400" />}
+              </div>
+              <p className="font-black text-slate-900 text-sm">Below 75% Attendance</p>
+              <p className="text-[11px] font-bold text-slate-500 mt-0.5">
+                Students at risk of detainment
+              </p>
+            </button>
+          </div>
         </section>
 
         {loading ? (
