@@ -374,13 +374,34 @@ export const staffAttendanceService = {
 
     const { data: staff, error: sErr } = await supabase
       .from('staff')
-      .select('id, name, role, status, is_active')
+      .select('id, name, role, status, is_active, joining_date, relieving_date')
       .eq('school_id', schoolId);
     if (sErr) throw new Error(sErr.message);
 
-    const activeStaff = ((staff ?? []) as any[]).filter(
-      (s: any) => s.is_active && s.status !== 'SUSPENDED',
-    );
+    // Lifecycle-aware filter so the attendance grid only lists staff
+    // who were actually employed AND not suspended on this specific
+    // date. Without these guards a freshly-joined teacher leaks into
+    // every past date (back to year start) and a relieved teacher
+    // continues to appear on dates after their last day.
+    //
+    // Rules (per user spec):
+    //   • is_active must be true (basic activation flag)
+    //   • status must NOT be SUSPENDED or RELIEVED — those are hidden
+    //     from the grid entirely (you can't mark attendance on someone
+    //     who isn't supposed to be there).
+    //   • date >= joining_date  (don't show before they joined)
+    //   • relieving_date IS NULL OR date <= relieving_date  (don't
+    //     show after their last day if a relieving date is set)
+    //
+    // ON_LEAVE staff DO still appear so the marker can record
+    // 'LEAVE' as that day's status — they're employed, just absent.
+    const activeStaff = ((staff ?? []) as any[]).filter((s: any) => {
+      if (!s.is_active) return false;
+      if (s.status === 'SUSPENDED' || s.status === 'RELIEVED') return false;
+      if (s.joining_date && date < s.joining_date) return false;
+      if (s.relieving_date && date > s.relieving_date) return false;
+      return true;
+    });
 
     const { data: existing, error: aErr } = await supabase
       .from('staff_attendance')
@@ -445,11 +466,26 @@ export const staffAttendanceService = {
     const lastDay  = `${yearMonth}-${String(dim).padStart(2, '0')}`;
 
     const { data: staff, error: sErr } = await supabase
-      .from('staff').select('id, name, role')
+      .from('staff').select('id, name, role, status, joining_date, relieving_date')
       .eq('school_id', schoolId).eq('is_active', true);
     if (sErr) throw new Error(sErr.message);
 
-    const activeStaff = ((staff ?? []) as any[]).sort((a: any, b: any) => a.name.localeCompare(b.name));
+    // Lifecycle filter — same rule as getForDate but evaluated against
+    // the month window:
+    //   • Hide SUSPENDED / RELIEVED entirely.
+    //   • Hide staff who joined AFTER the month ended (not employed at all).
+    //   • Hide staff whose relieving_date fell BEFORE the month started.
+    // Staff who joined / were relieved MID-MONTH still appear, but their
+    // day cells are clipped to only the dates they were actually
+    // employed (further down in the .map).
+    const activeStaff = ((staff ?? []) as any[])
+      .filter((s: any) => {
+        if (s.status === 'SUSPENDED' || s.status === 'RELIEVED') return false;
+        if (s.joining_date && s.joining_date > lastDay) return false;
+        if (s.relieving_date && s.relieving_date < firstDay) return false;
+        return true;
+      })
+      .sort((a: any, b: any) => a.name.localeCompare(b.name));
 
     const { data: rows, error: aErr } = await supabase
       .from('staff_attendance').select('staff_id, date, status')
@@ -467,7 +503,18 @@ export const staffAttendanceService = {
       PRESENT: 0, ABSENT: 0, HALF_DAY: 0, LEAVE: 0, LATE: 0, HOLIDAY: 0,
     };
     return activeStaff.map((s: any) => {
-      const days = (byStaff.get(s.id) ?? []).sort((a, b) => a.date.localeCompare(b.date));
+      // Per-staff cell-level clip — within the month, only include
+      // dates that fall inside this staff's active employment window.
+      // Earlier the grid would render PRESENT cells from January for
+      // a teacher who actually joined on Jan 20.
+      const inEmploymentWindow = (d: string) => {
+        if (s.joining_date && d < s.joining_date) return false;
+        if (s.relieving_date && d > s.relieving_date) return false;
+        return true;
+      };
+      const days = (byStaff.get(s.id) ?? [])
+        .filter(d => inEmploymentWindow(d.date))
+        .sort((a, b) => a.date.localeCompare(b.date));
       const counts = { ...ZERO };
       for (const d of days) counts[d.status]++;
       return { staffId: s.id, name: s.name, role: s.role, days, counts };
@@ -488,13 +535,29 @@ export const staffAttendanceService = {
   }> {
     const schoolId = useAuthStore.getState().session?.schoolId;
     if (!schoolId) throw new Error('No school in session');
+    // Pull the staff's lifecycle window so the day list only includes
+    // dates inside their employment period — same rule as the monthly
+    // grid. Otherwise a staff profile shows phantom days from before
+    // they joined / after they left.
+    const { data: staffRow } = await supabase
+      .from('staff').select('joining_date, relieving_date')
+      .eq('id', staffId).maybeSingle();
+    const joining   = (staffRow as { joining_date: string | null } | null)?.joining_date ?? null;
+    const relieving = (staffRow as { relieving_date: string | null } | null)?.relieving_date ?? null;
+
     const { data, error } = await supabase
       .from('staff_attendance').select('date, status')
       .eq('school_id', schoolId).eq('staff_id', staffId)
       .gte('date', startDate).lte('date', endDate)
       .order('date', { ascending: true });
     if (error) throw new Error(error.message);
-    const days = ((data ?? []) as Array<{ date: string; status: StaffAttendanceStatus }>);
+    const inEmploymentWindow = (d: string) => {
+      if (joining && d < joining) return false;
+      if (relieving && d > relieving) return false;
+      return true;
+    };
+    const days = ((data ?? []) as Array<{ date: string; status: StaffAttendanceStatus }>)
+      .filter(d => inEmploymentWindow(d.date));
     const counts: Record<StaffAttendanceStatus, number> = {
       PRESENT: 0, ABSENT: 0, HALF_DAY: 0, LEAVE: 0, LATE: 0, HOLIDAY: 0,
     };
