@@ -636,7 +636,17 @@ principalRouter.post('/leave/submit', requireAuth, async (req, res) => {
       new_value:    newValue,
       status:       'PENDING',
     }).select(APPROVAL_FIELDS).single();
-    if (error) throw new ApiError(500, error.message);
+    if (error) {
+      // RLS errors here mean the service-role client isn't actually
+      // service-role (env var missing). Surface a clear admin
+      // message instead of the raw "row-level security policy"
+      // string which reads as an app bug to end users.
+      if (error.message.toLowerCase().includes('row-level security')) {
+        throw new ApiError(500,
+          'Server is misconfigured (service role key missing). Contact support — your application was NOT submitted.');
+      }
+      throw new ApiError(500, error.message);
+    }
     ok(res, data, 201);
   } catch (err) { fail(res, err); }
 });
