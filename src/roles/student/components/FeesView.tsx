@@ -6,6 +6,7 @@ import {
 import { studentDashboardService } from '@/modules/students/studentDashboard.service';
 import { FeePaymentUpload } from '@/roles/student/student-role.types';
 import { useUIStore } from '@/store/uiStore';
+import { AppLoader } from '@/shared/components/AppLoader';
 import { feeService, FeeInstallment, FeeType, PaymentRecord } from '@/modules/fees/fee.service';
 import { studentService } from '@/modules/students/student.service';
 import { schoolInfoService } from '@/shared/utils/schoolInfo.service';
@@ -166,22 +167,7 @@ export const FeesView: React.FC<Props> = ({ onBack }) => {
     } finally { setIsSubmitting(false); }
   };
 
-  if (loading) return (
-    <div className="w-full lg:max-w-5xl lg:mx-auto bg-slate-50 flex flex-col animate-in slide-in-from-right-8 duration-300 min-h-[60vh] lg:min-h-[80vh]">
-      <div className="sticky top-0 bg-white border-b border-slate-100 px-4 pt-4 pb-4 flex items-center gap-3 shadow-sm z-10">
-        <button onClick={onBack} className="p-2 -ml-2 bg-slate-100 rounded-full">
-          <ArrowLeft size={20} className="text-slate-600" />
-        </button>
-        <h2 className="text-xl font-black text-slate-900 uppercase tracking-tight">Fee Payments</h2>
-      </div>
-      <div className="flex-1 flex items-center justify-center py-20">
-        <div className="text-center">
-          <Loader size={28} className="text-slate-400 animate-spin mx-auto mb-3" />
-          <p className="text-sm font-bold text-slate-500">Loading your fees…</p>
-        </div>
-      </div>
-    </div>
-  );
+  if (loading) return <AppLoader variant="centered" label="Loading your fees…" />;
 
   if (loadError) return (
     <div className="w-full lg:max-w-5xl lg:mx-auto bg-slate-50 flex flex-col animate-in slide-in-from-right-8 duration-300 min-h-[60vh] lg:min-h-[80vh]">

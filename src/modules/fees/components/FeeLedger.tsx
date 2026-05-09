@@ -13,6 +13,7 @@ import type { FeeStructureRecord } from '@/modules/fees/fees.types';
 import { useUIStore } from '@/store/uiStore';
 import { useEditorModeStore } from '@/store/editorModeStore';
 import { useAcademicYear } from '@/shared/context/AcademicYearContext';
+import { AppLoader } from '@/shared/components/AppLoader';
 import { FeePaymentSubmissionsQueue } from '@/modules/fees/components/FeePaymentSubmissionsQueue';
 import { PreviousYearDues } from '@/modules/fees/components/PreviousYearDues';
 
@@ -772,12 +773,10 @@ export const FeeLedger: React.FC<Props> = ({ onBack }) => {
   useEffect(() => { setShowCount(PAGE_SIZE); }, [search, listTab]);
 
   // ─── Loading ─────────────────────────────────────────────────────────────────
-  if (loading) return (
-    <div className="w-full min-h-screen bg-slate-50 flex flex-col items-center justify-center gap-3">
-      <div className="w-10 h-10 border-[3px] border-slate-200 border-t-blue-600 rounded-full animate-spin" />
-      <p className="text-[11px] font-black text-slate-400 uppercase tracking-widest">Loading…</p>
-    </div>
-  );
+  // Shared AppLoader so we don't fight the route-chunk Suspense fallback
+  // with a different look — earlier the parent's blue-tinted ring spinner
+  // and FeeLedger's own dotted spinner appeared together for ~200ms.
+  if (loading) return <AppLoader variant="centered" />;
 
   // ─── Derived data ─────────────────────────────────────────────────────────────
   const getParentDue  = (id: string) => feeService.getParentDueSummary(id);

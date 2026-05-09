@@ -32,14 +32,12 @@ const BillingManager     = lazy(() => import('@/roles/super-admin/components/Bil
 const AttendanceManager  = lazy(() => import('@/modules/attendance/components/TeacherAttendanceManager').then(m => ({ default: m.AttendanceManager })));
 const TeacherNoticesView = lazy(() => import('@/modules/notices/components/TeacherNoticesView').then(m => ({ default: m.TeacherNoticesView })));
 
-// Centred spinner shown while a route chunk is fetching. Same look as the
-// auth-init splash so route transitions don't flash a different style.
-const ChunkLoading: React.FC = () => (
-  <div className="flex items-center justify-center min-h-[60vh] gap-3 text-slate-400">
-    <Loader size={20} className="animate-spin" />
-    <span className="text-sm font-bold">Loading…</span>
-  </div>
-);
+// Route-chunk fallback uses the shared AppLoader so every loading
+// surface across the app (auth splash, route transitions, individual
+// tabs) shares one visual language. Earlier we had three different
+// "loading" looks fighting each other on the same fees screen.
+import { AppLoader } from '@/shared/components/AppLoader';
+const ChunkLoading: React.FC = () => <AppLoader variant="centered" />;
 
 const useIsDesktop = () => {
   const [isDesktop, setIsDesktop] = useState(() => window.innerWidth >= 1024);
@@ -152,13 +150,9 @@ export default function App() {
   }, [session?.userId, session?.role, (session?.linkedStudentIds ?? []).join(',')]);
 
   // ── Loading splash while restoring Supabase session ──────────────────────
-  if (isInitializing) {
-    return (
-      <div className="min-h-screen bg-gradient-to-br from-blue-600 to-blue-800 flex items-center justify-center">
-        <Loader size={32} className="text-white animate-spin" />
-      </div>
-    );
-  }
+  // White (not blue) so the user doesn't see a blue→white strobe when
+  // the app shell paints. Matches the Suspense fallback below.
+  if (isInitializing) return <AppLoader variant="full" />;
 
   // ── Not signed in ────────────────────────────────────────────────────────
   if (!session) return <LoginPage />;
