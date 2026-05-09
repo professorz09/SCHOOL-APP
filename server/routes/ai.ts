@@ -1,8 +1,33 @@
 import { Router } from 'express';
+import rateLimit from 'express-rate-limit';
 import { ok, fail, ApiError, requireBody } from '../lib/helpers';
 import { requireAuth, requireRole } from '../middleware/auth';
 
 export const aiRouter = Router();
+
+// Gemini calls are billable + share a single platform key across
+// every school. A misbehaving client (or compromised teacher token)
+// could otherwise exhaust the daily Gemini quota and break AI
+// features for everyone. 10/min per user is well above any realistic
+// paper-generation cadence; daily cap of 200 is the cost ceiling.
+const aiPerMinuteLimiter = rateLimit({
+  windowMs: 60_000,
+  limit: 10,
+  keyGenerator: (req: any) => `ai-min:${req.user?.id ?? req.ip}`,
+  validate: { keyGeneratorIpFallback: false },
+  standardHeaders: 'draft-7',
+  legacyHeaders: false,
+  message: { ok: false, error: 'AI rate limit reached (10 / minute). Wait a bit.' },
+});
+const aiPerDayLimiter = rateLimit({
+  windowMs: 24 * 60 * 60_000,
+  limit: 200,
+  keyGenerator: (req: any) => `ai-day:${req.user?.id ?? req.ip}`,
+  validate: { keyGeneratorIpFallback: false },
+  standardHeaders: 'draft-7',
+  legacyHeaders: false,
+  message: { ok: false, error: 'AI daily quota reached (200 / day). Try tomorrow.' },
+});
 
 // Gemini 3-series. gemini-2.0-flash and gemini-2.5-* are scheduled for
 // deprecation (June 2026); we're already on the 3.x line. `flash-preview`
@@ -22,7 +47,7 @@ const ENDPOINT = `https://generativelanguage.googleapis.com/v1beta/models/${MODE
 // handles multimodal inputs natively. Used by the "AI Scan Notes" flow
 // in the Exam Gen tool to OCR handwritten/printed notes into structured
 // questions.
-aiRouter.post('/generate', requireAuth, requireRole('TEACHER', 'PRINCIPAL'), async (req, res) => {
+aiRouter.post('/generate', aiPerMinuteLimiter, aiPerDayLimiter, requireAuth, requireRole('TEACHER', 'PRINCIPAL'), async (req, res) => {
   try {
     const body = requireBody<{
       prompt: string;

@@ -252,12 +252,33 @@ principalRouter.post('/notice/create', requireAuth, PRINCIPAL, async (req, res) 
       targetStudentId?: string | null;
     }>(req, ['title', 'body', 'audience']);
 
+    // Audience whitelist — must match NoticeAudience enum on the
+    // client. Anything outside this set is rejected; without this an
+    // attacker (or a typo'd client) could insert e.g. audience='ADMIN'
+    // and surface notices in places that read by != filter.
+    const VALID_AUDIENCES = new Set([
+      'ALL', 'STUDENTS', 'TEACHERS', 'STAFF', 'PARENTS', 'SPECIFIC_STUDENT',
+    ]);
+    if (!VALID_AUDIENCES.has(body.audience)) {
+      throw new ApiError(400, `Invalid audience: ${body.audience}`);
+    }
+
     // SPECIFIC_STUDENT audience must include a target id; other audiences must NOT
     // (we store NULL so per-row filters stay clean).
     if (body.audience === 'SPECIFIC_STUDENT' && !body.targetStudentId) {
       throw new ApiError(400, 'targetStudentId required for SPECIFIC_STUDENT notices');
     }
     const targetId = body.audience === 'SPECIFIC_STUDENT' ? body.targetStudentId : null;
+
+    // For SPECIFIC_STUDENT, verify the target belongs to this school.
+    // Without this guard a principal could (in principle) target a
+    // student in a different school whose UUID they happen to know.
+    if (targetId) {
+      const { data: stu } = await adminDb.from('students')
+        .select('id').eq('id', targetId).eq('school_id', req.user.school_id!)
+        .maybeSingle();
+      if (!stu) throw new ApiError(404, 'Target student not found in your school');
+    }
 
     const { data, error } = await adminDb.from('notices').insert({
       school_id:         req.user.school_id,
@@ -266,7 +287,10 @@ principalRouter.post('/notice/create', requireAuth, PRINCIPAL, async (req, res) 
       audience:          body.audience,
       pinned:            body.pinned ?? false,
       sent_by:           req.user.id,
-      sent_by_name:      body.sentBy || req.user.name || '',
+      // Author display name is derived server-side from the JWT
+      // user. body.sentBy is ignored — earlier we honoured it which
+      // let a principal forge "From: District Office" attribution.
+      sent_by_name:      req.user.name || '',
       target_student_id: targetId,
     }).select('id, title, body, audience, pinned, sent_by_name, created_at, is_active, target_student_id, students(name)').single();
     if (error) throw new ApiError(500, error.message);
@@ -292,6 +316,12 @@ principalRouter.post('/notice/delete', requireAuth, PRINCIPAL, async (req, res) 
 
 // ─── Complaints ───────────────────────────────────────────────────────────────
 
+// Open complaint statuses — only PENDING / IN_REVIEW rows can be
+// resolved or rejected. Re-running on RESOLVED / REJECTED would
+// silently overwrite the original `resolved_at` and `response`,
+// destroying the audit trail of when the principal first acted.
+const OPEN_COMPLAINT_STATUSES = ['PENDING', 'IN_REVIEW'];
+
 // POST /api/principal/complaint/resolve
 principalRouter.post('/complaint/resolve', requireAuth, PRINCIPAL, async (req, res) => {
   try {
@@ -301,8 +331,10 @@ principalRouter.post('/complaint/resolve', requireAuth, PRINCIPAL, async (req, r
     const { data, error } = await adminDb.from('complaints')
       .update({ status: 'RESOLVED', response: body.response, resolved_at: new Date().toISOString() })
       .eq('id', body.complaintId).eq('school_id', req.user.school_id!)
-      .select(COMPLAINT_FIELDS).single();
+      .in('status', OPEN_COMPLAINT_STATUSES)
+      .select(COMPLAINT_FIELDS).maybeSingle();
     if (error) throw new ApiError(500, error.message);
+    if (!data) throw new ApiError(409, 'Complaint already resolved or rejected — refresh the list');
     ok(res, data);
   } catch (err) { fail(res, err); }
 });
@@ -316,8 +348,10 @@ principalRouter.post('/complaint/reject', requireAuth, PRINCIPAL, async (req, re
     const { data, error } = await adminDb.from('complaints')
       .update({ status: 'REJECTED', response: body.reason, resolved_at: new Date().toISOString() })
       .eq('id', body.complaintId).eq('school_id', req.user.school_id!)
-      .select(COMPLAINT_FIELDS).single();
+      .in('status', OPEN_COMPLAINT_STATUSES)
+      .select(COMPLAINT_FIELDS).maybeSingle();
     if (error) throw new ApiError(500, error.message);
+    if (!data) throw new ApiError(409, 'Complaint already resolved or rejected — refresh the list');
     ok(res, data);
   } catch (err) { fail(res, err); }
 });
@@ -542,6 +576,20 @@ principalRouter.post('/leave/submit', requireAuth, async (req, res) => {
       studentId: string; studentName: string; title: string;
       fromDate: string; toDate: string; reason: string;
     }>(req, ['studentId', 'studentName', 'title', 'fromDate', 'toDate', 'reason']);
+
+    // Cross-school guard — applies to EVERY caller. PRINCIPAL and
+    // TEACHER were earlier skipped from this check, which meant a
+    // teacher who knew another school's student_id could submit a
+    // leave entry into that school's approval queue. The parent-link
+    // check below adds a tighter parent-only rule on top.
+    const { data: targetStudent } = await adminDb
+      .from('students').select('school_id')
+      .eq('id', body.studentId).maybeSingle();
+    const targetSchool = (targetStudent as { school_id: string } | null)?.school_id;
+    if (!targetSchool) throw new ApiError(404, 'Student not found');
+    if (targetSchool !== req.user.school_id) {
+      throw new ApiError(403, 'Student belongs to another school');
+    }
 
     // Ownership check for PARENT/STUDENT roles. PRINCIPAL/TEACHER skip this.
     if (req.user.role === 'PARENT' || req.user.role === 'STUDENT') {

@@ -221,19 +221,48 @@ teacherRouter.post('/test/publish-results', requireAuth, requireRole('TEACHER'),
     }>(req, ['testId', 'academicYearId', 'results']);
 
     // Verify the test belongs to the caller's school (defence-in-depth — RLS
-    // is bypassed since we use adminDb here).
+    // is bypassed since we use adminDb here). Also pull max_marks so we
+    // can validate the submitted obtained_marks against it.
     const { data: test, error: tErr } = await adminDb
       .from('test_schedules')
-      .select('id, school_id')
+      .select('id, school_id, max_marks')
       .eq('id', body.testId)
       .maybeSingle();
     if (tErr) throw new ApiError(500, tErr.message);
     if (!test) throw new ApiError(404, 'Test not found');
-    if ((test as any).school_id !== req.user.school_id) {
+    const testRow = test as { id: string; school_id: string; max_marks: number };
+    if (testRow.school_id !== req.user.school_id) {
       throw new ApiError(403, 'Test belongs to another school');
     }
 
     if (body.results.length > 0) {
+      // Validate every row before any DB write. Earlier this path
+      // accepted any number — including negatives or values larger
+      // than max_marks — so a teacher could submit `999999` marks
+      // that would later flow into report calculations.
+      for (const r of body.results) {
+        if (typeof r.obtainedMarks !== 'number' || !Number.isFinite(r.obtainedMarks)) {
+          throw new ApiError(400, `Invalid marks for student ${r.studentId}`);
+        }
+        if (r.obtainedMarks < 0 || r.obtainedMarks > testRow.max_marks) {
+          throw new ApiError(400, `Marks for student ${r.studentId} (${r.obtainedMarks}) must be between 0 and ${testRow.max_marks}`);
+        }
+      }
+
+      // Verify every student in the payload belongs to this school.
+      // Without this guard a teacher who knows another school's
+      // student_ids could insert exam_results for them.
+      const studentIds = Array.from(new Set(body.results.map(r => r.studentId)));
+      const { data: stuRows, error: sErr } = await adminDb
+        .from('students').select('id').eq('school_id', req.user.school_id!)
+        .in('id', studentIds);
+      if (sErr) throw new ApiError(500, sErr.message);
+      const allowed = new Set(((stuRows ?? []) as { id: string }[]).map(s => s.id));
+      const orphans = studentIds.filter(id => !allowed.has(id));
+      if (orphans.length > 0) {
+        throw new ApiError(403, `Students not in your school: ${orphans.join(', ')}`);
+      }
+
       const rows = body.results.map(r => ({
         test_id: body.testId,
         student_id: r.studentId,

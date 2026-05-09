@@ -552,12 +552,24 @@ export const studentDashboardService = {
     //   • Broadcast notices for this school where audience matches.
     //   • Personal notices targeting THIS student (audience=SPECIFIC_STUDENT).
     // Run in parallel and merge — RLS already filters cross-school rows.
+    // Audience whitelist depends on the caller's role:
+    //   • STUDENT → 'ALL' + 'STUDENTS' only (PARENTS-targeted notices
+    //     are for parents; students must NOT see fee reminders or
+    //     parent-meeting invites).
+    //   • PARENT  → 'ALL' + 'PARENTS' (and student notices their
+    //     child receives — surfaced via the personal-notice path).
+    // Earlier the query whitelisted PARENTS for students too, leaking
+    // every parent-only notice to every student in the school.
+    const role = getRole();
+    const audiences = role === 'PARENT'
+      ? ['ALL', 'PARENTS']
+      : ['ALL', 'STUDENTS'];
     const [broadcastRes, personalRes] = await Promise.all([
       supabase
         .from('notices')
         .select('id, title, body, audience, sent_at, pinned, target_student_id')
         .eq('school_id', ctx.schoolId).eq('is_active', true)
-        .in('audience', ['ALL', 'STUDENTS', 'STUDENTS_PARENTS', 'PARENTS_STUDENTS', 'PARENTS'])
+        .in('audience', audiences)
         .order('pinned', { ascending: false })
         .order('sent_at', { ascending: false }),
       supabase
