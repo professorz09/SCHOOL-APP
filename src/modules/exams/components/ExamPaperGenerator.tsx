@@ -1,5 +1,6 @@
-import React, { useEffect, useState } from 'react';
-import { ArrowLeft, Sparkles, Download, Loader2, ScrollText, ChevronRight } from 'lucide-react';
+import React, { useEffect, useRef, useState } from 'react';
+import { ArrowLeft, Sparkles, Download, Loader2, ScrollText, ChevronRight, Printer, FileText } from 'lucide-react';
+import { downloadNodeAsPdf, printCurrentPage } from '@/shared/utils/pdfPrint';
 import { teacherService } from '@/roles/teacher/teacher.service';
 import { ExamPaperRequest, GeneratedExamPaper, TestType } from '@/roles/teacher/teacher.types';
 import { useUIStore } from '@/store/uiStore';
@@ -92,11 +93,33 @@ export const ExamPaperGeneratorView: React.FC<Props> = ({ onBack }) => {
     } finally { setIsGenerating(false); }
   };
 
-  const handleDownload = () => {
+  // Ref to the printable section so html2canvas/jsPDF can rasterise
+  // just that part of the page (not the dark hero card or app shell).
+  const printableRef = useRef<HTMLDivElement | null>(null);
+  const [downloadingPdf, setDownloadingPdf] = useState(false);
+
+  const handleDownloadPdf = async () => {
+    if (!paper || !printableRef.current) return;
+    setDownloadingPdf(true);
+    try {
+      const safeSubject = paper.request.subject.replace(/\s+/g, '_');
+      const safeClass = paper.request.className.replace(/\s+/g, '_');
+      await downloadNodeAsPdf(
+        printableRef.current,
+        `exam_paper_${safeSubject}_${safeClass}.pdf`,
+      );
+      showToast('PDF saved');
+    } catch (e) {
+      showToast(e instanceof Error ? e.message : 'PDF export failed', 'error');
+    } finally { setDownloadingPdf(false); }
+  };
+
+  const handleDownloadTxt = () => {
     if (!paper) return;
-    let content = `EXAM PAPER\n${'='.repeat(50)}\n`;
+    let content = `${paper.request.schoolName ? paper.request.schoolName.toUpperCase() + '\n' : ''}EXAM PAPER\n${'='.repeat(50)}\n`;
     content += `Subject: ${paper.request.subject}\n`;
     content += `Class: ${paper.request.className}\n`;
+    if (paper.request.board) content += `Board: ${paper.request.board}\n`;
     content += `Type: ${paper.request.testType.replace('_', ' ')}\n`;
     content += `Total Marks: ${paper.request.totalMarks}\n`;
     content += `Duration: ${paper.request.duration} minutes\n`;
@@ -109,14 +132,14 @@ export const ExamPaperGeneratorView: React.FC<Props> = ({ onBack }) => {
         content += `Q${q.no}. ${q.text} [${q.marks} mark${q.marks > 1 ? 's' : ''}]\n\n`;
       });
     });
-    const blob = new Blob([content], { type: 'text/plain' });
+    const blob = new Blob(['﻿' + content], { type: 'text/plain;charset=utf-8' });
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
     a.download = `exam_paper_${paper.request.subject.replace(/\s+/g, '_')}_${paper.request.className.replace(/\s+/g, '_')}.txt`;
     a.click();
     URL.revokeObjectURL(url);
-    showToast('Paper downloaded');
+    showToast('Text downloaded');
   };
 
   const openSaved = async () => {
@@ -132,9 +155,22 @@ export const ExamPaperGeneratorView: React.FC<Props> = ({ onBack }) => {
           <button onClick={() => setView('FORM')} className="p-2 -ml-2 bg-slate-100 rounded-full text-slate-600"><ArrowLeft size={20} /></button>
           <h2 className="text-xl font-black text-slate-900 uppercase tracking-tight">Generated Paper</h2>
         </div>
-        <button onClick={handleDownload} className="flex items-center gap-1.5 bg-emerald-500 text-white text-[11px] font-black px-3 py-2 rounded-xl active:scale-95 transition-transform">
-          <Download size={13} /> Download
-        </button>
+        <div className="flex items-center gap-1.5">
+          <button onClick={handleDownloadPdf} disabled={downloadingPdf}
+            className="flex items-center gap-1.5 bg-rose-600 text-white text-[11px] font-black px-3 py-2 rounded-xl active:scale-95 transition-transform disabled:opacity-60">
+            {downloadingPdf
+              ? <><Loader2 size={13} className="animate-spin" /> PDF…</>
+              : <><Download size={13} /> PDF</>}
+          </button>
+          <button onClick={printCurrentPage}
+            className="flex items-center gap-1.5 bg-blue-600 text-white text-[11px] font-black px-3 py-2 rounded-xl active:scale-95 transition-transform">
+            <Printer size={13} /> Print
+          </button>
+          <button onClick={handleDownloadTxt}
+            className="flex items-center gap-1.5 bg-slate-200 text-slate-700 text-[11px] font-black px-3 py-2 rounded-xl active:scale-95 transition-transform">
+            <FileText size={13} /> TXT
+          </button>
+        </div>
       </div>
       <div className="flex-1 overflow-y-auto p-4 space-y-4">
         <div className="bg-slate-900 rounded-2xl p-4 text-white">
@@ -150,6 +186,28 @@ export const ExamPaperGeneratorView: React.FC<Props> = ({ onBack }) => {
             <span className="text-[9px] font-black bg-white/10 px-2 py-0.5 rounded-full uppercase">{paper.request.duration} min</span>
           </div>
         </div>
+
+        {/* Printable / PDF-target region — html2canvas rasterises only
+            this div, so the dark hero card above + app chrome stay
+            out of the export. School name + class line render at the
+            top of every PDF. */}
+        <div ref={printableRef} className="bg-white rounded-2xl border border-slate-200 p-5 lg:p-7">
+          <div className="text-center pb-4 mb-4 border-b-2 border-slate-200">
+            {paper.request.schoolName && (
+              <div className="text-lg lg:text-xl font-black text-slate-900 uppercase tracking-wide">
+                {paper.request.schoolName}
+              </div>
+            )}
+            <div className="text-sm font-black text-slate-700 mt-1">
+              {paper.request.subject} · Class {paper.request.className}
+              {paper.request.board ? ` · ${paper.request.board}` : ''}
+            </div>
+            <div className="text-[11px] font-bold text-slate-500 mt-1">
+              {paper.request.testType.replace('_', ' ')} ·
+              {' '}Total: {paper.request.totalMarks} marks ·
+              {' '}Duration: {paper.request.duration} min
+            </div>
+          </div>
 
         {paper.sections.map((sec, si) => (
           <div key={si} className="bg-white rounded-2xl border border-slate-100 shadow-sm overflow-hidden">
@@ -176,6 +234,7 @@ export const ExamPaperGeneratorView: React.FC<Props> = ({ onBack }) => {
             </div>
           </div>
         ))}
+        </div>
       </div>
     </div>
   );
