@@ -2,7 +2,7 @@ import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   ArrowLeft, ChevronLeft, ChevronRight, ShieldCheck,
   Save, Download, RefreshCw, Search, Lock,
-  AlertCircle, LayoutGrid,
+  AlertCircle, LayoutGrid, Loader2,
 } from 'lucide-react';
 import { studentService } from '@/modules/students/student.service';
 import { Student } from '@/modules/students/student.types';
@@ -961,21 +961,75 @@ export const StudentAttendanceManager: React.FC<Props> = ({ onBack }) => {
           )}
         </div>
 
-        {/* Date-level save panel — only Save buttons remain. Approval was
-            removed; saving locks the record immediately. */}
-        {gridClass && gridSection && !gridLoading && gridDates.length > 0 && hasEdits && (
-          <div className="bg-white border-t border-slate-100 px-3 py-3 space-y-2">
-            <p className="text-[9px] font-black uppercase tracking-widest text-slate-400">Save changes</p>
-            <div className="flex flex-wrap gap-2">
-              {gridDates.filter(d => editBuffer[d] && Object.keys(editBuffer[d]).length > 0).map(d => (
+        {/* Sticky save bar — shows when ANY date in the grid has
+            pending edits. One primary "Save All" button commits every
+            edited date sequentially with a clear progress chip; a
+            secondary row of per-date chips lets the principal save
+            just one date if they want to.
+            Earlier the panel only had per-date buttons and no all-at-
+            once action — saving 5 dates meant 5 taps and 5 toast
+            confirmations, which made it unclear whether anything had
+            actually been saved (the user complaint). */}
+        {gridClass && gridSection && !gridLoading && gridDates.length > 0 && hasEdits && (() => {
+          const editedDates = gridDates.filter(d => editBuffer[d] && Object.keys(editBuffer[d]).length > 0);
+          const totalEdits  = editedDates.reduce((sum, d) => sum + Object.keys(editBuffer[d]).length, 0);
+          return (
+          <div className="sticky bottom-0 bg-white border-t border-slate-200 shadow-[0_-4px_12px_rgba(0,0,0,0.06)] px-4 py-3 space-y-2 z-20">
+            <div className="flex items-center justify-between gap-2">
+              <div>
+                <p className="text-[9px] font-black uppercase tracking-widest text-slate-400">Pending changes</p>
+                <p className="text-xs font-black text-slate-700 mt-0.5">
+                  {totalEdits} edit{totalEdits === 1 ? '' : 's'} across {editedDates.length} date{editedDates.length === 1 ? '' : 's'}
+                </p>
+              </div>
+              <button
+                onClick={async () => {
+                  // Sequential save so a failure on date #3 doesn't
+                  // leave dates #4-5 silently unsaved. Per-call toasts
+                  // already fire from saveDate; we add a single
+                  // summary toast at the end so the principal sees a
+                  // clear "all done" cue instead of 5 toasts in a row.
+                  let ok = 0;
+                  for (const d of editedDates) {
+                    const before = editBuffer[d];
+                    await saveDate(d);
+                    // saveDate clears the buffer entry on success — use
+                    // that as our success signal without re-coupling to
+                    // its return value.
+                    if (!editBuffer[d] && before) ok++;
+                  }
+                  if (ok === editedDates.length) {
+                    showToast(`✓ Saved ${ok} date${ok === 1 ? '' : 's'}`);
+                  } else if (ok > 0) {
+                    showToast(`Saved ${ok} of ${editedDates.length} dates — check failed ones`, 'error');
+                  }
+                }}
+                disabled={isSubmitting || editedDates.length === 0}
+                className="flex items-center gap-1.5 px-4 py-2.5 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl text-xs font-black uppercase tracking-wide active:scale-95 transition-transform disabled:opacity-50 shrink-0">
+                {isSubmitting ? (
+                  <>
+                    <Loader2 size={14} className="animate-spin"/> Saving…
+                  </>
+                ) : (
+                  <>
+                    <Save size={14}/> Save All ({editedDates.length})
+                  </>
+                )}
+              </button>
+            </div>
+            {/* Per-date shortcut chips — collapsed, scrollable on mobile */}
+            <div className="flex gap-1.5 overflow-x-auto hide-scrollbar -mx-1 px-1">
+              {editedDates.map(d => (
                 <button key={d} onClick={() => saveDate(d)} disabled={isSubmitting}
-                  className="flex items-center gap-1 px-3 py-1.5 bg-indigo-600 text-white rounded-xl text-[10px] font-black active:scale-95 transition-transform disabled:opacity-50">
-                  <Save size={11}/> Save {new Date(d).getDate()}/{new Date(d).getMonth() + 1}
+                  className="shrink-0 flex items-center gap-1 px-2.5 py-1 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-lg text-[10px] font-black active:scale-95 transition-transform disabled:opacity-50">
+                  <Save size={10}/> {new Date(d).getDate()}/{new Date(d).getMonth() + 1}
+                  <span className="text-[9px] text-slate-400 ml-0.5">({Object.keys(editBuffer[d]).length})</span>
                 </button>
               ))}
             </div>
           </div>
-        )}
+          );
+        })()}
       </div>
     );
   }
