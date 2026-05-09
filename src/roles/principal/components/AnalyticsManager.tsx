@@ -9,14 +9,13 @@ import React, { useEffect, useMemo, useState } from 'react';
 import {
   ArrowLeft, Download, IndianRupee, TrendingDown, TrendingUp, Users,
   GraduationCap, Calendar, Loader, ChartBar,
-  Wallet, AlertCircle, Receipt, Briefcase, Bus, Banknote,
 } from 'lucide-react';
+import { ReportsSection } from '@/roles/principal/components/ReportsSection';
 import JSZip from 'jszip';
 import { supabase } from '@/lib/supabase';
 import { useAuthStore } from '@/store/authStore';
 import { useUIStore } from '@/store/uiStore';
 import { useAcademicYear } from '@/shared/context/AcademicYearContext';
-import { principalService, type FinancialAnalyticsSummary } from '@/roles/principal/principal.service';
 
 interface Props { onBack: () => void; }
 
@@ -117,23 +116,6 @@ export const AnalyticsManager: React.FC<Props> = ({ onBack }) => {
   const [exporting, setExporting] = useState(false);
 
   // Top-of-page financial summary — separate fetch from the heavy
-  // detail aggregation (which still loads payments / expenses / staff
-  // for the chart + class breakdown). One server-side aggregate via
-  // get_financial_analytics RPC; refetched only when the academic
-  // year changes, not on date-range tweaks.
-  const [finSummary, setFinSummary] = useState<FinancialAnalyticsSummary | null>(null);
-  const [finLoading, setFinLoading] = useState(true);
-  useEffect(() => {
-    if (!currentYear?.id) { setFinSummary(null); setFinLoading(false); return; }
-    let cancelled = false;
-    setFinLoading(true);
-    principalService.getFinancialAnalytics(currentYear.id)
-      .then(s => { if (!cancelled) setFinSummary(s); })
-      .catch(err => { if (!cancelled) console.warn('[analytics] financial summary failed', err); })
-      .finally(() => { if (!cancelled) setFinLoading(false); });
-    return () => { cancelled = true; };
-  }, [currentYear?.id]);
-
   const load = async () => {
     if (!session?.schoolId) return;
     setLoading(true);
@@ -318,15 +300,23 @@ export const AnalyticsManager: React.FC<Props> = ({ onBack }) => {
     }
   };
 
-  // ── Quick reports — three one-tap CSVs the office uses regularly ──
-  // Each one queries Supabase directly with an indexed filter so we don't
-  // ship the whole roster to the client. RLS already enforces school
-  // isolation; we add an explicit school_id eq for clarity. The current
-  // academic year scopes student_academic_records joins.
-  const [reportBusy, setReportBusy] = useState<null | 'RTE' | 'DUES' | 'ATT' | 'ALL' | 'NEW'>(null);
+  // ── Reports & Downloads ────────────────────────────────────────────
+  // 30+ on-demand CSVs grouped into 6 categories. Each report:
+  //   1. Calls log_export RPC FIRST — this is the rate-limit gate
+  //      (50/hour, 100/day per user). On limit hit the RPC raises and
+  //      we toast a friendly message; the heavy supabase query never runs.
+  //   2. Runs a single, indexed Supabase query (no full-roster downloads).
+  //   3. Maps rows → flat CSV objects → toCsv() → browser download.
+  //
+  // The active academic year + (optional) class filter scope the queries.
+  // Date-range reports (daily attendance, monthly collection) honour the
+  // From/To pickers in the header.
+  const [reportBusy, setReportBusy] = useState<string | null>(null);
+  const [classFilter, setClassFilter] = useState<string>(''); // 'class:section' or ''
 
   const triggerCsvDownload = (filename: string, content: string) => {
-    const blob = new Blob([content], { type: 'text/csv;charset=utf-8' });
+    // BOM prefix → Excel opens UTF-8 cleanly (₹, accents, devanagari).
+    const blob = new Blob(['﻿' + content], { type: 'text/csv;charset=utf-8' });
     const url  = URL.createObjectURL(blob);
     const a    = document.createElement('a');
     a.href = url; a.download = filename;
@@ -334,317 +324,44 @@ export const AnalyticsManager: React.FC<Props> = ({ onBack }) => {
     URL.revokeObjectURL(url);
   };
 
-  const downloadRteCsv = async () => {
-    if (!session?.schoolId || !currentYear?.id) {
-      showToast('Pick an academic year first', 'error'); return;
-    }
-    setReportBusy('RTE');
+  // Single source of truth for running a report. Rate-limit + error
+  // surfacing live here so each report-definition can stay declarative.
+  const runReport = React.useCallback(async (
+    reportType: string,
+    filters: Record<string, unknown>,
+    fetchFlat: () => Promise<{ rows: Record<string, unknown>[]; headers: string[]; filenamePrefix: string }>,
+  ) => {
+    if (reportBusy) return;
+    setReportBusy(reportType);
     try {
-      // Pull RTE students + their academic record for the active year. The
-      // RTE flag lives on `students`, fee + attendance on the per-year
-      // `student_academic_records` row.
-      const { data: rows, error } = await supabase
-        .from('students')
-        .select(`
-          id, name, admission_no, roll_no, dob, gender, phone,
-          father_name, father_phone, address,
-          student_academic_records!inner(class_name, section, total_fee, paid_fee, attendance_percent)
-        `)
-        .eq('school_id', session.schoolId)
-        .eq('rte', true)
-        .eq('is_active', true)
-        .eq('student_academic_records.academic_year_id', currentYear.id)
-        .order('name', { ascending: true });
-      if (error) throw new Error(error.message);
-      type Row = {
-        id: string; name: string; admission_no: string; roll_no: string | null;
-        dob: string | null; gender: string | null; phone: string | null;
-        father_name: string | null; father_phone: string | null; address: string | null;
-        student_academic_records: { class_name: string | null; section: string | null;
-          total_fee: number | null; paid_fee: number | null; attendance_percent: number | null }
-          | Array<{ class_name: string | null; section: string | null;
-              total_fee: number | null; paid_fee: number | null; attendance_percent: number | null }>;
-      };
-      const flat = ((rows ?? []) as unknown as Row[]).map(r => {
-        const ar = Array.isArray(r.student_academic_records)
-          ? r.student_academic_records[0]
-          : r.student_academic_records;
-        const total = Number(ar?.total_fee ?? 0);
-        const paid  = Number(ar?.paid_fee ?? 0);
-        return {
-          name: r.name,
-          admission_no: r.admission_no,
-          roll_no: r.roll_no ?? '',
-          class: `${ar?.class_name ?? ''}-${ar?.section ?? ''}`,
-          dob: r.dob ?? '',
-          gender: r.gender ?? '',
-          phone: r.phone ?? '',
-          father_name: r.father_name ?? '',
-          father_phone: r.father_phone ?? '',
-          address: r.address ?? '',
-          total_fee: total,
-          paid_fee: paid,
-          pending_fee: Math.max(0, total - paid),
-          attendance_percent: Number(ar?.attendance_percent ?? 0),
-        };
+      // Gate first — if rate-limited, the RPC raises before we burn a
+      // potentially expensive supabase round-trip.
+      const { error: logErr } = await supabase.rpc('log_export', {
+        p_report_type: reportType,
+        p_filters: filters,
       });
-      const headers = ['name','admission_no','roll_no','class','dob','gender','phone',
-        'father_name','father_phone','address','total_fee','paid_fee','pending_fee','attendance_percent'];
-      triggerCsvDownload(
-        `rte-students_${currentYear.name}_${new Date().toISOString().slice(0, 10)}.csv`,
-        toCsv(flat, headers),
-      );
-      showToast(`${flat.length} RTE student${flat.length === 1 ? '' : 's'} exported`);
-    } catch (e) {
-      showToast(e instanceof Error ? e.message : 'Export failed', 'error');
-    } finally { setReportBusy(null); }
-  };
+      if (logErr) {
+        if (logErr.message.includes('rate_limited_hour')) {
+          showToast('1 ghante me 50 export se zyada nahi — thodi der baad try karein', 'error');
+        } else if (logErr.message.includes('rate_limited_day')) {
+          showToast('Aaj 100 export ho chuke — kal try karein', 'error');
+        } else {
+          // Don't fail the export just because the audit row couldn't
+          // be written — log to console so the admin can debug.
+          console.warn('[reports] log_export warning:', logErr.message);
+        }
+        if (logErr.message.includes('rate_limited')) return;
+      }
 
-  const downloadDuesCsv = async () => {
-    if (!session?.schoolId || !currentYear?.id) {
-      showToast('Pick an academic year first', 'error'); return;
-    }
-    setReportBusy('DUES');
-    try {
-      // student_academic_records is the canonical fee aggregate per
-      // (student, year). Filter where paid_fee < total_fee — only active
-      // students, current year. Phone/address come via the joined students row.
-      const { data: rows, error } = await supabase
-        .from('student_academic_records')
-        .select(`
-          student_id, class_name, section, total_fee, paid_fee, attendance_percent,
-          students!inner(name, admission_no, phone, father_name, father_phone, address, is_active)
-        `)
-        .eq('academic_year_id', currentYear.id)
-        .order('class_name', { ascending: true });
-      if (error) throw new Error(error.message);
-      type Row = {
-        student_id: string; class_name: string | null; section: string | null;
-        total_fee: number | null; paid_fee: number | null; attendance_percent: number | null;
-        students: { name: string; admission_no: string; phone: string | null;
-          father_name: string | null; father_phone: string | null; address: string | null;
-          is_active: boolean } | null;
-      };
-      const flat = ((rows ?? []) as unknown as Row[])
-        .filter(r => r.students?.is_active !== false)
-        .map(r => {
-          const total = Number(r.total_fee ?? 0);
-          const paid  = Number(r.paid_fee ?? 0);
-          return {
-            name: r.students?.name ?? '',
-            admission_no: r.students?.admission_no ?? '',
-            class: `${r.class_name ?? ''}-${r.section ?? ''}`,
-            father_name: r.students?.father_name ?? '',
-            father_phone: r.students?.father_phone ?? '',
-            phone: r.students?.phone ?? '',
-            address: r.students?.address ?? '',
-            total_fee: total,
-            paid_fee: paid,
-            pending_fee: Math.max(0, total - paid),
-            attendance_percent: Number(r.attendance_percent ?? 0),
-          };
-        })
-        .filter(r => r.pending_fee > 0)
-        .sort((a, b) => b.pending_fee - a.pending_fee);
-      const headers = ['name','admission_no','class','father_name','father_phone','phone',
-        'address','total_fee','paid_fee','pending_fee','attendance_percent'];
-      triggerCsvDownload(
-        `fee-dues_${currentYear.name}_${new Date().toISOString().slice(0, 10)}.csv`,
-        toCsv(flat, headers),
-      );
-      showToast(`${flat.length} student${flat.length === 1 ? '' : 's'} with pending fees`);
+      const { rows, headers, filenamePrefix } = await fetchFlat();
+      const stamp = new Date().toISOString().slice(0, 10);
+      triggerCsvDownload(`${filenamePrefix}_${stamp}.csv`, toCsv(rows, headers));
+      showToast(`${rows.length} row${rows.length === 1 ? '' : 's'} exported`);
     } catch (e) {
       showToast(e instanceof Error ? e.message : 'Export failed', 'error');
     } finally { setReportBusy(null); }
-  };
+  }, [reportBusy, showToast]);
 
-  const downloadLowAttendanceCsv = async () => {
-    if (!session?.schoolId || !currentYear?.id) {
-      showToast('Pick an academic year first', 'error'); return;
-    }
-    setReportBusy('ATT');
-    try {
-      const { data: rows, error } = await supabase
-        .from('student_academic_records')
-        .select(`
-          student_id, class_name, section, total_fee, paid_fee, attendance_percent,
-          students!inner(name, admission_no, phone, father_name, father_phone, is_active)
-        `)
-        .eq('academic_year_id', currentYear.id)
-        .lt('attendance_percent', 75)
-        .order('attendance_percent', { ascending: true });
-      if (error) throw new Error(error.message);
-      type Row = {
-        student_id: string; class_name: string | null; section: string | null;
-        total_fee: number | null; paid_fee: number | null; attendance_percent: number | null;
-        students: { name: string; admission_no: string; phone: string | null;
-          father_name: string | null; father_phone: string | null; is_active: boolean } | null;
-      };
-      const flat = ((rows ?? []) as unknown as Row[])
-        .filter(r => r.students?.is_active !== false)
-        .map(r => ({
-          name: r.students?.name ?? '',
-          admission_no: r.students?.admission_no ?? '',
-          class: `${r.class_name ?? ''}-${r.section ?? ''}`,
-          father_name: r.students?.father_name ?? '',
-          father_phone: r.students?.father_phone ?? '',
-          phone: r.students?.phone ?? '',
-          attendance_percent: Number(r.attendance_percent ?? 0),
-          pending_fee: Math.max(0, Number(r.total_fee ?? 0) - Number(r.paid_fee ?? 0)),
-        }));
-      const headers = ['name','admission_no','class','father_name','father_phone','phone',
-        'attendance_percent','pending_fee'];
-      triggerCsvDownload(
-        `low-attendance_${currentYear.name}_${new Date().toISOString().slice(0, 10)}.csv`,
-        toCsv(flat, headers),
-      );
-      showToast(`${flat.length} student${flat.length === 1 ? '' : 's'} below 75%`);
-    } catch (e) {
-      showToast(e instanceof Error ? e.message : 'Export failed', 'error');
-    } finally { setReportBusy(null); }
-  };
-
-  // Full active-students export for the active academic year. One row per
-  // (student, AY) — same shape as the RTE export so a finance/auditor can
-  // diff or merge sheets later.
-  const downloadAllStudentsCsv = async () => {
-    if (!session?.schoolId || !currentYear?.id) {
-      showToast('Pick an academic year first', 'error'); return;
-    }
-    setReportBusy('ALL');
-    try {
-      const { data: rows, error } = await supabase
-        .from('students')
-        .select(`
-          id, name, admission_no, roll_no, dob, gender, phone, rte,
-          father_name, father_phone, mother_name, mother_phone, address,
-          admission_date,
-          student_academic_records(class_name, section, total_fee, paid_fee, attendance_percent, academic_year_id)
-        `)
-        .eq('school_id', session.schoolId)
-        .eq('is_active', true)
-        .order('name', { ascending: true });
-      if (error) throw new Error(error.message);
-      type Row = {
-        id: string; name: string; admission_no: string; roll_no: string | null;
-        dob: string | null; gender: string | null; phone: string | null; rte: boolean | null;
-        father_name: string | null; father_phone: string | null;
-        mother_name: string | null; mother_phone: string | null; address: string | null;
-        admission_date: string | null;
-        student_academic_records: Array<{
-          class_name: string | null; section: string | null;
-          total_fee: number | null; paid_fee: number | null;
-          attendance_percent: number | null; academic_year_id: string;
-        }> | null;
-      };
-      const flat = ((rows ?? []) as unknown as Row[]).map(r => {
-        const ar = (r.student_academic_records ?? []).find(a => a.academic_year_id === currentYear.id);
-        const total = Number(ar?.total_fee ?? 0);
-        const paid  = Number(ar?.paid_fee ?? 0);
-        return {
-          name: r.name,
-          admission_no: r.admission_no,
-          roll_no: r.roll_no ?? '',
-          class: ar ? `${ar.class_name ?? ''}-${ar.section ?? ''}` : '',
-          dob: r.dob ?? '',
-          gender: r.gender ?? '',
-          rte: r.rte ? 'YES' : 'NO',
-          phone: r.phone ?? '',
-          father_name: r.father_name ?? '',
-          father_phone: r.father_phone ?? '',
-          mother_name: r.mother_name ?? '',
-          mother_phone: r.mother_phone ?? '',
-          address: r.address ?? '',
-          admission_date: r.admission_date ?? '',
-          total_fee: total,
-          paid_fee: paid,
-          pending_fee: Math.max(0, total - paid),
-          attendance_percent: Number(ar?.attendance_percent ?? 0),
-        };
-      });
-      const headers = ['name','admission_no','roll_no','class','dob','gender','rte','phone',
-        'father_name','father_phone','mother_name','mother_phone','address','admission_date',
-        'total_fee','paid_fee','pending_fee','attendance_percent'];
-      triggerCsvDownload(
-        `all-students_${currentYear.name}_${new Date().toISOString().slice(0, 10)}.csv`,
-        toCsv(flat, headers),
-      );
-      showToast(`${flat.length} active student${flat.length === 1 ? '' : 's'} exported`);
-    } catch (e) {
-      showToast(e instanceof Error ? e.message : 'Export failed', 'error');
-    } finally { setReportBusy(null); }
-  };
-
-  // Recent admissions — students added in the last 30 days. Date filter is
-  // on `admission_date` (DATE column) so timezone wobble doesn't flip rows
-  // off the edge of the window.
-  const downloadNewAdmissionsCsv = async () => {
-    if (!session?.schoolId) { showToast('No school in session', 'error'); return; }
-    setReportBusy('NEW');
-    try {
-      const cutoff = new Date(); cutoff.setDate(cutoff.getDate() - 30);
-      const cutoffIso = cutoff.toISOString().slice(0, 10);
-      const yearId = currentYear?.id;
-      const selectAr = yearId
-        ? `student_academic_records(class_name, section, total_fee, paid_fee, academic_year_id)`
-        : ``;
-      const { data: rows, error } = await supabase
-        .from('students')
-        .select(`
-          id, name, admission_no, roll_no, dob, gender, phone, rte,
-          father_name, father_phone, address, admission_date
-          ${selectAr ? `, ${selectAr}` : ''}
-        `)
-        .eq('school_id', session.schoolId)
-        .gte('admission_date', cutoffIso)
-        .order('admission_date', { ascending: false });
-      if (error) throw new Error(error.message);
-      type Row = {
-        id: string; name: string; admission_no: string; roll_no: string | null;
-        dob: string | null; gender: string | null; phone: string | null; rte: boolean | null;
-        father_name: string | null; father_phone: string | null;
-        address: string | null; admission_date: string | null;
-        student_academic_records?: Array<{
-          class_name: string | null; section: string | null;
-          total_fee: number | null; paid_fee: number | null;
-          academic_year_id: string;
-        }>;
-      };
-      const flat = ((rows ?? []) as unknown as Row[]).map(r => {
-        const ar = yearId
-          ? (r.student_academic_records ?? []).find(a => a.academic_year_id === yearId)
-          : null;
-        const total = Number(ar?.total_fee ?? 0);
-        const paid  = Number(ar?.paid_fee ?? 0);
-        return {
-          name: r.name,
-          admission_no: r.admission_no,
-          roll_no: r.roll_no ?? '',
-          class: ar ? `${ar.class_name ?? ''}-${ar.section ?? ''}` : '',
-          admission_date: r.admission_date ?? '',
-          dob: r.dob ?? '',
-          gender: r.gender ?? '',
-          rte: r.rte ? 'YES' : 'NO',
-          phone: r.phone ?? '',
-          father_name: r.father_name ?? '',
-          father_phone: r.father_phone ?? '',
-          address: r.address ?? '',
-          total_fee: total,
-          paid_fee: paid,
-          pending_fee: Math.max(0, total - paid),
-        };
-      });
-      const headers = ['name','admission_no','roll_no','class','admission_date','dob','gender',
-        'rte','phone','father_name','father_phone','address','total_fee','paid_fee','pending_fee'];
-      triggerCsvDownload(
-        `new-admissions-30d_${new Date().toISOString().slice(0, 10)}.csv`,
-        toCsv(flat, headers),
-      );
-      showToast(`${flat.length} new admission${flat.length === 1 ? '' : 's'} in last 30 days`);
-    } catch (e) {
-      showToast(e instanceof Error ? e.message : 'Export failed', 'error');
-    } finally { setReportBusy(null); }
-  };
 
   const net = data ? data.income - data.expense : 0;
   const monthlyMax = useMemo(() => {
@@ -704,144 +421,19 @@ export const AnalyticsManager: React.FC<Props> = ({ onBack }) => {
       </div>
 
       <div className="flex-1 overflow-y-auto p-4 lg:p-6 space-y-5 lg:space-y-7 lg:max-w-6xl lg:mx-auto lg:w-full">
-        {/* ── Financial summary cards — top of dashboard. School- and
-            year-scoped via the get_financial_analytics RPC; loads
-            independently of the heavier KPI/chart fetch below so the
-            cards paint first. ─────────────────────────────────────── */}
-        <section>
-          <div className="flex items-center justify-between mb-3">
-            <h3 className="text-base lg:text-lg font-black text-slate-900">Financial Summary</h3>
-            <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">
-              {currentYear?.name ?? 'No year selected'}
-            </span>
-          </div>
-          {finLoading ? (
-            <div className="grid grid-cols-2 lg:grid-cols-5 gap-2.5 lg:gap-3">
-              {Array.from({ length: 10 }).map((_, i) => (
-                <div key={i} className="bg-white rounded-2xl border border-slate-100 shadow-sm p-3 lg:p-4 animate-pulse">
-                  <div className="h-3 w-16 bg-slate-200 rounded mb-2" />
-                  <div className="h-5 w-20 bg-slate-200 rounded" />
-                </div>
-              ))}
-            </div>
-          ) : finSummary ? (
-            <div className="grid grid-cols-2 lg:grid-cols-5 gap-2.5 lg:gap-3">
-              <FinTile icon={<Wallet size={14} />}      tone="emerald" label="Collected · Month" value={fmtINR(finSummary.feesCollectedMonth)} />
-              <FinTile icon={<Wallet size={14} />}      tone="emerald" label="Collected · Year"  value={fmtINR(finSummary.feesCollectedYear)}  />
-              <FinTile icon={<AlertCircle size={14} />} tone="rose"    label="Fees Pending"      value={fmtINR(finSummary.feesPending)}        />
-              <FinTile icon={<Receipt size={14} />}     tone="indigo"  label="Discounts Given"   value={fmtINR(finSummary.discountsGiven)}     />
-              <FinTile icon={<TrendingDown size={14}/>} tone="amber"   label="Expenses · Month"  value={fmtINR(finSummary.expensesMonth)}      />
-              <FinTile icon={<TrendingDown size={14}/>} tone="amber"   label="Expenses · Year"   value={fmtINR(finSummary.expensesYear)}       />
-              <FinTile icon={<Briefcase size={14}/>}    tone="violet"  label="Salary · Month"    value={fmtINR(finSummary.salaryPaidMonth)}    />
-              <FinTile icon={<Briefcase size={14}/>}    tone="rose"    label="Salary Pending"    value={fmtINR(finSummary.salaryPending)}      />
-              <FinTile icon={<Bus size={14}/>}          tone="orange"  label="Transport · Year"  value={fmtINR(finSummary.transportCollectionYear)} />
-              <FinTile
-                icon={<Banknote size={14}/>}
-                tone={finSummary.netBalanceYear >= 0 ? 'blue' : 'rose'}
-                label="Net Balance"
-                value={fmtINR(finSummary.netBalanceYear)}
-                emphasised
-              />
-            </div>
-          ) : (
-            <div className="bg-amber-50 border border-amber-200 rounded-2xl px-4 py-3 text-[12px] font-bold text-amber-700">
-              Pick an academic year to load the financial summary.
-            </div>
-          )}
-        </section>
 
-        {/* ── Quick Reports — one-tap CSV exports the office uses regularly.
-             Each report queries Supabase with an indexed filter so we don't
-             ship the whole roster client-side. ─────────────────────────── */}
-        <section>
-          <div className="flex items-center justify-between mb-3">
-            <h3 className="text-base lg:text-lg font-black text-slate-900">Quick Reports</h3>
-            <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">
-              CSV downloads
-            </span>
-          </div>
-          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
-            <button onClick={downloadAllStudentsCsv} disabled={!currentYear || reportBusy !== null}
-              className="bg-white border border-slate-100 hover:border-blue-300 rounded-2xl p-4 text-left shadow-sm active:scale-[0.99] transition-all disabled:opacity-50">
-              <div className="flex items-center justify-between mb-2">
-                <div className="w-10 h-10 rounded-xl bg-blue-50 text-blue-600 flex items-center justify-center">
-                  <Users size={18} />
-                </div>
-                {reportBusy === 'ALL'
-                  ? <Loader size={14} className="animate-spin text-slate-400" />
-                  : <Download size={14} className="text-slate-400" />}
-              </div>
-              <p className="font-black text-slate-900 text-sm">All Students</p>
-              <p className="text-[11px] font-bold text-slate-500 mt-0.5">
-                Full active roster — parents, class, fees, attendance
-              </p>
-            </button>
-
-            <button onClick={downloadRteCsv} disabled={!currentYear || reportBusy !== null}
-              className="bg-white border border-slate-100 hover:border-emerald-300 rounded-2xl p-4 text-left shadow-sm active:scale-[0.99] transition-all disabled:opacity-50">
-              <div className="flex items-center justify-between mb-2">
-                <div className="w-10 h-10 rounded-xl bg-emerald-50 text-emerald-600 flex items-center justify-center">
-                  <Users size={18} />
-                </div>
-                {reportBusy === 'RTE'
-                  ? <Loader size={14} className="animate-spin text-slate-400" />
-                  : <Download size={14} className="text-slate-400" />}
-              </div>
-              <p className="font-black text-slate-900 text-sm">RTE Students</p>
-              <p className="text-[11px] font-bold text-slate-500 mt-0.5">
-                Roll, parents, fees, attendance — full details
-              </p>
-            </button>
-
-            <button onClick={downloadNewAdmissionsCsv} disabled={reportBusy !== null}
-              className="bg-white border border-slate-100 hover:border-violet-300 rounded-2xl p-4 text-left shadow-sm active:scale-[0.99] transition-all disabled:opacity-50">
-              <div className="flex items-center justify-between mb-2">
-                <div className="w-10 h-10 rounded-xl bg-violet-50 text-violet-600 flex items-center justify-center">
-                  <Calendar size={18} />
-                </div>
-                {reportBusy === 'NEW'
-                  ? <Loader size={14} className="animate-spin text-slate-400" />
-                  : <Download size={14} className="text-slate-400" />}
-              </div>
-              <p className="font-black text-slate-900 text-sm">New Admissions · 30d</p>
-              <p className="text-[11px] font-bold text-slate-500 mt-0.5">
-                Students admitted in the last 30 days
-              </p>
-            </button>
-
-            <button onClick={downloadDuesCsv} disabled={!currentYear || reportBusy !== null}
-              className="bg-white border border-slate-100 hover:border-rose-300 rounded-2xl p-4 text-left shadow-sm active:scale-[0.99] transition-all disabled:opacity-50">
-              <div className="flex items-center justify-between mb-2">
-                <div className="w-10 h-10 rounded-xl bg-rose-50 text-rose-600 flex items-center justify-center">
-                  <AlertCircle size={18} />
-                </div>
-                {reportBusy === 'DUES'
-                  ? <Loader size={14} className="animate-spin text-slate-400" />
-                  : <Download size={14} className="text-slate-400" />}
-              </div>
-              <p className="font-black text-slate-900 text-sm">Fee Dues</p>
-              <p className="text-[11px] font-bold text-slate-500 mt-0.5">
-                Defaulters with pending amount + parent contact
-              </p>
-            </button>
-
-            <button onClick={downloadLowAttendanceCsv} disabled={!currentYear || reportBusy !== null}
-              className="bg-white border border-slate-100 hover:border-amber-300 rounded-2xl p-4 text-left shadow-sm active:scale-[0.99] transition-all disabled:opacity-50">
-              <div className="flex items-center justify-between mb-2">
-                <div className="w-10 h-10 rounded-xl bg-amber-50 text-amber-600 flex items-center justify-center">
-                  <ChartBar size={18} />
-                </div>
-                {reportBusy === 'ATT'
-                  ? <Loader size={14} className="animate-spin text-slate-400" />
-                  : <Download size={14} className="text-slate-400" />}
-              </div>
-              <p className="font-black text-slate-900 text-sm">Below 75% Attendance</p>
-              <p className="text-[11px] font-bold text-slate-500 mt-0.5">
-                Students at risk of detainment
-              </p>
-            </button>
-          </div>
-        </section>
+        <ReportsSection
+          runReport={runReport}
+          reportBusy={reportBusy}
+          schoolId={session?.schoolId ?? ''}
+          yearId={currentYear?.id ?? ''}
+          yearName={currentYear?.name ?? ''}
+          rangeFrom={from}
+          rangeTo={to}
+          classFilter={classFilter}
+          setClassFilter={setClassFilter}
+          classOptions={data?.classes ?? []}
+        />
 
         {loading ? (
           <div className="flex flex-col items-center py-24 text-slate-400">
@@ -1013,34 +605,6 @@ export const AnalyticsManager: React.FC<Props> = ({ onBack }) => {
 // Compact financial tile — denser than KpiTile because there are 10
 // of them stacked at the top of the analytics dashboard. Tone colour
 // only on the small leading icon so the value reads cleanly in black.
-const FinTile: React.FC<{
-  icon: React.ReactNode; label: string; value: string;
-  tone: 'emerald' | 'rose' | 'blue' | 'amber' | 'violet' | 'indigo' | 'orange';
-  emphasised?: boolean;
-}> = ({ icon, label, value, tone, emphasised }) => {
-  const TONE: Record<string, { chip: string; valueText: string }> = {
-    emerald: { chip: 'bg-emerald-100 text-emerald-700', valueText: 'text-emerald-700' },
-    rose:    { chip: 'bg-rose-100 text-rose-700',       valueText: 'text-rose-700' },
-    blue:    { chip: 'bg-blue-100 text-blue-700',       valueText: 'text-blue-700' },
-    amber:   { chip: 'bg-amber-100 text-amber-700',     valueText: 'text-amber-700' },
-    violet:  { chip: 'bg-violet-100 text-violet-700',   valueText: 'text-violet-700' },
-    indigo:  { chip: 'bg-indigo-100 text-indigo-700',   valueText: 'text-indigo-700' },
-    orange:  { chip: 'bg-orange-100 text-orange-700',   valueText: 'text-orange-700' },
-  };
-  const t = TONE[tone];
-  return (
-    <div className={`bg-white rounded-2xl border shadow-sm p-3 lg:p-4 ${emphasised ? 'border-blue-300 ring-1 ring-blue-100' : 'border-slate-100'}`}>
-      <div className="flex items-center gap-1.5 mb-1.5">
-        <div className={`w-5 h-5 rounded-md ${t.chip} flex items-center justify-center shrink-0`}>{icon}</div>
-        <span className="text-[9px] lg:text-[10px] font-black uppercase tracking-wider text-slate-500 truncate">{label}</span>
-      </div>
-      <div className={`text-base lg:text-xl font-black tabular-nums leading-none ${emphasised ? t.valueText : 'text-slate-900'}`}>
-        {value}
-      </div>
-    </div>
-  );
-};
-
 const KpiTile: React.FC<{
   icon: React.ReactNode; label: string; value: string; sub?: string;
   tone: 'emerald' | 'rose' | 'blue' | 'amber' | 'violet' | 'indigo' | 'slate' | 'teal';
