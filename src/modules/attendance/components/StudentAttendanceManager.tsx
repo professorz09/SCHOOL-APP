@@ -301,13 +301,15 @@ export const StudentAttendanceManager: React.FC<Props> = ({ onBack }) => {
   //     enforces it client-side). Earlier this routed everything through
   //     /submit, which the server rejected for locked records — that's why
   //     grid edits silently failed.
-  const saveDate = async (date: string) => {
+  // Returns true on success so the bulk "Save All" loop can count
+  // wins/losses without relying on a stale editBuffer closure read.
+  const saveDate = async (date: string): Promise<boolean> => {
     if (!editGuard.canEdit) {
-      showToast('Year closed — enable Correction Mode first', 'error'); return;
+      showToast('Year closed — enable Correction Mode first', 'error'); return false;
     }
-    if (!sectionId) { showToast('Section not resolved — reload the grid', 'error'); return; }
+    if (!sectionId) { showToast('Section not resolved — reload the grid', 'error'); return false; }
     const edits = editBuffer[date];
-    if (!edits || Object.keys(edits).length === 0) return;
+    if (!edits || Object.keys(edits).length === 0) return false;
     const rec = recordMap[date];
     const isLockedEdit = !!rec?.isLocked;
 
@@ -315,7 +317,7 @@ export const StudentAttendanceManager: React.FC<Props> = ({ onBack }) => {
     // Editor Mode is active — the same gate we use for cell taps. New
     // dates without a record skip this check entirely.
     if (isLockedEdit && !editorModeActive) {
-      showToast('Locked — enable Editor Mode in Settings to edit this date', 'error'); return;
+      showToast('Locked — enable Editor Mode in Settings to edit this date', 'error'); return false;
     }
 
     // Build the per-student payload, dropping anyone who wasn't enrolled
@@ -335,7 +337,7 @@ export const StudentAttendanceManager: React.FC<Props> = ({ onBack }) => {
     let reason: string | undefined;
     if (isLockedEdit) {
       const r = window.prompt('Reason for editing this locked date:')?.trim();
-      if (!r) return;
+      if (!r) return false;
       reason = r;
     }
 
@@ -360,7 +362,7 @@ export const StudentAttendanceManager: React.FC<Props> = ({ onBack }) => {
         },
         { entityType: 'student_attendance', entityId: `${gridClass}/${gridSection}/${date}` },
       );
-      if (result === undefined) return;
+      if (result === undefined) return false;
       showToast(`Attendance saved for ${new Date(date).getDate()}/${new Date(date).getMonth() + 1}`);
       setEditBuffer(prev => {
         const n = { ...prev }; delete n[date];
@@ -368,8 +370,10 @@ export const StudentAttendanceManager: React.FC<Props> = ({ onBack }) => {
         return n;
       });
       await loadGrid(gridClass, gridSection, gridYM);
+      return true;
     } catch (e) {
       showToast((e as Error).message || 'Failed to save', 'error');
+      return false;
     } finally { setIsSubmitting(false); }
   };
 
@@ -985,23 +989,43 @@ export const StudentAttendanceManager: React.FC<Props> = ({ onBack }) => {
               <button
                 onClick={async () => {
                   // Sequential save so a failure on date #3 doesn't
-                  // leave dates #4-5 silently unsaved. Per-call toasts
-                  // already fire from saveDate; we add a single
-                  // summary toast at the end so the principal sees a
-                  // clear "all done" cue instead of 5 toasts in a row.
-                  let ok = 0;
+                  // leave dates #4-5 silently unsaved. saveDate now
+                  // returns Promise<boolean>; earlier we tried to
+                  // detect success by reading editBuffer in the closure
+                  // but React state inside the same handler stays
+                  // pinned to the snapshot at handler-call time, so
+                  // every iteration saw the original buffer.
+                  const failedDates: string[] = [];
                   for (const d of editedDates) {
-                    const before = editBuffer[d];
-                    await saveDate(d);
-                    // saveDate clears the buffer entry on success — use
-                    // that as our success signal without re-coupling to
-                    // its return value.
-                    if (!editBuffer[d] && before) ok++;
+                    const success = await saveDate(d);
+                    if (!success) failedDates.push(d);
                   }
-                  if (ok === editedDates.length) {
-                    showToast(`✓ Saved ${ok} date${ok === 1 ? '' : 's'}`);
-                  } else if (ok > 0) {
-                    showToast(`Saved ${ok} of ${editedDates.length} dates — check failed ones`, 'error');
+                  // Force-clear the edit buffer for every successfully
+                  // saved date in a single setState, then exit edit
+                  // mode if nothing's left. saveDate already does this
+                  // per-call, but a defensive bulk-clear here ensures
+                  // the sticky bar disappears immediately even if a
+                  // race put a stale entry back.
+                  if (failedDates.length === 0) {
+                    setEditBuffer({});
+                    setGridEditMode(false);
+                  } else {
+                    setEditBuffer(prev => {
+                      const n: typeof prev = {};
+                      for (const d of failedDates) {
+                        if (prev[d]) n[d] = prev[d];
+                      }
+                      return n;
+                    });
+                  }
+                  // Single summary toast — replaces the per-date toasts
+                  // that fired inside saveDate (still useful in single-
+                  // tap mode, but in Save All they pile up).
+                  const okCount = editedDates.length - failedDates.length;
+                  if (failedDates.length === 0) {
+                    showToast(`✓ Saved ${okCount} date${okCount === 1 ? '' : 's'}`);
+                  } else if (okCount > 0) {
+                    showToast(`Saved ${okCount} of ${editedDates.length} dates — ${failedDates.length} failed`, 'error');
                   }
                 }}
                 disabled={isSubmitting || editedDates.length === 0}
