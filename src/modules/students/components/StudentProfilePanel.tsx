@@ -587,13 +587,22 @@ export const StudentProfilePanel: React.FC<Props> = ({ student, onBack, onStuden
       {/* ── Sticky Header ── */}
       <div className="sticky top-0 z-10 bg-white border-b border-slate-100 shadow-sm">
 
-        {/* Top bar */}
-        <div className="px-4 pt-4 pb-3 flex items-center justify-between">
-          <button onClick={onBack} className="p-2 -ml-2 bg-slate-100 rounded-full text-slate-600">
-            <ArrowLeft size={20} />
+        {/* Compact back-button strip — earlier this row had a
+            standalone empty bar with just the back button which
+            wasted ~50px on every profile. Now it's a thin pt-3 row,
+            no extra bottom padding (the hero card below provides
+            its own padding). */}
+        <div className="px-4 pt-3 flex items-center">
+          <button
+            onClick={onBack}
+            className="p-1.5 -ml-1.5 bg-slate-100 rounded-full text-slate-600 active:scale-95 transition-transform"
+            title="Back"
+          >
+            <ArrowLeft size={18} />
           </button>
-          {/* Admission Form download lives inside the Docs tab now — it's
-              a doc-shaped action and clutters the top bar otherwise. */}
+          <span className="ml-2 text-[10px] font-black uppercase tracking-widest text-slate-400">
+            Student Profile
+          </span>
         </div>
 
         {/* Hero card — replaced the indigo→violet gradient with a clean
@@ -602,7 +611,7 @@ export const StudentProfilePanel: React.FC<Props> = ({ student, onBack, onStuden
             rest of the app's white-card aesthetic. Status chip
             (ACTIVE / TC ISSUED) lives in-line with the name so the
             principal sees it immediately. */}
-        <div className="px-4 pb-4">
+        <div className="px-4 pt-2 pb-4">
           <div className="bg-white rounded-2xl border border-slate-100 shadow-sm p-4">
             <div className="flex items-start gap-3">
               <div className="w-14 h-14 rounded-2xl bg-slate-100 flex items-center justify-center font-black text-base text-slate-700 shrink-0 overflow-hidden">
@@ -665,59 +674,7 @@ export const StudentProfilePanel: React.FC<Props> = ({ student, onBack, onStuden
           </div>
         </div>
 
-        {/* Lifecycle action — Issue TC (active) OR Re-admit (inactive).
-            ALWAYS visible so the principal knows the action exists,
-            but disabled (and helpful tooltip) when editor mode is off
-            or no active year. Earlier the button was hidden entirely
-            when the gate was closed, so the principal couldn't even
-            tell that issuing a TC required Editor Mode. */}
-        <div className="px-4 pb-3">
-          {(() => {
-            const blockedReason = !activeYear
-              ? 'Active academic year is required'
-              : !editorModeActive
-                ? 'Editor Mode chalu karein (Settings me)'
-                : '';
-            const isBlocked = blockedReason !== '';
-            if (currentStudent.isActive) {
-              return (
-                <button
-                  onClick={() => {
-                    if (isBlocked) { showToast(blockedReason, 'error'); return; }
-                    setTcModal(true);
-                  }}
-                  title={isBlocked ? blockedReason : 'Issue Transfer Certificate and mark this student as left'}
-                  className={`w-full flex items-center justify-center gap-2 font-black text-xs uppercase tracking-widest py-2.5 rounded-xl active:scale-[0.99] transition-all border ${
-                    isBlocked
-                      ? 'bg-slate-50 text-slate-400 border-slate-200 cursor-not-allowed'
-                      : 'bg-rose-50 hover:bg-rose-100 text-rose-700 border-rose-200'
-                  }`}>
-                  <LogOut size={14} /> Issue TC &amp; Mark as Left
-                  {isBlocked && <Lock size={11} className="opacity-70" />}
-                </button>
-              );
-            }
-            return (
-              <button
-                onClick={() => {
-                  if (isBlocked) { showToast(blockedReason, 'error'); return; }
-                  setReadmitClass(currentStudent.className || '');
-                  setReadmitSection(currentStudent.section || '');
-                  setReadmitRoll(currentStudent.rollNo || '');
-                  setReadmitModal(true);
-                }}
-                title={isBlocked ? blockedReason : 'Re-admit this student to the active year'}
-                className={`w-full flex items-center justify-center gap-2 font-black text-xs uppercase tracking-widest py-2.5 rounded-xl active:scale-[0.99] transition-all border ${
-                  isBlocked
-                    ? 'bg-slate-50 text-slate-400 border-slate-200 cursor-not-allowed'
-                    : 'bg-emerald-50 hover:bg-emerald-100 text-emerald-700 border-emerald-200'
-                }`}>
-                <UserPlus size={14} /> Re-admit to {activeYear?.name ?? 'Active Year'}
-                {isBlocked && <Lock size={11} className="opacity-70" />}
-              </button>
-            );
-          })()}
-        </div>
+        {/* Lifecycle action moved into the Docs tab (Issue TC is paperwork). */}
 
         {/* Tabs */}
         <div className="flex gap-1 overflow-x-auto hide-scrollbar px-4 pb-3">
@@ -1472,9 +1429,63 @@ export const StudentProfilePanel: React.FC<Props> = ({ student, onBack, onStuden
           {/* ── DOCS TAB ─────────────────────────────── */}
           {activeProfileTab === 'DOCS' && (
             <>
+              {/* Lifecycle action — Issue TC / Re-admit lives here in
+                  Docs (it's paperwork, not a student attribute). Always
+                  visible; disabled with tooltip when Editor Mode is OFF
+                  or no active year. */}
+              {(() => {
+                const blockedReason = !activeYear
+                  ? 'Active academic year is required'
+                  : !editorModeActive
+                    ? 'Editor Mode chalu karein (Settings me)'
+                    : '';
+                const isBlocked = blockedReason !== '';
+                const isActive = currentStudent.isActive;
+                const Icon = isActive ? LogOut : UserPlus;
+                const tone = isBlocked
+                  ? 'bg-slate-50 text-slate-400 border-slate-200 cursor-not-allowed'
+                  : isActive
+                    ? 'bg-rose-50 hover:bg-rose-100 text-rose-700 border-rose-200'
+                    : 'bg-emerald-50 hover:bg-emerald-100 text-emerald-700 border-emerald-200';
+                const label = isActive
+                  ? 'Issue TC & Mark as Left'
+                  : `Re-admit to ${activeYear?.name ?? 'Active Year'}`;
+                return (
+                  <div className="bg-white rounded-2xl border border-slate-100 shadow-sm p-4">
+                    <div className="flex items-center gap-2 mb-1">
+                      <Icon size={14} className="text-slate-500" />
+                      <p className="text-[10px] font-black uppercase tracking-widest text-slate-500">
+                        {isActive ? 'Transfer Certificate' : 'Re-admission'}
+                      </p>
+                    </div>
+                    <p className="text-[11px] font-bold text-slate-500 leading-relaxed mb-3">
+                      {isActive
+                        ? 'Issue TC and mark student as left. Their record stays in history; future attendance / fee schedules stop generating.'
+                        : 'Bring this student back into the active year roster. Their old class details are pre-filled; adjust if needed.'}
+                    </p>
+                    <button
+                      onClick={() => {
+                        if (isBlocked) { showToast(blockedReason, 'error'); return; }
+                        if (isActive) {
+                          setTcModal(true);
+                        } else {
+                          setReadmitClass(currentStudent.className || '');
+                          setReadmitSection(currentStudent.section || '');
+                          setReadmitRoll(currentStudent.rollNo || '');
+                          setReadmitModal(true);
+                        }
+                      }}
+                      title={isBlocked ? blockedReason : label}
+                      className={`w-full flex items-center justify-center gap-2 font-black text-xs uppercase tracking-widest py-2.5 rounded-xl active:scale-[0.99] transition-all border ${tone}`}>
+                      <Icon size={14} /> {label}
+                      {isBlocked && <Lock size={11} className="opacity-70" />}
+                    </button>
+                  </div>
+                );
+              })()}
+
               {/* Quick-access certificate generators (Admit Card, Marksheet,
-                  Bonafide). TC issuance lives in the lifecycle action button
-                  above the tabs. */}
+                  Bonafide). */}
               <StudentDocumentsPanel student={student} />
               {docsLoading && (
                 <div className="flex flex-col items-center py-10 text-slate-400">
