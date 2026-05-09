@@ -418,6 +418,20 @@ export const apiPrincipal = {
   expenseVoid: (id: string, reason: string) =>
     post<any>('/principal/expense/void', { id, reason }),
 
+  // School holidays
+  holidaysList: (yearId?: string) =>
+    get<Array<{ id: string; academic_year_id: string; date: string; name: string; notes: string | null; created_at: string }>>(
+      `/principal/holidays${yearId ? `?yearId=${encodeURIComponent(yearId)}` : ''}`,
+    ),
+  holidayAdd: (body: { academicYearId: string; date: string; name: string; notes?: string }) =>
+    post<{ id: string; date: string; name: string }>('/principal/holidays/add', body),
+  holidayDelete: (id: string) =>
+    post<{ id: string }>('/principal/holidays/delete', { id }),
+  weeklyOffGet: () =>
+    get<{ days: number[] }>('/principal/holidays/weekly-off'),
+  weeklyOffSet: (days: number[]) =>
+    post<{ days: number[] }>('/principal/holidays/weekly-off', { days }),
+
   // Approvals
   approvalApprove: (approvalId: string) =>
     post<any>('/principal/approval/approve', { approvalId }),

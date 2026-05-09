@@ -1493,3 +1493,96 @@ principalRouter.get('/subject-suggestions', requireAuth, async (req, res) => {
     ok(res, list);
   } catch (err) { fail(res, err); }
 });
+
+// ─── School holidays ────────────────────────────────────────────────────────
+//
+// Centralised holiday calendar. Sundays (or other weekly offs) live on
+// schools.weekly_off_days; specific dated holidays (Diwali, 15 Aug,
+// founder's day, etc.) live in school_holidays.
+
+// GET /api/principal/holidays?yearId=…
+principalRouter.get('/holidays', requireAuth, async (req, res) => {
+  try {
+    const yearId = req.query.yearId as string | undefined;
+    let q = adminDb.from('school_holidays')
+      .select('id, academic_year_id, date, name, notes, created_at, created_by')
+      .eq('school_id', req.user.school_id!)
+      .order('date', { ascending: true });
+    if (yearId) q = q.eq('academic_year_id', yearId);
+    const { data, error } = await q;
+    if (error) throw new ApiError(500, error.message);
+    ok(res, data);
+  } catch (err) { fail(res, err); }
+});
+
+// POST /api/principal/holidays/add
+principalRouter.post('/holidays/add', requireAuth, PRINCIPAL, async (req, res) => {
+  try {
+    const body = requireBody<{ academicYearId: string; date: string; name: string; notes?: string }>(
+      req, ['academicYearId', 'date', 'name'],
+    );
+    const name = (body.name ?? '').trim();
+    if (!name) throw new ApiError(400, 'Holiday name is required');
+    if (name.length > 80) throw new ApiError(400, 'Holiday name too long (80 max)');
+
+    // Validate year + bounds.
+    const { data: ay } = await adminDb.from('academic_years')
+      .select('id, start_date, end_date')
+      .eq('id', body.academicYearId).eq('school_id', req.user.school_id!)
+      .maybeSingle();
+    const ayRow = ay as { id: string; start_date: string; end_date: string } | null;
+    if (!ayRow) throw new ApiError(404, 'Academic year not found');
+    if (body.date < ayRow.start_date || body.date > ayRow.end_date) {
+      throw new ApiError(400, `Date must fall inside ${ayRow.start_date} to ${ayRow.end_date}`);
+    }
+
+    const { data, error } = await adminDb.from('school_holidays').insert({
+      school_id: req.user.school_id,
+      academic_year_id: body.academicYearId,
+      date: body.date,
+      name,
+      notes: body.notes ?? null,
+      created_by: req.user.id,
+    }).select('id, academic_year_id, date, name, notes, created_at, created_by').single();
+    if (error) {
+      if (error.code === '23505') throw new ApiError(409, 'Holiday for this date already exists');
+      throw new ApiError(500, error.message);
+    }
+    ok(res, data, 201);
+  } catch (err) { fail(res, err); }
+});
+
+// POST /api/principal/holidays/delete
+principalRouter.post('/holidays/delete', requireAuth, PRINCIPAL, async (req, res) => {
+  try {
+    const { id } = requireBody<{ id: string }>(req, ['id']);
+    const { error } = await adminDb.from('school_holidays').delete()
+      .eq('id', id).eq('school_id', req.user.school_id!);
+    if (error) throw new ApiError(500, error.message);
+    ok(res, { id });
+  } catch (err) { fail(res, err); }
+});
+
+// GET /api/principal/holidays/weekly-off — current weekly off days
+principalRouter.get('/holidays/weekly-off', requireAuth, async (req, res) => {
+  try {
+    const { data, error } = await adminDb.from('schools')
+      .select('weekly_off_days').eq('id', req.user.school_id!).maybeSingle();
+    if (error) throw new ApiError(500, error.message);
+    const days = (data as { weekly_off_days: number[] } | null)?.weekly_off_days ?? [0];
+    ok(res, { days });
+  } catch (err) { fail(res, err); }
+});
+
+// POST /api/principal/holidays/weekly-off — set weekly off days (0–6)
+principalRouter.post('/holidays/weekly-off', requireAuth, PRINCIPAL, async (req, res) => {
+  try {
+    const { days } = requireBody<{ days: number[] }>(req, ['days']);
+    if (!Array.isArray(days)) throw new ApiError(400, 'days must be an array of 0–6');
+    const clean = Array.from(new Set(days.filter(d => Number.isInteger(d) && d >= 0 && d <= 6))).sort();
+    const { error } = await adminDb.from('schools')
+      .update({ weekly_off_days: clean }).eq('id', req.user.school_id!);
+    if (error) throw new ApiError(500, error.message);
+    ok(res, { days: clean });
+  } catch (err) { fail(res, err); }
+});

@@ -1,5 +1,6 @@
 import React, { useState, useCallback, useEffect } from 'react';
-import { ArrowLeft, Plus, Trash2, ChevronDown, AlertTriangle, CheckCircle2, Edit3, Clock, BookOpen, Coffee, Sparkles, MapPin } from 'lucide-react';
+import { ArrowLeft, Plus, Trash2, ChevronDown, AlertTriangle, CheckCircle2, Edit3, Clock, BookOpen, Coffee, Sparkles, MapPin, Calendar } from 'lucide-react';
+import { HolidaysManager } from '@/modules/timetable/components/HolidaysManager';
 import {
   timetableService, PERIOD_SLOTS, DAYS, TimetableEntry, TDay, TimetableTeacher,
 } from '@/modules/timetable/timetable.service';
@@ -40,6 +41,11 @@ export const TimetableManager: React.FC<Props> = ({ onBack }) => {
   const { showToast } = useUIStore();
   const { currentYear } = useAcademicYear();
   const session = useAuthStore(s => s.session);
+  // Inline detour to the Holidays panel — opens / closes without
+  // unmounting TimetableManager so state (selected class, edits)
+  // is preserved on return.
+  const [showHolidays, setShowHolidays] = useState(false);
+  if (showHolidays) return <HolidaysManager onBack={() => setShowHolidays(false)} />;
   const isYearClosed = !!currentYear && currentYear.status === 'LOCKED';
   const editGuard = useEditGuard(currentYear?.id, isYearClosed);
   // Real class list — fetched from `sections` for the active year. We keep
@@ -262,6 +268,14 @@ export const TimetableManager: React.FC<Props> = ({ onBack }) => {
               <CheckCircle2 size={14} /> {successMsg}
             </div>
           )}
+          {/* Holidays shortcut — opens the school-wide holiday calendar
+              (Diwali, 15 Aug, etc.) and weekly-off picker. */}
+          <button
+            onClick={() => setShowHolidays(true)}
+            title="Manage school holidays"
+            className="flex items-center gap-1.5 px-3 py-2 bg-rose-50 hover:bg-rose-100 text-rose-700 rounded-xl text-[11px] font-black uppercase tracking-wide active:scale-95 transition-transform">
+            <Calendar size={13} /> Holidays
+          </button>
         </div>
 
         {/* Class selector — show when classes load */}
