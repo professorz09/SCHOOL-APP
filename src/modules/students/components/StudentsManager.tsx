@@ -935,7 +935,7 @@ const [mainView, setMainView] = useState<MainView>(initialView ?? 'CLASSES');
                   onClick={() => { setSelected(student); setSubView('PROFILE'); }}
                   className="w-full bg-white rounded-2xl border border-slate-100 shadow-sm p-4 text-left active:bg-slate-50 transition-colors">
                   <div className="flex items-center gap-3">
-                    <div className="w-11 h-11 rounded-xl bg-gradient-to-br from-indigo-400 to-violet-500 text-white flex items-center justify-center font-black text-sm shrink-0">
+                    <div className="w-11 h-11 rounded-xl bg-slate-100 text-slate-700 flex items-center justify-center font-black text-sm shrink-0">
                       {initials.toUpperCase()}
                     </div>
                     <div className="flex-1 min-w-0">
@@ -1079,7 +1079,7 @@ const [mainView, setMainView] = useState<MainView>(initialView ?? 'CLASSES');
                   <button
                     onClick={() => { setSelected(student); setSubView('PROFILE'); }}
                     className="w-full flex items-center gap-3 text-left active:bg-slate-50 transition-colors p-1 rounded-xl">
-                    <div className="w-11 h-11 rounded-xl bg-gradient-to-br from-indigo-400 to-violet-500 text-white flex items-center justify-center font-black text-sm shrink-0">
+                    <div className="w-11 h-11 rounded-xl bg-slate-100 text-slate-700 flex items-center justify-center font-black text-sm shrink-0">
                       {initials.toUpperCase()}
                     </div>
                     <div className="flex-1 min-w-0">
@@ -1342,7 +1342,7 @@ const [mainView, setMainView] = useState<MainView>(initialView ?? 'CLASSES');
                   onClick={() => { setSelected(student); setSubView('PROFILE'); }}
                   className="w-full bg-white rounded-2xl border border-slate-100 shadow-sm p-4 text-left active:bg-slate-50 transition-colors">
                   <div className="flex items-start gap-3">
-                    <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-indigo-100 to-violet-100 text-indigo-700 flex items-center justify-center font-black text-sm shrink-0 mt-0.5">
+                    <div className="w-10 h-10 rounded-xl bg-slate-100 text-slate-700 flex items-center justify-center font-black text-sm shrink-0 mt-0.5">
                       {student.name.split(' ').map(w => w[0]).join('').slice(0, 2).toUpperCase()}
                     </div>
                     <div className="flex-1 min-w-0">

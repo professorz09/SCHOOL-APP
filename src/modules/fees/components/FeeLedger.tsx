@@ -1077,54 +1077,54 @@ export const FeeLedger: React.FC<Props> = ({ onBack }) => {
             const fillColor = isSettled ? 'bg-emerald-500' : group.isActive ? 'bg-blue-500' : 'bg-slate-400';
             return (
               <div key={group.academicYearId}>
-                {/* Year card — strong active vs closed contrast. Active
-                    year: blue-tinted surface + blue accent stripe on the
-                    left edge to anchor it visually. Closed years: flat
-                    white, smaller padding, quieter typography. */}
+                {/* Year card — same white card for active + closed years.
+                    No left side stripe, no blue-tinted background; the
+                    only differentiator is a tiny "ACTIVE" chip next to
+                    the year label. Settled years carry a quiet
+                    "SETTLED" chip in emerald. Earlier the active card
+                    had a blue side stripe + tinted background which
+                    looked inconsistent next to the rest of the app. */}
                 <div
                   onClick={() => setCollapsedYears(prev => ({ ...prev, [group.academicYearId]: !prev[group.academicYearId] }))}
                   role="button" tabIndex={0}
-                  className={`relative w-full text-left rounded-2xl cursor-pointer transition-all overflow-hidden ${
-                    group.isActive
-                      ? 'bg-blue-50/60 border border-blue-200 px-4 lg:px-5 py-4'
-                      : 'bg-white border border-slate-200 hover:border-slate-300 px-3.5 lg:px-4 py-3'
-                  }`}>
-                  {/* Accent stripe — only on active year */}
-                  {group.isActive && (
-                    <div className="absolute left-0 top-0 bottom-0 w-1 bg-blue-500" />
-                  )}
+                  className="w-full text-left rounded-2xl cursor-pointer transition-all bg-white border border-slate-200 hover:border-slate-300 px-4 py-3.5">
                   <div className="flex items-center justify-between gap-3">
                     <div className="min-w-0 flex items-center gap-2 flex-wrap">
-                      <span className={`font-black leading-tight ${group.isActive ? 'text-slate-900 text-base lg:text-lg' : 'text-slate-700 text-sm lg:text-base'}`}>
+                      <span className="font-black text-slate-900 text-base leading-tight">
                         {group.yearLabel}
                       </span>
                       {group.isActive && (
-                        <span className="text-[9px] font-black bg-blue-600 text-white px-1.5 py-0.5 rounded uppercase tracking-wider">Active</span>
+                        <span className="text-[9px] font-black bg-slate-900 text-white px-1.5 py-0.5 rounded uppercase tracking-wider">
+                          Active
+                        </span>
                       )}
-                      <span className={`text-[10px] lg:text-[11px] font-bold tabular-nums shrink-0 ${group.isActive ? 'text-slate-500' : 'text-slate-400'}`}>
+                      {!group.isActive && isSettled && (
+                        <span className="text-[9px] font-black bg-emerald-50 text-emerald-700 border border-emerald-200 px-1.5 py-0.5 rounded uppercase tracking-wider">
+                          Settled
+                        </span>
+                      )}
+                      <span className="text-[10px] lg:text-[11px] font-bold tabular-nums shrink-0 text-slate-400">
                         · {group.installments.length} inst.
                       </span>
                     </div>
                     <div className="flex items-center gap-2 shrink-0">
-                      <span className={`font-black tabular-nums ${
-                        group.isActive ? 'text-base lg:text-lg' : 'text-sm'
-                      } ${isSettled ? 'text-emerald-700' : 'text-slate-900'}`}>
+                      <span className={`font-black tabular-nums text-base ${isSettled ? 'text-emerald-700' : 'text-slate-900'}`}>
                         ₹{yearTotal.toLocaleString('en-IN')}
                       </span>
-                      <ChevronDown size={group.isActive ? 18 : 14} className={`text-slate-400 transition-transform ${collapsed ? '-rotate-90' : ''}`} />
+                      <ChevronDown size={16} className={`text-slate-400 transition-transform ${collapsed ? '-rotate-90' : ''}`} />
                     </div>
                   </div>
 
                   {yearTotal > 0 && (
-                    <div className={group.isActive ? 'mt-3' : 'mt-2'}>
-                      <div className={`bg-slate-100 rounded-full overflow-hidden ${group.isActive ? 'h-1.5' : 'h-1'}`}>
+                    <div className="mt-2.5">
+                      <div className="bg-slate-100 rounded-full overflow-hidden h-1.5">
                         <div className={`h-full rounded-full transition-all ${fillColor}`}
                              style={{ width: `${pctNum}%` }} />
                       </div>
-                      <div className={`flex items-center justify-between font-bold tabular-nums ${group.isActive ? 'text-[11px] mt-2' : 'text-[10px] mt-1'}`}>
+                      <div className="flex items-center justify-between font-bold tabular-nums text-[11px] mt-2">
                         <span className="text-slate-500">
                           <span className="text-emerald-700">₹{yearPaid.toLocaleString('en-IN')} paid</span>
-                          {yearDisc > 0 && <> · <span className="text-indigo-600">₹{yearDisc.toLocaleString('en-IN')} disc.</span></>}
+                          {yearDisc > 0 && <> · <span className="text-slate-500">₹{yearDisc.toLocaleString('en-IN')} disc.</span></>}
                         </span>
                         {yearDue > 0
                           ? <span className="text-rose-600">₹{yearDue.toLocaleString('en-IN')} due</span>
