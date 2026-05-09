@@ -564,13 +564,17 @@ studentsRouter.post('/create', requireAuth, requireRole('PRINCIPAL'), async (req
       if (dup) throw new ApiError(409, `Aadhaar already registered: ${dup.name}`);
     }
     const fatherPhone = (body.fatherPhone ?? '').replace(/\D/g, '').slice(-10);
-    if (fatherPhone) {
-      const { data: dups, error: dupErr } = await adminDb
-        .from('students').select('id, name').eq('school_id', schoolId).eq('father_phone', fatherPhone).limit(1);
-      if (dupErr) throw new ApiError(500, `Father-phone duplicate-check failed: ${dupErr.message}`);
-      const dup = (dups ?? [])[0] as { name: string } | undefined;
-      if (dup) throw new ApiError(409, `Father phone already registered: ${dup.name}`);
-    }
+    // NOTE: We intentionally do NOT block siblings from sharing
+    // father_phone here. Many real families have one mobile and
+    // multiple kids in the same school — that's a legit use case.
+    // Login-level uniqueness still holds: the parent-account block
+    // below (~line 580) detects an existing users.mobile_number
+    // and REUSES the parent user, then parent_student_links.upsert
+    // links the new student to that same parent so the parent
+    // picker on login shows both kids. The "one mobile = one
+    // student" rule was the wrong invariant; the right invariant
+    // is "one mobile = one parent user" which is enforced where
+    // it matters (auth).
 
     // ── Provision parent auth account (upsertSchoolUser pattern) ─────────────
     const MOBILE_EMAIL_DOMAIN = '@edugrow.local';
