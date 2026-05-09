@@ -665,14 +665,11 @@ principalRouter.post('/leave/submit', requireAuth, async (req, res) => {
       status:       'PENDING',
     }).select(APPROVAL_FIELDS).single();
     if (error) {
-      // RLS errors here mean the service-role client isn't actually
-      // service-role (env var missing). Surface a clear admin
-      // message instead of the raw "row-level security policy"
-      // string which reads as an app bug to end users.
-      if (error.message.toLowerCase().includes('row-level security')) {
-        throw new ApiError(500,
-          'Server is misconfigured (service role key missing). Contact support — your application was NOT submitted.');
-      }
+      // Surface the actual Postgres error verbatim — the earlier
+      // "service role key missing" rewrite was over-aggressive and
+      // misled users into chasing an env-config issue when the real
+      // cause was something else (trigger CHECK violation, FK,
+      // etc.). Pass the raw message through.
       throw new ApiError(500, error.message);
     }
     ok(res, data, 201);

@@ -141,15 +141,17 @@ export const StudentLeaveView: React.FC<Props> = ({ onBack, studentId, studentNa
             </div>
           </div>
           <div className="flex items-center gap-2">
-            <span className={`text-[10px] font-black px-2 py-0.5 rounded-full border ${
-              reachedCap
-                ? 'bg-rose-50 text-rose-600 border-rose-200'
-                : todayCount > 0
-                  ? 'bg-amber-50 text-amber-700 border-amber-200'
-                  : 'bg-slate-50 text-slate-500 border-slate-200'
-            }`}>
-              {todayCount}/{DAILY_CAP} today
-            </span>
+            {/* Daily-limit chip only shows when the parent has
+                actually started using up the cap (>0) AND when
+                they're at the limit. Showing "0/3 today" on a fresh
+                screen looked like the parent had already hit some
+                quota. The cap itself is still enforced server-side
+                so a runaway client can't bypass it. */}
+            {reachedCap && (
+              <span className="text-[10px] font-black px-2 py-0.5 rounded-full border bg-rose-50 text-rose-600 border-rose-200">
+                Limit reached
+              </span>
+            )}
             <button
               onClick={() => setShowForm(f => !f)}
               disabled={!showForm && reachedCap}
