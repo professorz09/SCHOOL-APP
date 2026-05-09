@@ -10,6 +10,7 @@ import {
   UserPlus, BookmarkCheck, Banknote, Truck, TruckIcon, FileX, RotateCcw, ArrowUpCircle, Eye,
   LogOut, X,
 } from 'lucide-react';
+import { supabase } from '@/lib/supabase';
 import { studentService } from '@/modules/students/student.service';
 import { apiStudents, apiFees } from '@/lib/apiClient';
 import { Student, StudentAcademicRecord, StudentDoc } from '@/modules/students/student.types';
@@ -82,6 +83,14 @@ export const StudentProfilePanel: React.FC<Props> = ({ student, onBack, onStuden
   const [readmitClass, setReadmitClass] = useState('');
   const [readmitSection, setReadmitSection] = useState('');
   const [readmitRoll, setReadmitRoll] = useState('');
+  // Login mobile editing — editor-mode + principal-only. The actual
+  // current value lives on users.mobile_number (not on the student
+  // row), fetched lazily when the modal opens. Kept simple: input,
+  // save, toast — no autosave.
+  const [loginPhoneModal, setLoginPhoneModal] = useState(false);
+  const [loginPhoneInput, setLoginPhoneInput] = useState('');
+  const [loginPhoneSaving, setLoginPhoneSaving] = useState(false);
+  const [loginPhoneCurrent, setLoginPhoneCurrent] = useState<string>('');
   const [readmitSubmitting, setReadmitSubmitting] = useState(false);
 
   const handleIssueTc = async () => {
@@ -129,6 +138,53 @@ export const StudentProfilePanel: React.FC<Props> = ({ student, onBack, onStuden
   };
 
   const lifecycleEnabled = !!activeYear && editorModeActive;
+
+  // Open the login-mobile modal. Lazily fetches the parent's
+  // current mobile_number from users via parent_student_links so
+  // the principal sees what's there before typing a new value.
+  const openLoginPhoneModal = async () => {
+    if (!editorModeActive) {
+      showToast('Editor Mode chalu karein (Settings me)', 'error');
+      return;
+    }
+    setLoginPhoneCurrent('');
+    setLoginPhoneInput('');
+    setLoginPhoneModal(true);
+    try {
+      const { data: links } = await supabase
+        .from('parent_student_links').select('parent_user_id')
+        .eq('student_id', currentStudent.id).limit(1).maybeSingle();
+      const parentUserId = (links as { parent_user_id: string } | null)?.parent_user_id;
+      if (parentUserId) {
+        const { data: user } = await supabase
+          .from('users').select('mobile_number').eq('id', parentUserId).maybeSingle();
+        const mob = (user as { mobile_number: string } | null)?.mobile_number ?? '';
+        setLoginPhoneCurrent(mob);
+        setLoginPhoneInput(mob);
+      }
+    } catch { /* leave blank — user can still type a new one */ }
+  };
+
+  const handleSaveLoginPhone = async () => {
+    const newPhone = loginPhoneInput.replace(/\D/g, '').slice(-10);
+    if (newPhone.length !== 10) {
+      showToast('10-digit mobile number daalein', 'error');
+      return;
+    }
+    if (newPhone === loginPhoneCurrent) {
+      showToast('Number same hai — koi change nahi', 'error');
+      return;
+    }
+    setLoginPhoneSaving(true);
+    try {
+      await studentService.updateLoginPhone(currentStudent.id, newPhone);
+      showToast(`Login mobile updated to ${newPhone}`);
+      setLoginPhoneModal(false);
+      setLoginPhoneCurrent(newPhone);
+    } catch (e) {
+      showToast(e instanceof Error ? e.message : 'Update failed', 'error');
+    } finally { setLoginPhoneSaving(false); }
+  };
 
   const [activeProfileTab, setActiveProfileTab] = useState<
     'INFO' | 'ALLOTMENT' | 'FAMILY' | 'RESULTS' | 'FEES' | 'ATTENDANCE' | 'CLASS_HISTORY' | 'TRANSPORT' | 'DOCS'
@@ -909,6 +965,36 @@ export const StudentProfilePanel: React.FC<Props> = ({ student, onBack, onStuden
           {/* ── FAMILY TAB ───────────────────────────── */}
           {activeProfileTab === 'FAMILY' && (
             <>
+              {/* Login Mobile card — Editor-Mode-gated edit. Lives at
+                  the top of Family because it's the auth identity for
+                  the parent who owns this student. Unlike the contact
+                  phones below, this drives login. */}
+              <div className="bg-white rounded-2xl border border-slate-100 shadow-sm p-4">
+                <div className="flex items-center justify-between gap-2 mb-1">
+                  <div className="flex items-center gap-2">
+                    <div className="w-8 h-8 rounded-xl bg-emerald-50 text-emerald-600 flex items-center justify-center">
+                      <Phone size={14} />
+                    </div>
+                    <div>
+                      <p className="text-sm font-black text-slate-900">Login Mobile</p>
+                      <p className="text-[9px] font-bold text-slate-400 uppercase tracking-widest">Parent uses this to log in</p>
+                    </div>
+                  </div>
+                  <button
+                    onClick={openLoginPhoneModal}
+                    disabled={!editorModeActive}
+                    title={editorModeActive ? 'Change login mobile' : 'Editor Mode chalu karein'}
+                    className={`flex items-center gap-1 px-2.5 py-1.5 rounded-lg text-[10px] font-black ${
+                      editorModeActive
+                        ? 'bg-blue-50 text-blue-700 hover:bg-blue-100'
+                        : 'bg-slate-50 text-slate-400 cursor-not-allowed'
+                    }`}
+                  >
+                    <Edit2 size={11} /> {editorModeActive ? 'Change' : 'Locked'}
+                  </button>
+                </div>
+              </div>
+
               <div className="bg-white rounded-2xl border border-slate-100 shadow-sm p-4">
                 <div className="flex items-center gap-2 mb-3">
                   <div className="w-8 h-8 rounded-xl bg-blue-50 text-blue-600 flex items-center justify-center font-black text-sm">F</div>
@@ -1835,6 +1921,52 @@ export const StudentProfilePanel: React.FC<Props> = ({ student, onBack, onStuden
             }
           }}
         />
+      )}
+
+      {/* Login Mobile change modal — editor-mode gated */}
+      {loginPhoneModal && (
+        <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-50 flex items-end justify-center sm:items-center">
+          <div className="w-full max-w-md mx-auto bg-white rounded-t-3xl sm:rounded-3xl p-5 pb-7 animate-in slide-in-from-bottom-8">
+            <div className="flex justify-between items-start mb-4">
+              <div>
+                <h3 className="font-black text-slate-900 text-lg">Change Login Mobile</h3>
+                <p className="text-[11px] font-bold text-slate-500 mt-0.5">
+                  Parent will use the new number to log in. Old number stops working immediately.
+                </p>
+              </div>
+              <button onClick={() => setLoginPhoneModal(false)} disabled={loginPhoneSaving}
+                className="w-8 h-8 bg-slate-100 rounded-full flex items-center justify-center text-slate-500 disabled:opacity-50">
+                <X size={16} />
+              </button>
+            </div>
+            {loginPhoneCurrent && (
+              <div className="bg-slate-50 border border-slate-100 rounded-xl px-3 py-2 mb-3">
+                <p className="text-[9px] font-black text-slate-400 uppercase tracking-widest">Current</p>
+                <p className="text-sm font-black text-slate-900 tabular-nums">{loginPhoneCurrent}</p>
+              </div>
+            )}
+            <label className="block text-[10px] font-black uppercase tracking-widest text-slate-500 mb-1.5">
+              New Login Mobile <sup className="text-rose-500">*</sup>
+            </label>
+            <input
+              value={loginPhoneInput}
+              onChange={e => setLoginPhoneInput(e.target.value.replace(/\D/g, '').slice(0, 10))}
+              placeholder="10-digit mobile"
+              inputMode="numeric"
+              className="w-full border border-slate-200 bg-slate-50 rounded-xl px-4 py-3 font-bold text-base outline-none focus:border-blue-500 mb-4 tabular-nums" />
+            <div className="flex gap-2">
+              <button onClick={() => setLoginPhoneModal(false)} disabled={loginPhoneSaving}
+                className="flex-1 py-3 bg-slate-100 text-slate-700 font-black rounded-xl disabled:opacity-50">
+                Cancel
+              </button>
+              <button onClick={handleSaveLoginPhone}
+                disabled={loginPhoneSaving || loginPhoneInput.replace(/\D/g, '').length !== 10}
+                className="flex-1 py-3 bg-blue-600 text-white font-black rounded-xl disabled:opacity-50">
+                {loginPhoneSaving ? 'Saving…' : 'Save'}
+              </button>
+            </div>
+          </div>
+        </div>
       )}
 
       {/* Issue TC modal */}
