@@ -42,7 +42,11 @@ const ROLE_LABEL: Record<string, string> = {
   LIBRARIAN: 'Librarian', LAB_INCHARGE: 'Lab', DRIVER: 'Driver', PEON: 'Peon', SECURITY: 'Security',
 };
 
-const today = () => new Date().toISOString().split('T')[0];
+// IST-anchored "today" — using toISOString() returns UTC, which after
+// 18:30 IST flips to the next day and creates an off-by-one in the
+// date strip. en-CA gives ISO format (YYYY-MM-DD) when locked to the
+// Asia/Kolkata zone.
+const today = () => new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Kolkata' });
 
 const dayShort = (d: string) => new Date(d).toLocaleDateString('en-IN', { weekday: 'short' });
 const dayNum   = (d: string) => new Date(d).getDate();
@@ -53,12 +57,28 @@ const monthYearLabel = (ym: string) => {
   return new Date(`${y}-${m}-01`).toLocaleDateString('en-IN', { month: 'long', year: 'numeric' });
 };
 
-const buildDateStrip = (count = 14): string[] => {
+// Builds a clamped 14-day strip honouring the active academic year
+// window. Anchored on today if today is inside the year; otherwise
+// on yearEnd (correction-mode-on-closed-year case) so the strip
+// shows the last 14 days of THAT year, not phantom dates after it.
+// Dates outside [yearStart, yearEnd] are filtered out.
+const buildDateStrip = (
+  yearStart?: string | null,
+  yearEnd?: string | null,
+  count = 14,
+): string[] => {
+  const todayIso = today();
+  let anchor = todayIso;
+  if (yearEnd && todayIso > yearEnd) anchor = yearEnd;
+  if (yearStart && todayIso < yearStart) return [];
   const out: string[] = [];
   for (let i = count - 1; i >= 0; i--) {
-    const d = new Date();
+    const d = new Date(anchor);
     d.setDate(d.getDate() - i);
-    out.push(d.toISOString().split('T')[0]);
+    const iso = d.toLocaleDateString('en-CA', { timeZone: 'Asia/Kolkata' });
+    if (yearStart && iso < yearStart) continue;
+    if (yearEnd && iso > yearEnd) continue;
+    out.push(iso);
   }
   return out;
 };
@@ -107,7 +127,10 @@ export const StaffAttendanceManager: React.FC<Props> = ({ onBack, startTab = 'OV
   // to the picked role. Built from the loaded data so we never offer roles that
   // don't actually exist for this school.
   const [historyRole, setHistoryRole] = useState<string>('ALL');
-  const dateStrip = useMemo(() => buildDateStrip(14), []);
+  const dateStrip = useMemo(
+    () => buildDateStrip(currentYear?.startDate, currentYear?.endDate, 14),
+    [currentYear?.startDate, currentYear?.endDate],
+  );
 
   const loadDate = async (date: string) => {
     setSelectedDate(date);
@@ -182,6 +205,20 @@ export const StaffAttendanceManager: React.FC<Props> = ({ onBack, startTab = 'OV
 
   const bulkSet = (status: AttendanceStatus) => {
     if (isLocked) return;
+    // Warn before clobbering already-marked LEAVE / LATE / HALF_DAY
+    // rows. "All Present" / "All Holiday" should not silently flip
+    // a manually-set LEAVE to PRESENT — that loses real data the
+    // marker entered.
+    const distinctOverride = (record?.rows ?? []).filter(r =>
+      r.status !== 'PRESENT' && r.status !== status,
+    );
+    if (distinctOverride.length > 0) {
+      const ok = window.confirm(
+        `${distinctOverride.length} staff already have a different status set ` +
+        `(LEAVE / LATE / HALF_DAY etc). Overwriting all to ${status}?`,
+      );
+      if (!ok) return;
+    }
     setRecord(r => r ? ({ ...r, rows: r.rows.map(row => ({ ...row, status })) }) : r);
     setClearedIds(new Set());
   };

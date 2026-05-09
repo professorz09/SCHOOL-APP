@@ -226,8 +226,14 @@ export const StudentAttendanceManager: React.FC<Props> = ({ onBack }) => {
       setGridRecords(recs);
       setGridDetails(studentDetails);
 
+      // Filter inactive / TC-issued students out of the grid roster.
+      // Their historical attendance still appears in the saved
+      // `gridDetails` rows (because attendance_student_details rows
+      // exist from when they were active), but they're no longer
+      // markable for new dates — TC was issued, they're gone.
       const sectionStudents = students
         .filter(s => s.className === cls && s.section === sec)
+        .filter(s => s.isActive !== false && (s as any).status !== 'TC_ISSUED')
         .sort((a, b) => parseInt(a.rollNo || '0') - parseInt(b.rollNo || '0'))
         .map(s => ({
           id: s.id, name: s.name, rollNo: s.rollNo ?? '',
@@ -292,6 +298,23 @@ export const StudentAttendanceManager: React.FC<Props> = ({ onBack }) => {
     });
   };
 
+  // Clear a cell's pending edit — undoes a mistaken tap. Only meaningful
+  // for brand-new dates (no record yet); for an already-saved date we
+  // can't truly "unmark" — the row just reverts to whatever the prior
+  // saved value was. Wired to long-press on the cell.
+  const clearCell = (date: string, stuId: string) => {
+    if (!gridEditMode) return;
+    setEditBuffer(prev => {
+      if (!prev[date]?.[stuId]) return prev;
+      const dayBuffer = { ...prev[date] };
+      delete dayBuffer[stuId];
+      const next = { ...prev };
+      if (Object.keys(dayBuffer).length === 0) delete next[date];
+      else next[date] = dayBuffer;
+      return next;
+    });
+  };
+
   const bulkSetDate = (date: string, status: AttendanceCellStatus) => {
     if (!gridEditMode) return;
     if (date > todayStr()) return;
@@ -317,7 +340,11 @@ export const StudentAttendanceManager: React.FC<Props> = ({ onBack }) => {
   //     grid edits silently failed.
   // Returns true on success so the bulk "Save All" loop can count
   // wins/losses without relying on a stale editBuffer closure read.
-  const saveDate = async (date: string): Promise<boolean> => {
+  // `skipReload` lets the bulk handler defer the loadGrid() call
+  // until AFTER all dates have saved — otherwise the per-call reload
+  // resets editBuffer to {} and wipes pending edits for dates that
+  // haven't saved yet.
+  const saveDate = async (date: string, skipReload = false): Promise<boolean> => {
     if (!editGuard.canEdit) {
       showToast('Year closed — enable Correction Mode first', 'error'); return false;
     }
@@ -334,19 +361,37 @@ export const StudentAttendanceManager: React.FC<Props> = ({ onBack }) => {
       showToast('Locked — enable Editor Mode in Settings to edit this date', 'error'); return false;
     }
 
+    // Brand-new date sanity check. If the user only flipped one
+    // student's cell on a date with no existing record, every other
+    // student would silently default to PRESENT and the record locks
+    // — fabricating a roll register. Force the principal to do an
+    // explicit "All Present" / "All Absent" / "All Holiday" bulk
+    // (which fills editBuffer for every student) before we'll save a
+    // brand-new date. For an existing record (rec exists), we keep
+    // the prior cell value as the fallback — those defaults reflect
+    // a real prior save, not a fabrication.
+    const eligible = gridStudents.filter(s => !isPreEnrollment(s.admissionDate, date));
+    if (!rec) {
+      const editedCount = eligible.filter(s => edits[s.id] !== undefined).length;
+      if (editedCount < eligible.length) {
+        showToast(
+          `Brand-new date — first tap "All Present" / "All Absent" / "All Holiday" to set a baseline, then adjust individual cells.`,
+          'error',
+        );
+        return false;
+      }
+    }
     // Build the per-student payload, dropping anyone who wasn't enrolled
     // yet on this date. Server also enforces the same filter as
     // defence-in-depth, but pruning client-side keeps the UI roster honest.
     const stuRecords: import('@/modules/attendance/attendance.service').AttendanceStudentRecord[] =
-      gridStudents
-        .filter(s => !isPreEnrollment(s.admissionDate, date))
-        .map(s => ({
-          id: s.id,
-          name: s.name,
-          rollNo: s.rollNo,
-          isPresent: (edits[s.id] ?? gridDetails[date]?.[s.id] ?? 'present') !== 'absent',
-          status: edits[s.id] ?? gridDetails[date]?.[s.id] ?? 'present' as AttendanceCellStatus,
-        }));
+      eligible.map(s => ({
+        id: s.id,
+        name: s.name,
+        rollNo: s.rollNo,
+        isPresent: (edits[s.id] ?? gridDetails[date]?.[s.id] ?? 'present') !== 'absent',
+        status: edits[s.id] ?? gridDetails[date]?.[s.id] ?? 'present' as AttendanceCellStatus,
+      }));
 
     let reason: string | undefined;
     if (isLockedEdit) {
@@ -383,7 +428,7 @@ export const StudentAttendanceManager: React.FC<Props> = ({ onBack }) => {
         if (Object.keys(n).length === 0) setGridEditMode(false);
         return n;
       });
-      await loadGrid(gridClass, gridSection, gridYM);
+      if (!skipReload) await loadGrid(gridClass, gridSection, gridYM);
       return true;
     } catch (e) {
       showToast((e as Error).message || 'Failed to save', 'error');
@@ -443,7 +488,10 @@ export const StudentAttendanceManager: React.FC<Props> = ({ onBack }) => {
         const stus = await sharedAttendance.getStudents(existing.id);
         setMarkStudents(stus);
       } else {
+        // Drop inactive / TC-issued students from the mark roster —
+        // they shouldn't be markable for new attendance entries.
         const ss = students.filter(s => s.className === className && s.section === section)
+          .filter(s => s.isActive !== false && (s as any).status !== 'TC_ISSUED')
           .sort((a, b) => parseInt(a.rollNo) - parseInt(b.rollNo));
         setMarkStudents(ss.map(s => ({ id: s.id, name: s.name, rollNo: s.rollNo, isPresent: true, status: 'present' as AttendanceCellStatus })));
       }
@@ -964,11 +1012,19 @@ export const StudentAttendanceManager: React.FC<Props> = ({ onBack }) => {
                                             'cursor-pointer active:scale-90'
                               }`}
                               onClick={() => toggleCell(d, stu.id)}
+                              onContextMenu={(e) => {
+                                // Long-press on mobile fires contextmenu;
+                                // right-click on desktop. Either way, clear
+                                // the pending edit on this cell so users can
+                                // undo a mistaken tap before saving.
+                                e.preventDefault();
+                                clearCell(d, stu.id);
+                              }}
                               title={
                                 isFuture ? 'Future date — not editable' :
                                 locked
-                                  ? `Locked${rec?.markedByName ? ` · marked by ${rec.markedByName}` : ''}${editorModeActive ? ' · tap to edit' : ' · enable Editor Mode to edit'}`
-                                  : rec?.markedByName ? `Marked by ${rec.markedByName}` : undefined
+                                  ? `Locked${rec?.markedByName ? ` · marked by ${rec.markedByName}` : ''}${editorModeActive ? ' · tap to edit · long-press to clear' : ' · enable Editor Mode to edit'}`
+                                  : (rec?.markedByName ? `Marked by ${rec.markedByName}` : 'Tap to cycle · long-press to clear')
                               }>
                               <span className={`inline-flex items-center justify-center w-7 h-7 rounded-lg text-[9px] font-black transition-colors ${bg} ${(!editable || isFuture) ? 'opacity-30' : ''}`}>
                                 {st ? CELL_LABEL[st] : isFuture ? '·' : '—'}
@@ -1021,9 +1077,18 @@ export const StudentAttendanceManager: React.FC<Props> = ({ onBack }) => {
                   // pinned to the snapshot at handler-call time, so
                   // every iteration saw the original buffer.
                   const failedDates: string[] = [];
+                  // skipReload=true so saveDate doesn't call loadGrid()
+                  // between iterations — that wipes editBuffer for the
+                  // dates we haven't saved yet. We do one loadGrid at
+                  // the end after the whole loop settles.
                   for (const d of editedDates) {
-                    const success = await saveDate(d);
+                    const success = await saveDate(d, true);
                     if (!success) failedDates.push(d);
+                  }
+                  // Single reload after the loop so the grid reflects
+                  // the canonical server state for every saved date.
+                  if (gridClass && gridSection) {
+                    await loadGrid(gridClass, gridSection, gridYM);
                   }
                   // Force-clear the edit buffer for every successfully
                   // saved date in a single setState, then exit edit

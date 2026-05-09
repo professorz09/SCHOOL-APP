@@ -314,6 +314,27 @@ attendanceRouter.post('/submit', requireAuth, requireRole('TEACHER', 'PRINCIPAL'
     const section = secData as SectionRow | null;
     if (!section) throw new ApiError(404, 'Section not found');
 
+    // Server-side date guards. Client already enforces these but a
+    // forged or stale payload could otherwise write a record dated in
+    // the future, or outside the section's academic-year window.
+    // Pull the AY bounds from the section's AY row.
+    const todayIso = new Date().toISOString().slice(0, 10);
+    if (body.date > todayIso) {
+      throw new ApiError(400, 'Future-dated attendance is not allowed');
+    }
+    const { data: ayRow } = await adminDb
+      .from('academic_years').select('start_date, end_date')
+      .eq('id', section.academic_year_id).maybeSingle();
+    const ay = ayRow as { start_date: string; end_date: string } | null;
+    if (ay) {
+      if (body.date < ay.start_date) {
+        throw new ApiError(400, `Date ${body.date} is before this section's academic year started (${ay.start_date})`);
+      }
+      if (body.date > ay.end_date) {
+        throw new ApiError(400, `Date ${body.date} is after this section's academic year ended (${ay.end_date})`);
+      }
+    }
+
     const { data: existData } = await adminDb
       .from('attendance_records')
       .select('id, is_locked, approval_status, marked_by')
@@ -442,21 +463,36 @@ attendanceRouter.post('/mark-by-principal', requireAuth, requireRole('PRINCIPAL'
       throw new ApiError(400, 'records array required');
     }
 
-    const { data: ayData } = await adminDb
-      .from('academic_years').select('id')
-      .eq('school_id', req.user.school_id!).eq('is_active', true).maybeSingle();
-    const yearId = (ayData as AcYearRow | null)?.id;
-    if (!yearId) throw new ApiError(400, 'No active academic year');
-
-    const { data: secData } = await adminDb
-      .from('sections').select('id')
+    // Resolve section by class+section across ALL years (not just
+    // active) so correction mode for a closed year resolves to the
+    // CORRECT historical section, not whatever the active year
+    // currently has under that name. We disambiguate by date — pull
+    // any section whose AY window covers body.date.
+    const { data: candidateSections } = await adminDb
+      .from('sections')
+      .select('id, academic_year_id, academic_years(start_date, end_date)')
       .eq('school_id', req.user.school_id!)
-      .eq('academic_year_id', yearId)
       .eq('class_name', body.className)
-      .eq('section', body.section)
-      .limit(1);
-    const sectionId = ((secData ?? []) as SectionIdRow[])[0]?.id;
-    if (!sectionId) throw new ApiError(404, `Section ${body.className}-${body.section} not found`);
+      .eq('section', body.section);
+    type Cand = {
+      id: string; academic_year_id: string;
+      academic_years: { start_date: string; end_date: string } | null;
+    };
+    const matching = ((candidateSections ?? []) as unknown as Cand[]).find(c =>
+      c.academic_years &&
+      body.date >= c.academic_years.start_date &&
+      body.date <= c.academic_years.end_date,
+    );
+    if (!matching) {
+      throw new ApiError(404, `Section ${body.className}-${body.section} not found for date ${body.date}`);
+    }
+    const sectionId = matching.id;
+
+    // Future-date guard.
+    const todayIso = new Date().toISOString().slice(0, 10);
+    if (body.date > todayIso) {
+      throw new ApiError(400, 'Future-dated attendance is not allowed');
+    }
 
     const normalizedRecords = body.records.map(r => ({
       studentId: r.studentId,
@@ -522,7 +558,7 @@ attendanceRouter.post('/mark-by-principal', requireAuth, requireRole('PRINCIPAL'
       const { data: recData, error: rErr } = await adminDb
         .from('attendance_records').insert({
           school_id:        req.user.school_id,
-          academic_year_id: yearId,
+          academic_year_id: matching.academic_year_id,
           section_id:       sectionId,
           class_name:       body.className,
           section:          body.section,

@@ -989,6 +989,27 @@ principalRouter.post('/staff-attendance/save', requireAuth, PRINCIPAL, async (re
     const clearedStaffIds: string[] = body.clearedStaffIds ?? [];
     if (!body.rows.length && !clearedStaffIds.length) throw new ApiError(400, 'No staff to record');
 
+    // Date guard — server-side defence-in-depth. The client's date
+    // picker has max=today and a year-window check, but a forged
+    // payload could still try to write a future / out-of-year date.
+    const todayIso = new Date().toISOString().slice(0, 10);
+    if (body.date > todayIso) {
+      throw new ApiError(400, 'Future-dated staff attendance is not allowed');
+    }
+    // Year-bounds check: pull the AY whose window covers body.date.
+    // If no AY for the school covers the date (e.g. a date before
+    // the very first year was created), reject the write.
+    const { data: ayMatch } = await adminDb
+      .from('academic_years')
+      .select('id, start_date, end_date')
+      .eq('school_id', req.user.school_id!)
+      .lte('start_date', body.date)
+      .gte('end_date', body.date)
+      .maybeSingle();
+    if (!ayMatch) {
+      throw new ApiError(400, `Date ${body.date} is outside every academic year configured for this school`);
+    }
+
     // Hard-lock guard: salary-generated records cannot be modified by anyone.
     const { data: hardLocked } = await adminDb
       .from('staff_attendance')
