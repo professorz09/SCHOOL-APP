@@ -103,6 +103,12 @@ const [mainView, setMainView] = useState<MainView>(initialView ?? 'CLASSES');
   // most principals found overwhelming. Order matches the user's
   // mental model: Basic → Family → Documents.
   const [admStep, setAdmStep] = useState<1 | 2 | 3>(1);
+  // Hides every optional step-1 field (Aadhaar, gender, religion,
+  // caste, PEN, birth cert, TC no, DOB, blood, phone, email,
+  // address) behind a single "Show more details" disclosure so the
+  // first screen the principal sees is just Name + Admission No +
+  // Photo. Everything else is one tap away.
+  const [showMoreInfo, setShowMoreInfo] = useState(false);
   const [students, setStudents] = useState<Student[]>([]);
   // Track whether the initial student fetch has completed. Without
   // this, the class card briefly renders "0" (empty array) before
@@ -590,10 +596,9 @@ const [mainView, setMainView] = useState<MainView>(initialView ?? 'CLASSES');
           {/* ─── STEP 1: BASIC INFO ─────────────────────────────────── */}
           {admStep === 1 && (<>
           {/* Passport-size photo — top of form, dedicated upload with preview */}
-          <div className="bg-white rounded-2xl border border-slate-100 shadow-sm p-4">
-            <p className="text-[10px] font-black uppercase tracking-widest text-slate-400 mb-3">Passport-Size Photo</p>
-            <div className="flex items-start gap-4">
-              <div className="w-24 h-32 lg:w-28 lg:h-36 rounded-xl border-2 border-dashed border-slate-300 bg-slate-50 overflow-hidden flex items-center justify-center shrink-0">
+          <div className="bg-white rounded-2xl border border-slate-100 shadow-sm p-3.5">
+            <div className="flex items-center gap-3.5">
+              <div className="w-20 h-24 rounded-xl border-2 border-dashed border-slate-300 bg-slate-50 overflow-hidden flex items-center justify-center shrink-0">
                 {documentFiles.get('PHOTO') ? (
                   <img
                     src={URL.createObjectURL(documentFiles.get('PHOTO')!)}
@@ -607,11 +612,9 @@ const [mainView, setMainView] = useState<MainView>(initialView ?? 'CLASSES');
                   </div>
                 )}
               </div>
-              <div className="flex-1 min-w-0 space-y-2">
-                <p className="text-[11px] font-bold text-slate-600 leading-relaxed">
-                  Recent passport-size photo with plain background. Used on ID card, admit card, and admission form.
-                </p>
-                <p className="text-[9px] font-bold text-slate-400">JPG / PNG · Max 1 MB · 3:4 ratio recommended</p>
+              <div className="flex-1 min-w-0 space-y-1.5">
+                <p className="text-[10px] font-black uppercase tracking-widest text-slate-400">Passport Photo</p>
+                <p className="text-[10px] font-bold text-slate-400">JPG / PNG · Max 1 MB</p>
                 <div className="flex items-center gap-2">
                   <label className="cursor-pointer">
                     <input type="file" onChange={e => handleDocumentUpload(e, 'PHOTO')} className="hidden"
@@ -641,7 +644,6 @@ const [mainView, setMainView] = useState<MainView>(initialView ?? 'CLASSES');
             {[
               { label: 'Full Name', key: 'name', placeholder: 'Student full name', req: true },
               { label: 'Admission No.', key: 'admissionNo', placeholder: 'ADM-2024-XXX', req: true },
-              { label: 'Aadhaar No.', key: 'aadhaarNo', placeholder: 'XXXX XXXX XXXX' },
             ].map(({ label, key, placeholder, req }) => (
               <div key={key}>
                 <label className="block text-[10px] font-black uppercase tracking-widest text-slate-500 mb-1.5">
@@ -652,6 +654,31 @@ const [mainView, setMainView] = useState<MainView>(initialView ?? 'CLASSES');
                   className="w-full border border-slate-200 bg-slate-50 rounded-xl px-4 py-3 font-bold text-sm outline-none focus:border-indigo-500 focus:bg-white transition-colors" />
               </div>
             ))}
+
+            {/* "Show more details" disclosure — hides every optional
+                step-1 field below until the principal asks. Keeps the
+                first screen ultra-short: just Name, Admission No,
+                and the photo card. Most admissions only need this. */}
+            <button type="button"
+              onClick={() => setShowMoreInfo(s => !s)}
+              className="w-full mt-1 flex items-center justify-center gap-1.5 text-[10px] font-black uppercase tracking-widest text-indigo-600 bg-indigo-50 hover:bg-indigo-100 active:scale-[0.99] rounded-xl py-2.5 transition-colors">
+              {showMoreInfo
+                ? <>Hide extra details <span className="text-base leading-none">▴</span></>
+                : <>+ Add more details (Aadhaar, DOB, contact, etc.)</>}
+            </button>
+
+            {showMoreInfo && (<>
+            {/* Aadhaar — moved here from the always-visible array
+                above. Optional for most boards; principals fill it
+                later once parents bring the card. */}
+            <div>
+              <label className="block text-[10px] font-black uppercase tracking-widest text-slate-500 mb-1.5">
+                Aadhaar No. <span className="text-slate-400 normal-case font-bold text-[9px]">(optional)</span>
+              </label>
+              <input value={form.aadhaarNo ?? ''} onChange={e => setForm(f => ({ ...f, aadhaarNo: e.target.value }))}
+                placeholder="XXXX XXXX XXXX"
+                className="w-full border border-slate-200 bg-slate-50 rounded-xl px-4 py-3 font-bold text-sm outline-none focus:border-indigo-500 focus:bg-white transition-colors" />
+            </div>
 
             {/* Gender dropdown */}
             <div>
@@ -763,6 +790,8 @@ const [mainView, setMainView] = useState<MainView>(initialView ?? 'CLASSES');
                   className="w-full border border-slate-200 bg-slate-50 rounded-xl px-4 py-3 font-bold text-sm outline-none focus:border-indigo-500" />
               </div>
             ))}
+            </>)}
+            {/* /showMoreInfo */}
           </div>
 
           </>)}
