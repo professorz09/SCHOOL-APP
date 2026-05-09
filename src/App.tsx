@@ -39,6 +39,16 @@ const TeacherNoticesView = lazy(() => import('@/modules/notices/components/Teach
 import { AppLoader } from '@/shared/components/AppLoader';
 const ChunkLoading: React.FC = () => <AppLoader variant="centered" />;
 
+// Fires its onMount once when the wrapped tree finally commits — i.e.
+// when Suspense stops suspending. Used to flip a "first chunk loaded"
+// flag so the full splash overlay can disappear and the bottom nav
+// can fade in. While Suspense is still showing the fallback, this
+// component isn't mounted, so the effect never fires.
+const FirstMountSignal: React.FC<{ children: React.ReactNode; onMount: () => void }> = ({ children, onMount }) => {
+  React.useEffect(() => { onMount(); }, []); // eslint-disable-line react-hooks/exhaustive-deps
+  return <>{children}</>;
+};
+
 const useIsDesktop = () => {
   const [isDesktop, setIsDesktop] = useState(() => window.innerWidth >= 1024);
   useEffect(() => {
@@ -62,6 +72,13 @@ export default function App() {
 
   const [tab, setTab] = useState<NavTab>('HOME');
   const [linkedStudents, setLinkedStudents] = useState<Student[]>([]);
+  // Tracks whether the first lazy-imported route chunk has actually
+  // mounted (i.e. Suspense has stopped suspending at least once).
+  // While this is false, we show a full-screen splash overlay so the
+  // bottom nav / sidebar / page chrome don't appear AROUND a
+  // half-loaded tab body — that's what made the boot feel like 2-3
+  // separate loading screens stacked.
+  const [firstChunkLoaded, setFirstChunkLoaded] = useState(false);
   const isDesktop = useIsDesktop();
   const mainScrollRef = useRef<HTMLElement | null>(null);
 
@@ -245,9 +262,19 @@ export default function App() {
   // ToastContainer is mounted once at the app root so toasts always render —
   // every nested view (Transport, Timetable, Settings, …) shares this single
   // instance instead of needing its own.
+  // Full-screen splash overlay — keeps the page chrome (sidebar /
+  // bottom nav) hidden until the very first lazy chunk has resolved.
+  // Without this, the user sees the bottom nav + a centred mini
+  // loader floating in an empty page body for ~1s after auth-init
+  // ends, which reads as multiple stacked loading states.
+  const splashOverlay = !firstChunkLoaded
+    ? <div className="fixed inset-0 z-[60] bg-white"><AppLoader variant="full" /></div>
+    : null;
+
   if (isDesktop) {
     return (
       <>
+        {splashOverlay}
         <div className="flex h-full bg-slate-50 overflow-hidden">
           <aside className="w-64 xl:w-72 bg-white border-r border-slate-100 shadow-sm shrink-0">
             <SidebarNav role={role} currentTab={tab} setTab={setTab} onLogout={() => logout()} />
@@ -258,7 +285,11 @@ export default function App() {
             tabIndex={0}
             className="flex-1 overflow-y-auto hide-scrollbar focus:outline-none"
           >
-            {<Suspense fallback={<ChunkLoading />}>{renderTabContent()}</Suspense>}
+            <Suspense fallback={<ChunkLoading />}>
+              <FirstMountSignal onMount={() => setFirstChunkLoaded(true)}>
+                {renderTabContent()}
+              </FirstMountSignal>
+            </Suspense>
           </main>
         </div>
         <ToastContainer />
@@ -269,6 +300,7 @@ export default function App() {
   // ── Mobile layout ─────────────────────────────────────────────────────────
   return (
     <>
+      {splashOverlay}
       <div className="h-dvh bg-slate-100 flex flex-col overflow-hidden">
         <div className="w-full h-full bg-slate-50 flex flex-col overflow-hidden">
           {/* Roles whose dashboard renders its own greeting block (with extra
@@ -277,7 +309,11 @@ export default function App() {
           {tab === 'HOME' && !isSubView && role !== 'STUDENT' && role !== 'PRINCIPAL' && role !== 'TEACHER' && <Header role={role} />}
 
           <main className="flex-1 overflow-y-auto pb-32 hide-scrollbar">
-            {<Suspense fallback={<ChunkLoading />}>{renderTabContent()}</Suspense>}
+            <Suspense fallback={<ChunkLoading />}>
+              <FirstMountSignal onMount={() => setFirstChunkLoaded(true)}>
+                {renderTabContent()}
+              </FirstMountSignal>
+            </Suspense>
           </main>
 
           <div className="fixed bottom-0 left-0 right-0 z-20">
