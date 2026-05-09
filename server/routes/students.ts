@@ -1,9 +1,25 @@
 import { Router } from 'express';
+import rateLimit from 'express-rate-limit';
 import { adminDb, userDb } from '../lib/db';
 import { ok, fail, ApiError, requireBody } from '../lib/helpers';
 import { requireAuth, requireRole, requireEditorMode } from '../middleware/auth';
 
 export const studentsRouter = Router();
+
+// TC issuance is destructive (sets is_active=false, generates a TC
+// number, writes student_change_history). 30 per principal per day
+// is well above any realistic real-world cadence (a typical school
+// issues a handful of TCs per academic year). The cap exists so a
+// compromised account or an automated mistake can't wipe the roster.
+const issueTcLimiter = rateLimit({
+  windowMs: 24 * 60 * 60_000,
+  limit: 30,
+  keyGenerator: (req: any) => `tc:${req.user?.id ?? req.ip}`,
+  validate: { keyGeneratorIpFallback: false },
+  standardHeaders: 'draft-7',
+  legacyHeaders: false,
+  message: { ok: false, error: 'TC issuance limit reached (30/day). Contact support if more are needed.' },
+});
 
 // GET /api/students?yearId=&search=&status=
 studentsRouter.get('/', requireAuth, requireRole('PRINCIPAL', 'TEACHER'), async (req, res) => {
@@ -398,7 +414,7 @@ studentsRouter.post('/fail', requireAuth, requireRole('PRINCIPAL'), async (req, 
 // parent's user account is also deactivated so they can no longer log in
 // here. The next school's admission flow will auto-reactivate the account
 // when transferring it. (See `/create` parent-handling block.)
-studentsRouter.post('/issue-tc', requireAuth, requireRole('PRINCIPAL'), async (req, res) => {
+studentsRouter.post('/issue-tc', issueTcLimiter, requireAuth, requireRole('PRINCIPAL'), async (req, res) => {
   try {
     // tcNumber now optional — when omitted the SQL RPC generates a
     // school-scoped sequential TC-{year}-{NNN}. Caller can still pass

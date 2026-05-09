@@ -1,4 +1,5 @@
 import { Router } from 'express';
+import rateLimit from 'express-rate-limit';
 import { adminDb, userDb } from '../lib/db';
 import { ok, fail, ApiError, requireBody } from '../lib/helpers';
 import { requireAuth, requireRole } from '../middleware/auth';
@@ -6,6 +7,21 @@ import { requireAuth, requireRole } from '../middleware/auth';
 export const academicYearRouter = Router();
 
 const PRINCIPAL = requireRole('PRINCIPAL');
+
+// Year-close + year-promotion are catastrophic actions (lock every
+// AY-scoped table for that year, promote every student, close fee
+// books). 5 per principal per day prevents an automated loop or a
+// compromised account from cycling close→reopen→close→…. A normal
+// school does this exactly once per year per academic cycle.
+const yearCloseLimiter = rateLimit({
+  windowMs: 24 * 60 * 60_000,
+  limit: 5,
+  keyGenerator: (req: any) => `yr-close:${req.user?.id ?? req.ip}`,
+  validate: { keyGeneratorIpFallback: false },
+  standardHeaders: 'draft-7',
+  legacyHeaders: false,
+  message: { ok: false, error: 'Year-close limit reached (5/day). Contact support if more are needed.' },
+});
 
 // GET /api/academic-year
 academicYearRouter.get('/', requireAuth, PRINCIPAL, async (req, res) => {
@@ -90,7 +106,7 @@ academicYearRouter.post('/set-active', requireAuth, PRINCIPAL, async (req, res) 
 });
 
 // POST /api/academic-year/close
-academicYearRouter.post('/close', requireAuth, PRINCIPAL, async (req, res) => {
+academicYearRouter.post('/close', yearCloseLimiter, requireAuth, PRINCIPAL, async (req, res) => {
   try {
     const { yearId } = requireBody<{ yearId: string }>(req, ['yearId']);
 
@@ -175,7 +191,7 @@ academicYearRouter.post('/create-with-sections', requireAuth, PRINCIPAL, async (
 });
 
 // POST /api/academic-year/commit-closing — commit_year_closing RPC (auth.uid() required)
-academicYearRouter.post('/commit-closing', requireAuth, PRINCIPAL, async (req, res) => {
+academicYearRouter.post('/commit-closing', yearCloseLimiter, requireAuth, PRINCIPAL, async (req, res) => {
   try {
     const body = requireBody<{
       oldYearId: string; newLabel: string; newStart: string; newEnd: string;

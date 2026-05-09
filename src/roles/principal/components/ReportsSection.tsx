@@ -59,6 +59,15 @@ interface SectionDef {
 
 const fail = (msg: string): never => { throw new Error(msg); };
 
+// Hard cap on every heavy fact-table read. The reports are scoped by
+// year + date range already, so a real school will never hit this —
+// it's a defence so a misconfigured filter or a school with 5+ years
+// of history can't accidentally load 200k rows into the browser tab.
+// If you ever see a "this report is truncated" warning in production,
+// the right fix is to add a sub-filter (smaller date window) — NOT
+// to bump this number.
+const MAX_REPORT_ROWS = 50000;
+
 const splitClass = (cf: string) => {
   if (!cf) return { className: null as string | null, section: null as string | null };
   const [className, section] = cf.split(':');
@@ -357,7 +366,8 @@ export const ReportsSection: React.FC<Props> = ({
             const { data, error } = await supabase.from('payment_records')
               .select('amount, date, method, reversed_at')
               .eq('school_id', schoolId).gte('date', rangeFrom).lte('date', rangeTo)
-              .is('reversed_at', null);
+              .is('reversed_at', null)
+                .limit(MAX_REPORT_ROWS);
             if (error) throw new Error(error.message);
             const buckets = new Map<string, { count: number; total: number }>();
             for (const p of (data ?? []) as any[]) {
@@ -428,7 +438,8 @@ export const ReportsSection: React.FC<Props> = ({
             const { data, error } = await supabase.from('payment_records')
               .select('id, date, amount, method, receipt_no, note, reversed_at, students(name, admission_no)')
               .eq('school_id', schoolId).gte('date', rangeFrom).lte('date', rangeTo)
-              .order('date', { ascending: false });
+              .order('date', { ascending: false })
+                .limit(MAX_REPORT_ROWS);
             if (error) throw new Error(error.message);
             const rows = ((data ?? []) as any[]).map(p => ({
               date: p.date,
@@ -483,7 +494,8 @@ export const ReportsSection: React.FC<Props> = ({
             const { data, error } = await supabase.from('attendance_records')
               .select('date, class_name, section, total_present, total_absent, approval_status')
               .eq('school_id', schoolId).gte('date', rangeFrom).lte('date', rangeTo)
-              .order('date', { ascending: false });
+              .order('date', { ascending: false })
+                .limit(MAX_REPORT_ROWS);
             if (error) throw new Error(error.message);
             const rows = ((data ?? []) as any[]).map(r => ({
               date: r.date,
@@ -501,7 +513,8 @@ export const ReportsSection: React.FC<Props> = ({
           run: async () => {
             const { data, error } = await supabase.from('attendance_records')
               .select('date, total_present, total_absent')
-              .eq('school_id', schoolId).gte('date', rangeFrom).lte('date', rangeTo);
+              .eq('school_id', schoolId).gte('date', rangeFrom).lte('date', rangeTo)
+                .limit(MAX_REPORT_ROWS);
             if (error) throw new Error(error.message);
             const buckets = new Map<string, { p: number; a: number; days: number }>();
             for (const r of (data ?? []) as any[]) {
@@ -539,7 +552,8 @@ export const ReportsSection: React.FC<Props> = ({
             // Step 2: pull every attendance_record on that exact date so
             // we cover every class+section that marked rolls.
             const { data: recs, error: e2 } = await supabase.from('attendance_records')
-              .select('id').eq('school_id', schoolId).eq('date', latestDate);
+              .select('id').eq('school_id', schoolId).eq('date', latestDate)
+                .limit(MAX_REPORT_ROWS);
             if (e2) throw new Error(e2.message);
             const ids = ((recs ?? []) as { id: string }[]).map(r => r.id);
             if (ids.length === 0) {
@@ -609,7 +623,8 @@ export const ReportsSection: React.FC<Props> = ({
             if (testIds.length === 0) return { rows: [], headers: ['name','admission_no','class','subject','obtained','max'], filenamePrefix: 'failed-students' };
             const { data: results, error: e2 } = await supabase.from('exam_results')
               .select('test_id, obtained_marks, students!inner(name, admission_no, school_id)')
-              .in('test_id', testIds);
+              .in('test_id', testIds)
+                .limit(MAX_REPORT_ROWS);
             if (e2) throw new Error(e2.message);
             const testMap = new Map<string, any>(((tests ?? []) as any[]).map(t => [t.id, t]));
             const rows = ((results ?? []) as any[])
@@ -636,7 +651,8 @@ export const ReportsSection: React.FC<Props> = ({
             if (!yearId) fail('Pick an academic year first');
             const { data, error } = await supabase.from('exam_results')
               .select('obtained_marks, students!inner(name, admission_no, school_id), test_schedules!inner(max_marks, school_id, academic_year_id)')
-              .eq('test_schedules.school_id', schoolId).eq('test_schedules.academic_year_id', yearId);
+              .eq('test_schedules.school_id', schoolId).eq('test_schedules.academic_year_id', yearId)
+                .limit(MAX_REPORT_ROWS);
             if (error) throw new Error(error.message);
             const totals = new Map<string, { name: string; admission_no: string; obt: number; max: number }>();
             for (const r of (data ?? []) as any[]) {
@@ -666,7 +682,8 @@ export const ReportsSection: React.FC<Props> = ({
             if (!yearId) fail('Pick an academic year first');
             const { data, error } = await supabase.from('exam_results')
               .select('obtained_marks, grade, students!inner(name, admission_no, school_id), test_schedules!inner(title, subject, max_marks, class_name, section, school_id, academic_year_id)')
-              .eq('test_schedules.school_id', schoolId).eq('test_schedules.academic_year_id', yearId);
+              .eq('test_schedules.school_id', schoolId).eq('test_schedules.academic_year_id', yearId)
+                .limit(MAX_REPORT_ROWS);
             if (error) throw new Error(error.message);
             const rows = ((data ?? []) as any[])
               .filter(r => r.students?.school_id === schoolId)
@@ -691,7 +708,8 @@ export const ReportsSection: React.FC<Props> = ({
             const { data, error } = await supabase.from('exam_results')
               .select('obtained_marks, students!inner(school_id), test_schedules!inner(max_marks, class_name, section, school_id, academic_year_id, test_type)')
               .eq('test_schedules.school_id', schoolId).eq('test_schedules.academic_year_id', yearId)
-              .in('test_schedules.test_type', ['FINAL', 'ANNUAL', 'TERMINAL']);
+              .in('test_schedules.test_type', ['FINAL', 'ANNUAL', 'TERMINAL'])
+                .limit(MAX_REPORT_ROWS);
             if (error) throw new Error(error.message);
             const buckets = new Map<string, { pass: number; fail: number }>();
             for (const r of (data ?? []) as any[]) {
@@ -795,7 +813,8 @@ export const ReportsSection: React.FC<Props> = ({
             const { data, error } = await supabase.from('salary_payments')
               .select('paid_at, month, amount, method, staff!inner(name, role, school_id)')
               .gte('paid_at', rangeFrom).lte('paid_at', rangeTo + 'T23:59:59')
-              .order('paid_at', { ascending: false });
+              .order('paid_at', { ascending: false })
+                .limit(MAX_REPORT_ROWS);
             if (error) throw new Error(error.message);
             const rows = ((data ?? []) as any[])
               .filter(r => r.staff?.school_id === schoolId)
@@ -816,7 +835,7 @@ export const ReportsSection: React.FC<Props> = ({
             // Compute month-by-month from staff.joining_date → today; subtract paid months.
             const [staffRes, payRes] = await Promise.all([
               supabase.from('staff').select('id, name, role, salary, joining_date, is_active').eq('school_id', schoolId).eq('is_active', true),
-              supabase.from('salary_payments').select('staff_id, month, amount').eq('school_id', schoolId),
+              supabase.from('salary_payments').select('staff_id, month, amount').eq('school_id', schoolId).limit(MAX_REPORT_ROWS),
             ]);
             if (staffRes.error) throw new Error(staffRes.error.message);
             if (payRes.error) throw new Error(payRes.error.message);

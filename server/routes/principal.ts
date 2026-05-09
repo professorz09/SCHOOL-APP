@@ -12,6 +12,22 @@ export const principalRouter = Router();
 
 const PRINCIPAL = requireRole('PRINCIPAL');
 
+// Resetting a user's password is sensitive — even though only the
+// principal can call it, a compromised account could otherwise loop
+// it to lock the entire school out. 20/hr is well above any real
+// onboarding rush. Declared up here so the route handler below can
+// reference it (limiter declared inline next to inventory works
+// because that handler appears AFTER its declaration).
+const resetPasswordLimiter = rateLimit({
+  windowMs: 60 * 60_000,
+  limit: 20,
+  keyGenerator: (req: any) => `pw-reset:${req.user?.id ?? req.ip}`,
+  validate: { keyGeneratorIpFallback: false },
+  standardHeaders: 'draft-7',
+  legacyHeaders: false,
+  message: { ok: false, error: 'Password-reset limit reached (20/hour). Try again later.' },
+});
+
 // ─── Connected Users (students + staff) — for the Settings → Users screen ──
 
 // GET /api/principal/users/list — server-paginated. Used by Settings → Users
@@ -123,7 +139,7 @@ function generateTempPassword(): string {
   return out.slice(0, 8) + '7Aa';
 }
 
-principalRouter.post('/users/reset-password', requireAuth, PRINCIPAL, async (req, res) => {
+principalRouter.post('/users/reset-password', resetPasswordLimiter, requireAuth, PRINCIPAL, async (req, res) => {
   try {
     const { userId } = requireBody<{ userId: string }>(req, ['userId']);
 
