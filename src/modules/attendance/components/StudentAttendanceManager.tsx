@@ -159,8 +159,16 @@ export const StudentAttendanceManager: React.FC<Props> = ({ onBack }) => {
   const classOptions = useMemo(() => {
     const map = new Map<string, Set<string>>();
     for (const s of students) {
-      if (!map.has(s.className)) map.set(s.className, new Set());
-      map.get(s.className)!.add(s.section);
+      // Skip students who have no class+section allotment for the
+      // active year. Without this guard their empty-string class
+      // bucket renders as a phantom blank "Class" option above the
+      // real ones.
+      const cls = (s.className ?? '').trim();
+      const sec = (s.section ?? '').trim();
+      if (!cls || !sec) continue;
+      if (s.isActive === false) continue;
+      if (!map.has(cls)) map.set(cls, new Set());
+      map.get(cls)!.add(sec);
     }
     return Array.from(map.entries())
       .map(([name, sections]) => ({ name, sections: [...sections].sort() }))
