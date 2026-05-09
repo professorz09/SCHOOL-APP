@@ -98,6 +98,10 @@ export interface StudentFeeProfile {
   name: string;
   className: string;
   admissionNo: string;
+  /** Optional — surfaces in the FeeLedger list card so the principal
+   *  can disambiguate students who share a name. Falls back to '' when
+   *  not yet hydrated from the slim list (older callers). */
+  rollNo?: string;
   academicYearId: string;
   installments: FeeInstallment[];
   isRte: boolean;
@@ -522,10 +526,13 @@ export const feeService = {
     return _installmentsCache.filter(i => i.studentId === studentId);
   },
 
-  getStudentFeeProfile(studentId: string, name: string, className: string, admissionNo: string, isRte = false): StudentFeeProfile {
+  getStudentFeeProfile(
+    studentId: string, name: string, className: string,
+    admissionNo: string, isRte = false, rollNo = '',
+  ): StudentFeeProfile {
     const insts = this.getStudentInstallments(studentId);
     return {
-      studentId, name, className, admissionNo,
+      studentId, name, className, admissionNo, rollNo,
       academicYearId: insts[0]?.academicYearId ?? '',
       installments: insts,
       isRte,

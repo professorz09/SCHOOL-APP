@@ -82,9 +82,20 @@ interface ComplaintRow {
   created_at: string;
   resolved_at: string | null;
   is_anonymous: boolean | null;
+  // Embedded join — present when the complaint is tied to a student
+  // (parent + student submissions both set complaints.student_id on
+  // insert). Surfaces roll_no + admission_no so the principal can
+  // disambiguate between two students with the same name. Supabase
+  // returns embeddings as either an object (single FK) or an array
+  // depending on schema introspection — we accept both shapes and
+  // normalise inside rowToComplaint.
+  students?:
+    | { roll_no: string | null; admission_no: string | null }
+    | Array<{ roll_no: string | null; admission_no: string | null }>
+    | null;
 }
 
-const COMPLAINT_FIELDS = 'id, from_role, from_name, from_class, subject, description, status, response, created_at, resolved_at, is_anonymous';
+const COMPLAINT_FIELDS = 'id, from_role, from_name, from_class, subject, description, status, response, created_at, resolved_at, is_anonymous, students(roll_no, admission_no)';
 
 function rowToComplaint(r: ComplaintRow): Complaint {
   // Map legacy DB values onto the canonical status set used by the UI.
@@ -104,11 +115,15 @@ function rowToComplaint(r: ComplaintRow): Complaint {
   // can never accidentally render the name. The DB still keeps from_name /
   // from_class populated for audit, but they don't leave the service.
   const anon = r.is_anonymous === true;
+  // Identity-bearing fields (name, class, roll, admission) all hard-
+  // masked when the row is anonymous so a stale UI can never leak them.
   return {
     id: r.id,
     from: (r.from_role as Complaint['from']) ?? 'STUDENT',
     fromName: anon ? 'Anonymous' : (r.from_name ?? ''),
     fromClass: anon ? undefined : (r.from_class ?? undefined),
+    fromRollNo: anon ? undefined : (Array.isArray(r.students) ? r.students[0]?.roll_no : r.students?.roll_no) ?? undefined,
+    fromAdmissionNo: anon ? undefined : (Array.isArray(r.students) ? r.students[0]?.admission_no : r.students?.admission_no) ?? undefined,
     subject: r.subject,
     description: r.description ?? '',
     status,
@@ -175,6 +190,9 @@ function rowToApproval(r: ApprovalRow): Approval {
   const nv = r.new_value ?? {};
   const fromName = (nv['fromName'] as string) ?? '';
   const fromRole = (nv['fromRole'] as string) ?? '';
+  const fromClass = (nv['fromClass'] as string) ?? '';
+  const fromRollNo = (nv['fromRollNo'] as string) ?? '';
+  const fromAdmissionNo = (nv['fromAdmissionNo'] as string) ?? '';
   const subject = (nv['subject'] as string) ?? '';
   const description = (nv['description'] as string) ?? '';
   const rejectionReason = (nv['rejectionReason'] as string) ?? null;
@@ -189,6 +207,9 @@ function rowToApproval(r: ApprovalRow): Approval {
     type,
     fromName,
     fromRole,
+    fromClass: fromClass || undefined,
+    fromRollNo: fromRollNo || undefined,
+    fromAdmissionNo: fromAdmissionNo || undefined,
     subject,
     description,
     status: (r.status as Approval['status']) ?? 'PENDING',

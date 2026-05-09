@@ -245,7 +245,7 @@ export const FeeLedger: React.FC<Props> = ({ onBack }) => {
     if (stuList.items.length === 0 && stuList.loading) return;
     const profiles = stuList.items.map(s =>
       feeService.getStudentFeeProfile(
-        s.id, s.name, `${s.className}-${s.section}`, s.admissionNo, s.isRte,
+        s.id, s.name, `${s.className}-${s.section}`, s.admissionNo, s.isRte, s.rollNo,
       ),
     );
     setStudents(profiles);
@@ -309,7 +309,7 @@ export const FeeLedger: React.FC<Props> = ({ onBack }) => {
         // Re-derive the selected profile from the now-populated cache.
         const fresh = feeService.getStudentFeeProfile(
           selected.studentId, selected.name, selected.className,
-          selected.admissionNo, selected.isRte,
+          selected.admissionNo, selected.isRte, selected.rollNo,
         );
         setSelected(fresh);
         setStudents(prev => prev.map(s => s.studentId === fresh.studentId ? fresh : s));
@@ -432,7 +432,7 @@ export const FeeLedger: React.FC<Props> = ({ onBack }) => {
       );
       const updated = feeService.getStudentFeeProfile(
         selected.studentId, selected.name, selected.className,
-        selected.admissionNo, selected.isRte,
+        selected.admissionNo, selected.isRte, selected.rollNo,
       );
       updateStudent(updated);
       await reloadYearGroups(selected.studentId);
@@ -491,7 +491,7 @@ export const FeeLedger: React.FC<Props> = ({ onBack }) => {
       );
       const updated = feeService.getStudentFeeProfile(
         selected.studentId, selected.name, selected.className,
-        selected.admissionNo, selected.isRte,
+        selected.admissionNo, selected.isRte, selected.rollNo,
       );
       updateStudent(updated);
       setPaymentTransactions(feeService.getPaymentHistory()); void refreshAggregate();
@@ -569,7 +569,7 @@ export const FeeLedger: React.FC<Props> = ({ onBack }) => {
       if (selected) {
         const updated = feeService.getStudentFeeProfile(
           selected.studentId, selected.name, selected.className,
-          selected.admissionNo, selected.isRte,
+          selected.admissionNo, selected.isRte, selected.rollNo,
         );
         updateStudent(updated);
         setSelected(updated);
@@ -662,7 +662,7 @@ export const FeeLedger: React.FC<Props> = ({ onBack }) => {
       // Refresh local profile from cache (already re-pulled by recordPayment).
       const updated = feeService.getStudentFeeProfile(
         selected.studentId, selected.name, selected.className,
-        selected.admissionNo, selected.isRte,
+        selected.admissionNo, selected.isRte, selected.rollNo,
       );
       updateStudent(updated);
       // Read back the canonical payment row written by the RPC. Receipt
@@ -2229,7 +2229,10 @@ export const FeeLedger: React.FC<Props> = ({ onBack }) => {
                     <div className="flex items-center gap-1.5 mb-0.5">
                       <span className="font-extrabold text-slate-900 text-sm lg:text-base truncate">{student.name}</span>
                     </div>
-                    <div className="text-[10px] lg:text-[11px] font-bold text-slate-400">{student.className} · {student.admissionNo}</div>
+                    <div className="text-[10px] lg:text-[11px] font-bold text-slate-400">
+                      {student.className} · {student.admissionNo}
+                      {student.rollNo && <> · Roll #{student.rollNo}</>}
+                    </div>
 
                     {/* Mini progress bar */}
                     <div className="mt-2 h-1 lg:h-1.5 bg-slate-100 rounded-full overflow-hidden">

@@ -131,6 +131,8 @@ export const ComplaintsManager: React.FC<Props> = ({ onBack }) => {
             <div className="text-[10px] font-bold text-slate-400">
               From: <span className="text-slate-700">{selected.fromName}</span>
               {selected.fromClass && <> · <span className="text-slate-700">{selected.fromClass}</span></>}
+              {selected.fromRollNo && <> · Roll <span className="text-slate-700">#{selected.fromRollNo}</span></>}
+              {selected.fromAdmissionNo && <> · <span className="text-slate-700">{selected.fromAdmissionNo}</span></>}
             </div>
           )}
           <div className="text-[10px] font-bold text-slate-400">Filed: {selected.createdAt}</div>
@@ -243,7 +245,13 @@ export const ComplaintsManager: React.FC<Props> = ({ onBack }) => {
               <div className="font-extrabold text-slate-900 text-sm">{c.subject}</div>
               <div className="text-[11px] font-bold text-slate-400 mt-1 line-clamp-2">{c.description}</div>
               <div className={`text-[10px] font-black mt-1.5 ${c.isAnonymous ? 'text-violet-600 italic' : 'text-slate-500'}`}>
-                {c.isAnonymous ? 'Anonymous' : c.fromName}
+                {c.isAnonymous ? 'Anonymous' : (
+                  <>
+                    {c.fromName}
+                    {c.fromClass && <> · {c.fromClass}</>}
+                    {c.fromRollNo && <> · Roll #{c.fromRollNo}</>}
+                  </>
+                )}
               </div>
             </button>
           ))}

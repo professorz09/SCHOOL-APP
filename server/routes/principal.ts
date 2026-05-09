@@ -327,7 +327,7 @@ principalRouter.post('/complaint/resolve', requireAuth, PRINCIPAL, async (req, r
   try {
     const body = requireBody<{ complaintId: string; response: string }>(req, ['complaintId', 'response']);
 
-    const COMPLAINT_FIELDS = 'id, from_role, from_name, from_class, subject, description, status, response, created_at, resolved_at';
+    const COMPLAINT_FIELDS = 'id, from_role, from_name, from_class, subject, description, status, response, created_at, resolved_at, is_anonymous, students(roll_no, admission_no)';
     const { data, error } = await adminDb.from('complaints')
       .update({ status: 'RESOLVED', response: body.response, resolved_at: new Date().toISOString() })
       .eq('id', body.complaintId).eq('school_id', req.user.school_id!)
@@ -344,7 +344,7 @@ principalRouter.post('/complaint/reject', requireAuth, PRINCIPAL, async (req, re
   try {
     const body = requireBody<{ complaintId: string; reason: string }>(req, ['complaintId', 'reason']);
 
-    const COMPLAINT_FIELDS = 'id, from_role, from_name, from_class, subject, description, status, response, created_at, resolved_at';
+    const COMPLAINT_FIELDS = 'id, from_role, from_name, from_class, subject, description, status, response, created_at, resolved_at, is_anonymous, students(roll_no, admission_no)';
     const { data, error } = await adminDb.from('complaints')
       .update({ status: 'REJECTED', response: body.reason, resolved_at: new Date().toISOString() })
       .eq('id', body.complaintId).eq('school_id', req.user.school_id!)
@@ -621,8 +621,36 @@ principalRouter.post('/leave/submit', requireAuth, async (req, res) => {
       }
     }
 
+    // Pack roll + admission + class into new_value so the principal's
+    // approvals queue can disambiguate two students with the same name.
+    // Source from the students row + the active student_academic_records
+    // for the current year.
+    let fromClass = '';
+    let fromRollNo = '';
+    let fromAdmissionNo = '';
+    {
+      const { data: stuData } = await adminDb.from('students')
+        .select('roll_no, admission_no, student_academic_records(class_name, section, academic_year_id)')
+        .eq('id', body.studentId).maybeSingle();
+      type Row = {
+        roll_no: string | null; admission_no: string | null;
+        student_academic_records: Array<{
+          class_name: string | null; section: string | null;
+          academic_year_id: string;
+        }> | null;
+      };
+      const stu = stuData as Row | null;
+      fromRollNo = stu?.roll_no ?? '';
+      fromAdmissionNo = stu?.admission_no ?? '';
+      const ar = (stu?.student_academic_records ?? [])[0];
+      if (ar?.class_name && ar?.section) {
+        fromClass = `${ar.class_name}-${ar.section}`;
+      }
+    }
+
     const newValue = {
       fromName: body.studentName, fromRole: 'STUDENT', subject: body.title,
+      fromClass, fromRollNo, fromAdmissionNo,
       description: `From: ${body.fromDate}  To: ${body.toDate}\nReason: ${body.reason}`,
       fromDate: body.fromDate, toDate: body.toDate, reason: body.reason,
     };

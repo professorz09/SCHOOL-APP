@@ -10,6 +10,11 @@ export interface Complaint {
   from: ComplaintFrom;
   fromName: string;
   fromClass?: string;
+  /** Student roll + admission no, when the complaint is tied to a
+   *  student row (parent / student submissions). Helps the principal
+   *  distinguish between two students with the same name. */
+  fromRollNo?: string;
+  fromAdmissionNo?: string;
   subject: string;
   description: string;
   status: ComplaintStatus;
@@ -49,6 +54,12 @@ export interface Approval {
   type: ApprovalType;
   fromName: string;
   fromRole: string;
+  /** Class+section / roll / admission — packed into approvals.new_value
+   *  on insert by /leave/submit. Helps the principal disambiguate two
+   *  students with the same name in the queue. */
+  fromClass?: string;
+  fromRollNo?: string;
+  fromAdmissionNo?: string;
   subject: string;
   description: string;
   status: ApprovalStatus;

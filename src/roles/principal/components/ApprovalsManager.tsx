@@ -82,7 +82,11 @@ export const ApprovalsManager: React.FC<Props> = ({ onBack }) => {
           <h3 className="font-black text-slate-900 text-base">{selected.subject}</h3>
           <p className="text-sm font-bold text-slate-500 whitespace-pre-line">{selected.description}</p>
           <div className="text-[10px] font-bold text-slate-400">
-            From: <span className="text-slate-700 font-black">{selected.fromName}</span> ({selected.fromRole})
+            From: <span className="text-slate-700 font-black">{selected.fromName}</span>
+            {selected.fromClass && <> · <span className="text-slate-700">{selected.fromClass}</span></>}
+            {selected.fromRollNo && <> · Roll <span className="text-slate-700">#{selected.fromRollNo}</span></>}
+            {selected.fromAdmissionNo && <> · <span className="text-slate-700">{selected.fromAdmissionNo}</span></>}
+            {' '}({selected.fromRole})
           </div>
           <div className="text-[10px] font-bold text-slate-400">Filed: {selected.createdAt}</div>
           {selected.attachmentUrl && (
@@ -175,7 +179,12 @@ export const ApprovalsManager: React.FC<Props> = ({ onBack }) => {
                 <span className="text-[10px] font-bold text-slate-400 shrink-0">{ap.createdAt}</span>
               </div>
               <div className="font-extrabold text-slate-900 text-sm">{ap.subject}</div>
-              <div className="text-[10px] font-bold text-slate-500 mt-1">{ap.fromName} · {ap.fromRole}</div>
+              <div className="text-[10px] font-bold text-slate-500 mt-1">
+                {ap.fromName}
+                {ap.fromClass && <> · {ap.fromClass}</>}
+                {ap.fromRollNo && <> · Roll #{ap.fromRollNo}</>}
+                {' '}· {ap.fromRole}
+              </div>
               {ap.rejectionReason && (
                 <div className="mt-1.5 text-[10px] font-bold text-rose-600 truncate">
                   Reason: {ap.rejectionReason}
