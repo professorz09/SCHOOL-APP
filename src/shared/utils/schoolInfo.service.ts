@@ -1,6 +1,7 @@
 import { supabase } from '@/lib/supabase';
 import { useAuthStore } from '@/store/authStore';
 import { logAudit } from '@/lib/audit';
+import { swrGet, swrInvalidate, swrSet } from '@/shared/utils/swr';
 
 export interface SchoolInfo {
   name: string;
@@ -88,18 +89,43 @@ function getSchoolId(): string | null {
   return useAuthStore.getState().session?.schoolId ?? null;
 }
 
+// School info (name / address / branding / logo path) almost never
+// changes during a session. Cache it in localStorage with a 1-hour
+// TTL so principal toolbars / printable templates / student
+// dashboard headers don't all hit Supabase on every mount.
+//
+// Mutations (save / saveBranding) explicitly invalidate the cache
+// so the next read sees fresh data immediately instead of waiting
+// for the TTL.
+const SCHOOL_INFO_TTL_MS = 60 * 60_000; // 1 hour
+const schoolInfoKey = (schoolId: string) => `school-info:${schoolId}`;
+
 export const schoolInfoService = {
   async get(): Promise<SchoolInfo> {
     const schoolId = getSchoolId();
     if (!schoolId) return { ...EMPTY };
-    const { data, error } = await supabase
-      .from('schools')
-      .select(FIELDS)
-      .eq('id', schoolId)
-      .maybeSingle();
-    if (error) throw new Error(error.message);
-    if (!data) return { ...EMPTY };
-    return rowToInfo(data as SchoolRow);
+    return swrGet<SchoolInfo>(
+      schoolInfoKey(schoolId),
+      async () => {
+        const { data, error } = await supabase
+          .from('schools')
+          .select(FIELDS)
+          .eq('id', schoolId)
+          .maybeSingle();
+        if (error) throw new Error(error.message);
+        if (!data) return { ...EMPTY };
+        return rowToInfo(data as SchoolRow);
+      },
+      { ttlMs: SCHOOL_INFO_TTL_MS, storage: 'localStorage' },
+    );
+  },
+
+  /** Drop the cached school info so the next get() pulls fresh.
+   *  Call after any mutation that changes school metadata. */
+  invalidate(): void {
+    const schoolId = getSchoolId();
+    if (!schoolId) return;
+    swrInvalidate(schoolInfoKey(schoolId), 'localStorage');
   },
 
   async save(input: Partial<SchoolInfo>): Promise<SchoolInfo> {
@@ -143,7 +169,12 @@ export const schoolInfoService = {
       .single();
     if (error) throw new Error(error.message);
     await logAudit('update_school_info', 'school', schoolId, patch);
-    return rowToInfo(data as SchoolRow);
+    const fresh = rowToInfo(data as SchoolRow);
+    // Push the new value into the SWR cache so any concurrent
+    // .get() callers (toolbars / printable templates) see the
+    // change instantly rather than waiting for the 1h TTL.
+    swrSet(schoolInfoKey(schoolId), fresh, { ttlMs: SCHOOL_INFO_TTL_MS, storage: 'localStorage' });
+    return fresh;
   },
 
   async uploadPaymentQr(file: File): Promise<string> {
