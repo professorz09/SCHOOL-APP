@@ -66,7 +66,7 @@ const splitClass = (cf: string) => {
 };
 
 const flattenAr = (
-  s: { id: string; name: string; admission_no: string; phone: string | null; rte: boolean | null;
+  s: { id: string; name: string; admission_no: string; phone: string | null; is_rte: boolean | null;
        father_name: string | null; father_phone: string | null; mother_name: string | null;
        mother_phone: string | null; address: string | null; admission_date: string | null;
        student_academic_records?: Array<{
@@ -83,7 +83,7 @@ const flattenAr = (
     name: s.name,
     admission_no: s.admission_no,
     class: ar ? `${ar.class_name ?? ''}-${ar.section ?? ''}` : '',
-    rte: s.rte ? 'YES' : 'NO',
+    rte: s.is_rte ? 'YES' : 'NO',
     phone: s.phone ?? '',
     father_name: s.father_name ?? '',
     father_phone: s.father_phone ?? '',
@@ -130,7 +130,7 @@ export const ReportsSection: React.FC<Props> = ({
           run: async () => {
             if (!schoolId || !yearId) fail('Pick an academic year first');
             const { data, error } = await supabase.from('students')
-              .select('id, name, admission_no, phone, rte, father_name, father_phone, mother_name, mother_phone, address, admission_date, student_academic_records(class_name, section, total_fee, paid_fee, attendance_percent, academic_year_id)')
+              .select('id, name, admission_no, phone, is_rte, father_name, father_phone, mother_name, mother_phone, address, admission_date, student_academic_records(class_name, section, total_fee, paid_fee, attendance_percent, academic_year_id)')
               .eq('school_id', schoolId).eq('is_active', true).order('name');
             if (error) throw new Error(error.message);
             const rows = ((data ?? []) as any[]).map(s => flattenAr(s, yearId));
@@ -142,8 +142,8 @@ export const ReportsSection: React.FC<Props> = ({
           run: async () => {
             if (!yearId) fail('Pick an academic year first');
             const { data, error } = await supabase.from('students')
-              .select('id, name, admission_no, phone, rte, father_name, father_phone, mother_name, mother_phone, address, admission_date, student_academic_records(class_name, section, total_fee, paid_fee, attendance_percent, academic_year_id)')
-              .eq('school_id', schoolId).eq('rte', true).eq('is_active', true).order('name');
+              .select('id, name, admission_no, phone, is_rte, father_name, father_phone, mother_name, mother_phone, address, admission_date, student_academic_records(class_name, section, total_fee, paid_fee, attendance_percent, academic_year_id)')
+              .eq('school_id', schoolId).eq('is_rte', true).eq('is_active', true).order('name');
             if (error) throw new Error(error.message);
             const rows = ((data ?? []) as any[]).map(s => flattenAr(s, yearId));
             return { rows, headers: STUDENT_HEADERS, filenamePrefix: `rte-students_${yearName}` };
@@ -155,7 +155,7 @@ export const ReportsSection: React.FC<Props> = ({
             const cutoff = new Date(); cutoff.setDate(cutoff.getDate() - 30);
             const cutoffIso = cutoff.toISOString().slice(0, 10);
             const { data, error } = await supabase.from('students')
-              .select('id, name, admission_no, phone, rte, father_name, father_phone, mother_name, mother_phone, address, admission_date, student_academic_records(class_name, section, total_fee, paid_fee, attendance_percent, academic_year_id)')
+              .select('id, name, admission_no, phone, is_rte, father_name, father_phone, mother_name, mother_phone, address, admission_date, student_academic_records(class_name, section, total_fee, paid_fee, attendance_percent, academic_year_id)')
               .eq('school_id', schoolId).gte('admission_date', cutoffIso)
               .order('admission_date', { ascending: false });
             if (error) throw new Error(error.message);
@@ -167,13 +167,13 @@ export const ReportsSection: React.FC<Props> = ({
           id: 'students_tc', label: 'TC Students', desc: 'Students with a TC issued (left school)',
           run: async () => {
             const { data, error } = await supabase.from('students')
-              .select('id, name, admission_no, phone, rte, father_name, father_phone, mother_name, mother_phone, address, admission_date, tc_number, is_active, student_academic_records(class_name, section, total_fee, paid_fee, attendance_percent, academic_year_id)')
-              .eq('school_id', schoolId).neq('tc_number', '').order('name');
+              .select('id, name, admission_no, phone, is_rte, father_name, father_phone, mother_name, mother_phone, address, admission_date, tc_number, is_active, status, student_academic_records(class_name, section, total_fee, paid_fee, attendance_percent, academic_year_id)')
+              .eq('school_id', schoolId).eq('status', 'TC_ISSUED').order('name');
             if (error) throw new Error(error.message);
             const rows = ((data ?? []) as any[]).map(s => ({
               tc_number: s.tc_number ?? '',
               ...flattenAr(s, yearId),
-              status: s.is_active ? 'ACTIVE' : 'LEFT',
+              status: s.status ?? '',
             }));
             return { rows, headers: ['tc_number', ...STUDENT_HEADERS, 'status'], filenamePrefix: 'tc-students' };
           },
@@ -182,7 +182,7 @@ export const ReportsSection: React.FC<Props> = ({
           id: 'students_inactive', label: 'Inactive Students', desc: 'Dropped out / withdrawn / TC issued',
           run: async () => {
             const { data, error } = await supabase.from('students')
-              .select('id, name, admission_no, phone, rte, father_name, father_phone, mother_name, mother_phone, address, admission_date, student_academic_records(class_name, section, total_fee, paid_fee, attendance_percent, academic_year_id)')
+              .select('id, name, admission_no, phone, is_rte, father_name, father_phone, mother_name, mother_phone, address, admission_date, student_academic_records(class_name, section, total_fee, paid_fee, attendance_percent, academic_year_id)')
               .eq('school_id', schoolId).eq('is_active', false).order('name');
             if (error) throw new Error(error.message);
             const rows = ((data ?? []) as any[]).map(s => flattenAr(s, yearId));
@@ -198,7 +198,7 @@ export const ReportsSection: React.FC<Props> = ({
             if (!classFilter) fail('Choose a class from the filter above');
             const { className, section } = splitClass(classFilter);
             const { data, error } = await supabase.from('students')
-              .select('id, name, admission_no, phone, rte, father_name, father_phone, mother_name, mother_phone, address, admission_date, student_academic_records!inner(class_name, section, total_fee, paid_fee, attendance_percent, academic_year_id)')
+              .select('id, name, admission_no, phone, is_rte, father_name, father_phone, mother_name, mother_phone, address, admission_date, student_academic_records!inner(class_name, section, total_fee, paid_fee, attendance_percent, academic_year_id)')
               .eq('school_id', schoolId).eq('is_active', true)
               .eq('student_academic_records.academic_year_id', yearId)
               .eq('student_academic_records.class_name', className!)
@@ -214,7 +214,7 @@ export const ReportsSection: React.FC<Props> = ({
           run: async () => {
             const m = new Date().getMonth() + 1;
             const { data, error } = await supabase.from('students')
-              .select('id, name, admission_no, phone, dob, rte, father_name, father_phone, mother_name, mother_phone, address, admission_date, student_academic_records(class_name, section, total_fee, paid_fee, attendance_percent, academic_year_id)')
+              .select('id, name, admission_no, phone, dob, is_rte, father_name, father_phone, mother_name, mother_phone, address, admission_date, student_academic_records(class_name, section, total_fee, paid_fee, attendance_percent, academic_year_id)')
               .eq('school_id', schoolId).eq('is_active', true).not('dob', 'is', null);
             if (error) throw new Error(error.message);
             // Filter month client-side because Supabase doesn't expose
@@ -237,12 +237,12 @@ export const ReportsSection: React.FC<Props> = ({
           run: async () => {
             if (!yearId) fail('Pick an academic year first');
             const { data, error } = await supabase.from('student_academic_records')
-              .select('total_fee, paid_fee, attendance_percent, students!inner(name, admission_no, phone, rte, father_name, father_phone, mother_name, mother_phone, address, admission_date, school_id, is_active), class_name, section, academic_year_id')
+              .select('total_fee, paid_fee, attendance_percent, students!inner(name, admission_no, phone, is_rte, father_name, father_phone, mother_name, mother_phone, address, admission_date, school_id, is_active), class_name, section, academic_year_id')
               .eq('academic_year_id', yearId);
             if (error) throw new Error(error.message);
             type Row = { total_fee: number|null; paid_fee: number|null; attendance_percent: number|null;
               class_name: string|null; section: string|null;
-              students: { name: string; admission_no: string; phone: string|null; rte: boolean|null;
+              students: { name: string; admission_no: string; phone: string|null; is_rte: boolean|null;
                 father_name: string|null; father_phone: string|null; mother_name: string|null;
                 mother_phone: string|null; address: string|null; admission_date: string|null;
                 school_id: string; is_active: boolean } };
@@ -318,16 +318,21 @@ export const ReportsSection: React.FC<Props> = ({
           id: 'fees_discounts', label: 'Discounts Report', desc: 'Write-offs / discounts in active year', needsYear: true,
           run: async () => {
             if (!yearId) fail('Pick an academic year first');
+            // fee_write_offs has no direct academic_year_id; we reach
+            // it via the parent fee_installments row, then through
+            // students for the friendly name.
             const { data, error } = await supabase.from('fee_write_offs')
-              .select('amount, reason, created_at, students!inner(name, admission_no, school_id), fee_installments(month, due_date)')
-              .eq('academic_year_id', yearId).order('created_at', { ascending: false });
+              .select('amount, reason, created_at, fee_installments!inner(month, due_date, academic_year_id, students!inner(name, admission_no, school_id))')
+              .eq('school_id', schoolId)
+              .eq('fee_installments.academic_year_id', yearId)
+              .order('created_at', { ascending: false });
             if (error) throw new Error(error.message);
             const rows = ((data ?? []) as any[])
-              .filter(r => r.students?.school_id === schoolId)
+              .filter(r => r.fee_installments?.students?.school_id === schoolId)
               .map(r => ({
                 date: r.created_at?.slice(0, 10) ?? '',
-                student: r.students?.name ?? '',
-                admission_no: r.students?.admission_no ?? '',
+                student: r.fee_installments?.students?.name ?? '',
+                admission_no: r.fee_installments?.students?.admission_no ?? '',
                 month: r.fee_installments?.month ?? '',
                 amount: Number(r.amount ?? 0),
                 reason: r.reason ?? '',
@@ -509,9 +514,12 @@ export const ReportsSection: React.FC<Props> = ({
             if (e1) throw new Error(e1.message);
             const ids = ((rec ?? []) as any[]).map(r => r.id);
             if (ids.length === 0) return { rows: [], headers: ['name','admission_no','class','date'], filenamePrefix: 'absent-today' };
+            // attendance_student_details FK column is `attendance_id`,
+            // not `attendance_record_id`. The post-Phase-6 schema also
+            // has a `status` column ('present' | 'absent' | 'holiday' | 'half').
             const { data, error } = await supabase.from('attendance_student_details')
-              .select('students!inner(name, admission_no, school_id), attendance_records!inner(date, class_name, section, school_id)')
-              .in('attendance_record_id', ids)
+              .select('students!inner(name, admission_no, school_id), attendance_records!inner(date, class_name, section, school_id), status, is_present')
+              .in('attendance_id', ids)
               .or('is_present.eq.false,status.eq.absent');
             if (error) throw new Error(error.message);
             const rows = ((data ?? []) as any[])

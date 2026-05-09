@@ -392,27 +392,46 @@ export const AnalyticsManager: React.FC<Props> = ({ onBack }) => {
           </button>
         </div>
 
-        {/* Range picker + presets */}
-        <div className="flex flex-wrap items-end gap-3">
-          <div>
-            <label className="text-[9px] font-black uppercase tracking-widest text-slate-400 mb-1 block">From</label>
-            <input type="date" value={from} onChange={e => { setUserTouchedRange(true); setFrom(e.target.value); }}
-              className="border border-slate-200 bg-slate-50 rounded-xl px-3 py-2 text-xs font-bold text-slate-800 focus:outline-none focus:border-blue-400"/>
+        {/* Range picker + presets — compact on mobile (date pickers
+            on one row, presets on the next) so the sticky header
+            doesn't eat half the viewport. */}
+        <div className="space-y-2 lg:space-y-3">
+          <div className="grid grid-cols-2 gap-2 lg:grid-cols-[auto_auto_1fr] lg:gap-3 lg:items-end">
+            <label className="block">
+              <span className="text-[9px] font-black uppercase tracking-widest text-slate-400 mb-1 block">From</span>
+              <input type="date" value={from} onChange={e => { setUserTouchedRange(true); setFrom(e.target.value); }}
+                className="w-full border border-slate-200 bg-slate-50 rounded-xl px-3 py-2 text-xs font-bold text-slate-800 focus:outline-none focus:border-blue-400"/>
+            </label>
+            <label className="block">
+              <span className="text-[9px] font-black uppercase tracking-widest text-slate-400 mb-1 block">To</span>
+              <input type="date" value={to} onChange={e => { setUserTouchedRange(true); setTo(e.target.value); }}
+                className="w-full border border-slate-200 bg-slate-50 rounded-xl px-3 py-2 text-xs font-bold text-slate-800 focus:outline-none focus:border-blue-400"/>
+            </label>
+            <div className="hidden lg:flex gap-1.5 col-span-1">
+              {([
+                { id: 'TODAY', label: 'Today' },
+                { id: 'M1',    label: 'Month' },
+                { id: 'M3',    label: '3 mo' },
+                { id: 'YEAR',  label: 'Year' },
+              ] as const).map(p => (
+                <button key={p.id} onClick={() => setPreset(p.id)}
+                  className="px-3 py-2 text-[10px] font-black uppercase tracking-wide border border-slate-200 bg-slate-50 text-slate-600 rounded-xl hover:border-blue-300 hover:text-blue-700 transition-colors">
+                  {p.label}
+                </button>
+              ))}
+            </div>
           </div>
-          <div>
-            <label className="text-[9px] font-black uppercase tracking-widest text-slate-400 mb-1 block">To</label>
-            <input type="date" value={to} onChange={e => { setUserTouchedRange(true); setTo(e.target.value); }}
-              className="border border-slate-200 bg-slate-50 rounded-xl px-3 py-2 text-xs font-bold text-slate-800 focus:outline-none focus:border-blue-400"/>
-          </div>
-          <div className="flex gap-1.5">
+          {/* Mobile-only preset row — narrower chips so all 4 fit on
+              even small viewports without wrapping. */}
+          <div className="flex gap-1.5 lg:hidden">
             {([
               { id: 'TODAY', label: 'Today' },
-              { id: 'M1',    label: 'This month' },
-              { id: 'M3',    label: '3 months' },
+              { id: 'M1',    label: 'Month' },
+              { id: 'M3',    label: '3 mo' },
               { id: 'YEAR',  label: 'Year' },
             ] as const).map(p => (
               <button key={p.id} onClick={() => setPreset(p.id)}
-                className="px-3 py-2 text-[10px] font-black uppercase tracking-wide border border-slate-200 bg-slate-50 text-slate-600 rounded-xl hover:border-blue-300 hover:text-blue-700 transition-colors">
+                className="flex-1 py-1.5 text-[10px] font-black uppercase tracking-wide border border-slate-200 bg-slate-50 text-slate-600 rounded-lg active:bg-blue-50 active:border-blue-300 active:text-blue-700 transition-colors">
                 {p.label}
               </button>
             ))}
@@ -421,19 +440,6 @@ export const AnalyticsManager: React.FC<Props> = ({ onBack }) => {
       </div>
 
       <div className="flex-1 overflow-y-auto p-4 lg:p-6 space-y-5 lg:space-y-7 lg:max-w-6xl lg:mx-auto lg:w-full">
-
-        <ReportsSection
-          runReport={runReport}
-          reportBusy={reportBusy}
-          schoolId={session?.schoolId ?? ''}
-          yearId={currentYear?.id ?? ''}
-          yearName={currentYear?.name ?? ''}
-          rangeFrom={from}
-          rangeTo={to}
-          classFilter={classFilter}
-          setClassFilter={setClassFilter}
-          classOptions={data?.classes ?? []}
-        />
 
         {loading ? (
           <div className="flex flex-col items-center py-24 text-slate-400">
@@ -597,6 +603,23 @@ export const AnalyticsManager: React.FC<Props> = ({ onBack }) => {
             </div>
           </>
         )}
+
+        {/* Reports & Downloads pinned at the bottom of the dashboard.
+            Sits below the KPI tiles + charts so the live numbers paint
+            first and the (lighter, on-demand) reports section never
+            blocks the visual hierarchy. */}
+        <ReportsSection
+          runReport={runReport}
+          reportBusy={reportBusy}
+          schoolId={session?.schoolId ?? ''}
+          yearId={currentYear?.id ?? ''}
+          yearName={currentYear?.name ?? ''}
+          rangeFrom={from}
+          rangeTo={to}
+          classFilter={classFilter}
+          setClassFilter={setClassFilter}
+          classOptions={data?.classes ?? []}
+        />
       </div>
     </div>
   );
