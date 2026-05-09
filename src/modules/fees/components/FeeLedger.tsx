@@ -70,6 +70,17 @@ const STATUS_BAR: Record<FeeStatus, string> = {
   WAIVED: 'bg-slate-300', WRITTEN_OFF: 'bg-slate-300',
   CANCELLED: 'bg-slate-300',
 };
+// Border-color twin of STATUS_BAR — used on the installment card's
+// 2px left edge accent (border classes need border-* not bg-* in
+// Tailwind v4).
+const STATUS_BORDER: Record<FeeStatus, string> = {
+  PAID: 'border-emerald-500', PARTIAL: 'border-amber-400', PARTIAL_DUE: 'border-rose-500',
+  UPCOMING: 'border-slate-200', DUE: 'border-rose-500',
+  UNPAID: 'border-slate-200', OVERDUE: 'border-rose-500',
+  WAIVED: 'border-slate-200', WRITTEN_OFF: 'border-slate-200',
+  CANCELLED: 'border-slate-200',
+};
+const STATUS_BORDER_FALLBACK = 'border-slate-200';
 const STATUS_ICON = (s: FeeStatus) => {
   if (s === 'PAID')                              return <CheckCircle2 size={11} className="text-emerald-500" />;
   if (s === 'PARTIAL')                           return <AlertTriangle size={11} className="text-amber-500" />;
@@ -1159,26 +1170,19 @@ export const FeeLedger: React.FC<Props> = ({ onBack }) => {
                   <div className="space-y-4">
                   {realInsts.length > 0 && (
                   <div>
-                    <div className="flex items-center justify-between mb-3 px-1">
-                      <div className="flex items-center gap-2">
-                        <span className="w-1 h-3.5 bg-blue-500 rounded-full" />
-                        <span className="text-[11px] font-black text-slate-700 uppercase tracking-wider">Payable</span>
-                        <span className="text-[10px] font-black text-slate-400 bg-slate-100 px-1.5 py-0.5 rounded-md">{realInsts.length}</span>
-                      </div>
-                    </div>
-                    {/* Branch list — single vertical rail on the left
-                        drops out of the year card; each installment is a
-                        flat card offset to the right of the rail with a
-                        short horizontal connector. Mirrors the user's
-                        sketch (year on top, rail down the left side,
-                        installment branches). */}
-                    <div className="relative pl-5 lg:pl-6 mt-2 space-y-1.5">
-                      {/* The rail itself — 2px slate line */}
-                      <div className="absolute left-2 lg:left-2.5 top-0 bottom-2 w-px bg-slate-200" />
+                    {/* Installments are visually attached to their year
+                        card via a small left indent (pl-3) and a
+                        no-top-margin gap. The earlier "PAYABLE" header
+                        and the timeline rail/dots have been dropped —
+                        the year card immediately above already carries
+                        the count + label, so the rail was redundant. */}
+                    <div className="pl-3 mt-1.5 space-y-1.5">
                       {realInsts.map(inst => {
                           const due = inst.amount - inst.paidAmount - inst.writeOffAmount;
                           const receipt = feeService.getPaymentRecordByInstallmentId(inst.id);
                           const stripe = STATUS_BAR[inst.status] ?? STATUS_BAR_FALLBACK;
+                          const stripeBorder = STATUS_BORDER[inst.status] ?? STATUS_BORDER_FALLBACK;
+                          void stripe; // eslint: kept for potential future inline use
                           const isActionable = due > 0
                             && inst.status !== 'PAID' && inst.status !== 'WAIVED'
                             && inst.status !== 'WRITTEN_OFF' && inst.status !== 'CANCELLED';
@@ -1200,11 +1204,11 @@ export const FeeLedger: React.FC<Props> = ({ onBack }) => {
                               : 'bg-slate-100 text-slate-500';
                           return (
                             <div key={inst.id} className="relative">
-                              {/* Connector dot on the rail — small status-
-                                  coloured circle that branches the card
-                                  off the year's vertical line. */}
-                              <div className={`absolute -left-[14px] lg:-left-[14px] top-3.5 w-2.5 h-2.5 rounded-full ring-2 ring-slate-50 ${stripe}`} />
-                              <div className="rounded-xl py-2.5 px-3.5 bg-white border border-slate-100 hover:border-slate-200 transition-colors">
+                              <div className={`rounded-xl py-2.5 px-3.5 bg-white border border-slate-100 hover:border-slate-200 transition-colors border-l-2 ${stripeBorder}`}>
+                                {/* Status accent kept as a subtle 2px
+                                    left edge so the row's state still
+                                    reads at a glance — without the
+                                    full timeline dots+rail. */}
                                 {/* Top row — month + amount + status pill in
                                     a single line. Pill on the right replaces
                                     the awkward inline "✓ Paid" text. */}
