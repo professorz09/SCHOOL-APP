@@ -1,7 +1,6 @@
-// FeeCollectionsHub — the principal's bottom-nav landing for Fees.
+// FeeCollectionsHub — opens from the dashboard's green "Total Collection ·
+// This Month" card. Two tabs sit on top of the at-a-glance KPIs:
 //
-// Three tabs sit on top of one financial pulse view:
-//   • Overview    — KPIs + this-month inflow + status mix.
 //   • Collections — the existing per-student FeeLedger (delegated).
 //   • Dues        — defaulter list with Call / WhatsApp reminder shortcuts.
 //
@@ -19,7 +18,7 @@ import { useUIStore } from '@/store/uiStore';
 
 interface Props { onBack: () => void; }
 
-type Tab = 'OVERVIEW' | 'COLLECTIONS' | 'DUES';
+type Tab = 'COLLECTIONS' | 'DUES';
 
 const fmtINR = (n: number): string => {
   if (n >= 10_000_000) return `₹${(n / 10_000_000).toFixed(1)}Cr`;
@@ -27,8 +26,6 @@ const fmtINR = (n: number): string => {
   if (n >= 1_000)      return `₹${(n / 1_000).toFixed(0)}k`;
   return `₹${n.toLocaleString('en-IN')}`;
 };
-
-const fmtFullINR = (n: number) => `₹${n.toLocaleString('en-IN')}`;
 
 const istToday = () => new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Kolkata' });
 
@@ -41,7 +38,7 @@ interface DueItem extends StudentListItem {
 }
 
 export const FeeCollectionsHub: React.FC<Props> = ({ onBack }) => {
-  const [tab, setTab] = useState<Tab>('OVERVIEW');
+  const [tab, setTab] = useState<Tab>('DUES');
   const [loading, setLoading] = useState(true);
   const [aggregate, setAggregate] = useState<Awaited<ReturnType<typeof feeService.getSchoolAggregate>> | null>(null);
   const [todayInflow, setTodayInflow] = useState(0);
@@ -69,8 +66,8 @@ export const FeeCollectionsHub: React.FC<Props> = ({ onBack }) => {
 
   if (tab === 'COLLECTIONS') {
     // Reuse the existing per-student schedule + history viewer untouched.
-    // Back button takes the user back to the hub, not to the dashboard.
-    return <FeeLedger onBack={() => setTab('OVERVIEW')} />;
+    // Back button returns to the hub's default Dues tab, not the dashboard.
+    return <FeeLedger onBack={() => setTab('DUES')} />;
   }
 
   const pendingTotal = aggregate?.totalParentDue ?? 0;
@@ -106,7 +103,7 @@ export const FeeCollectionsHub: React.FC<Props> = ({ onBack }) => {
 
         {/* Tabs */}
         <div className="flex gap-2">
-          {(['OVERVIEW', 'COLLECTIONS', 'DUES'] as const).map(t => (
+          {(['DUES', 'COLLECTIONS'] as const).map(t => (
             <button key={t} onClick={() => setTab(t)}
               className={`flex-1 py-2.5 rounded-full text-[11px] font-black uppercase tracking-widest transition-colors ${
                 tab === t ? 'bg-violet-600 text-white shadow-sm' : 'bg-white text-slate-500 border border-slate-200'
@@ -116,8 +113,7 @@ export const FeeCollectionsHub: React.FC<Props> = ({ onBack }) => {
           ))}
         </div>
 
-        {tab === 'OVERVIEW' && <OverviewPanel aggregate={aggregate} todayInflow={todayInflow} loading={loading} />}
-        {tab === 'DUES'     && <DuesPanel />}
+        {tab === 'DUES' && <DuesPanel />}
       </div>
     </div>
   );
@@ -152,69 +148,6 @@ const KpiCard: React.FC<{
   );
 };
 
-// ───────────────────────────────────────────────────────────────────────────
-// Overview tab
-// ───────────────────────────────────────────────────────────────────────────
-
-const OverviewPanel: React.FC<{
-  aggregate: Awaited<ReturnType<typeof feeService.getSchoolAggregate>> | null;
-  todayInflow: number;
-  loading: boolean;
-}> = ({ aggregate, todayInflow, loading }) => {
-  if (loading || !aggregate) {
-    return <div className="flex justify-center py-8"><Loader2 className="animate-spin text-slate-400" /></div>;
-  }
-  const collected = aggregate.totalCollected;
-  const due       = aggregate.totalParentDue;
-  const total     = collected + due;
-  const collectedPct = total > 0 ? Math.round((collected / total) * 100) : 0;
-
-  return (
-    <div className="space-y-3">
-      <div className="bg-white rounded-2xl border border-slate-100 shadow-sm p-4">
-        <p className="text-[10px] font-black uppercase tracking-widest text-slate-400 mb-3">Year-to-Date</p>
-        <div className="grid grid-cols-2 gap-3 text-center">
-          <Cell label="Collected" value={fmtFullINR(collected)} tone="emerald" />
-          <Cell label="Outstanding" value={fmtFullINR(due)} tone="rose" />
-        </div>
-        <div className="mt-4">
-          <div className="flex items-center justify-between text-[10px] font-black uppercase tracking-widest mb-1.5">
-            <span className="text-slate-500">Collection Rate</span>
-            <span className="text-emerald-600">{collectedPct}%</span>
-          </div>
-          <div className="bg-slate-100 h-2 rounded-full overflow-hidden">
-            <div className="bg-emerald-500 h-full rounded-full" style={{ width: `${collectedPct}%` }} />
-          </div>
-        </div>
-      </div>
-
-      <div className="bg-white rounded-2xl border border-slate-100 shadow-sm p-4">
-        <p className="text-[10px] font-black uppercase tracking-widest text-slate-400 mb-3">Student Status</p>
-        <div className="grid grid-cols-3 gap-2 text-center">
-          <Cell label="Cleared" value={String(aggregate.clearedCount)} tone="emerald" />
-          <Cell label="Partial" value={String(aggregate.dueCount)} tone="amber" />
-          <Cell label="Pending" value={String(aggregate.pendingCount)} tone="rose" />
-        </div>
-      </div>
-
-      <div className="bg-white rounded-2xl border border-slate-100 shadow-sm p-4">
-        <p className="text-[10px] font-black uppercase tracking-widest text-slate-400 mb-3">Today</p>
-        <p className="text-2xl font-black text-blue-700 tabular-nums">{fmtFullINR(todayInflow)}</p>
-        <p className="text-[10px] font-bold text-slate-400 mt-0.5">collected so far</p>
-      </div>
-    </div>
-  );
-};
-
-const Cell: React.FC<{ label: string; value: string; tone: 'emerald' | 'rose' | 'amber' }> = ({ label, value, tone }) => {
-  const colour = tone === 'emerald' ? 'text-emerald-600' : tone === 'rose' ? 'text-rose-600' : 'text-amber-600';
-  return (
-    <div className="bg-slate-50 rounded-xl p-3">
-      <p className={`font-black text-base tabular-nums ${colour}`}>{value}</p>
-      <p className="text-[9px] font-black uppercase tracking-widest text-slate-400 mt-0.5">{label}</p>
-    </div>
-  );
-};
 
 // ───────────────────────────────────────────────────────────────────────────
 // Dues tab

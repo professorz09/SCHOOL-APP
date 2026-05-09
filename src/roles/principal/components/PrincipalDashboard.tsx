@@ -262,7 +262,7 @@ export const PrincipalDashboard: React.FC<Props> = ({ onNavigate }) => {
           Mirrors the reference: big monthly collection number, "Dues Collected"
           progress bar (year-to-date paid vs billed), and a faint ₹ watermark
           for visual texture. */}
-      <button onClick={() => onNavigate('FEE_LEDGER')}
+      <button onClick={() => onNavigate('FEE_COLLECTIONS')}
         className="relative bg-gradient-to-br from-emerald-500 via-emerald-600 to-emerald-700 rounded-3xl p-5 lg:p-7 shadow-xl shadow-emerald-200/40 text-white overflow-hidden text-left active:scale-[0.99] transition-transform">
         {/* Decorative ₹ watermark + soft wave */}
         <span aria-hidden className="pointer-events-none absolute -top-6 -right-2 text-[160px] lg:text-[220px] font-black text-white/10 leading-none select-none tracking-tighter">₹</span>
