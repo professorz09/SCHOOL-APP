@@ -478,37 +478,37 @@ export const AssetsManager: React.FC<Props> = ({ onBack }) => {
                   {group.items.map(item => {
                     const meta = CATEGORY_META[item.category];
                     const Icon = meta.icon;
-                    // Map category-soft tint → matching solid border accent.
-                    const borderAccent =
-                      item.category === 'BOOK'          ? 'border-l-amber-400'   :
-                      item.category === 'LAB_EQUIPMENT' ? 'border-l-emerald-400' :
-                                                          'border-l-slate-300';
                     return (
                       <div key={item.id}
-                        className={`bg-white rounded-xl border border-slate-200 border-l-4 ${borderAccent} px-3.5 py-3 lg:px-4 lg:py-3.5 hover:border-slate-300 transition-colors`}>
-                        <div className="flex items-start gap-3">
-                          <div className={`w-9 h-9 lg:w-10 lg:h-10 rounded-lg flex items-center justify-center shrink-0 ${meta.soft} ${meta.tint}`}>
-                            <Icon size={16} />
+                        className="bg-white rounded-2xl border border-slate-100 shadow-sm hover:border-slate-200 hover:shadow-md transition-all px-4 py-4 lg:px-5 lg:py-5">
+                        <div className="flex items-start gap-3.5">
+                          {/* Larger soft-tinted tile carries the category
+                              colour (amber for books, emerald for lab,
+                              slate for other). Earlier the same colour
+                              was duplicated as a left-edge stripe AND on
+                              the icon tile — visually noisy. Just the
+                              tile now. */}
+                          <div className={`w-12 h-12 lg:w-14 lg:h-14 rounded-2xl flex items-center justify-center shrink-0 ${meta.soft} ${meta.tint}`}>
+                            <Icon size={20} />
                           </div>
                           <div className="flex-1 min-w-0">
                             <div className="flex items-center justify-between gap-2">
-                              <span className="font-black text-slate-900 text-sm lg:text-[15px] truncate">{item.title}</span>
-                              <span className="text-xs lg:text-sm font-black text-slate-700 tabular-nums shrink-0">
+                              <span className="font-black text-slate-900 text-base lg:text-lg truncate">{item.title}</span>
+                              <span className="text-sm lg:text-base font-black text-slate-700 tabular-nums shrink-0 bg-slate-50 px-2 py-0.5 rounded-md">
                                 ×{item.quantity}
                               </span>
                             </div>
-                            <div className="flex items-center gap-2 mt-1 text-[10px] font-bold text-slate-500">
-                              <span className="uppercase tracking-widest">{meta.label}</span>
+                            <div className="flex items-center gap-2 mt-1.5 text-[11px] font-black text-slate-500">
+                              <span className={`uppercase tracking-widest px-2 py-0.5 rounded-full ${meta.soft} ${meta.tint}`}>
+                                {meta.label}
+                              </span>
                               {item.description && (
-                                <>
-                                  <span className="text-slate-300">·</span>
-                                  <span className="truncate">{item.description}</span>
-                                </>
+                                <span className="truncate text-slate-500 font-bold normal-case tracking-normal">{item.description}</span>
                               )}
                             </div>
                             {item.note && (
-                              <p className="text-[10px] font-bold text-slate-500 mt-1.5 px-2 py-1 rounded bg-slate-50 border border-slate-100">
-                                <span className="text-slate-400 uppercase tracking-widest mr-1">Note:</span>{item.note}
+                              <p className="text-[11px] font-bold text-slate-600 mt-2.5 px-3 py-2 rounded-lg bg-slate-50 border border-slate-100 leading-relaxed">
+                                <span className="text-slate-400 uppercase tracking-widest mr-1.5 text-[9px]">Note:</span>{item.note}
                               </p>
                             )}
                           </div>
@@ -516,13 +516,13 @@ export const AssetsManager: React.FC<Props> = ({ onBack }) => {
                             <div className="flex items-center gap-1 shrink-0">
                               <button onClick={() => setEditing({ ...item })}
                                 title="Edit"
-                                className="p-1.5 text-blue-600 bg-blue-50 hover:bg-blue-100 rounded-md transition-colors">
-                                <Pencil size={12} />
+                                className="p-2 text-blue-600 bg-blue-50 hover:bg-blue-100 rounded-lg transition-colors">
+                                <Pencil size={14} />
                               </button>
                               <button onClick={() => setDeleting(item)}
                                 title="Delete"
-                                className="p-1.5 text-rose-500 bg-rose-50 hover:bg-rose-100 rounded-md transition-colors">
-                                <Trash2 size={12} />
+                                className="p-2 text-rose-500 bg-rose-50 hover:bg-rose-100 rounded-lg transition-colors">
+                                <Trash2 size={14} />
                               </button>
                             </div>
                           )}
