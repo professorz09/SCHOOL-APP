@@ -37,12 +37,27 @@ export const PrincipalDashboard: React.FC<Props> = ({ onNavigate }) => {
   const ayKey = `${activeYear?.id ?? 'none'}|${academicYears.length}`;
 
   const [openHub, setOpenHub] = useState<Hub['key'] | null>(null);
-  const [stats, setStats] = useState({
+  // Stats are heavy to compute (8 parallel queries including a full
+  // student + staff scan). To avoid the "₹0 / 0%" flash on cold loads:
+  //   • Hydrate from sessionStorage so a refresh shows the last value
+  //     instantly while the fresh fetch runs (stale-while-revalidate).
+  //   • Track `statsLoading` so the hero card shows a skeleton on the
+  //     very first ever load (no cache yet).
+  const STATS_CACHE_KEY = 'principal:dashboard:stats';
+  const initialStats = (() => {
+    if (typeof sessionStorage === 'undefined') return null;
+    try {
+      const raw = sessionStorage.getItem(STATS_CACHE_KEY);
+      return raw ? JSON.parse(raw) : null;
+    } catch { return null; }
+  })();
+  const [stats, setStats] = useState(initialStats ?? {
     totalStudents: 0, avgAttendance: 0, paidFees: 0, totalFees: 0,
     monthlyCollection: 0,
     totalStaff: 0, openComplaints: 0, pendingApprovals: 0,
     studentsWithDues: 0, pendingLeaves: 0, lowAttendanceStudents: 0, unsubmittedAttendanceDays: 0,
   });
+  const [statsLoading, setStatsLoading] = useState(!initialStats);
   const [vehicles, setVehicles] = useState<{
     id: string; vehicleNo: string; routeName: string; driverName: string;
     isLive: boolean; lastPing: string | null; currentStop: string;
@@ -96,7 +111,7 @@ export const PrincipalDashboard: React.FC<Props> = ({ onNavigate }) => {
       // attRes still pulled to keep alert / stats parity, but the
       // "Live Classes" UI is gone so we no longer build the row list.
       void attRes;
-      setStats({
+      const next = {
         totalStudents: students.length,
         // Guard each numeric field against undefined / NaN — students newly
         // admitted with no attendance/fee data otherwise propagated NaN to
@@ -114,7 +129,12 @@ export const PrincipalDashboard: React.FC<Props> = ({ onNavigate }) => {
         pendingLeaves: dashStats?.pendingLeaves ?? 0,
         lowAttendanceStudents: dashStats?.lowAttendanceStudents ?? 0,
         unsubmittedAttendanceDays: dashStats?.unsubmittedAttendanceDays ?? 0,
-      });
+      };
+      setStats(next);
+      setStatsLoading(false);
+      // Stash so the next mount paints instantly with the last seen
+      // numbers while the fresh fetch is still in flight.
+      try { sessionStorage.setItem(STATS_CACHE_KEY, JSON.stringify(next)); } catch { /* quota / private mode */ }
       // Vehicles shown on dashboard = currently LIVE only (driver has the
       // tracking app open and pinged GPS in the last 5 min). The earlier
       // logic showed every is_active vehicle which clutters the screen
@@ -179,6 +199,10 @@ export const PrincipalDashboard: React.FC<Props> = ({ onNavigate }) => {
         // showing stale data rather than silently rendering empty cards.
         // eslint-disable-next-line no-console
         console.error('[principal-dashboard] load failed:', e);
+        // Ensure the skeleton clears even on failure — otherwise the
+        // hero card stays in "loading…" forever and the principal
+        // thinks the app is hung.
+        setStatsLoading(false);
       }
     };
     load();
@@ -279,18 +303,30 @@ export const PrincipalDashboard: React.FC<Props> = ({ onNavigate }) => {
                 hint, now lives in Settings → Academic Year so the hero
                 stays focused on the headline metric. */}
           </div>
-          <div className="text-4xl lg:text-6xl font-black tabular-nums mt-1 mb-4 lg:mb-5">
-            ₹{stats.monthlyCollection.toLocaleString('en-IN')}
+          <div className="text-4xl lg:text-6xl font-black tabular-nums mt-1 mb-4 lg:mb-5 min-h-[2.5rem] lg:min-h-[3.75rem]">
+            {statsLoading ? (
+              // Pulsing placeholder so the user knows numbers are
+              // loading — much clearer than the previous flash of
+              // "₹0" which read as real data.
+              <span className="inline-block bg-white/25 rounded-lg h-9 lg:h-12 w-48 lg:w-64 animate-pulse" />
+            ) : (
+              <>₹{stats.monthlyCollection.toLocaleString('en-IN')}</>
+            )}
           </div>
 
           {/* Progress bar — Dues Collected (year-to-date paid / billed) */}
           <div className="bg-emerald-800/40 rounded-2xl p-3 lg:p-4">
             <div className="flex items-center justify-between mb-2">
               <span className="text-[11px] lg:text-sm font-black text-white">Dues Collected</span>
-              <span className="text-[11px] lg:text-sm font-black text-white tabular-nums">{feePercent}%</span>
+              <span className="text-[11px] lg:text-sm font-black text-white tabular-nums">
+                {statsLoading ? (
+                  <span className="inline-block bg-white/25 rounded h-3 w-10 align-middle animate-pulse" />
+                ) : `${feePercent}%`}
+              </span>
             </div>
             <div className="h-2 lg:h-2.5 bg-emerald-900/40 rounded-full overflow-hidden">
-              <div className="h-full bg-white rounded-full transition-all" style={{ width: `${feePercent}%` }} />
+              <div className={`h-full bg-white rounded-full transition-all ${statsLoading ? 'animate-pulse' : ''}`}
+                style={{ width: statsLoading ? '30%' : `${feePercent}%` }} />
             </div>
           </div>
         </div>
