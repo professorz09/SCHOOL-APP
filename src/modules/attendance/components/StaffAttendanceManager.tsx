@@ -308,26 +308,47 @@ export const StaffAttendanceManager: React.FC<Props> = ({ onBack, startTab = 'OV
             </div>
           </div>
 
-          {/* Date strip */}
-          <div ref={stripRef} className="flex border-t border-slate-100 overflow-x-auto hide-scrollbar -mx-4 lg:-mx-6 px-4 lg:px-6 pt-1.5 lg:pt-2 pb-1 lg:pb-2">
-            {dateStrip.map(d => {
-              const isSelected = selectedDate === d;
-              const today_flag = isToday(d);
-              return (
-                <button key={d}
-                  data-today={today_flag ? 'true' : 'false'}
-                  onClick={() => { loadDate(d); setSearch(''); }}
-                  className={`shrink-0 flex flex-col items-center mx-0.5 lg:mx-1 px-2.5 lg:px-3.5 py-1.5 lg:py-2 rounded-xl border-2 transition-colors ${
-                    isSelected
-                      ? today_flag ? 'bg-blue-600 border-blue-600 text-white' : 'bg-slate-800 border-slate-800 text-white'
-                      : today_flag ? 'border-blue-200 text-blue-600 bg-blue-50' : 'border-transparent text-slate-400 hover:text-slate-600'
-                  }`}>
-                  <span className="text-[9px] lg:text-[10px] font-black uppercase tracking-widest">{dayShort(d)}</span>
-                  <span className="text-base lg:text-lg font-black tabular-nums leading-none my-0.5">{dayNum(d)}</span>
-                  <span className="text-[8px] lg:text-[9px] font-bold uppercase tracking-wide opacity-75">{monthShort(d)}</span>
-                </button>
-              );
-            })}
+          {/* Date strip + "older" date picker. The strip shows the
+              last 14 days for the common "mark today / fix yesterday"
+              flow. For any date older than that, the picker on the
+              right jumps straight to it — lock rules apply
+              automatically (saved + not editor mode = softLocked, and
+              the server hard-rejects edits to is_locked rows). */}
+          <div className="flex items-center gap-2 border-t border-slate-100 -mx-4 lg:-mx-6 px-4 lg:px-6 pt-1.5 lg:pt-2 pb-1 lg:pb-2">
+            <div ref={stripRef} className="flex flex-1 overflow-x-auto hide-scrollbar">
+              {dateStrip.map(d => {
+                const isSelected = selectedDate === d;
+                const today_flag = isToday(d);
+                return (
+                  <button key={d}
+                    data-today={today_flag ? 'true' : 'false'}
+                    onClick={() => { loadDate(d); setSearch(''); }}
+                    className={`shrink-0 flex flex-col items-center mx-0.5 lg:mx-1 px-2.5 lg:px-3.5 py-1.5 lg:py-2 rounded-xl border-2 transition-colors ${
+                      isSelected
+                        ? today_flag ? 'bg-blue-600 border-blue-600 text-white' : 'bg-slate-800 border-slate-800 text-white'
+                        : today_flag ? 'border-blue-200 text-blue-600 bg-blue-50' : 'border-transparent text-slate-400 hover:text-slate-600'
+                    }`}>
+                    <span className="text-[9px] lg:text-[10px] font-black uppercase tracking-widest">{dayShort(d)}</span>
+                    <span className="text-base lg:text-lg font-black tabular-nums leading-none my-0.5">{dayNum(d)}</span>
+                    <span className="text-[8px] lg:text-[9px] font-bold uppercase tracking-wide opacity-75">{monthShort(d)}</span>
+                  </button>
+                );
+              })}
+            </div>
+            {/* Native date picker — simplest, mobile-friendly. Jumps
+                the grid to the picked date; if it's outside the strip,
+                lock rules still gate edits. Capped at today so a typo
+                can't put attendance into the future. */}
+            <label className="shrink-0 flex flex-col items-center justify-center w-12 lg:w-14 px-1 py-1.5 lg:py-2 rounded-xl border-2 border-dashed border-slate-200 text-slate-500 hover:border-blue-300 hover:text-blue-600 cursor-pointer transition-colors"
+              title="Pick any older date">
+              <input type="date" value={selectedDate}
+                max={today()}
+                onChange={e => { if (e.target.value) loadDate(e.target.value); setSearch(''); }}
+                className="absolute opacity-0 w-12 lg:w-14 h-14 cursor-pointer" />
+              <span className="text-[9px] lg:text-[10px] font-black uppercase tracking-widest pointer-events-none">Pick</span>
+              <span className="text-base lg:text-lg font-black leading-none my-0.5 pointer-events-none">📅</span>
+              <span className="text-[8px] lg:text-[9px] font-bold uppercase tracking-wide opacity-75 pointer-events-none">Date</span>
+            </label>
           </div>
 
         </div>
