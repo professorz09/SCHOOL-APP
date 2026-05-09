@@ -190,19 +190,38 @@ export const AssetsManager: React.FC<Props> = ({ onBack }) => {
     }
     setSubmitting(true);
     try {
-      await apiPrincipal.inventoryAdd({
+      const result = await apiPrincipal.inventoryAdd({
         title, category: form.category, quantity: form.quantity,
         description: form.description.trim() || undefined,
         note: form.note.trim() || undefined,
         addedOn: form.addedOn,
       });
+      // Diagnostic — earlier users reported "no error, no add" silent
+      // failures. Logging the server-returned id confirms the insert
+      // really happened; if it didn't, the catch path runs instead.
+      // eslint-disable-next-line no-console
+      console.log('[inventory/add] inserted:', result);
       showToast(`"${title}" added to inventory`);
       setForm(blankForm());
       setAddOpen(false);
+      // Optimistically prepend so the row appears before the round-
+      // trip to /inventory/list lands. If refresh() returns a fresher
+      // value, setItems will replace this with the canonical list.
+      const optimistic: InventoryItem = {
+        id: result.id, category: form.category, title,
+        description: form.description.trim() || '',
+        note: form.note.trim() || '',
+        quantity: form.quantity,
+        addedOn: form.addedOn || todayIso(),
+        createdAt: new Date().toISOString(),
+      };
+      setItems(prev => [optimistic, ...prev]);
       // Refresh both lists so the History tab is current the next time
       // the principal flips to it without waiting for the tab effect.
       await Promise.all([refresh(), refreshHistory()]);
     } catch (e) {
+      // eslint-disable-next-line no-console
+      console.error('[inventory/add] failed:', e);
       showToast(e instanceof Error ? e.message : 'Failed to add', 'error');
     } finally { setSubmitting(false); }
   };
@@ -520,7 +539,7 @@ export const AssetsManager: React.FC<Props> = ({ onBack }) => {
 
       {/* Add modal */}
       {addOpen && (
-        <div className="absolute inset-0 bg-slate-900/50 backdrop-blur-sm z-50 flex items-end">
+        <div className="fixed inset-0 bg-slate-900/50 backdrop-blur-sm z-50 flex items-end">
           <div className="w-full max-w-lg mx-auto bg-white rounded-t-3xl p-5 pb-7 animate-in slide-in-from-bottom-8 max-h-[90vh] overflow-y-auto space-y-3.5">
             <div className="flex items-center justify-between">
               <h3 className="font-black text-slate-900 text-lg">Add Inventory</h3>
@@ -592,7 +611,7 @@ export const AssetsManager: React.FC<Props> = ({ onBack }) => {
                 className="w-full border border-slate-200 bg-slate-50 rounded-xl px-4 py-2.5 font-bold text-sm outline-none focus:border-amber-500 resize-none" />
             </div>
 
-            <button onClick={handleAdd} disabled={submitting || !form.title.trim()}
+            <button type="button" onClick={handleAdd} disabled={submitting || !form.title.trim()}
               className="w-full flex items-center justify-center gap-2 bg-amber-500 text-white font-black text-sm uppercase tracking-widest py-3.5 rounded-2xl active:scale-95 transition-transform disabled:opacity-60">
               {submitting ? 'Adding…' : <><Plus size={16} /> Add to Inventory</>}
             </button>
@@ -602,7 +621,7 @@ export const AssetsManager: React.FC<Props> = ({ onBack }) => {
 
       {/* Edit modal — same layout, addedOn locked to keep timeline groups stable */}
       {editing && (
-        <div className="absolute inset-0 bg-slate-900/50 backdrop-blur-sm z-50 flex items-end">
+        <div className="fixed inset-0 bg-slate-900/50 backdrop-blur-sm z-50 flex items-end">
           <div className="w-full max-w-lg mx-auto bg-white rounded-t-3xl p-5 pb-7 animate-in slide-in-from-bottom-8 max-h-[90vh] overflow-y-auto space-y-3.5">
             <div className="flex items-center justify-between">
               <h3 className="font-black text-slate-900 text-lg">Edit Item</h3>
@@ -645,7 +664,7 @@ export const AssetsManager: React.FC<Props> = ({ onBack }) => {
 
       {/* Delete confirmation */}
       {deleting && (
-        <div className="absolute inset-0 bg-slate-900/60 backdrop-blur-sm z-50 flex items-center justify-center p-5">
+        <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-50 flex items-center justify-center p-5">
           <div className="w-full max-w-sm bg-white rounded-3xl p-5 animate-in zoom-in-95 duration-200 space-y-4">
             <div className="flex items-center gap-3">
               <div className="w-12 h-12 rounded-2xl bg-rose-100 flex items-center justify-center shrink-0">
