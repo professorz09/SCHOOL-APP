@@ -3,6 +3,7 @@ import { CheckCircle2, XCircle, Clock, IndianRupee, ChevronDown, ChevronUp, Hash
 import { feeService } from '@/modules/fees/fee.service';
 import type { FeePaymentUploadRecord, FeeUploadStatus } from '@/modules/fees/fees.types';
 import { useUIStore } from '@/store/uiStore';
+import { schoolInfoService } from '@/shared/utils/schoolInfo.service';
 
 const STATUS_BADGE: Record<FeeUploadStatus, string> = {
   PENDING:  'bg-amber-50 text-amber-700 border-amber-200',
@@ -59,9 +60,29 @@ export const FeePaymentSubmissionsQueue: React.FC<QueueProps> = ({
   const review = async (id: string, decision: 'APPROVED' | 'REJECTED') => {
     setBusyId(id);
     try {
-      const note = decision === 'REJECTED'
-        ? (window.prompt('Reason for rejection (optional):') ?? undefined)
-        : undefined;
+      let note: string | undefined;
+      if (decision === 'REJECTED') {
+        const reason = window.prompt('Reason for rejection (optional):') ?? '';
+        // Append school contact so the parent has a direct call/email
+        // path right inside the rejection note. Using a one-shot fetch
+        // here keeps the component simple — schools rarely change
+        // contact info mid-session.
+        try {
+          const info = await schoolInfoService.get();
+          const contactBits = [
+            info.phone ? `Call ${info.phone}` : '',
+            info.email ? `Email ${info.email}` : '',
+          ].filter(Boolean).join(' · ');
+          note = [
+            reason.trim(),
+            contactBits
+              ? `For clarification, contact the school: ${contactBits}`
+              : '',
+          ].filter(Boolean).join('\n\n') || undefined;
+        } catch {
+          note = reason.trim() || undefined;
+        }
+      }
       await feeService.reviewFeePaymentUpload(id, decision, note);
       showToast(`Submission ${decision.toLowerCase()}`, 'success');
       await reload();

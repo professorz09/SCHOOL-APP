@@ -1,3 +1,10 @@
+// Hydrate process.env from .env / .env.local BEFORE any other plugin
+// module loads. Done via a side-effect import (env-bootstrap.ts) because
+// ES module imports hoist — calling dotenv inline after the plugin
+// imports would run too late, after admin-api.ts had already cached
+// empty SUPABASE_URL constants at its module top-level.
+import './vite-plugins/env-bootstrap';
+
 import tailwindcss from '@tailwindcss/vite';
 import react from '@vitejs/plugin-react';
 import path from 'path';
@@ -7,6 +14,19 @@ import {apiServerPlugin} from './vite-plugins/api-server';
 
 export default defineConfig(({mode}) => {
   const env = loadEnv(mode, '.', '');
+  // Hydrate process.env from .env / .env.local so the API server (loaded
+  // lazily by vite-plugins/api-server.ts) can see Supabase + Gemini keys.
+  // Vite's loadEnv only returns the values for `define` substitution; the
+  // server side reads process.env directly. Without this, the API server
+  // boots with an empty SUPABASE_URL and the toast says "API server boot
+  // failed" the moment the principal hits any /api/* endpoint.
+  for (const k of [
+    'SUPABASE_URL', 'SUPABASE_ANON_KEY', 'SUPABASE_SERVICE_ROLE_KEY',
+    'SUPABASE_DB_PASSWORD', 'SUPABASE_DB_HOST',
+    'GEMINI_API_KEY', 'APP_URL', 'PORT',
+  ]) {
+    if (!process.env[k] && env[k]) process.env[k] = env[k];
+  }
   const supabaseUrl = process.env.SUPABASE_URL ?? env.SUPABASE_URL ?? '';
   const supabaseAnonKey = process.env.SUPABASE_ANON_KEY ?? env.SUPABASE_ANON_KEY ?? '';
   // GEMINI_API_KEY is intentionally NOT exposed to the client bundle. The

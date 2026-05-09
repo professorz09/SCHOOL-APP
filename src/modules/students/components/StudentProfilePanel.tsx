@@ -183,6 +183,16 @@ export const StudentProfilePanel: React.FC<Props> = ({ student, onBack, onStuden
   // Admission form print
   const [showAdmissionForm, setShowAdmissionForm] = useState(false);
   const [schoolInfo, setSchoolInfo] = useState<SchoolInfo | null>(null);
+  // Eager-load school info on mount so the INFO tab can show contact
+  // details without waiting for the Docs tab to trigger the fetch.
+  // Cheap: a single row from `schools`.
+  useEffect(() => {
+    let cancelled = false;
+    schoolInfoService.get()
+      .then(info => { if (!cancelled) setSchoolInfo(info); })
+      .catch(() => {});
+    return () => { cancelled = true; };
+  }, []);
 
   // ── Core load: only what the hero card needs (runs on student open) ─────────
   const loadCore = async (s: Student) => {
@@ -697,6 +707,33 @@ export const StudentProfilePanel: React.FC<Props> = ({ student, onBack, onStuden
           {/* ── INFO TAB ─────────────────────────────── */}
           {activeProfileTab === 'INFO' && (
             <>
+              {/* School contact card — surfaces office mobile / email so
+                  parents can reach the school directly from the student
+                  profile without digging through Settings. */}
+              {schoolInfo && (schoolInfo.phone || schoolInfo.email || schoolInfo.address) && (
+                <div className="bg-white rounded-2xl border border-slate-100 shadow-sm p-4">
+                  <p className="text-[10px] font-black uppercase tracking-widest text-slate-400 mb-2">School Contact</p>
+                  <div className="font-black text-slate-900 text-sm">{schoolInfo.name || '—'}</div>
+                  {schoolInfo.address && (
+                    <div className="text-[11px] font-bold text-slate-500 mt-1 leading-relaxed">{schoolInfo.address}</div>
+                  )}
+                  <div className="flex flex-wrap gap-2 mt-3">
+                    {schoolInfo.phone && (
+                      <a href={`tel:${schoolInfo.phone}`}
+                        className="flex items-center gap-1.5 px-3 py-1.5 bg-blue-50 text-blue-700 rounded-full text-[11px] font-black hover:bg-blue-100 active:scale-95 transition-transform">
+                        📞 {schoolInfo.phone}
+                      </a>
+                    )}
+                    {schoolInfo.email && (
+                      <a href={`mailto:${schoolInfo.email}`}
+                        className="flex items-center gap-1.5 px-3 py-1.5 bg-emerald-50 text-emerald-700 rounded-full text-[11px] font-black hover:bg-emerald-100 active:scale-95 transition-transform">
+                        ✉ {schoolInfo.email}
+                      </a>
+                    )}
+                  </div>
+                </div>
+              )}
+
               <div className="grid grid-cols-3 gap-2">
                 <div className="bg-white rounded-2xl border border-slate-100 shadow-sm p-3 flex flex-col items-center gap-1">
                   <Droplets size={16} className="text-rose-500" />
