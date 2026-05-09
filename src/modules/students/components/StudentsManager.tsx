@@ -98,6 +98,11 @@ export const StudentsManager: React.FC<Props> = ({ onBack, initialView }) => {
 const [mainView, setMainView] = useState<MainView>(initialView ?? 'CLASSES');
   const [subView, setSubView] = useState<SubView>('LIST');
   const [students, setStudents] = useState<Student[]>([]);
+  // Track whether the initial student fetch has completed. Without
+  // this, the class card briefly renders "0" (empty array) before
+  // the real count arrives ~1-2s later — which reads as a real
+  // "no students" state.
+  const [studentsLoading, setStudentsLoading] = useState(true);
   const [selected, setSelected] = useState<Student | null>(null);
   const [selectedClass, setSelectedClass] = useState<string | null>(null);
   const [selectedSection, setSelectedSection] = useState<string | null>(null);
@@ -162,9 +167,13 @@ const [mainView, setMainView] = useState<MainView>(initialView ?? 'CLASSES');
   const [tcModal, setTcModal] = useState<{ student: Student; tcNumber: string; reason: string } | null>(null);
 
   useEffect(() => {
+    setStudentsLoading(true);
     void studentService.getAll()
-      .then(setStudents)
-      .catch(e => showToast(e instanceof Error ? e.message : 'Failed to load students', 'error'));
+      .then(rows => { setStudents(rows); setStudentsLoading(false); })
+      .catch(e => {
+        showToast(e instanceof Error ? e.message : 'Failed to load students', 'error');
+        setStudentsLoading(false);
+      });
   }, [activeYear?.id]);
   useEffect(() => {
     if (!activeYear?.id) { setDbSections([]); return; }
@@ -1579,7 +1588,14 @@ const [mainView, setMainView] = useState<MainView>(initialView ?? 'CLASSES');
                     <span className="font-black text-slate-900 text-base leading-tight">{clsNum}</span>
                     <ChevronRight size={18} className="text-slate-300 mt-0.5" />
                   </div>
-                  <div className="text-3xl font-black text-indigo-600 leading-none mb-1">{count}</div>
+                  {studentsLoading ? (
+                    // Skeleton — pulsing block in the same footprint as the
+                    // count digit so the card doesn't reflow when real data
+                    // arrives.
+                    <div className="h-8 w-12 rounded-md bg-slate-200 animate-pulse mb-1" />
+                  ) : (
+                    <div className="text-3xl font-black text-indigo-600 leading-none mb-1">{count}</div>
+                  )}
                   <div className="text-[10px] font-black uppercase tracking-widest text-slate-400">
                     {numSections} section{numSections !== 1 ? 's' : ''}
                   </div>
