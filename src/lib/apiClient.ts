@@ -415,6 +415,8 @@ export const apiPrincipal = {
     post<any>('/principal/expense/update', body),
   expenseDelete: (id: string) =>
     post<{ id: string }>('/principal/expense/delete', { id }),
+  expenseVoid: (id: string, reason: string) =>
+    post<any>('/principal/expense/void', { id, reason }),
 
   // Approvals
   approvalApprove: (approvalId: string) =>

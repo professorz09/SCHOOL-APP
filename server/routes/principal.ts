@@ -361,10 +361,73 @@ principalRouter.post('/expense/update', requireAuth, PRINCIPAL, async (req, res)
   } catch (err) { fail(res, err); }
 });
 
+// POST /api/principal/expense/void
+//
+// Soft-cancels an expense without removing the row. Financial records
+// stay immutable on disk; the principal sees a "VOIDED" badge in the
+// list and the original line + a reason are preserved in the audit
+// log. Rules enforced server-side:
+//   • Caller must be the same school's principal (RLS + explicit eq).
+//   • Reason is mandatory (>= 3 chars) — UI also gates this, but the
+//     server is the last line of defence.
+//   • Void window: 7 days from the original `created_at`. Older rows
+//     are immutable — corrections must be done with a counter-entry.
+//   • Idempotent: re-voiding an already-voided row is a 409.
+principalRouter.post('/expense/void', requireAuth, PRINCIPAL, async (req, res) => {
+  try {
+    const { id, reason } = requireBody<{ id: string; reason: string }>(req, ['id', 'reason']);
+    const r = (reason ?? '').trim();
+    if (r.length < 3) throw new ApiError(400, 'Reason must be at least 3 characters');
+
+    const { data: existing, error: lookupErr } = await adminDb.from('expenses')
+      .select('id, school_id, voided_at, created_at, amount, category, description')
+      .eq('id', id).eq('school_id', req.user.school_id!).maybeSingle();
+    if (lookupErr) throw new ApiError(500, lookupErr.message);
+    if (!existing) throw new ApiError(404, 'Expense not found');
+    if (existing.voided_at) throw new ApiError(409, 'Expense is already voided');
+
+    // 7-day void window. After that, file a corrective counter-entry
+    // — never rewrite history.
+    const ageMs = Date.now() - new Date(existing.created_at).getTime();
+    if (ageMs > 7 * 24 * 60 * 60 * 1000) {
+      throw new ApiError(403, '7 din se purana expense void nahi ho sakta — naya correction entry banayein');
+    }
+
+    const { data, error } = await adminDb.from('expenses')
+      .update({ voided_at: new Date().toISOString(), voided_by: req.user.id, void_reason: r })
+      .eq('id', id).eq('school_id', req.user.school_id!)
+      .select('id, school_id, academic_year_id, category, description, amount, date, created_by, created_at, voided_at, voided_by, void_reason').single();
+    if (error) throw new ApiError(500, error.message);
+    ok(res, data);
+  } catch (err) { fail(res, err); }
+});
+
 // POST /api/principal/expense/delete
+//
+// Hard delete is allowed ONLY on the same calendar day the expense was
+// recorded. The reasoning: same-day rows are still effectively a draft —
+// no monthly report has consumed them yet, so removing a typo or a
+// duplicate keeps the books clean without an awkward "void" trail.
+// Anything older must use /expense/void which preserves the row.
 principalRouter.post('/expense/delete', requireAuth, PRINCIPAL, async (req, res) => {
   try {
     const { id } = requireBody<{ id: string }>(req, ['id']);
+    const { data: existing, error: lookupErr } = await adminDb.from('expenses')
+      .select('id, school_id, created_at, voided_at')
+      .eq('id', id).eq('school_id', req.user.school_id!).maybeSingle();
+    if (lookupErr) throw new ApiError(500, lookupErr.message);
+    if (!existing) throw new ApiError(404, 'Expense not found');
+    if (existing.voided_at) throw new ApiError(409, 'Voided rows cannot be deleted');
+
+    // Same-day check anchored to IST so a principal in India sees the
+    // same boundary the row's `date` field uses.
+    const istNow   = new Date(new Date().toLocaleString('en-US', { timeZone: 'Asia/Kolkata' }));
+    const istThen  = new Date(new Date(existing.created_at).toLocaleString('en-US', { timeZone: 'Asia/Kolkata' }));
+    const sameDay = istNow.toDateString() === istThen.toDateString();
+    if (!sameDay) {
+      throw new ApiError(403, 'Same-day delete only — purane expenses ko Void karein');
+    }
+
     const { error } = await adminDb.from('expenses')
       .delete().eq('id', id).eq('school_id', req.user.school_id!);
     if (error) throw new ApiError(500, error.message);

@@ -26,6 +26,12 @@ export interface Expense {
   amount: number;
   date: string;
   approvedBy: string;
+  /** When the row was created (server timestamp). Drives the same-day
+   *  delete window and the 7-day void window. */
+  createdAt?: string;
+  /** Soft-cancel marker. NULL = active row. */
+  voidedAt?: string | null;
+  voidReason?: string | null;
 }
 
 export interface Notice {

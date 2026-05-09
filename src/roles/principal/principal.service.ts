@@ -130,9 +130,11 @@ interface ExpenseRow {
   bill_url: string | null;
   created_by: string | null;
   created_at: string;
+  voided_at?: string | null;
+  void_reason?: string | null;
 }
 
-const EXPENSE_FIELDS = 'id, category, description, amount, date, bill_url, created_by, created_at';
+const EXPENSE_FIELDS = 'id, category, description, amount, date, bill_url, created_by, created_at, voided_at, void_reason';
 
 function rowToExpense(r: ExpenseRow, approvedByName?: string): Expense {
   return {
@@ -142,6 +144,9 @@ function rowToExpense(r: ExpenseRow, approvedByName?: string): Expense {
     amount: Number(r.amount),
     date: r.date,
     approvedBy: approvedByName ?? '',
+    createdAt: r.created_at,
+    voidedAt: r.voided_at ?? null,
+    voidReason: r.void_reason ?? null,
   };
 }
 
@@ -335,8 +340,19 @@ export const principalService = {
   },
 
   async deleteExpense(id: string): Promise<void> {
+    // Server hard-rejects deletes on rows older than the same calendar
+    // day (IST). Anything older must use voidExpense().
     await apiPrincipal.expenseDelete(id);
     await logAudit('expense_deleted', 'expense', id, {});
+  },
+
+  async voidExpense(id: string, reason: string): Promise<Expense> {
+    const r = (reason ?? '').trim();
+    if (r.length < 3) throw new Error('Reason must be at least 3 characters');
+    const raw = await apiPrincipal.expenseVoid(id, r);
+    await logAudit('expense_voided', 'expense', id, { reason: r });
+    const actor = getActor();
+    return rowToExpense(raw as ExpenseRow, actor?.name ?? '');
   },
 
   // ─── Approvals ────────────────────────────────────────────────────────────
