@@ -26,7 +26,7 @@ const DriverStudentsView = lazy(() => import('@/roles/driver/DriverStudentsView'
 const FeesView           = lazy(() => import('@/roles/student/components/FeesView').then(m => ({ default: m.FeesView })));
 const StudentNoticesView = lazy(() => import('@/modules/notices/components/StudentNoticesView').then(m => ({ default: m.StudentNoticesView })));
 const StudentsManager    = lazy(() => import('@/modules/students/components/StudentsManager').then(m => ({ default: m.StudentsManager })));
-const FeeLedger          = lazy(() => import('@/modules/fees/components/FeeLedger').then(m => ({ default: m.FeeLedger })));
+const FeeCollectionsHub   = lazy(() => import('@/modules/fees/components/FeeCollectionsHub').then(m => ({ default: m.FeeCollectionsHub })));
 const SchoolsManager     = lazy(() => import('@/roles/super-admin/components/SchoolsManager').then(m => ({ default: m.SchoolsManager })));
 const BillingManager     = lazy(() => import('@/roles/super-admin/components/BillingManager').then(m => ({ default: m.BillingManager })));
 const AttendanceManager  = lazy(() => import('@/modules/attendance/components/TeacherAttendanceManager').then(m => ({ default: m.AttendanceManager })));
@@ -233,7 +233,7 @@ export default function App() {
     if (tab === 'FEES'    && role === 'STUDENT')    return <FeesView           onBack={goHome} />;
     if (tab === 'NOTICES' && role === 'STUDENT')    return <StudentNoticesView onBack={goHome} />;
     if (tab === 'STUDENTS'    && role === 'PRINCIPAL') return <StudentsManager onBack={goHome} />;
-    if (tab === 'FEE_LEDGER'  && role === 'PRINCIPAL') return <ErrorBoundary label="Fee Ledger"><FeeLedger onBack={goHome} /></ErrorBoundary>;
+    if (tab === 'FEE_LEDGER'  && role === 'PRINCIPAL') return <ErrorBoundary label="Fee Collections"><FeeCollectionsHub onBack={goHome} /></ErrorBoundary>;
     if (tab === 'SCHOOLS'  && role === 'SUPER_ADMIN') return <SchoolsManager onBack={goHome} />;
     if (tab === 'BILLING'  && role === 'SUPER_ADMIN') return <BillingManager  onBack={goHome} />;
     if (tab === 'ATTENDANCE' && role === 'TEACHER') return <AttendanceManager  onBack={goHome} />;
