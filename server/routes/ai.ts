@@ -1,5 +1,6 @@
 import { Router } from 'express';
 import rateLimit from 'express-rate-limit';
+import { adminDb } from '../lib/db';
 import { ok, fail, ApiError, requireBody } from '../lib/helpers';
 import { requireAuth, requireRole } from '../middleware/auth';
 
@@ -52,6 +53,12 @@ aiRouter.post('/generate', aiPerMinuteLimiter, aiPerDayLimiter, requireAuth, req
     const body = requireBody<{
       prompt: string;
       images?: Array<{ mimeType: string; data: string }>;
+      // When the caller wants the generated content saved into the
+      // last-50-papers history (paper-generator flow). Counts against
+      // the school's monthly quota. Plain ad-hoc generations leave it
+      // unset so they don't burn the quota.
+      savePaper?: boolean;
+      paperRequest?: Record<string, unknown>;
     }>(req, ['prompt']);
     const key = (process.env.GEMINI_API_KEY ?? '').trim();
     if (!key || key === 'MY_GEMINI_API_KEY') {
@@ -75,12 +82,53 @@ aiRouter.post('/generate', aiPerMinuteLimiter, aiPerDayLimiter, requireAuth, req
       if (!img || typeof img.mimeType !== 'string' || typeof img.data !== 'string') {
         throw new ApiError(400, 'Each image needs mimeType and base64 data');
       }
-      if (!/^image\/(png|jpe?g|webp|heic|heif)$/i.test(img.mimeType)) {
-        throw new ApiError(415, `Unsupported image type: ${img.mimeType}`);
+      // Gemini officially supports png/jpeg/webp/heic/heif. Some
+      // Android cameras report "image/jpg" (no 'e') and "image/x-png"
+      // — normalise both and accept. Also strip any "; charset=…"
+      // suffix some browsers append when reading from clipboard.
+      const cleanedMime = img.mimeType.split(';')[0].trim().toLowerCase();
+      const normalised = cleanedMime
+        .replace(/^image\/jpg$/, 'image/jpeg')
+        .replace(/^image\/x-png$/, 'image/png');
+      if (!/^image\/(png|jpeg|webp|heic|heif)$/.test(normalised)) {
+        throw new ApiError(415, `Unsupported image type: ${img.mimeType} (use PNG / JPEG / WEBP / HEIC)`);
       }
+      img.mimeType = normalised;
       // Rough cap: ~6 MB raw → ~8 MB base64. Gemini max inline ≈ 7 MB.
       if (img.data.length > 8 * 1024 * 1024) {
         throw new ApiError(413, 'Image too large (max ~6 MB)');
+      }
+    }
+
+    // Per-school monthly quota — set by super-admin via
+    // schools.ai_papers_monthly_limit. 0 means unlimited.
+    // The count is taken from ai_paper_history rows for this school
+    // dated this calendar month. We only enforce the quota for the
+    // exam-paper flow (i.e. when the caller flagged this generation
+    // as a paper save) — ad-hoc /generate calls without the
+    // `savePaper` flag bypass the quota count but are still rate-
+    // limited by aiPerMinuteLimiter / aiPerDayLimiter.
+    const wantsSave = !!body.savePaper;
+    if (wantsSave && req.user.school_id) {
+      const { data: schoolRow } = await adminDb.from('schools')
+        .select('ai_papers_monthly_limit').eq('id', req.user.school_id).maybeSingle();
+      const monthlyLimit = (schoolRow as { ai_papers_monthly_limit: number } | null)?.ai_papers_monthly_limit ?? 50;
+      if (monthlyLimit > 0) {
+        // Anchor month boundary in IST so the cap resets when the
+        // school's day rolls over — not at UTC midnight.
+        const istMonthStart = new Date(
+          new Date().toLocaleString('en-US', { timeZone: 'Asia/Kolkata' }),
+        );
+        istMonthStart.setDate(1);
+        istMonthStart.setHours(0, 0, 0, 0);
+        const { count } = await adminDb.from('ai_paper_history')
+          .select('id', { count: 'exact', head: true })
+          .eq('school_id', req.user.school_id)
+          .gte('created_at', istMonthStart.toISOString());
+        if ((count ?? 0) >= monthlyLimit) {
+          throw new ApiError(429,
+            `This month's AI paper quota reached (${monthlyLimit}/month). Contact your school administrator.`);
+        }
       }
     }
 
@@ -117,6 +165,65 @@ aiRouter.post('/generate', aiPerMinuteLimiter, aiPerDayLimiter, requireAuth, req
     const text = json.candidates?.[0]?.content?.parts?.[0]?.text;
     if (!text) throw new ApiError(502, 'Gemini returned an empty response');
 
+    // Save to last-50 history when this was a paper generation. We
+    // store only the JSON content + the request; raw prompt size
+    // goes into prompt_chars for bookkeeping. The DB trigger trims
+    // anything beyond 50 per school automatically.
+    if (wantsSave && req.user.school_id) {
+      let parsed: unknown = text;
+      try { parsed = JSON.parse(text); } catch { /* keep raw text */ }
+      try {
+        await adminDb.from('ai_paper_history').insert({
+          school_id: req.user.school_id,
+          generated_by: req.user.id,
+          request_json: body.paperRequest ?? {},
+          paper_json: typeof parsed === 'string' ? { raw: parsed } : parsed,
+          prompt_chars: body.prompt.length,
+        });
+      } catch (e) {
+        // Save failure shouldn't fail the user-visible call — the
+        // paper already came back. Log and move on.
+        // eslint-disable-next-line no-console
+        console.warn('[ai] paper history save failed:', e);
+      }
+    }
+
     ok(res, { text });
+  } catch (err) { fail(res, err); }
+});
+
+// GET /api/ai/papers — list the last 50 generated papers for the
+// caller's school. Read-restricted to PRINCIPAL/TEACHER (RLS already
+// enforces school scoping; we add the role gate as defence).
+aiRouter.get('/papers', requireAuth, requireRole('TEACHER', 'PRINCIPAL'), async (req, res) => {
+  try {
+    if (!req.user.school_id) throw new ApiError(400, 'No school in session');
+    const { data, error } = await adminDb.from('ai_paper_history')
+      .select('id, generated_by, request_json, paper_json, created_at')
+      .eq('school_id', req.user.school_id)
+      .order('created_at', { ascending: false })
+      .limit(50);
+    if (error) throw new ApiError(500, error.message);
+    ok(res, data ?? []);
+  } catch (err) { fail(res, err); }
+});
+
+// GET /api/ai/quota — current month's usage + cap.
+aiRouter.get('/quota', requireAuth, requireRole('TEACHER', 'PRINCIPAL'), async (req, res) => {
+  try {
+    if (!req.user.school_id) throw new ApiError(400, 'No school in session');
+    const { data: schoolRow } = await adminDb.from('schools')
+      .select('ai_papers_monthly_limit').eq('id', req.user.school_id).maybeSingle();
+    const limit = (schoolRow as { ai_papers_monthly_limit: number } | null)?.ai_papers_monthly_limit ?? 50;
+    const istMonthStart = new Date(
+      new Date().toLocaleString('en-US', { timeZone: 'Asia/Kolkata' }),
+    );
+    istMonthStart.setDate(1);
+    istMonthStart.setHours(0, 0, 0, 0);
+    const { count } = await adminDb.from('ai_paper_history')
+      .select('id', { count: 'exact', head: true })
+      .eq('school_id', req.user.school_id)
+      .gte('created_at', istMonthStart.toISOString());
+    ok(res, { used: count ?? 0, limit, unlimited: limit === 0 });
   } catch (err) { fail(res, err); }
 });

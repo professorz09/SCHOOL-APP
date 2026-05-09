@@ -42,6 +42,8 @@ export const ExamPaperGeneratorView: React.FC<Props> = ({ onBack }) => {
     duration: 60,
     topics: '',
     difficulty: 'MEDIUM',
+    paperType: 'MIX',
+    language: 'ENGLISH',
     mcqCount: 0,
     shortCount: 0,
     longCount: 0,

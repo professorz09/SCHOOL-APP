@@ -93,6 +93,19 @@ export interface TeacherComplaint {
   response: string | null;
 }
 
+export type ExamPaperLanguage = 'ENGLISH' | 'HINDI' | 'BILINGUAL';
+
+/** Paper layout — three high-level options:
+ *   • MCQ_ONLY      — every question is multiple-choice
+ *   • SUBJECTIVE    — short + long answers only, no MCQs
+ *   • MIX           — balanced MCQ + Short + Long (default)
+ *
+ *  Replaces the earlier per-type count fields (mcqCount / shortCount
+ *  / longCount). Per-type counts are still available as overrides
+ *  but the primary control is now this single dropdown.
+ */
+export type ExamPaperType = 'MCQ_ONLY' | 'SUBJECTIVE' | 'MIX';
+
 export interface ExamPaperRequest {
   subject: string;
   className: string;
@@ -101,11 +114,24 @@ export interface ExamPaperRequest {
   duration: number;
   topics: string;
   difficulty: 'EASY' | 'MEDIUM' | 'HARD';
-  /** Exact question counts the AI must produce. Optional — when all
-   *  three are 0 the model picks a balanced mix automatically. */
+  /** Question-type layout — defaults to MIX. */
+  paperType?: ExamPaperType;
+  /** Optional override of question counts. When set, the AI honours
+   *  these EXACT counts. Otherwise the layout above + total marks
+   *  drive the breakdown. */
   mcqCount?: number;
   shortCount?: number;
   longCount?: number;
+  /** Output language. Defaults to ENGLISH. BILINGUAL prints English
+   *  question + Hindi translation in parentheses (Hindi-medium boards). */
+  language?: ExamPaperLanguage;
+  /** Optional school name for the printable header. The server
+   *  auto-fills this from the caller's session if not provided. */
+  schoolName?: string;
+  /** Board name (CBSE / ICSE / State Board / etc.) — passed into the
+   *  prompt so Gemini can pick board-appropriate question patterns
+   *  and language. Defaults to whatever is set on the school row. */
+  board?: string;
 }
 
 export interface GeneratedExamPaper {

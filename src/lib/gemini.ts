@@ -30,6 +30,31 @@ export async function generateText(prompt: string): Promise<string> {
 }
 
 /**
+ * Paper-generation call. Same as generateText but flags the request
+ * as a paper generation so the server (a) counts it against the
+ * school's monthly AI-paper quota and (b) saves the result into the
+ * last-50-papers history. Pass the original ExamPaperRequest so the
+ * stored row carries the metadata for later recall.
+ */
+export async function generatePaper(
+  prompt: string,
+  paperRequest: Record<string, unknown>,
+): Promise<string> {
+  try {
+    const { text } = await apiFetch<{ text: string }>('POST', '/ai/generate', {
+      prompt,
+      savePaper: true,
+      paperRequest,
+    });
+    return text;
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e);
+    if (msg.toLowerCase().includes('not configured')) throw new GeminiUnavailableError();
+    throw e;
+  }
+}
+
+/**
  * Multimodal call: prompt + one or more images. Images must be supplied as
  * base64-encoded strings WITHOUT the `data:image/...;base64,` prefix —
  * use the helper below to convert a File. Returns the raw model text.

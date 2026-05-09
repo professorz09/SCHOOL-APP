@@ -64,6 +64,28 @@ adminSchoolsRouter.put('/:id/billing', requireAuth, SA, async (req, res) => {
   } catch (err) { fail(res, err); }
 });
 
+// PUT /api/admin/schools/:id/ai-limit
+// Super-admin sets the per-school monthly AI paper generation cap.
+// 0 = unlimited (paid tier / boarding schools). Counts are taken
+// from ai_paper_history for the current calendar month.
+adminSchoolsRouter.put('/:id/ai-limit', requireAuth, SA, async (req, res) => {
+  try {
+    const schoolId = req.params.id;
+    const body = requireBody<{ monthlyLimit: number }>(req, ['monthlyLimit']);
+    const limit = Math.round(Number(body.monthlyLimit));
+    if (!Number.isFinite(limit) || limit < 0 || limit > 10000) {
+      throw new ApiError(400, 'monthlyLimit must be 0–10000 (0 = unlimited)');
+    }
+    const { data: school } = await adminDb.from('schools').select('id').eq('id', schoolId).maybeSingle();
+    if (!school) throw new ApiError(404, 'School not found');
+    const { error } = await adminDb.from('schools')
+      .update({ ai_papers_monthly_limit: limit, updated_at: new Date().toISOString() })
+      .eq('id', schoolId);
+    if (error) throw new ApiError(500, error.message);
+    ok(res, { schoolId, monthlyLimit: limit, unlimited: limit === 0 });
+  } catch (err) { fail(res, err); }
+});
+
 // ─── POST /api/admin/schools/:id/payments ────────────────────────────────────
 // Record a payment for a school.
 adminSchoolsRouter.post('/:id/payments', requireAuth, SA, async (req, res) => {

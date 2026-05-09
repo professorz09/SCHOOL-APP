@@ -23,7 +23,7 @@ import { supabase } from '@/lib/supabase';
 import { useAuthStore } from '@/store/authStore';
 import { useEditingYearStore } from '@/store/editingYearStore';
 import { logAudit } from '@/lib/audit';
-import { generateText, generateFromImages, stripJsonFence, GeminiUnavailableError } from '@/lib/gemini';
+import { generateText, generatePaper, generateFromImages, stripJsonFence, GeminiUnavailableError } from '@/lib/gemini';
 import type { PublishResultsInput, FinalExamPublishInput } from '@/roles/teacher/teacher.types';
 import type {
   TeacherClass,
@@ -814,10 +814,30 @@ export const teacherService = {
   // ── AI Exam Paper Generator ───────────────────────────────────────────────
 
   async generateExamPaper(request: ExamPaperRequest): Promise<GeneratedExamPaper> {
-    const prompt = buildExamPrompt(request);
+    // Hydrate schoolName + board from the school row so the prompt can
+    // include curriculum context AND the saved history row carries
+    // them. UI doesn't need to ask the teacher every time.
+    let enriched = request;
+    if (!request.schoolName || !request.board) {
+      try {
+        const schoolId = getSchoolId();
+        const { data } = await supabase.from('schools')
+          .select('name, affiliation_board').eq('id', schoolId).maybeSingle();
+        const row = data as { name: string | null; affiliation_board: string | null } | null;
+        enriched = {
+          ...request,
+          schoolName: request.schoolName ?? row?.name ?? '',
+          board:      request.board ?? row?.affiliation_board ?? '',
+        };
+      } catch { /* fallback to original request */ }
+    }
+    const prompt = buildExamPrompt(enriched);
     let raw: string;
     try {
-      raw = await generateText(prompt);
+      // generatePaper (vs generateText) enables the server-side
+      // monthly-quota check and writes the result into the school's
+      // last-50-papers history table.
+      raw = await generatePaper(prompt, enriched as unknown as Record<string, unknown>);
     } catch (err) {
       if (err instanceof GeminiUnavailableError) throw err;
       throw new Error(err instanceof Error ? err.message : 'AI generation failed');
@@ -1143,45 +1163,83 @@ function buildExamPrompt(req: ExamPaperRequest): string {
   const short = Math.max(0, req.shortCount ?? 0);
   const long  = Math.max(0, req.longCount  ?? 0);
   const totalRequested = mcq + short + long;
-  // When the teacher specified explicit per-type counts, the AI MUST
-  // honour them exactly. Otherwise we let the model pick a balanced
-  // mix matching the testType + difficulty.
-  const countLine = totalRequested > 0
-    ? `EXACT question counts (must match exactly):
+  const paperType = req.paperType ?? 'MIX';
+  const language  = req.language  ?? 'ENGLISH';
+
+  // Exact counts override the paper-type breakdown.
+  let breakdownLine: string;
+  if (totalRequested > 0) {
+    breakdownLine = `EXACT question counts (must match exactly):
 - ${mcq} MCQ (1 mark each)
 - ${short} short-answer (2-3 marks each)
 - ${long} long-answer (5+ marks each)
-Total questions: ${totalRequested}.`
-    : 'Pick a balanced mix of MCQ / short-answer / long-answer appropriate for the test type and difficulty.';
+Total questions: ${totalRequested}.`;
+  } else if (paperType === 'MCQ_ONLY') {
+    breakdownLine = `Paper type: MCQ ONLY. Every question must be a multiple-choice question carrying 1 mark, with 4 options labelled (a)-(d). Sum to exactly ${req.totalMarks} marks (so ${req.totalMarks} MCQs).`;
+  } else if (paperType === 'SUBJECTIVE') {
+    breakdownLine = `Paper type: SUBJECTIVE ONLY. No multiple-choice questions. Mix short-answer (2-3 marks) and long-answer (5-10 marks) — short questions FIRST in lower numbers, long questions after.`;
+  } else {
+    breakdownLine = `Paper type: MIX. Use this exact ORDER:
+  1. Section A: Multiple-choice questions (MCQs, 1 mark each, 4 options)
+  2. Section B: Short-answer questions (2-3 marks each)
+  3. Section C: Long-answer questions (5+ marks each)
+Pick a balanced count appropriate for ${req.totalMarks} total marks.`;
+  }
+
+  // Language directive. BILINGUAL = English first, Hindi (Devanagari)
+  // translation in parentheses for each question.
+  const languageLine =
+    language === 'HINDI'     ? 'Write the entire paper in Hindi (Devanagari script).' :
+    language === 'BILINGUAL' ? 'Write each question in English first, then add the Hindi (Devanagari) translation in parentheses on the next line.' :
+                               'Write the paper in clear, exam-grade English.';
+
+  // Board context — when present, Gemini picks board-aligned phrasing
+  // (CBSE NCERT vocabulary, ICSE structure, state-board pattern, etc.).
+  const boardLine = req.board ? `Board / curriculum: ${req.board}.` : '';
+
+  // Optional school header for the printable PDF — appears at the top
+  // of the rendered paper. AI doesn't need to render it, but we tell
+  // it so it doesn't insert its own.
+  const schoolHeaderNote = req.schoolName
+    ? `The school name "${req.schoolName}" will be added to the header by the print template — do NOT include a school name in the JSON.`
+    : '';
 
   return `You are an experienced Indian school teacher creating an examination paper.
+
 Subject: ${req.subject}
 Class: ${req.className}
+${boardLine}
 Test type: ${req.testType}
 Total marks: ${req.totalMarks}
 Duration: ${req.duration} minutes
 Topics covered: ${req.topics}
 Difficulty: ${req.difficulty}
 
-${countLine}
+${breakdownLine}
 
-Generate a complete exam paper as a JSON object with the following shape:
+LANGUAGE: ${languageLine}
+
+${schoolHeaderNote}
+
+Generate the paper as a JSON object with this exact shape:
 {
   "sections": [
     {
-      "title": "Section A — Multiple Choice",
+      "title": "Section A — Multiple Choice Questions",
       "instructions": "Choose the correct option. Each carries 1 mark.",
       "questions": [
-        { "no": 1, "text": "…", "marks": 1, "type": "MCQ" }
+        { "no": 1, "text": "…", "marks": 1, "type": "MCQ", "options": ["…","…","…","…"] }
       ]
     }
   ]
 }
 
-Constraints:
-- Type must be one of: MCQ, SHORT, LONG, DIAGRAM
-- The sum of marks across all sections must equal ${req.totalMarks}
-- Group questions by type into their own sections (Section A = MCQ, Section B = Short, Section C = Long)
-- Use authentic textbook-style language for ${req.className}-level ${req.subject}
-- Return only the JSON, no preamble, no markdown fences`;
+STRICT RULES (every one must be honoured):
+- The sections array MUST appear in this order: MCQ section first, then Short, then Long. Skip any section that has zero questions.
+- Question "type" must be one of: MCQ, SHORT, LONG, DIAGRAM.
+- For MCQ entries, include an "options" array with exactly 4 strings; the question text must NOT pre-mark the right answer.
+- Number questions sequentially (1,2,3…) within each section starting from 1.
+- The sum of marks across every section MUST equal ${req.totalMarks}.
+- Use authentic textbook-style language for ${req.className}-level ${req.subject}, aligned to the topics and the board's syllabus.
+- Return ONLY the JSON object — no preamble, no commentary, no markdown code fences.`;
 }

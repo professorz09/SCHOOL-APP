@@ -573,6 +573,17 @@ export const apiAdminSchools = {
     post<SchoolFeePayment>(`/admin/schools/${schoolId}/payments`, body),
   getPayments: (schoolId: string) =>
     get<SchoolBillingInfo>(`/admin/schools/${schoolId}/payments`),
+  setAiLimit: (schoolId: string, monthlyLimit: number) =>
+    put<{ schoolId: string; monthlyLimit: number; unlimited: boolean }>(
+      `/admin/schools/${schoolId}/ai-limit`, { monthlyLimit },
+    ),
+};
+
+// AI quota + history binding (used by paper generator UI to show
+// "X of Y used this month" + recall last 50 papers).
+export const apiAi = {
+  quota: () => get<{ used: number; limit: number; unlimited: boolean }>('/ai/quota'),
+  papers: () => get<Array<{ id: string; request_json: any; paper_json: any; created_at: string }>>('/ai/papers'),
 };
 
 
