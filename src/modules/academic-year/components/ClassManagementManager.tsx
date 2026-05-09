@@ -41,9 +41,21 @@ export const ClassManagementManager: React.FC<Props> = ({ onBack }) => {
   const buildClasses = useCallback((students: Student[], permissions: ClassPermission[]): ClassInfo[] => {
     const classMap: Record<string, { sections: Record<string, Student[]> }> = {};
     students.forEach(s => {
-      if (!classMap[s.className]) classMap[s.className] = { sections: {} };
-      if (!classMap[s.className].sections[s.section]) classMap[s.className].sections[s.section] = [];
-      classMap[s.className].sections[s.section].push(s);
+      // Skip students who don't have a class+section allotment for the
+      // active year. Without this guard, students whose AR row is empty
+      // (last year's leavers, freshly admitted but unassigned) bucket
+      // under '' / '' and surface as a phantom blank class card above
+      // the real ones.
+      const cls = (s.className ?? '').trim();
+      const sec = (s.section ?? '').trim();
+      if (!cls || !sec) return;
+      // Active students only — inactive / TC-issued students linger in
+      // the roster for audit purposes but shouldn't count toward the
+      // teacher-permissions panel.
+      if (s.isActive === false) return;
+      if (!classMap[cls]) classMap[cls] = { sections: {} };
+      if (!classMap[cls].sections[sec]) classMap[cls].sections[sec] = [];
+      classMap[cls].sections[sec].push(s);
     });
     return Object.entries(classMap)
       .sort(([a], [b]) => a.localeCompare(b))
