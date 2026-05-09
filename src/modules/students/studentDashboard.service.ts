@@ -92,8 +92,22 @@ export interface ActiveStudentContext {
 
 // Cache keyed by (userId, studentId) so a parent switching children gets a
 // fresh context. Cleared on sign-out automatically because session.userId
-// changes.
+// changes. Also cleared explicitly via invalidateContext() after lifecycle
+// events (re-admit, class change) where the underlying student row moved.
 let _ctxCache: { key: string; ctx: StudentContext } | null = null;
+
+// Drop the cache when the auth session flips (logout / login as different
+// user / parent picks a different child). Without this, stale class+year
+// context from a previous session could leak into a fresh one.
+useAuthStore.subscribe((s, prev) => {
+  if (
+    s.session?.userId !== prev.session?.userId ||
+    s.session?.role !== prev.session?.role ||
+    s.selectedStudentId !== prev.selectedStudentId
+  ) {
+    _ctxCache = null;
+  }
+});
 
 /**
  * Resolve the *active* student for the signed-in user.
@@ -277,6 +291,13 @@ function mapComplaintStatus(raw: string | null): StudentComplaint['status'] {
 // ─── Public API ─────────────────────────────────────────────────────────────
 
 export const studentDashboardService = {
+  /**
+   * Drop the cached context. Call after lifecycle events that move the
+   * student between classes / sections / years (re-admit, year rollover,
+   * principal-side class promotion) so the next read pulls fresh rows.
+   */
+  invalidateContext(): void { _ctxCache = null; },
+
   /**
    * Resolve and return the active student id for the signed-in user. Used by
    * other services (FeesView -> feeService, TransportView -> transportService)

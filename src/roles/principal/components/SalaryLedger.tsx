@@ -132,6 +132,15 @@ export const SalaryLedger: React.FC<Props> = ({ onBack }) => {
     if (!selected || !payModal) return;
     const amount = Number(payAmount);
     if (!Number.isFinite(amount) || amount <= 0) { showToast('Enter a valid amount', 'error'); return; }
+    // Overpay block — same rule as fee ledger's pay_installment. The server
+    // doesn't enforce a hard cap on salary payments (cumulative), so we
+    // gate it on the client to prevent accidental double-payment of a
+    // month's salary.
+    const outstanding = Math.max(0, payModal.amount - payModal.paid);
+    if (amount > outstanding) {
+      showToast(`Overpay blocked — max ₹${outstanding.toLocaleString('en-IN')} for ${payModal.month}`, 'error');
+      return;
+    }
     setPayBusy(true);
     try {
       await staffService.recordSalaryPayment(
@@ -259,13 +268,33 @@ export const SalaryLedger: React.FC<Props> = ({ onBack }) => {
                 <h3 className="text-lg font-black text-slate-900">Record Salary Payment</h3>
                 <button onClick={() => setPayModal(null)} className="w-8 h-8 bg-slate-100 rounded-full flex items-center justify-center text-slate-500">✕</button>
               </div>
-              <p className="text-[10px] font-bold text-slate-400 mb-4">{payModal.month} · {selected.staff.name}</p>
-              <div className="bg-slate-50 border border-slate-200 rounded-xl p-3 flex items-center gap-2 mb-3">
-                <IndianRupee size={16} className="text-slate-400" />
-                <input type="number" value={payAmount} onChange={e => setPayAmount(e.target.value)}
-                  placeholder="Amount"
-                  className="flex-1 bg-transparent font-black text-slate-900 text-lg outline-none" />
-              </div>
+              <p className="text-[10px] font-bold text-slate-400 mb-2">{payModal.month} · {selected.staff.name}</p>
+              {(() => {
+                const outstanding = Math.max(0, payModal.amount - payModal.paid);
+                const entered = Number(payAmount) || 0;
+                const overpay = entered > outstanding;
+                return (
+                  <>
+                    <div className="flex items-center justify-between text-[10px] font-black mb-2">
+                      <span className="text-slate-500 uppercase tracking-widest">Outstanding</span>
+                      <span className="text-emerald-700 tabular-nums">₹{outstanding.toLocaleString('en-IN')}</span>
+                    </div>
+                    <div className={`bg-slate-50 border rounded-xl p-3 flex items-center gap-2 mb-1 ${overpay ? 'border-rose-300 bg-rose-50' : 'border-slate-200'}`}>
+                      <IndianRupee size={16} className={overpay ? 'text-rose-500' : 'text-slate-400'} />
+                      <input type="number" min={0} max={outstanding} value={payAmount}
+                        onChange={e => setPayAmount(e.target.value)}
+                        placeholder="Amount"
+                        className="flex-1 bg-transparent font-black text-slate-900 text-lg outline-none" />
+                    </div>
+                    {overpay && (
+                      <div className="text-[10px] font-black text-rose-600 mb-2">
+                        Overpay blocked — max ₹{outstanding.toLocaleString('en-IN')}
+                      </div>
+                    )}
+                    {!overpay && <div className="mb-2" />}
+                  </>
+                );
+              })()}
               <div className="grid grid-cols-2 gap-3 mb-3">
                 <select value={payMethod} onChange={e => setPayMethod(e.target.value as SalaryPaymentMethod)}
                   className="bg-slate-50 border border-slate-200 rounded-xl px-3 py-3 text-sm font-bold outline-none focus:border-blue-500">
@@ -279,7 +308,11 @@ export const SalaryLedger: React.FC<Props> = ({ onBack }) => {
                 placeholder="Note (optional)"
                 className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-3 text-sm font-bold outline-none focus:border-blue-500 mb-4" />
               <button onClick={handlePay}
-                disabled={!payAmount || payBusy}
+                disabled={
+                  !payAmount || payBusy ||
+                  (Number(payAmount) || 0) <= 0 ||
+                  (Number(payAmount) || 0) > Math.max(0, payModal.amount - payModal.paid)
+                }
                 className="w-full py-3 bg-emerald-600 text-white font-black rounded-xl disabled:opacity-40 flex items-center justify-center gap-2">
                 {payBusy ? <Loader2 size={16} className="animate-spin" /> : null}
                 {payBusy ? 'Saving…' : 'Save Payment'}
@@ -304,26 +337,60 @@ export const SalaryLedger: React.FC<Props> = ({ onBack }) => {
               <p className="text-[10px] font-bold text-slate-400">Schedule · Payments · History</p>
             </div>
           </div>
-          <button
-            onClick={() => {
-              const rows = filtered.flatMap(p => p.schedule.map(s => ({
-                staff_name: p.staff.name,
-                role:       p.staff.role,
-                staff_status: p.staff.status,
-                month:      s.month,
-                due:        s.amount,
-                paid:       s.paid,
-                pending:    Math.max(0, s.amount - s.paid),
-                status:     s.status,
-                paid_at:    s.paidAt ?? '',
-                note:       s.note ?? '',
-              })));
-              exportCsv(`salary_ledger_${new Date().toISOString().slice(0, 10)}`, rows);
-            }}
-            disabled={filtered.length === 0}
-            className="flex items-center gap-1.5 px-3 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 font-black text-xs rounded-xl active:scale-95 transition-all disabled:opacity-40">
-            <Download size={13} /> CSV
-          </button>
+          <div className="flex items-center gap-2">
+            <button
+              onClick={() => {
+                // Monthly roll-up across all staff: one row per month with
+                // total due / paid / pending and a "fully paid" head-count.
+                // Matches the fee ledger monthly export shape so principals
+                // can drop both into the same workbook.
+                const buckets = new Map<string, { due: number; paid: number; staffPaid: number; staffTotal: number }>();
+                filtered.forEach(p => p.schedule.forEach(s => {
+                  const b = buckets.get(s.month) ?? { due: 0, paid: 0, staffPaid: 0, staffTotal: 0 };
+                  b.due += s.amount;
+                  b.paid += s.paid;
+                  b.staffTotal += 1;
+                  if (s.status === 'PAID') b.staffPaid += 1;
+                  buckets.set(s.month, b);
+                }));
+                const monthlyRows = Array.from(buckets.entries())
+                  .sort(([a], [b]) => new Date(`${a} 1`).getTime() - new Date(`${b} 1`).getTime())
+                  .map(([month, v]) => ({
+                    month,
+                    due: v.due,
+                    paid: v.paid,
+                    pending: Math.max(0, v.due - v.paid),
+                    staff_paid: v.staffPaid,
+                    staff_total: v.staffTotal,
+                  }));
+                exportCsv(`salary_monthly_${new Date().toISOString().slice(0, 10)}`, monthlyRows);
+              }}
+              disabled={filtered.length === 0}
+              title="Monthly summary CSV"
+              className="flex items-center gap-1.5 px-3 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 font-black text-xs rounded-xl active:scale-95 transition-all disabled:opacity-40">
+              <Calendar size={13} /> Monthly
+            </button>
+            <button
+              onClick={() => {
+                const rows = filtered.flatMap(p => p.schedule.map(s => ({
+                  staff_name: p.staff.name,
+                  role:       p.staff.role,
+                  staff_status: p.staff.status,
+                  month:      s.month,
+                  due:        s.amount,
+                  paid:       s.paid,
+                  pending:    Math.max(0, s.amount - s.paid),
+                  status:     s.status,
+                  paid_at:    s.paidAt ?? '',
+                  note:       s.note ?? '',
+                })));
+                exportCsv(`salary_ledger_${new Date().toISOString().slice(0, 10)}`, rows);
+              }}
+              disabled={filtered.length === 0}
+              className="flex items-center gap-1.5 px-3 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 font-black text-xs rounded-xl active:scale-95 transition-all disabled:opacity-40">
+              <Download size={13} /> CSV
+            </button>
+          </div>
         </div>
         <input value={search} onChange={e => setSearch(e.target.value)}
           placeholder="Search staff name or role..."

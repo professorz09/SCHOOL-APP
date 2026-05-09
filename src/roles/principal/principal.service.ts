@@ -194,7 +194,50 @@ function rowToApproval(r: ApprovalRow): Approval {
   };
 }
 
+export interface FinancialAnalyticsSummary {
+  feesCollectedMonth:      number;
+  feesCollectedYear:       number;
+  feesPending:             number;
+  discountsGiven:          number;
+  expensesMonth:           number;
+  expensesYear:            number;
+  salaryPaidMonth:         number;
+  salaryPending:           number;
+  transportCollectionYear: number;
+  netBalanceYear:          number;
+}
+
 export const principalService = {
+  /**
+   * Server-side aggregate for the Analytics dashboard's top summary
+   * cards. One round-trip; school + year scoped via the SQL RPC
+   * (migration 0086). Avoids loading row-level fee/expense data into
+   * the browser just to sum it.
+   */
+  async getFinancialAnalytics(yearId: string): Promise<FinancialAnalyticsSummary> {
+    const { data, error } = await supabase.rpc('get_financial_analytics', { p_year_id: yearId });
+    if (error) throw new Error(error.message);
+    const row = (Array.isArray(data) ? data[0] : data) as {
+      fees_collected_month: number; fees_collected_year: number;
+      fees_pending: number; discounts_given: number;
+      expenses_month: number; expenses_year: number;
+      salary_paid_month: number; salary_pending: number;
+      transport_collection_year: number; net_balance_year: number;
+    } | null;
+    return {
+      feesCollectedMonth:      Number(row?.fees_collected_month      ?? 0),
+      feesCollectedYear:       Number(row?.fees_collected_year       ?? 0),
+      feesPending:             Number(row?.fees_pending              ?? 0),
+      discountsGiven:          Number(row?.discounts_given           ?? 0),
+      expensesMonth:           Number(row?.expenses_month            ?? 0),
+      expensesYear:            Number(row?.expenses_year             ?? 0),
+      salaryPaidMonth:         Number(row?.salary_paid_month         ?? 0),
+      salaryPending:           Number(row?.salary_pending            ?? 0),
+      transportCollectionYear: Number(row?.transport_collection_year ?? 0),
+      netBalanceYear:          Number(row?.net_balance_year          ?? 0),
+    };
+  },
+
   // ─── Notices ──────────────────────────────────────────────────────────────
   async getNotices(): Promise<Notice[]> {
     const schoolId = getSchoolId();
@@ -249,13 +292,15 @@ export const principalService = {
   },
 
   // ─── Expenses ─────────────────────────────────────────────────────────────
-  async getExpenses(): Promise<Expense[]> {
+  async getExpenses(yearId?: string): Promise<Expense[]> {
     const schoolId = getSchoolId();
-    const { data, error } = await supabase
+    let q = supabase
       .from('expenses')
       .select(EXPENSE_FIELDS)
       .eq('school_id', schoolId)
       .order('date', { ascending: false });
+    if (yearId) q = q.eq('academic_year_id', yearId);
+    const { data, error } = await q;
     if (error) throw new Error(error.message);
     const rows = (data ?? []) as ExpenseRow[];
 
@@ -277,6 +322,21 @@ export const principalService = {
     });
     await logAudit('expense_added', 'expense', raw.id, { category: input.category, amount: input.amount });
     return rowToExpense(raw as ExpenseRow, input.approvedBy || actor?.name || '');
+  },
+
+  async updateExpense(
+    id: string,
+    patch: Partial<Pick<Expense, 'category' | 'description' | 'amount' | 'date'>>,
+  ): Promise<Expense> {
+    const actor = getActor();
+    const raw = await apiPrincipal.expenseUpdate({ id, ...patch });
+    await logAudit('expense_updated', 'expense', id, patch);
+    return rowToExpense(raw as ExpenseRow, actor?.name ?? '');
+  },
+
+  async deleteExpense(id: string): Promise<void> {
+    await apiPrincipal.expenseDelete(id);
+    await logAudit('expense_deleted', 'expense', id, {});
   },
 
   // ─── Approvals ────────────────────────────────────────────────────────────

@@ -4,7 +4,12 @@ import { requireAuth, requireRole } from '../middleware/auth';
 
 export const aiRouter = Router();
 
-const MODEL = 'gemini-2.0-flash';
+// Gemini 3-series. gemini-2.0-flash and gemini-2.5-* are scheduled for
+// deprecation (June 2026); we're already on the 3.x line. `flash-preview`
+// is the production-grade flash tier with Pro-level reasoning at flash
+// pricing. Switch to `gemini-3.1-flash-lite-preview` for high-volume /
+// cost-sensitive workloads.
+const MODEL = 'gemini-3-flash-preview';
 const ENDPOINT = `https://generativelanguage.googleapis.com/v1beta/models/${MODEL}:generateContent`;
 
 // POST /api/ai/generate — proxy to Google Gemini.
@@ -13,10 +18,10 @@ const ENDPOINT = `https://generativelanguage.googleapis.com/v1beta/models/${MODE
 // is meant for paper generation, not a public LLM playground.
 //
 // `images` (optional) lets callers do vision tasks — each entry is an
-// inline base64 image (mimeType + data, NO data: prefix). The model used
-// (gemini-2.0-flash) handles multimodal inputs natively. Used by the
-// "Scan from Image" flow in the Question Paper tool to OCR a hand-typed
-// or photographed paper into structured questions.
+// inline base64 image (mimeType + data, NO data: prefix). Gemini 3 Flash
+// handles multimodal inputs natively. Used by the "AI Scan Notes" flow
+// in the Exam Gen tool to OCR handwritten/printed notes into structured
+// questions.
 aiRouter.post('/generate', requireAuth, requireRole('TEACHER', 'PRINCIPAL'), async (req, res) => {
   try {
     const body = requireBody<{

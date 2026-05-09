@@ -104,32 +104,33 @@ feesRouter.post('/schedule/generate', requireAuth, requireRole('PRINCIPAL'), asy
   } catch (err) { fail(res, err); }
 });
 
-// POST /api/fees/pay — oldest-due-first via record_fee_payment RPC
+// POST /api/fees/pay — oldest-due-first via record_fee_payment RPC.
+// Overpay is HARD-REJECTED in 0084 (advance credit feature removed).
 feesRouter.post('/pay', requireAuth, requireRole('PRINCIPAL'), async (req, res) => {
   try {
     const body = requireBody<{
       studentId: string; amount: number; method: string;
-      date?: string; note?: string; useAdvance?: boolean; applyLateFee?: boolean; discountAmount?: number;
+      date?: string; note?: string; applyLateFee?: boolean; discountAmount?: number;
     }>(req, ['studentId', 'amount', 'method']);
 
-    if (body.amount <= 0) throw new ApiError(400, 'Amount must be positive');
-
+    const amount   = Math.max(0, Math.round(body.amount));
     const discount = Math.max(0, Math.round(body.discountAmount ?? 0));
+    if (amount === 0 && discount === 0) {
+      throw new ApiError(400, 'Amount and discount cannot both be zero');
+    }
     const discountNote = discount > 0 ? ` (with ₹${discount} discount)` : '';
 
-    // RPC requires auth.uid() — use user JWT
     const db = userDb(req.jwt);
     const { data: paymentId, error } = await db.rpc('record_fee_payment', {
       p_student_id:      body.studentId,
-      p_amount:          Math.round(body.amount),
+      p_amount:          amount,
       p_method:          body.method,
       p_date:            body.date ?? new Date().toISOString().split('T')[0],
       p_note:            (body.note ?? '') + discountNote || null,
-      p_use_advance:     body.useAdvance ?? false,
       p_apply_late_fee:  body.applyLateFee ?? true,
       p_discount_amount: discount,
     });
-    if (error) throw new ApiError(500, error.message);
+    if (error) throw new ApiError(400, error.message);
 
     // Return the new payment record
     const { data: payment } = await adminDb
@@ -150,13 +151,12 @@ feesRouter.post('/pay-installment', requireAuth, requireRole('PRINCIPAL'), async
     const body = requireBody<{
       installmentId: string; amount: number;
       discount?: number; method?: string; date?: string; note?: string;
-      useAdvance?: boolean;
     }>(req, ['installmentId', 'amount']);
 
     const amount   = Math.max(0, Math.round(body.amount));
     const discount = Math.max(0, Math.round(body.discount ?? 0));
-    if (amount === 0 && discount === 0 && !body.useAdvance) {
-      throw new ApiError(400, 'Amount, discount and advance cannot all be zero');
+    if (amount === 0 && discount === 0) {
+      throw new ApiError(400, 'Amount and discount cannot both be zero');
     }
 
     const db = userDb(req.jwt);
@@ -167,7 +167,6 @@ feesRouter.post('/pay-installment', requireAuth, requireRole('PRINCIPAL'), async
       p_method:         body.method ?? 'CASH',
       p_date:           body.date ?? new Date().toISOString().split('T')[0],
       p_note:           body.note ?? null,
-      p_use_advance:    body.useAdvance ?? false,
     });
     if (error) throw new ApiError(400, error.message);
 
@@ -181,30 +180,10 @@ feesRouter.post('/pay-installment', requireAuth, requireRole('PRINCIPAL'), async
   } catch (err) { fail(res, err); }
 });
 
-// POST /api/fees/govt-pay — bulk RTE / government payment
-feesRouter.post('/govt-pay', requireAuth, requireRole('PRINCIPAL'), async (req, res) => {
-  try {
-    const body = requireBody<{
-      studentIds: string[]; totalAmount: number; referenceNo: string; note: string;
-    }>(req, ['studentIds', 'totalAmount', 'referenceNo', 'note']);
-
-    if (!Array.isArray(body.studentIds) || body.studentIds.length === 0)
-      throw new ApiError(400, 'studentIds array required');
-    if (body.totalAmount <= 0) throw new ApiError(400, 'Amount must be positive');
-
-    const db = userDb(req.jwt);
-    const { error } = await db.rpc('record_govt_payment', {
-      p_amount:      Math.round(body.totalAmount),
-      p_date:        new Date().toISOString().split('T')[0],
-      p_reference:   body.referenceNo,
-      p_note:        body.note,
-      p_student_ids: body.studentIds,
-    });
-    if (error) throw new ApiError(500, error.message);
-
-    ok(res, { success: true, studentCount: body.studentIds.length });
-  } catch (err) { fail(res, err); }
-});
+// /api/fees/govt-pay removed in 0083 — government grants are now
+// recorded as regular payments via /api/fees/pay with a "Govt grant"
+// note. The underlying record_govt_payment RPC and government_payments
+// table were dropped in the same migration.
 
 // POST /api/fees/writeoff
 feesRouter.post('/writeoff', requireAuth, requireRole('PRINCIPAL'), async (req, res) => {
@@ -340,6 +319,7 @@ feesRouter.post('/payment/reverse', requireAuth, requireRole('PRINCIPAL'), requi
       if (rpcErr.message.includes('cannot_reverse_a_reversal')) throw new ApiError(409, 'This row IS a reversal — cannot reverse a reversal');
       if (rpcErr.message.includes('non_positive_amount')) throw new ApiError(400, 'Cannot reverse a non-positive payment');
       if (rpcErr.message.includes('payment_not_found')) throw new ApiError(404, 'Payment not found');
+      if (rpcErr.message.includes('reversal_window_expired')) throw new ApiError(403, '24 hours beet chuke — ab reverse nahi hoga. Naya correction payment ya write-off use karein.');
       throw new ApiError(500, `Reversal failed: ${rpcErr.message}`);
     }
     const reversalRow = (Array.isArray(rpcData) ? rpcData[0] : rpcData) as

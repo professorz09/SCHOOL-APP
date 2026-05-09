@@ -396,7 +396,7 @@ export const transportService = {
 
   async assignStudent(
     studentId: string, _studentName: string, _className: string,
-    vehicleId: string, stopId: string, _stopName: string,
+    vehicleId: string, stopId: string | null, _stopName: string,
     monthlyAmount = 500, startDate?: string,
     academicYearId?: string,
     endDate?: string | null,
@@ -422,7 +422,7 @@ export const transportService = {
     await apiTransport.assign({
       studentId,
       vehicleId,
-      stopId,
+      stopId: stopId ?? undefined,
       monthlyAmount,
       startDate: startIso,
       academicYearId: ayId,

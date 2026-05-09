@@ -118,10 +118,10 @@ export const apiStudents = {
   }) => post<any>('/students/class-movement', body),
   fail: (body: { studentId: string; academicYearId: string; reason?: string }) =>
     post<any>('/students/fail', body),
-  issueTC: (body: { studentId: string; tcNumber: string; reason?: string }) =>
-    post<any>('/students/issue-tc', body),
-  readmit: (studentId: string) =>
-    post<any>('/students/readmit', { studentId }),
+  issueTC: (body: { studentId: string; tcNumber?: string; reason?: string }) =>
+    post<{ studentId: string; tcNumber: string }>('/students/issue-tc', body),
+  readmit: (body: { studentId: string; className: string; section?: string; rollNo?: string }) =>
+    post<{ studentId: string }>('/students/readmit', body),
   addDocument: (body: { studentId: string; docType: string; docUrl: string }) =>
     post<any>('/students/document/add', body),
   removeDocument: (documentId: string) =>
@@ -149,18 +149,19 @@ export const apiFees = {
   }) => post<any>('/fees/schedule/generate', body),
   pay: (body: {
     studentId: string; amount: number; method: string;
-    date?: string; note?: string; useAdvance?: boolean; applyLateFee?: boolean; discountAmount?: number;
+    date?: string; note?: string; applyLateFee?: boolean; discountAmount?: number;
   }) => post<any>('/fees/pay', body),
   payInstallment: (body: {
     installmentId: string; amount: number; discount?: number;
-    method?: string; date?: string; note?: string; useAdvance?: boolean;
+    method?: string; date?: string; note?: string;
   }) => post<{ paymentId: string; payment: any }>('/fees/pay-installment', body),
   getStudentFees: (studentId: string, yearId?: string) => {
     const q = yearId ? `?yearId=${yearId}` : '';
     return get<any>(`/fees/student/${studentId}${q}`);
   },
-  govtPay: (body: { studentIds: string[]; totalAmount: number; referenceNo: string; note: string }) =>
-    post<any>('/fees/govt-pay', body),
+  // govtPay removed in 0083 — bulk RTE flow dropped. Government grants
+  // are recorded as regular payments via apiFees.pay with a "Govt grant"
+  // note in the principal's Collect Payment modal.
   writeoff: (body: { installmentId: string; amount: number; reason: string }) =>
     post<any>('/fees/writeoff', body),
   reversePayment: (body: { paymentId: string; reason: string }) =>
@@ -205,7 +206,7 @@ export const apiTransport = {
   getVehicles: () => get<any[]>('/transport/vehicles'),
   getStudentAssignments: (studentId: string) => get<any[]>(`/transport/student/${studentId}`),
   assign: (body: {
-    studentId: string; vehicleId: string; stopId: string;
+    studentId: string; vehicleId: string; stopId?: string;
     monthlyAmount: number; startDate: string; academicYearId: string;
     endDate?: string; reason?: string; feeStructureId?: string;
   }) => post<any>('/transport/assign', body),
@@ -410,6 +411,10 @@ export const apiPrincipal = {
   // Expenses
   expenseAdd: (body: { category: string; description: string; amount: number; date: string }) =>
     post<any>('/principal/expense/add', body),
+  expenseUpdate: (body: { id: string; category?: string; description?: string; amount?: number; date?: string }) =>
+    post<any>('/principal/expense/update', body),
+  expenseDelete: (id: string) =>
+    post<{ id: string }>('/principal/expense/delete', { id }),
 
   // Approvals
   approvalApprove: (approvalId: string) =>

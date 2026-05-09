@@ -30,6 +30,7 @@ export const TeacherNoticesView: React.FC<Props> = ({ onBack }) => {
   const { showToast } = useUIStore();
   const [view, setView] = useState<'LIST' | 'CREATE'>('LIST');
   const [notices, setNotices] = useState<TeacherNotice[]>([]);
+  const [shown, setShown] = useState(50);
   const [classes, setClasses] = useState<TeacherClass[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [isSubmitting, setIsSubmitting] = useState(false);
@@ -214,7 +215,8 @@ export const TeacherNoticesView: React.FC<Props> = ({ onBack }) => {
             <p className="text-[11px] mt-1">School-wide notices and ones for your classes will show here.</p>
           </div>
         ) : (
-          notices.map(n => (
+          <>
+          {notices.slice(0, shown).map(n => (
             <div key={n.id} className="bg-white rounded-2xl border border-slate-100 shadow-sm p-4">
               <div className="flex items-start justify-between gap-2 mb-2">
                 <div className="font-extrabold text-slate-900 text-sm flex-1">{n.title}</div>
@@ -235,7 +237,14 @@ export const TeacherNoticesView: React.FC<Props> = ({ onBack }) => {
                 <span className="text-[9px] font-bold text-slate-400 ml-auto">{n.sentAt}</span>
               </div>
             </div>
-          ))
+          ))}
+          {notices.length > shown && (
+            <button onClick={() => setShown(s => s + 50)}
+              className="w-full py-3 bg-white border border-slate-200 rounded-2xl font-black text-xs text-indigo-700 hover:bg-indigo-50 transition-colors">
+              Load More ({notices.length - shown} remaining)
+            </button>
+          )}
+          </>
         )}
       </div>
     </div>

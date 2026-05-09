@@ -400,19 +400,30 @@ studentsRouter.post('/fail', requireAuth, requireRole('PRINCIPAL'), async (req, 
 // when transferring it. (See `/create` parent-handling block.)
 studentsRouter.post('/issue-tc', requireAuth, requireRole('PRINCIPAL'), async (req, res) => {
   try {
-    const body = requireBody<{ studentId: string; tcNumber: string; reason?: string }>(
-      req, ['studentId', 'tcNumber'],
+    // tcNumber now optional — when omitted the SQL RPC generates a
+    // school-scoped sequential TC-{year}-{NNN}. Caller can still pass
+    // a custom number if the school keeps an off-app numbering system.
+    const body = requireBody<{ studentId: string; tcNumber?: string; reason?: string }>(
+      req, ['studentId'],
     );
-    if (!body.tcNumber.trim()) throw new ApiError(400, 'TC number required');
     const schoolId = req.user.school_id!;
 
-    const { error } = await adminDb.from('students').update({
-      is_active: false,
-      status:    'TC_ISSUED',
-      tc_number: body.tcNumber.trim(),
-      updated_at: new Date().toISOString(),
-    }).eq('id', body.studentId).eq('school_id', schoolId);
-    if (error) throw new ApiError(500, error.message);
+    // Delegate to issue_tc_and_leave RPC — it enforces Editor Mode,
+    // generates the TC number, deactivates the student, and writes a
+    // student_change_history row in one transaction.
+    const db = userDb(req.jwt);
+    const { data: tcNumber, error } = await db.rpc('issue_tc_and_leave', {
+      p_student_id: body.studentId,
+      p_reason:     body.reason ?? null,
+    });
+    if (error) throw new ApiError(400, error.message);
+
+    // If caller passed an explicit override (legacy path), patch the
+    // student row with the supplied number after the RPC's auto-gen.
+    if (body.tcNumber?.trim()) {
+      await adminDb.from('students').update({ tc_number: body.tcNumber.trim() })
+        .eq('id', body.studentId).eq('school_id', schoolId);
+    }
 
     // Parent deactivation cascade. We find the parent linked to this student
     // (if any) and check whether they have any OTHER active kids in this
@@ -455,21 +466,28 @@ studentsRouter.post('/issue-tc', requireAuth, requireRole('PRINCIPAL'), async (r
       console.warn('[issue-tc] parent deactivation cascade failed:', (e as Error).message);
     }
 
-    ok(res, { studentId: body.studentId, tcNumber: body.tcNumber.trim() });
+    const finalTc = body.tcNumber?.trim() || (tcNumber as string);
+    ok(res, { studentId: body.studentId, tcNumber: finalTc });
   } catch (err) { fail(res, err); }
 });
 
 // POST /api/students/readmit — re-activate a previously deactivated student
+// and create their student_academic_records row for the active year.
+// Editor Mode enforced server-side via the rejoin_student RPC.
 studentsRouter.post('/readmit', requireAuth, requireRole('PRINCIPAL'), async (req, res) => {
   try {
-    const { studentId } = requireBody<{ studentId: string }>(req, ['studentId']);
+    const { studentId, className, section, rollNo } = requireBody<{
+      studentId: string; className: string; section?: string; rollNo?: string;
+    }>(req, ['studentId', 'className']);
 
-    const { error } = await adminDb.from('students').update({
-      is_active: true,
-      status:    'ACTIVE',
-      updated_at: new Date().toISOString(),
-    }).eq('id', studentId).eq('school_id', req.user.school_id!);
-    if (error) throw new ApiError(500, error.message);
+    const db = userDb(req.jwt);
+    const { error } = await db.rpc('rejoin_student', {
+      p_student_id: studentId,
+      p_class_name: className,
+      p_section:    section ?? '',
+      p_roll_no:    rollNo ?? null,
+    });
+    if (error) throw new ApiError(400, error.message);
 
     ok(res, { studentId });
   } catch (err) { fail(res, err); }

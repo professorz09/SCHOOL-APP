@@ -1139,6 +1139,21 @@ Class: ${meta.className}
 };
 
 function buildExamPrompt(req: ExamPaperRequest): string {
+  const mcq   = Math.max(0, req.mcqCount   ?? 0);
+  const short = Math.max(0, req.shortCount ?? 0);
+  const long  = Math.max(0, req.longCount  ?? 0);
+  const totalRequested = mcq + short + long;
+  // When the teacher specified explicit per-type counts, the AI MUST
+  // honour them exactly. Otherwise we let the model pick a balanced
+  // mix matching the testType + difficulty.
+  const countLine = totalRequested > 0
+    ? `EXACT question counts (must match exactly):
+- ${mcq} MCQ (1 mark each)
+- ${short} short-answer (2-3 marks each)
+- ${long} long-answer (5+ marks each)
+Total questions: ${totalRequested}.`
+    : 'Pick a balanced mix of MCQ / short-answer / long-answer appropriate for the test type and difficulty.';
+
   return `You are an experienced Indian school teacher creating an examination paper.
 Subject: ${req.subject}
 Class: ${req.className}
@@ -1147,6 +1162,8 @@ Total marks: ${req.totalMarks}
 Duration: ${req.duration} minutes
 Topics covered: ${req.topics}
 Difficulty: ${req.difficulty}
+
+${countLine}
 
 Generate a complete exam paper as a JSON object with the following shape:
 {
@@ -1164,7 +1181,7 @@ Generate a complete exam paper as a JSON object with the following shape:
 Constraints:
 - Type must be one of: MCQ, SHORT, LONG, DIAGRAM
 - The sum of marks across all sections must equal ${req.totalMarks}
-- Provide a balanced mix appropriate for the test type and difficulty
+- Group questions by type into their own sections (Section A = MCQ, Section B = Short, Section C = Long)
 - Use authentic textbook-style language for ${req.className}-level ${req.subject}
 - Return only the JSON, no preamble, no markdown fences`;
 }

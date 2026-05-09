@@ -36,6 +36,7 @@ export const ComplaintsManager: React.FC<Props> = ({ onBack }) => {
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [showRejectModal, setShowRejectModal] = useState(false);
   const [rejectReason, setRejectReason] = useState('');
+  const [shown, setShown] = useState(50);
 
   const loadComplaints = useCallback(() => {
     principalService.getComplaints()
@@ -52,7 +53,23 @@ export const ComplaintsManager: React.FC<Props> = ({ onBack }) => {
   useEffect(() => { loadComplaints(); }, [loadComplaints]);
   useRealtimeTable('complaints', loadComplaints);
 
-  const filtered = filter === 'ALL' ? complaints : complaints.filter(c => c.status === filter);
+  // Sort so open complaints (PENDING / IN_REVIEW) bubble to the top — these
+  // are the ones the principal still needs to act on. Within each group,
+  // newest first. Resolved + rejected go below in the same date order.
+  const isOpenStatus = (s: ComplaintStatus) => s === 'PENDING' || s === 'IN_REVIEW';
+  const sortedComplaints = React.useMemo(() => [...complaints].sort((a, b) => {
+    const ao = isOpenStatus(a.status) ? 0 : 1;
+    const bo = isOpenStatus(b.status) ? 0 : 1;
+    if (ao !== bo) return ao - bo;
+    return (b.createdAt ?? '').localeCompare(a.createdAt ?? '');
+  }), [complaints]);
+  const filtered = filter === 'ALL' ? sortedComplaints : sortedComplaints.filter(c => c.status === filter);
+
+  // Reset pager when filter changes; cap visible to last 20 by default.
+  useEffect(() => { setShown(50); }, [filter]);
+  const visible = filtered.slice(0, shown);
+  const remaining = filtered.length - visible.length;
+  const openCount = complaints.filter(c => isOpenStatus(c.status)).length;
 
   const handleResolve = async () => {
     if (!selected || !response.trim()) { showToast('Response required', 'error'); return; }
@@ -82,7 +99,7 @@ export const ComplaintsManager: React.FC<Props> = ({ onBack }) => {
     } finally { setIsSubmitting(false); }
   };
 
-  const isOpen = (s: ComplaintStatus) => s === 'PENDING' || s === 'IN_REVIEW';
+  const isOpen = isOpenStatus;
 
   if (selected) return (
     <div className="w-full bg-slate-50 flex flex-col animate-in slide-in-from-right-8 duration-300">
@@ -192,6 +209,11 @@ export const ComplaintsManager: React.FC<Props> = ({ onBack }) => {
       <div className="bg-white border-b border-slate-100 px-4 pt-4 pb-4 flex items-center gap-3 sticky top-0 z-10 shadow-sm">
         <button onClick={onBack} className="p-2 -ml-2 bg-slate-100 rounded-full text-slate-600"><ArrowLeft size={20} /></button>
         <h2 className="text-xl font-black text-slate-900 uppercase tracking-tight">Complaints</h2>
+        {openCount > 0 && (
+          <span className="ml-auto text-[9px] font-black px-2.5 py-1 rounded-full bg-rose-50 text-rose-700 uppercase tracking-widest">
+            {openCount} open
+          </span>
+        )}
       </div>
       <div className="flex-1 overflow-y-auto p-4  space-y-3">
         <div className="flex gap-1.5 overflow-x-auto hide-scrollbar -mx-1 px-1">
@@ -203,7 +225,7 @@ export const ComplaintsManager: React.FC<Props> = ({ onBack }) => {
           ))}
         </div>
         <div className="space-y-2">
-          {filtered.map(c => (
+          {visible.map(c => (
             <button key={c.id} onClick={() => { setSelected(c); setResponse(c.response ?? ''); setShowRejectModal(false); setRejectReason(''); }}
               className="w-full bg-white rounded-2xl border border-slate-100 shadow-sm p-4 text-left active:bg-slate-50">
               <div className="flex items-start justify-between gap-2 mb-2">
@@ -230,6 +252,17 @@ export const ComplaintsManager: React.FC<Props> = ({ onBack }) => {
               <CircleAlert size={32} className="mb-3 opacity-40" />
               <p className="font-bold text-sm">No complaints</p>
             </div>
+          )}
+          {remaining > 0 && (
+            <button onClick={() => setShown(s => s + 50)}
+              className="w-full py-3 bg-white border border-slate-200 rounded-2xl font-black text-xs text-slate-700 hover:bg-slate-50 transition-colors">
+              Load More ({remaining} remaining)
+            </button>
+          )}
+          {filtered.length > 0 && (
+            <p className="text-center text-[10px] font-bold text-slate-300 pt-1">
+              Showing {visible.length} of {filtered.length}
+            </p>
           )}
         </div>
       </div>

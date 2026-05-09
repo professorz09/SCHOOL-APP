@@ -93,6 +93,8 @@ export const StudentNoticesView: React.FC<Props> = ({ onBack }) => {
   const [notices, setNotices] = useState<StudentNotice[]>([]);
   const [broadcasts, setBroadcasts] = useState<RelevantBroadcast[]>([]);
   const [filter, setFilter]   = useState<FilterKey>('ALL');
+  const [shown, setShown]     = useState(50);
+  useEffect(() => { setShown(50); }, [filter]);
 
   const loadAll = useCallback(() => {
     studentDashboardService.getNotices().then(setNotices);
@@ -164,9 +166,17 @@ export const StudentNoticesView: React.FC<Props> = ({ onBack }) => {
             <p className="font-bold text-sm">Nothing here</p>
           </div>
         ) : (
-          <div className="grid grid-cols-1 lg:grid-cols-2 gap-3 lg:gap-4">
-            {filtered.map((n, idx) => <NoticeCard key={`n-${n.id ?? idx}`} notice={n}/>)}
-          </div>
+          <>
+            <div className="grid grid-cols-1 lg:grid-cols-2 gap-3 lg:gap-4">
+              {filtered.slice(0, shown).map((n, idx) => <NoticeCard key={`n-${n.id ?? idx}`} notice={n}/>)}
+            </div>
+            {filtered.length > shown && (
+              <button onClick={() => setShown(s => s + 50)}
+                className="w-full mt-4 py-3 bg-white border border-slate-200 rounded-2xl font-black text-xs text-indigo-700 hover:bg-indigo-50 transition-colors">
+                Load More ({filtered.length - shown} remaining)
+              </button>
+            )}
+          </>
         )}
       </div>
     </div>

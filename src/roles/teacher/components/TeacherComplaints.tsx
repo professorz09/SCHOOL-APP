@@ -27,6 +27,7 @@ export const TeacherComplaintsView: React.FC<Props> = ({ onBack }) => {
   const { showToast } = useUIStore();
   const [view, setView] = useState<View>('LIST');
   const [complaints, setComplaints] = useState<TeacherComplaint[]>([]);
+  const [shown, setShown] = useState(50);
   const [form, setForm] = useState({ subject: '', description: '' });
   const [isSubmitting, setIsSubmitting] = useState(false);
 
@@ -98,7 +99,7 @@ export const TeacherComplaintsView: React.FC<Props> = ({ onBack }) => {
         <button onClick={() => setView('CREATE')} className="p-2 bg-rose-500 text-white rounded-full shadow-md"><Plus size={18} /></button>
       )}
       <div className="flex-1 overflow-y-auto p-4  space-y-3">
-        {complaints.map(c => (
+        {complaints.slice(0, shown).map(c => (
           <div key={c.id} className="bg-white rounded-2xl border border-slate-100 shadow-sm p-4">
             <div className="flex items-start justify-between gap-2 mb-2">
               <span className={`text-[9px] font-black px-2 py-0.5 rounded-full uppercase ${statusColor(c.status)}`}>{STATUS_LABEL[c.status] ?? c.status}</span>
@@ -121,6 +122,12 @@ export const TeacherComplaintsView: React.FC<Props> = ({ onBack }) => {
             <CircleAlert size={32} className="mb-3 opacity-40" />
             <p className="font-bold text-sm">No complaints filed</p>
           </div>
+        )}
+        {complaints.length > shown && (
+          <button onClick={() => setShown(s => s + 50)}
+            className="w-full py-3 bg-white border border-slate-200 rounded-2xl font-black text-xs text-rose-700 hover:bg-rose-50 transition-colors">
+            Load More ({complaints.length - shown} remaining)
+          </button>
         )}
       </div>
     </div>

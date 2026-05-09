@@ -42,6 +42,9 @@ export const ExamPaperGeneratorView: React.FC<Props> = ({ onBack }) => {
     duration: 60,
     topics: '',
     difficulty: 'MEDIUM',
+    mcqCount: 0,
+    shortCount: 0,
+    longCount: 0,
   });
 
   // Pre-load this teacher's primary subject + first assigned class for saner defaults.
@@ -291,6 +294,52 @@ export const ExamPaperGeneratorView: React.FC<Props> = ({ onBack }) => {
                 </button>
               ))}
             </div>
+          </div>
+
+          {/* Question count controls — exact counts per type. When all
+              three are 0, AI auto-balances based on difficulty + test
+              type. Live total + marks math shown below the row. */}
+          <div>
+            <label className="block text-[10px] font-black uppercase tracking-widest text-slate-500 mb-1.5">
+              Question Counts <span className="text-slate-400">(0 = auto-balance)</span>
+            </label>
+            <div className="grid grid-cols-3 gap-2">
+              {[
+                { key: 'mcqCount'   as const, label: 'MCQ',         marks: 1, color: 'border-blue-200 focus:border-blue-500',      labelColor: 'text-blue-700' },
+                { key: 'shortCount' as const, label: 'Short',       marks: 2, color: 'border-violet-200 focus:border-violet-500',  labelColor: 'text-violet-700' },
+                { key: 'longCount'  as const, label: 'Long',        marks: 5, color: 'border-rose-200 focus:border-rose-500',      labelColor: 'text-rose-700' },
+              ].map(({ key, label, marks, color, labelColor }) => (
+                <div key={key}>
+                  <div className={`text-[9px] font-black uppercase tracking-wider ${labelColor} mb-1 flex items-center justify-between`}>
+                    <span>{label}</span>
+                    <span className="text-slate-400">~{marks}m</span>
+                  </div>
+                  <input
+                    type="number" min={0} max={50}
+                    value={form[key] ?? 0}
+                    onChange={e => setForm(f => ({ ...f, [key]: Math.max(0, +e.target.value || 0) }))}
+                    className={`w-full bg-slate-50 border rounded-xl px-3 py-2 text-center font-black text-base outline-none ${color}`}
+                  />
+                </div>
+              ))}
+            </div>
+            {(() => {
+              const mcq = form.mcqCount ?? 0;
+              const sht = form.shortCount ?? 0;
+              const lng = form.longCount ?? 0;
+              const totalQs = mcq + sht + lng;
+              const estMarks = mcq * 1 + sht * 2 + lng * 5;
+              if (totalQs === 0) return (
+                <p className="text-[10px] font-bold text-slate-400 mt-1.5">AI will pick a balanced mix automatically.</p>
+              );
+              const overrun = estMarks > form.totalMarks;
+              return (
+                <p className={`text-[10px] font-bold mt-1.5 ${overrun ? 'text-rose-600' : 'text-slate-500'}`}>
+                  {totalQs} questions · ≈ {estMarks} marks
+                  {overrun && ` — exceeds total ${form.totalMarks}, AI will rebalance`}
+                </p>
+              );
+            })()}
           </div>
         </div>
 

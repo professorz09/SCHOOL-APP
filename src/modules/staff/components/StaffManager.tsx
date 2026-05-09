@@ -411,6 +411,7 @@ export const StaffManager: React.FC<Props> = ({ onBack }) => {
   const [selected, setSelected] = useState<StaffMember | null>(null);
   const [search, setSearch] = useState('');
   const [roleFilter, setRoleFilter] = useState<StaffRole | 'ALL'>('ALL');
+  const [shown, setShown] = useState(50);
   const [form, setForm] = useState<Omit<StaffMember, 'id'>>(BLANK);
   const [editForm, setEditForm] = useState<Omit<StaffMember, 'id'>>(BLANK);
   const [isSubmitting, setIsSubmitting] = useState(false);
@@ -514,6 +515,11 @@ export const StaffManager: React.FC<Props> = ({ onBack }) => {
     const matchRole = roleFilter === 'ALL' || s.role === roleFilter;
     return matchSearch && matchRole;
   });
+
+  // Reset to first page when filters narrow.
+  useEffect(() => { setShown(50); }, [search, roleFilter]);
+  const visibleStaff = filtered.slice(0, shown);
+  const remainingStaff = filtered.length - visibleStaff.length;
 
   const handleCreate = async () => {
     if (!form.name.trim()) { showToast('Staff name required', 'error'); return; }
@@ -896,7 +902,7 @@ export const StaffManager: React.FC<Props> = ({ onBack }) => {
         </div>
 
         <div className="space-y-2 px-4 pt-1">
-          {filtered.map(member => (
+          {visibleStaff.map(member => (
             <button key={member.id} onClick={() => { setSelected(member); setTab('INFO'); setView('PROFILE'); }}
               className="w-full bg-white rounded-2xl border border-slate-100 shadow-sm px-4 py-3.5 text-left active:scale-[0.98] transition-transform">
               <div className="flex items-center gap-3">
@@ -923,6 +929,17 @@ export const StaffManager: React.FC<Props> = ({ onBack }) => {
               <UserCheck size={32} className="mb-3 opacity-40" />
               <p className="font-bold text-sm">No staff found</p>
             </div>
+          )}
+          {remainingStaff > 0 && (
+            <button onClick={() => setShown(s => s + 50)}
+              className="w-full py-3 bg-white border border-slate-200 rounded-2xl font-black text-xs text-blue-700 hover:bg-blue-50 transition-colors">
+              Load More ({remainingStaff} remaining)
+            </button>
+          )}
+          {filtered.length > 0 && (
+            <p className="text-center text-[10px] font-bold text-slate-300 pt-1 pb-2">
+              Showing {visibleStaff.length} of {filtered.length} staff
+            </p>
           )}
         </div>
       </div>

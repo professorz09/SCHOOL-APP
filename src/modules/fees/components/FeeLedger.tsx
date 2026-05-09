@@ -5,7 +5,7 @@ import {
   Building2, FileCheck, ChevronRight, Receipt, TrendingDown, Users, Filter,
   RefreshCw, Download, ChevronDown, Calendar, RotateCcw, AlertCircle,
 } from 'lucide-react';
-import { feeService, FeeInstallment, FeeStatus, FeeType, PaymentRecord, GovernmentPaymentRecord } from '@/modules/fees/fee.service';
+import { feeService, FeeInstallment, FeeStatus, FeeType, PaymentRecord } from '@/modules/fees/fee.service';
 import { exportCsv } from '@/shared/utils/csv';
 import { studentService } from '@/modules/students/student.service';
 import { useStudentList } from '@/modules/students/useStudentList';
@@ -19,7 +19,7 @@ import { PreviousYearDues } from '@/modules/fees/components/PreviousYearDues';
 type YearGroup = { academicYearId: string; yearLabel: string; isActive: boolean; installments: FeeInstallment[] };
 
 type PaymentMethod = 'CASH' | 'UPI' | 'NET_BANKING' | 'CHEQUE' | 'ONLINE';
-type ListTab = 'ALL' | 'DUE' | 'CLEARED' | 'PENDING';
+type ListTab = 'ALL' | 'DUE' | 'CLEARED' | 'PENDING' | 'HISTORY';
 
 const METHOD_LABEL: Record<PaymentMethod, string> = {
   CASH: 'Cash', UPI: 'UPI', NET_BANKING: 'Net Banking', CHEQUE: 'Cheque', ONLINE: 'Online',
@@ -123,7 +123,10 @@ export const FeeLedger: React.FC<Props> = ({ onBack }) => {
   // through the Collect Payment modal's Discount field. Existing
   // fee_write_offs rows in the DB are still surfaced as historical
   // "Discount" entries in Payment History so audit trail isn't lost.
-  const [govtPayModal, setGovtPayModal]     = useState(false);
+  // RTE / govt-pay modal removed in 0083 — government grants are now
+  // recorded as regular payments with a "Govt grant" note in the
+  // Collect Payment modal. Removes the parallel pay flow + the
+  // govt-payments cache + the GOVT history stream.
   const [receiptModal, setReceiptModal]     = useState<PaymentRecord | null>(null);
   // Payment reversal — only set while the confirm modal is open. The list
   // refresh + receipt close happen on success.
@@ -150,11 +153,8 @@ export const FeeLedger: React.FC<Props> = ({ onBack }) => {
   const [applyDiscount, setApplyDiscount]   = useState(false);
   const [useCustomDate, setUseCustomDate]   = useState(false);
   const [paymentDate, setPaymentDate]       = useState('');
-  const [govtPayAmount, setGovtPayAmount]   = useState('');
-  const [govtRefNo, setGovtRefNo]           = useState('');
-  const [govtNote, setGovtNote]             = useState('');
+  // useAdvanceCredit removed in 0084 — advance credit feature dropped.
   const [paymentTransactions, setPaymentTransactions] = useState<PaymentRecord[]>(() => feeService.getPaymentHistory());
-  const [govtTransactions, setGovtTransactions] = useState<GovernmentPaymentRecord[]>(() => feeService.getGovernmentPayments());
 
   // Late-fee preview shown inside the pay modal. Refreshed every time the
   // modal opens; principal can opt out via the "Skip late fee" checkbox.
@@ -164,12 +164,18 @@ export const FeeLedger: React.FC<Props> = ({ onBack }) => {
 
   // Per-year grouping for the schedule tab.
   const [yearGroups, setYearGroups]         = useState<YearGroup[]>([]);
+  // Tracks whether reloadYearGroups has finished at least once for the
+  // currently selected student. Without this, the "No fee schedule yet"
+  // empty state flashes for ~200ms on every student tap because both
+  // `yearGroups` and `selected.installments` are empty before the cache
+  // primes — the empty-state check can't tell loading from genuinely empty.
+  const [yearGroupsLoading, setYearGroupsLoading] = useState(false);
   const [collapsedYears, setCollapsedYears] = useState<Record<string, boolean>>({});
 
   // Fee structures for the regenerate modal — loaded lazily on open.
   const [feeStructures, setFeeStructures]   = useState<FeeStructureRecord[]>([]);
   const [regenStructureId, setRegenStructureId] = useState('');
-  const [regenIsRte, setRegenIsRte]         = useState(false);
+  // regenIsRte removed in 0083 — RTE distinction dropped from fees.
   const [regenDiscountAmt, setRegenDiscountAmt] = useState('');
   const [regenDiscountPct, setRegenDiscountPct] = useState('');
   const [regenSubmitting, setRegenSubmitting]   = useState(false);
@@ -195,8 +201,8 @@ export const FeeLedger: React.FC<Props> = ({ onBack }) => {
   // preview show by default. Discount, method, and note live behind a
   // "More Options" disclosure (mirrors the existing Collect Payment modal).
   const [rowPayMoreOpen, setRowPayMoreOpen]   = useState(false);
-  const [rowPayUseAdvance, setRowPayUseAdvance] = useState(false);
-  const [rowPayPaidBy, setRowPayPaidBy]       = useState<'PARENT' | 'GOVERNMENT'>('PARENT');
+  // rowPayUseAdvance removed in 0084 — advance credit feature dropped.
+  // rowPayPaidBy removed in 0083 — see Compact summary chips section.
 
   // Schedule row's expand-on-tap history: which installment is expanded.
   // Only one open at a time so the timeline stays scannable.
@@ -233,6 +239,20 @@ export const FeeLedger: React.FC<Props> = ({ onBack }) => {
     setStudents(profiles);
   }, [stuList.items, stuList.loading]);
 
+  // Slim-list fee snapshot keyed by studentId — derived from
+  // student_academic_records aggregates (refreshed on every payment via
+  // refresh_student_fee_aggregate trigger). Drives the list-card badges
+  // BEFORE the per-student installment cache is primed. Without this,
+  // every unopened student showed "No schedule / Pending" even when they
+  // had installments + payments — confusing for a quick triage view.
+  const slimFeeMap = React.useMemo(() => {
+    const m = new Map<string, { totalFee: number; paidFee: number; feeStatus: string }>();
+    for (const s of stuList.items) {
+      m.set(s.id, { totalFee: s.totalFee, paidFee: s.paidFee, feeStatus: s.feeStatus });
+    }
+    return m;
+  }, [stuList.items]);
+
   useEffect(() => {
     (async () => {
       try {
@@ -243,7 +263,6 @@ export const FeeLedger: React.FC<Props> = ({ onBack }) => {
         await Promise.all([
           feeService.refreshLite().then(() => {
             setPaymentTransactions(feeService.getPaymentHistory());
-            setGovtTransactions(feeService.getGovernmentPayments());
           }),
           refreshAggregate(),
         ]);
@@ -263,6 +282,14 @@ export const FeeLedger: React.FC<Props> = ({ onBack }) => {
   useEffect(() => {
     if (!selected) return;
     let cancelled = false;
+    // Flip to loading immediately so the empty state can't flash before
+    // refreshStudent (cache prime) + reloadYearGroups both finish. Earlier
+    // a sibling effect was setting this true/false on its own short timing
+    // window, leaving a ~200ms gap during which yearGroups was [] AND
+    // yearGroupsLoading was false → "Generate Schedule" empty state shown
+    // for the user even though the student had a real schedule.
+    setYearGroups([]);
+    setYearGroupsLoading(true);
     (async () => {
       try {
         await feeService.refreshStudent(selected.studentId);
@@ -278,6 +305,8 @@ export const FeeLedger: React.FC<Props> = ({ onBack }) => {
         await reloadYearGroups(selected.studentId);
       } catch (e) {
         if (!cancelled) console.warn('[FeeLedger] prime selected failed', e);
+        // Clear loading on failure so the user isn't stuck on the spinner.
+        if (!cancelled) setYearGroupsLoading(false);
       }
     })();
     return () => { cancelled = true; };
@@ -294,6 +323,7 @@ export const FeeLedger: React.FC<Props> = ({ onBack }) => {
   // tab stays in sync with the cache that recordPayment / regenerate
   // already refreshed.
   const reloadYearGroups = async (studentId: string) => {
+    setYearGroupsLoading(true);
     try {
       const groups = await feeService.getStudentInstallmentsByYear(studentId);
       setYearGroups(groups);
@@ -309,12 +339,18 @@ export const FeeLedger: React.FC<Props> = ({ onBack }) => {
       // Non-fatal — schedule tab will fall back to the legacy flat list.
       // eslint-disable-next-line no-console
       console.warn('Failed to load per-year fee groups', e);
+    } finally {
+      setYearGroupsLoading(false);
     }
   };
 
   useEffect(() => {
-    if (!selected) { setYearGroups([]); return; }
-    void reloadYearGroups(selected.studentId);
+    // Reset year groups when nothing is selected. The selection-change
+    // priming + loading flag now lives entirely in the refreshStudent
+    // effect above so we don't double-fire reloadYearGroups (which used
+    // to leave a ~200ms window where the empty state showed before the
+    // refresh kicked in).
+    if (!selected) { setYearGroups([]); setYearGroupsLoading(false); }
   }, [selected?.studentId]);
 
   // Fetch a fresh late-fee preview every time the pay modal opens. We
@@ -337,7 +373,7 @@ export const FeeLedger: React.FC<Props> = ({ onBack }) => {
   // Lazy-load fee structures the first time the regenerate modal opens.
   const openRegenModal = async () => {
     if (!selected) return;
-    setRegenIsRte(selected.isRte);
+    // setRegenIsRte removed — RTE flag no longer drives schedule generation.
     setRegenDiscountAmt('');
     setRegenDiscountPct('');
     setRegenStructureId('');
@@ -378,7 +414,7 @@ export const FeeLedger: React.FC<Props> = ({ onBack }) => {
     try {
       const inserted = await feeService.regenerateScheduleFromStructure(
         selected.studentId, yearId, regenStructureId,
-        regenIsRte,
+        false, // RTE flag dropped in 0083 — passed for back-compat
         Number(regenDiscountAmt) || 0,
         Number(regenDiscountPct) || 0,
       );
@@ -416,16 +452,14 @@ export const FeeLedger: React.FC<Props> = ({ onBack }) => {
     setRowPayMethod('CASH');
     setRowPayNote('');
     setRowPayMoreOpen(false);
-    setRowPayUseAdvance(false);
-    setRowPayPaidBy(inst.payerType === 'GOVERNMENT' ? 'GOVERNMENT' : 'PARENT');
   };
 
   const handleRowPaySubmit = async () => {
     if (!rowPayModal || !selected) return;
     const amount   = Number(rowPayAmount) || 0;
     const discount = Number(rowPayDiscount) || 0;
-    if (amount === 0 && discount === 0 && !rowPayUseAdvance) {
-      showToast('Enter an amount, discount, or use advance', 'error');
+    if (amount === 0 && discount === 0) {
+      showToast('Enter an amount or discount', 'error');
       return;
     }
     if (amount + discount > rowPayModal.outstanding) {
@@ -434,10 +468,7 @@ export const FeeLedger: React.FC<Props> = ({ onBack }) => {
     }
     setRowPaySubmitting(true);
     try {
-      // When the principal marks the source as Government, the method is
-      // overridden to 'GOVERNMENT' so history can colour the entry blue
-      // and the audit log distinguishes RTE/grant flows from cash receipts.
-      const effectiveMethod = rowPayPaidBy === 'GOVERNMENT' ? 'GOVERNMENT' : METHOD_LABEL[rowPayMethod];
+      const effectiveMethod = METHOD_LABEL[rowPayMethod];
       await feeService.recordPaymentForInstallment(
         rowPayModal.installmentId,
         Math.round(amount),
@@ -445,7 +476,6 @@ export const FeeLedger: React.FC<Props> = ({ onBack }) => {
         effectiveMethod,
         undefined,
         rowPayNote || undefined,
-        rowPayUseAdvance,
       );
       const updated = feeService.getStudentFeeProfile(
         selected.studentId, selected.name, selected.className,
@@ -513,7 +543,7 @@ export const FeeLedger: React.FC<Props> = ({ onBack }) => {
           await feeService.recordPayment(
             reverseTarget.studentId, keepAmount, reverseTarget.method,
             undefined, `Re-recorded after partial reversal of #${reverseTarget.receiptNo}`,
-            false, false, 0,
+            false, 0,
           );
         } catch (e) {
           // Use error toast so the message stays visible until dismissed.
@@ -582,6 +612,16 @@ export const FeeLedger: React.FC<Props> = ({ onBack }) => {
       showToast('Amount must be a whole rupee value (no decimals)', 'error');
       return;
     }
+    // Hard-block overpay client-side. Server also rejects (0084) but
+    // surfacing it here gives instant, friendly feedback instead of an
+    // opaque 400 from the API.
+    const totalDue = (selected.installments ?? [])
+      .reduce((s, i) => s + Math.max(0, i.amount - i.paidAmount - i.writeOffAmount), 0)
+      + (applyLateFee ? lateFeeTotal : 0);
+    if ((amount + discount) > totalDue) {
+      showToast(`Overpay blocked — max ₹${totalDue.toLocaleString('en-IN')} due. Reduce by ₹${(amount + discount - totalDue).toLocaleString('en-IN')}.`, 'error');
+      return;
+    }
     if (amount > 10_000_000 || discount > 10_000_000) {
       showToast('Amount looks too large — please re-check', 'error');
       return;
@@ -601,14 +641,9 @@ export const FeeLedger: React.FC<Props> = ({ onBack }) => {
         // dedicated parameter and is allocated against installments separately.
         Math.max(amount, 0),
         METHOD_LABEL[paymentMethod],
-        chosenDate, paymentNote || undefined, false, applyLateFee, discount,
+        chosenDate, paymentNote || undefined, applyLateFee, discount,
       );
-      // Treat the RPC's persisted paymentId as the source of truth: if the
-      // RPC committed a payment row, the collection succeeded — even if the
-      // cache-derived applied/advance counters end up at zero (e.g. when an
-      // auto-inserted Late Fee absorbed the entire amount). Only short-circuit
-      // when there is no paymentId AND nothing measurably moved.
-      if (!result.paymentId && result.applied <= 0 && result.advance <= 0) {
+      if (!result.paymentId && result.applied <= 0) {
         showToast('Nothing applied', 'error');
         return;
       }
@@ -656,7 +691,6 @@ export const FeeLedger: React.FC<Props> = ({ onBack }) => {
       ? `<div class="section-label">Particulars</div>
          <div class="items">
            ${r.installmentDetails.map(d => `<div class="item"><span>${d.month} · ${FEE_TYPE_LABEL[d.feeType] ?? d.feeType}</span><span>₹${d.amount.toLocaleString('en-IN')}</span></div>`).join('')}
-           ${r.advanceAmount > 0 ? `<div class="item advance"><span>Advance Credit Added</span><span>₹${r.advanceAmount.toLocaleString('en-IN')}</span></div>` : ''}
          </div>`
       : '';
     // Note is internal-only — never rendered on the printed receipt.
@@ -729,22 +763,9 @@ export const FeeLedger: React.FC<Props> = ({ onBack }) => {
     setTimeout(() => { popup.print(); popup.close(); }, 400);
   };
 
-  const handleGovtPayment = async () => {
-    if (!govtPayAmount || !govtRefNo.trim()) { showToast('Amount and reference number required', 'error'); return; }
-    const amount = Number(govtPayAmount);
-    if (isNaN(amount) || amount <= 0) { showToast('Invalid amount', 'error'); return; }
-    const rteStudents = students.filter(s => s.isRte).map(s => s.studentId);
-    if (rteStudents.length === 0) { showToast('No RTE students found', 'error'); return; }
-    if (await feeService.recordGovernmentPayment(rteStudents, amount, govtRefNo, govtNote)) {
-      setStudents(students.map(s => feeService.getStudentFeeProfile(s.studentId, s.name, s.className, s.admissionNo, s.isRte)));
-      setGovtTransactions(feeService.getGovernmentPayments());
-      setGovtPayModal(false);
-      setGovtPayAmount('');
-      setGovtRefNo('');
-      setGovtNote('');
-      showToast('Government payment recorded');
-    }
-  };
+  // handleGovtPayment removed — bulk RTE payment dropped in 0083.
+  // Government grants are now recorded as regular payments via the
+  // Collect Payment modal, with a "Govt grant" note for accounting.
 
   // Reset page when filter/search changes — must be BEFORE any early return
   // to satisfy React's Rules of Hooks (hook count must be identical every render).
@@ -760,11 +781,21 @@ export const FeeLedger: React.FC<Props> = ({ onBack }) => {
 
   // ─── Derived data ─────────────────────────────────────────────────────────────
   const getParentDue  = (id: string) => feeService.getParentDueSummary(id);
-  const getGovtDue    = (id: string) => feeService.getGovernmentDueSummary(id);
-  const hasDue = (s: StudentFeeProfile) => {
-    const pd = getParentDue(s.studentId).total;
-    const gd = s.isRte ? getGovtDue(s.studentId).total : 0;
-    return pd > 0 || gd > 0;
+  // hasDue + hasSchedule use the slim aggregate when the per-student
+  // installment cache hasn't been primed yet. Without this, the tabs
+  // (Pending / Due / Cleared) and per-card badges all defaulted to
+  // "Pending / No schedule" until each student was opened — defeating
+  // the whole point of the list view.
+  const hasDue = (s: StudentFeeProfile): boolean => {
+    if (s.installments.length > 0) return getParentDue(s.studentId).total > 0;
+    const slim = slimFeeMap.get(s.studentId);
+    if (!slim) return false;
+    return Math.max(0, slim.totalFee - slim.paidFee) > 0;
+  };
+  const hasSchedule = (s: StudentFeeProfile): boolean => {
+    if (s.installments.length > 0) return true;
+    const slim = slimFeeMap.get(s.studentId);
+    return (slim?.totalFee ?? 0) > 0;
   };
 
   const searchMatch = (s: StudentFeeProfile) =>
@@ -772,25 +803,26 @@ export const FeeLedger: React.FC<Props> = ({ onBack }) => {
     (s.admissionNo ?? '').toLowerCase().includes(search.toLowerCase()) ||
     (s.className ?? '').toLowerCase().includes(search.toLowerCase());
 
-  const pendingStudents = students.filter(s => s.installments.length === 0);
-  const dueStudents     = students.filter(s => s.installments.length > 0 && hasDue(s));
-  const clearedStudents = students.filter(s => s.installments.length > 0 && !hasDue(s));
+  // Pending = no schedule at all (students without any installments).
+  // Due / Cleared = have a schedule, with/without outstanding amount.
+  const pendingStudents = students.filter(s => !hasSchedule(s));
+  const dueStudents     = students.filter(s =>  hasSchedule(s) &&  hasDue(s));
+  const clearedStudents = students.filter(s =>  hasSchedule(s) && !hasDue(s));
   // Prefer the server aggregate when it has loaded — accurate even if
   // the in-memory cache is mid-refresh. Falls back to the client walk
   // for the brief window before the first aggregate fetch returns and
   // for anyone who lost the connection mid-session.
   const totalParentDue  = aggregate?.totalParentDue
                           ?? dueStudents.reduce((a, s) => a + getParentDue(s.studentId).total, 0);
-  const totalGovtDue    = aggregate?.totalGovtDue
-                          ?? dueStudents.filter(s => s.isRte).reduce((a, s) => a + getGovtDue(s.studentId).total, 0);
   const totalCollected  = aggregate?.totalCollected
                           ?? students.reduce((a, s) => a + s.installments.reduce((b, i) => b + i.paidAmount, 0), 0);
 
   const visibleStudents = students.filter(s => {
     if (!searchMatch(s)) return false;
-    if (listTab === 'PENDING') return s.installments.length === 0;
-    if (listTab === 'DUE')     return s.installments.length > 0 && hasDue(s);
-    if (listTab === 'CLEARED') return s.installments.length > 0 && !hasDue(s);
+    // PENDING tab removed in this iteration — guard kept so any old
+    // saved state lands on ALL safely.
+    if (listTab === 'DUE')     return  hasSchedule(s) &&  hasDue(s);
+    if (listTab === 'CLEARED') return  hasSchedule(s) && !hasDue(s);
     return true;
   });
 
@@ -800,11 +832,19 @@ export const FeeLedger: React.FC<Props> = ({ onBack }) => {
   // ─── DETAIL VIEW ─────────────────────────────────────────────────────────────
   if (selected) {
     const parentSummary = getParentDue(selected.studentId);
-    const govtSummary   = selected.isRte ? getGovtDue(selected.studentId) : { tuition: 0, total: 0 };
-    const advance       = feeService.getAdvanceBalance(selected.studentId);
+    // Advance credit removed in 0084 — keeping the variable as a 0
+    // constant so the existing layout doesn't flicker / blank chunks
+    // don't need touching beyond the conditional `advance > 0` blocks
+    // (which now never render).
+    const advance = 0;
     const totalDue      = selected.installments.reduce((a, i) => a + i.amount, 0);
     const totalPaid     = selected.installments.reduce((a, i) => a + i.paidAmount, 0);
-    const pct           = totalDue > 0 ? Math.round((totalPaid / totalDue) * 100) : 100;
+    // Cleared = cash paid + discount (write-off). Both reduce the
+    // outstanding, so a ₹2k row fully covered by ₹2k discount must read
+    // as 100% paid in the header tile too — earlier it only counted
+    // cash and showed 38% even when the student was Fully Paid.
+    const totalCleared  = selected.installments.reduce((a, i) => a + i.paidAmount + i.writeOffAmount, 0);
+    const pct           = totalDue > 0 ? Math.min(100, Math.round((totalCleared / totalDue) * 100)) : 100;
 
     return (
       <div className="w-full bg-slate-50 flex flex-col animate-in slide-in-from-right-8 duration-300 lg:max-w-6xl lg:mx-auto lg:px-4 lg:py-6">
@@ -817,7 +857,10 @@ export const FeeLedger: React.FC<Props> = ({ onBack }) => {
             <div className="flex-1 min-w-0">
               <div className="flex items-center gap-2">
                 <span className="font-black text-slate-900 text-lg lg:text-2xl truncate">{selected.name}</span>
-                {selected.isRte && <span className="flex items-center gap-0.5 text-[9px] lg:text-[10px] font-black bg-blue-100 text-blue-700 px-2 py-0.5 rounded-full"><ShieldCheck size={9} /> RTE</span>}
+                {/* RTE chip removed — see commit. The RTE flag stays on
+                    students.is_rte for admission records, but the FeeLedger
+                    treats every student the same. If government pays, the
+                    principal records it as a normal payment with a note. */}
               </div>
               <p className="text-[10px] lg:text-xs font-bold text-slate-400">{selected.className} · {selected.admissionNo}</p>
             </div>
@@ -831,19 +874,15 @@ export const FeeLedger: React.FC<Props> = ({ onBack }) => {
             </div>
             <div className="bg-rose-50 rounded-xl p-2.5 lg:p-4 text-center">
               <div className="text-base lg:text-2xl font-black text-rose-600 tabular-nums">₹{parentSummary.total.toLocaleString('en-IN')}</div>
-              <div className="text-[9px] lg:text-[11px] font-black text-slate-400 uppercase tracking-widest mt-0.5 lg:mt-1">Parent Due</div>
+              <div className="text-[9px] lg:text-[11px] font-black text-slate-400 uppercase tracking-widest mt-0.5 lg:mt-1">Total Due</div>
             </div>
-            {selected.isRte ? (
-              <div className="bg-emerald-50 rounded-xl p-2.5 lg:p-4 text-center">
-                <div className="text-base lg:text-2xl font-black text-emerald-600 tabular-nums">₹{govtSummary.total.toLocaleString('en-IN')}</div>
-                <div className="text-[9px] lg:text-[11px] font-black text-slate-400 uppercase tracking-widest mt-0.5 lg:mt-1">Govt Due</div>
-              </div>
-            ) : (
-              <div className="bg-indigo-50 rounded-xl p-2.5 lg:p-4 text-center">
-                <div className="text-base lg:text-2xl font-black text-indigo-600 tabular-nums">{pct}%</div>
-                <div className="text-[9px] lg:text-[11px] font-black text-slate-400 uppercase tracking-widest mt-0.5 lg:mt-1">Paid</div>
-              </div>
-            )}
+            {/* RTE-specific Govt Due tile removed. Every student now sees
+                the same Paid % tile — government grants (when they happen)
+                go through as a normal payment with a "Govt grant" note. */}
+            <div className="bg-indigo-50 rounded-xl p-2.5 lg:p-4 text-center">
+              <div className="text-base lg:text-2xl font-black text-indigo-600 tabular-nums">{pct}%</div>
+              <div className="text-[9px] lg:text-[11px] font-black text-slate-400 uppercase tracking-widest mt-0.5 lg:mt-1">Paid</div>
+            </div>
           </div>
 
           {/* Progress bar — advance credit is shown inside the Collect
@@ -854,11 +893,7 @@ export const FeeLedger: React.FC<Props> = ({ onBack }) => {
           <div className="h-2 lg:h-2.5 bg-slate-100 rounded-full overflow-hidden">
             <div className={`h-full rounded-full transition-all ${pct === 100 ? 'bg-emerald-500' : 'bg-blue-500'}`} style={{ width: `${pct}%` }} />
           </div>
-          {advance > 0 && (
-            <p className="text-right text-[10px] lg:text-[11px] font-bold text-violet-600 mt-1.5">
-              Advance credit on file: ₹{advance.toLocaleString('en-IN')}
-            </p>
-          )}
+          {/* Advance credit on file banner removed in 0084. */}
         </div>
 
         {/* Tab bar — segmented pill control. Active tab gets a white "card"
@@ -966,20 +1001,14 @@ export const FeeLedger: React.FC<Props> = ({ onBack }) => {
 
         <div className="flex-1 overflow-y-auto lg:overflow-visible p-4 lg:p-0 lg:pt-2 space-y-3 lg:space-y-4">
 
-          {/* ── COLLECT + Govt Pay (inline) ──────────────────────────────── */}
+          {/* Single Collect Payment button — RTE-specific Govt Pay flow
+              removed in 0083. Government grants flow through this same
+              button with a "Govt grant" note. */}
           {detailTab === 'SCHEDULE' && (
-            <div className="flex gap-2">
-              <button onClick={() => setPayModal(true)}
-                className="flex-1 lg:flex-none lg:px-8 flex items-center justify-center gap-2 bg-emerald-600 hover:bg-emerald-700 text-white font-black text-sm lg:text-base py-3.5 lg:py-4 rounded-2xl shadow-md active:scale-[0.98] transition-all">
-                <IndianRupee size={16} /> Collect Payment
-              </button>
-              {selected.isRte && (
-                <button onClick={() => setGovtPayModal(true)}
-                  className="px-4 lg:px-5 flex items-center justify-center gap-2 bg-blue-50 hover:bg-blue-100 text-blue-700 font-black text-xs lg:text-sm py-3.5 lg:py-4 rounded-2xl border border-blue-200 active:scale-[0.98] transition-all">
-                  <ShieldCheck size={14} /> <span className="hidden lg:inline">Govt Pay</span>
-                </button>
-              )}
-            </div>
+            <button onClick={() => setPayModal(true)}
+              className="w-full lg:w-auto lg:px-8 lg:self-start flex items-center justify-center gap-2 bg-emerald-600 hover:bg-emerald-700 text-white font-black text-sm lg:text-base py-3.5 lg:py-4 rounded-2xl shadow-md active:scale-[0.98] transition-all">
+              <IndianRupee size={16} /> Collect Payment
+            </button>
           )}
 
           {/* ── PREVIOUS YEAR DUES ────────────────────────────────────────── */}
@@ -994,12 +1023,23 @@ export const FeeLedger: React.FC<Props> = ({ onBack }) => {
             />
           )}
 
-          {/* Empty state — no installments anywhere for this student. The
-              schedule tab used to render a header with "0 installments" and
-              an empty body, leaving the principal with no obvious next
-              step. We now surface a clear CTA pointing to Regenerate, and
-              don't gate first-time generation behind editor mode. */}
-          {detailTab === 'SCHEDULE' && yearGroups.length === 0 && selected.installments.length === 0 && (
+          {/* Skeleton placeholder while year-groups are still loading.
+              Prevents the "No fee schedule yet" empty state from flashing
+              before the cache primes for the newly-selected student. */}
+          {detailTab === 'SCHEDULE' && yearGroupsLoading && selected.installments.length === 0 && (
+            <div className="bg-white rounded-2xl border border-slate-100 shadow-sm p-6 lg:p-8 text-center">
+              <div className="w-10 h-10 mx-auto mb-3 border-4 border-slate-200 border-t-blue-500 rounded-full animate-spin" />
+              <p className="font-black text-slate-500 text-sm">Loading schedule…</p>
+            </div>
+          )}
+
+          {/* Empty state — only after the load finishes and the student
+              genuinely has no installments. The schedule tab used to render
+              a header with "0 installments" and an empty body, leaving the
+              principal with no obvious next step. We now surface a clear
+              CTA pointing to Regenerate, and don't gate first-time
+              generation behind editor mode. */}
+          {detailTab === 'SCHEDULE' && !yearGroupsLoading && yearGroups.length === 0 && selected.installments.length === 0 && (
             <div className="bg-white rounded-2xl border border-slate-200 shadow-sm p-6 lg:p-8 text-center">
               <div className="w-12 h-12 rounded-2xl bg-amber-50 text-amber-600 flex items-center justify-center mx-auto mb-3">
                 <Calendar size={20} />
@@ -1030,64 +1070,69 @@ export const FeeLedger: React.FC<Props> = ({ onBack }) => {
             const collapsed = !!collapsedYears[group.academicYearId];
             const yearTotal = group.installments.reduce((a, i) => a + i.amount, 0);
             const yearPaid  = group.installments.reduce((a, i) => a + i.paidAmount, 0);
+            const yearDisc  = group.installments.reduce((a, i) => a + i.writeOffAmount, 0);
             const yearDue   = group.installments.reduce((a, i) => a + Math.max(0, i.amount - i.paidAmount - i.writeOffAmount), 0);
+            const cleared   = yearPaid + yearDisc;
+            const pctNum    = yearTotal > 0 ? Math.min(100, Math.round((cleared / yearTotal) * 100)) : 0;
+            const isSettled = yearDue === 0 && yearTotal > 0;
+            const fillColor = isSettled ? 'bg-emerald-500' : group.isActive ? 'bg-blue-500' : 'bg-slate-400';
             return (
-              <div key={group.academicYearId} className="space-y-3">
+              <div key={group.academicYearId}>
+                {/* Year card — strong active vs closed contrast. Active
+                    year: blue-tinted surface + blue accent stripe on the
+                    left edge to anchor it visually. Closed years: flat
+                    white, smaller padding, quieter typography. */}
                 <div
                   onClick={() => setCollapsedYears(prev => ({ ...prev, [group.academicYearId]: !prev[group.academicYearId] }))}
                   role="button" tabIndex={0}
-                  className={`w-full text-left border rounded-2xl px-4 lg:px-5 py-4 cursor-pointer transition-all ${group.isActive ? 'bg-white border-slate-200 hover:border-blue-300 shadow-sm' : 'bg-white border-slate-200 hover:border-slate-300'}`}>
+                  className={`relative w-full text-left rounded-2xl cursor-pointer transition-all overflow-hidden ${
+                    group.isActive
+                      ? 'bg-blue-50/60 border border-blue-200 px-4 lg:px-5 py-4'
+                      : 'bg-white border border-slate-200 hover:border-slate-300 px-3.5 lg:px-4 py-3'
+                  }`}>
+                  {/* Accent stripe — only on active year */}
+                  {group.isActive && (
+                    <div className="absolute left-0 top-0 bottom-0 w-1 bg-blue-500" />
+                  )}
                   <div className="flex items-center justify-between gap-3">
-                    <div className="flex items-center gap-3 min-w-0">
-                      <div className={`w-10 h-10 lg:w-11 lg:h-11 rounded-xl flex items-center justify-center shrink-0 ${group.isActive ? 'bg-blue-600 text-white' : 'bg-slate-100 text-slate-400'}`}>
-                        <Calendar size={16} />
-                      </div>
-                      <div className="min-w-0">
-                        <div className="flex items-center gap-2">
-                          <span className="font-black text-slate-900 text-base lg:text-lg truncate leading-tight">{group.yearLabel}</span>
-                          {group.isActive && <span className="text-[9px] font-black bg-emerald-100 text-emerald-700 px-2 py-0.5 rounded-full uppercase tracking-wider">Active</span>}
-                        </div>
-                        <div className="text-[11px] font-bold text-slate-500 mt-0.5 tabular-nums">
-                          {group.installments.length} installments · ₹{yearTotal.toLocaleString('en-IN')} total
-                        </div>
-                      </div>
+                    <div className="min-w-0 flex items-center gap-2 flex-wrap">
+                      <span className={`font-black leading-tight ${group.isActive ? 'text-slate-900 text-base lg:text-lg' : 'text-slate-700 text-sm lg:text-base'}`}>
+                        {group.yearLabel}
+                      </span>
+                      {group.isActive && (
+                        <span className="text-[9px] font-black bg-blue-600 text-white px-1.5 py-0.5 rounded uppercase tracking-wider">Active</span>
+                      )}
+                      <span className={`text-[10px] lg:text-[11px] font-bold tabular-nums shrink-0 ${group.isActive ? 'text-slate-500' : 'text-slate-400'}`}>
+                        · {group.installments.length} inst.
+                      </span>
                     </div>
                     <div className="flex items-center gap-2 shrink-0">
-                      <div className="text-right">
-                        {yearTotal > 0 && (
-                          <div className="text-base lg:text-lg font-black tabular-nums leading-none text-slate-900">
-                            {Math.round(((yearPaid + group.installments.reduce((a, i) => a + i.writeOffAmount, 0)) / yearTotal) * 100)}<span className="text-slate-400 text-sm">%</span>
-                          </div>
-                        )}
-                        <div className={`text-[10px] font-black uppercase tracking-wider mt-1 ${yearDue === 0 && yearTotal > 0 ? 'text-emerald-600' : 'text-slate-400'}`}>
-                          {yearDue === 0 && yearTotal > 0 ? 'All clear' : 'Collected'}
-                        </div>
-                      </div>
-                      <ChevronDown size={18} className={`text-slate-400 transition-transform ml-1 ${collapsed ? '-rotate-90' : ''}`} />
+                      <span className={`font-black tabular-nums ${
+                        group.isActive ? 'text-base lg:text-lg' : 'text-sm'
+                      } ${isSettled ? 'text-emerald-700' : 'text-slate-900'}`}>
+                        ₹{yearTotal.toLocaleString('en-IN')}
+                      </span>
+                      <ChevronDown size={group.isActive ? 18 : 14} className={`text-slate-400 transition-transform ${collapsed ? '-rotate-90' : ''}`} />
                     </div>
                   </div>
 
-                  {/* Year-level progress bar — replaces the cramped 2-line
-                      paid/due numbers stacked on the right with a proper
-                      visual readout. */}
-                  {yearTotal > 0 && (() => {
-                    const cleared = yearPaid + group.installments.reduce((a, i) => a + i.writeOffAmount, 0);
-                    const pctNum = Math.min(100, Math.round((cleared / yearTotal) * 100));
-                    return (
-                      <div className="mt-3 space-y-2">
-                        <div className="h-1.5 bg-slate-100 rounded-full overflow-hidden">
-                          <div className={`h-full rounded-full transition-all ${pctNum >= 100 ? 'bg-emerald-500' : group.isActive ? 'bg-blue-500' : 'bg-slate-400'}`}
-                               style={{ width: `${pctNum}%` }} />
-                        </div>
-                        <div className="flex items-center justify-between text-[11px] font-bold tabular-nums">
-                          <span className="text-emerald-700">₹{yearPaid.toLocaleString('en-IN')} <span className="text-slate-400">paid</span></span>
-                          {yearDue > 0
-                            ? <span className="text-rose-600">₹{yearDue.toLocaleString('en-IN')} <span className="text-slate-400">remaining</span></span>
-                            : <span className="text-slate-400">Settled</span>}
-                        </div>
+                  {yearTotal > 0 && (
+                    <div className={group.isActive ? 'mt-3' : 'mt-2'}>
+                      <div className={`bg-slate-100 rounded-full overflow-hidden ${group.isActive ? 'h-1.5' : 'h-1'}`}>
+                        <div className={`h-full rounded-full transition-all ${fillColor}`}
+                             style={{ width: `${pctNum}%` }} />
                       </div>
-                    );
-                  })()}
+                      <div className={`flex items-center justify-between font-bold tabular-nums ${group.isActive ? 'text-[11px] mt-2' : 'text-[10px] mt-1'}`}>
+                        <span className="text-slate-500">
+                          <span className="text-emerald-700">₹{yearPaid.toLocaleString('en-IN')} paid</span>
+                          {yearDisc > 0 && <> · <span className="text-indigo-600">₹{yearDisc.toLocaleString('en-IN')} disc.</span></>}
+                        </span>
+                        {yearDue > 0
+                          ? <span className="text-rose-600">₹{yearDue.toLocaleString('en-IN')} due</span>
+                          : <span className="text-emerald-600">✓ Settled</span>}
+                      </div>
+                    </div>
+                  )}
 
                   {/* Regenerate / Generate Schedule action — moved here from
                       the overflow menu so the rare admin action lives next
@@ -1107,10 +1152,10 @@ export const FeeLedger: React.FC<Props> = ({ onBack }) => {
                 {!collapsed && (() => {
                   const sorted = group.installments.slice()
                     .sort((a, b) => new Date(a.dueDate).getTime() - new Date(b.dueDate).getTime());
-                  // Split payable items from govt-covered ₹0 placeholders so each
-                  // section can render with its own header + uniform card heights.
-                  const realInsts = sorted.filter(i => !(i.amount === 0 && i.payerType === 'GOVERNMENT'));
-                  const govtZeros = sorted.filter(i => i.amount === 0 && i.payerType === 'GOVERNMENT');
+                  // RTE/govt split removed in 0083 — every installment is
+                  // now treated equally. ₹0 GOVERNMENT placeholders aren't
+                  // generated anymore by the schedule generator.
+                  const realInsts = sorted;
                   return (
                   <div className="space-y-4">
                   {realInsts.length > 0 && (
@@ -1122,118 +1167,104 @@ export const FeeLedger: React.FC<Props> = ({ onBack }) => {
                         <span className="text-[10px] font-black text-slate-400 bg-slate-100 px-1.5 py-0.5 rounded-md">{realInsts.length}</span>
                       </div>
                     </div>
-                    {/* Timeline — vertical rail on the left, status dot per
-                        installment, content flows inline. Replaces the heavy
-                        boxed cards with a calendar-strip feel: each row is one
-                        scan-line, the dot's colour is the status at a glance,
-                        and only Total + (optionally) Paid / Discount / Balance
-                        chips are shown below the headline. */}
-                    <div className="relative pl-5 lg:pl-6">
-                      {/* the rail */}
-                      <div className="absolute left-2 lg:left-2.5 top-1 bottom-1 w-px bg-slate-200" />
-                      <div className="space-y-3">
-                        {realInsts.map(inst => {
+                    {/* Branch list — single vertical rail on the left
+                        drops out of the year card; each installment is a
+                        flat card offset to the right of the rail with a
+                        short horizontal connector. Mirrors the user's
+                        sketch (year on top, rail down the left side,
+                        installment branches). */}
+                    <div className="relative pl-5 lg:pl-6 mt-2 space-y-1.5">
+                      {/* The rail itself — 2px slate line */}
+                      <div className="absolute left-2 lg:left-2.5 top-0 bottom-2 w-px bg-slate-200" />
+                      {realInsts.map(inst => {
                           const due = inst.amount - inst.paidAmount - inst.writeOffAmount;
                           const receipt = feeService.getPaymentRecordByInstallmentId(inst.id);
-                          const dotColor = STATUS_BAR[inst.status] ?? STATUS_BAR_FALLBACK;
+                          const stripe = STATUS_BAR[inst.status] ?? STATUS_BAR_FALLBACK;
                           const isActionable = due > 0
                             && inst.status !== 'PAID' && inst.status !== 'WAIVED'
                             && inst.status !== 'WRITTEN_OFF' && inst.status !== 'CANCELLED';
 
+                          // Status pill content + colour, derived once.
+                          const isPaid = (inst.amount > 0 || inst.paidAmount > 0 || inst.writeOffAmount > 0)
+                                          && due === 0;
+                          const isUpcoming = inst.amount === 0 && inst.paidAmount === 0 && inst.writeOffAmount === 0;
+                          const statusLabel = isPaid
+                            ? (inst.status === 'WAIVED' ? 'Waived'
+                              : inst.status === 'WRITTEN_OFF' ? 'Written off'
+                              : inst.status === 'CANCELLED' ? 'Cancelled' : 'Paid')
+                            : due > 0 ? 'Due'
+                            : 'Upcoming';
+                          const statusPill = isPaid
+                            ? 'bg-emerald-100 text-emerald-700'
+                            : due > 0
+                              ? (inst.paidAmount + inst.writeOffAmount > 0 ? 'bg-amber-100 text-amber-700' : 'bg-rose-100 text-rose-700')
+                              : 'bg-slate-100 text-slate-500';
                           return (
                             <div key={inst.id} className="relative">
-                              {/* dot on the rail (slightly inset so it sits
-                                  on top of the line, not next to it) */}
-                              <div className={`absolute -left-[14px] lg:-left-[14px] top-1.5 w-3 h-3 rounded-full ring-2 ring-white ${dotColor}`} />
-
-                              <div className={`rounded-2xl p-4 lg:p-5 transition-colors ${inst.payerType === 'GOVERNMENT' ? 'bg-blue-50/40 border-l-4 border border-blue-200 hover:border-blue-300' : 'bg-white border border-slate-100 hover:border-slate-200'}`}>
-                                {/* Header — month name big, fee type subtle text below.
-                                    RTE installments get a blue left-border + tint
-                                    so the principal can spot government-paid
-                                    rows at a glance even when scrolling fast. */}
-                                <div className="flex items-start justify-between gap-3">
-                                  <div className="min-w-0">
-                                    <div className="font-black text-slate-900 text-base lg:text-lg leading-tight truncate">{inst.month}</div>
-                                    <div className="text-[11px] font-bold text-slate-400 mt-0.5 truncate">
-                                      {FEE_TYPE_LABEL[inst.feeType] ?? inst.feeType}
-                                      {inst.payerType === 'GOVERNMENT' && (
-                                        <span className="text-blue-700 font-black"> · RTE</span>
-                                      )}
-                                    </div>
+                              {/* Connector dot on the rail — small status-
+                                  coloured circle that branches the card
+                                  off the year's vertical line. */}
+                              <div className={`absolute -left-[14px] lg:-left-[14px] top-3.5 w-2.5 h-2.5 rounded-full ring-2 ring-slate-50 ${stripe}`} />
+                              <div className="rounded-xl py-2.5 px-3.5 bg-white border border-slate-100 hover:border-slate-200 transition-colors">
+                                {/* Top row — month + amount + status pill in
+                                    a single line. Pill on the right replaces
+                                    the awkward inline "✓ Paid" text. */}
+                                <div className="flex items-center justify-between gap-2">
+                                  <div className="min-w-0 flex items-baseline gap-2 flex-wrap">
+                                    <span className="font-black text-slate-900 text-[13px] leading-tight">{inst.month}</span>
+                                    <span className="text-[10px] font-bold text-slate-400 tabular-nums">
+                                      {inst.dueDate}
+                                    </span>
                                   </div>
-                                  <div className="text-right shrink-0">
-                                    <div className="font-black text-slate-900 text-base lg:text-lg tabular-nums leading-tight">₹{inst.amount.toLocaleString('en-IN')}</div>
-                                    <div className="text-[10px] font-bold text-slate-400 mt-0.5">Due {inst.dueDate}</div>
+                                  <div className="flex items-center gap-2 shrink-0">
+                                    <span className="font-black text-slate-900 text-[13px] tabular-nums">
+                                      ₹{inst.amount.toLocaleString('en-IN')}
+                                    </span>
+                                    {!isUpcoming && (
+                                      <span className={`text-[9px] font-black uppercase tracking-wider px-2 py-0.5 rounded-md ${statusPill}`}>
+                                        {statusLabel}
+                                      </span>
+                                    )}
                                   </div>
                                 </div>
 
-                                {/* Progress bar — replaces the chip-soup with a
-                                    single visual cue. Width = (paid+discount)
-                                    fraction of total. */}
-                                {inst.amount > 0 && (() => {
-                                  const cleared = Math.min(inst.amount, inst.paidAmount + inst.writeOffAmount);
-                                  const pctNum = Math.round((cleared / inst.amount) * 100);
-                                  const barColor =
-                                    inst.status === 'PAID' || inst.status === 'WAIVED' || inst.status === 'WRITTEN_OFF' ? 'bg-emerald-500'
-                                    : inst.status === 'CANCELLED' ? 'bg-slate-300'
-                                    : inst.status === 'PARTIAL_DUE' || inst.status === 'DUE' || inst.status === 'OVERDUE' ? 'bg-rose-500'
-                                    : inst.status === 'PARTIAL' ? 'bg-amber-400'
-                                    : 'bg-slate-200';
-                                  return (
-                                    <div className="mt-3 h-1.5 bg-slate-100 rounded-full overflow-hidden">
-                                      <div className={`h-full rounded-full transition-all ${barColor}`} style={{ width: `${pctNum}%` }} />
-                                    </div>
-                                  );
-                                })()}
-
-                                {/* Status line — one quiet sentence instead of
-                                    three colour-coded chips. */}
-                                <div className="mt-2.5 text-[12px] font-bold text-slate-600 tabular-nums">
-                                  {due > 0 ? (
+                                {/* Sub-line — fee-type + breakdown of paid
+                                    / discount / due. Quiet by design;
+                                    headline carries the meaning. */}
+                                <div className="mt-1 text-[10px] font-bold tabular-nums text-slate-400">
+                                  <span>{FEE_TYPE_LABEL[inst.feeType] ?? inst.feeType}</span>
+                                  {due > 0 && (
                                     <>
-                                      <span className="text-rose-600 font-black">₹{due.toLocaleString('en-IN')} pending</span>
-                                      {(inst.paidAmount > 0 || inst.writeOffAmount > 0) && (
-                                        <span className="text-slate-400">
-                                          {' · '}
-                                          {inst.paidAmount > 0 && <>Paid ₹{inst.paidAmount.toLocaleString('en-IN')}</>}
-                                          {inst.paidAmount > 0 && inst.writeOffAmount > 0 && ' + '}
-                                          {inst.writeOffAmount > 0 && <>Discount ₹{inst.writeOffAmount.toLocaleString('en-IN')}</>}
-                                        </span>
-                                      )}
+                                      {' · '}
+                                      <span className="text-rose-600">₹{due.toLocaleString('en-IN')} due</span>
+                                      {inst.paidAmount > 0 && <> · paid ₹{inst.paidAmount.toLocaleString('en-IN')}</>}
+                                      {inst.writeOffAmount > 0 && <> · disc ₹{inst.writeOffAmount.toLocaleString('en-IN')}</>}
                                     </>
-                                  ) : (inst.amount > 0 || inst.paidAmount > 0 || inst.writeOffAmount > 0) ? (
-                                    <span className="text-emerald-700 font-black">
-                                      ✓ {inst.status === 'WAIVED' ? 'Waived' : inst.status === 'WRITTEN_OFF' ? 'Written off' : inst.status === 'CANCELLED' ? 'Cancelled' : 'Fully paid'}
-                                      {inst.writeOffAmount > 0 && (
-                                        <span className="text-slate-400 font-bold"> · ₹{inst.writeOffAmount.toLocaleString('en-IN')} discount</span>
-                                      )}
-                                    </span>
-                                  ) : (
-                                    <span className="text-slate-400">Upcoming</span>
+                                  )}
+                                  {isPaid && inst.writeOffAmount > 0 && (
+                                    <> · <span className="text-indigo-600">₹{inst.writeOffAmount.toLocaleString('en-IN')} disc.</span></>
                                   )}
                                 </div>
 
-                                {/* Action row — Pay (when due) and a single
-                                    History toggle. Receipt + note now live
-                                    INSIDE the history panel where each entry
-                                    has its own receipt button, so the card
-                                    surface stays uncluttered. */}
+                                {/* Compact action row — only renders when
+                                    the row is actionable or has activity.
+                                    Slim buttons that match the row height. */}
                                 {(isActionable || inst.paidAmount > 0 || inst.writeOffAmount > 0) && (
-                                  <div className="mt-3 flex items-center gap-2">
-                                    {isActionable && inst.payerType === 'PARENT' ? (
+                                  <div className="mt-2 flex items-center gap-1.5">
+                                    {isActionable && (
                                       <button
                                         onClick={() => openRowPay(inst)}
-                                        className="flex-1 flex items-center justify-center gap-1.5 text-[13px] font-black text-white bg-emerald-600 hover:bg-emerald-700 active:scale-[0.98] py-3 rounded-xl transition-all">
-                                        <IndianRupee size={13} /> Pay ₹{due.toLocaleString('en-IN')}
+                                        className="flex-1 flex items-center justify-center gap-1 text-[11px] font-black text-white bg-emerald-600 hover:bg-emerald-700 active:scale-[0.98] py-1.5 rounded-md transition-all">
+                                        <IndianRupee size={11} /> Pay ₹{due.toLocaleString('en-IN')}
                                       </button>
-                                    ) : <div className="flex-1" />}
+                                    )}
                                     {(inst.paidAmount > 0 || inst.writeOffAmount > 0) && (() => {
                                       const isOpen = expandedInstId === inst.id;
                                       return (
                                         <button
                                           onClick={() => setExpandedInstId(isOpen ? null : inst.id)}
-                                          className="flex items-center gap-1.5 text-[12px] font-black text-slate-600 px-3 py-3 rounded-xl border border-slate-200 hover:bg-slate-50 transition-colors">
-                                          History <ChevronDown size={12} className={`transition-transform ${isOpen ? 'rotate-180' : ''}`} />
+                                          className={`${isActionable ? '' : 'flex-1'} flex items-center justify-center gap-1 text-[11px] font-black text-slate-600 px-2.5 py-1.5 rounded-md border border-slate-200 hover:bg-slate-50 transition-colors`}>
+                                          {isOpen ? 'Hide' : 'History'} <ChevronDown size={10} className={`transition-transform ${isOpen ? 'rotate-180' : ''}`} />
                                         </button>
                                       );
                                     })()}
@@ -1260,19 +1291,22 @@ export const FeeLedger: React.FC<Props> = ({ onBack }) => {
                                           .reduce((s, d) => s + d.amount, 0);
                                         const reversed = !!p.reversedAt;
                                         const isReversal = !!p.reversesPaymentId;
-                                        const isGovt = (p.method || '').toUpperCase() === 'GOVERNMENT';
+                                        // Historic 'GOVERNMENT' method rows (pre-0083) shown as
+                                        // a regular Payment now — RTE distinction is gone.
+                                        const methodLabel = (p.method || '').toUpperCase() === 'GOVERNMENT'
+                                          ? 'Payment'
+                                          : (p.method || 'Payment');
                                         return (
                                           <div key={p.id}
-                                            className={`rounded-xl p-3 ${reversed ? 'opacity-50' : ''} ${isGovt ? 'bg-blue-50/60 border border-blue-100' : 'bg-slate-50/60'}`}>
+                                            className={`rounded-xl p-3 bg-slate-50/60 ${reversed ? 'opacity-50' : ''}`}>
                                             <div className="flex items-start justify-between gap-2">
                                               <div className="min-w-0">
-                                                <div className={`text-[13px] font-black flex items-center gap-1.5 ${isReversal ? 'text-rose-600' : isGovt ? 'text-blue-700' : 'text-slate-900'} ${reversed ? 'line-through' : ''}`}>
-                                                  {isGovt && !isReversal && <ShieldCheck size={12} />}
-                                                  {isReversal ? 'Reversed' : isGovt ? 'Government' : (p.method || 'Payment')}
+                                                <div className={`text-[13px] font-black ${isReversal ? 'text-rose-600' : 'text-slate-900'} ${reversed ? 'line-through' : ''}`}>
+                                                  {isReversal ? 'Reversed' : methodLabel}
                                                 </div>
                                                 <div className="text-[10px] font-bold text-slate-400 mt-0.5">{p.date}</div>
                                               </div>
-                                              <div className={`text-[14px] font-black tabular-nums shrink-0 ${isReversal ? 'text-rose-600' : isGovt ? 'text-blue-700' : 'text-emerald-700'} ${reversed ? 'line-through' : ''}`}>
+                                              <div className={`text-[14px] font-black tabular-nums shrink-0 ${isReversal ? 'text-rose-600' : 'text-emerald-700'} ${reversed ? 'line-through' : ''}`}>
                                                 {isReversal ? '−' : '+'}₹{Math.abs(cashApplied).toLocaleString('en-IN')}
                                               </div>
                                             </div>
@@ -1310,37 +1344,8 @@ export const FeeLedger: React.FC<Props> = ({ onBack }) => {
                             </div>
                           );
                         })}
-                      </div>
                     </div>
                   </div>
-                  )}
-                  {govtZeros.length > 0 && (
-                    <div>
-                      <div className="flex items-center gap-2 mb-2 px-1">
-                        <ShieldCheck size={12} className="text-emerald-600" />
-                        <span className="text-[10px] font-black text-emerald-700 uppercase tracking-widest">Government Covered (RTE)</span>
-                        <span className="text-[10px] font-bold text-slate-400">· {govtZeros.length}</span>
-                      </div>
-                      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-2.5">
-                        {govtZeros.map(inst => (
-                          <div key={inst.id} className="bg-emerald-50/40 border border-emerald-100 rounded-xl p-3 flex items-center justify-between gap-2 hover:border-emerald-200 transition-colors">
-                            <div className="min-w-0 flex items-center gap-2">
-                              <div className="w-8 h-8 rounded-lg bg-emerald-100 flex items-center justify-center shrink-0">
-                                <ShieldCheck size={14} className="text-emerald-600" />
-                              </div>
-                              <div className="min-w-0">
-                                <div className="font-black text-slate-700 text-sm leading-tight truncate">{inst.month}</div>
-                                <div className="text-[10px] font-bold text-slate-400 truncate">{FEE_TYPE_LABEL[inst.feeType] ?? inst.feeType}</div>
-                              </div>
-                            </div>
-                            <div className="text-right shrink-0">
-                              <div className="text-[10px] font-black text-emerald-700">Govt Paid</div>
-                              <div className="text-[10px] font-bold text-slate-400">₹0 due</div>
-                            </div>
-                          </div>
-                        ))}
-                      </div>
-                    </div>
                   )}
                   </div>
                   );
@@ -1351,21 +1356,13 @@ export const FeeLedger: React.FC<Props> = ({ onBack }) => {
 
           {/* ── PAYMENT HISTORY ───────────────────────────────────────────── */}
           {detailTab === 'HISTORY' && (() => {
-            // Two event streams merged into one chronological list:
-            //   1. Cash payments (incl. reversals + payment-time discount)
-            //   2. Govt RTE transfers
-            // Standalone write-offs were removed per spec — discount is
-            // only applied at payment time and surfaces as a sub-line on
-            // the matching cash receipt below.
-            type Item =
-              | { kind: 'PAY'; date: string; payload: PaymentRecord }
-              | { kind: 'GOVT'; date: string; payload: GovernmentPaymentRecord };
-            const items: Item[] = [
-              ...paymentTransactions.filter(t => t.studentId === selected.studentId)
-                .map(p => ({ kind: 'PAY' as const, date: p.date, payload: p })),
-              ...govtTransactions.filter(g => g.allocatedStudentIds.includes(selected.studentId))
-                .map(g => ({ kind: 'GOVT' as const, date: g.date, payload: g })),
-            ].sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
+            // Single payment stream — RTE/govt cross-linked transfers
+            // dropped in 0083. Government grants now appear as regular
+            // payments with a "Govt grant" note in this same timeline.
+            const items: Array<{ date: string; payload: PaymentRecord }> =
+              paymentTransactions.filter(t => t.studentId === selected.studentId)
+                .map(p => ({ date: p.date, payload: p }))
+                .sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
 
             if (items.length === 0) return (
               <div className="flex flex-col items-center py-16 text-slate-400">
@@ -1374,14 +1371,12 @@ export const FeeLedger: React.FC<Props> = ({ onBack }) => {
               </div>
             );
             const txns = paymentTransactions.filter(t => t.studentId === selected.studentId);
-            const govtTxns = govtTransactions.filter(g => g.allocatedStudentIds.includes(selected.studentId));
             const totalCash     = txns.filter(t => !t.reversedAt && !t.reversesPaymentId).reduce((s, t) => s + t.amount, 0);
             const totalDiscount = txns.reduce((s, t) => s + (t.discountAmount ?? 0), 0);
-            const totalGovt     = govtTxns.reduce((s, g) => s + g.amount, 0);
             return (
               <>
-              {/* Summary strip — three numbers, no chrome */}
-              <div className="grid grid-cols-3 gap-2 mb-4">
+              {/* Summary strip — two numbers, no chrome */}
+              <div className="grid grid-cols-2 gap-2 mb-4">
                 <div className="bg-emerald-50 border border-emerald-100 rounded-xl px-3 py-2 text-center">
                   <div className="text-sm lg:text-base font-black text-emerald-700 tabular-nums">₹{totalCash.toLocaleString('en-IN')}</div>
                   <div className="text-[9px] font-black text-slate-400 uppercase tracking-widest mt-0.5">Cash</div>
@@ -1390,40 +1385,16 @@ export const FeeLedger: React.FC<Props> = ({ onBack }) => {
                   <div className="text-sm lg:text-base font-black text-indigo-700 tabular-nums">₹{totalDiscount.toLocaleString('en-IN')}</div>
                   <div className="text-[9px] font-black text-slate-400 uppercase tracking-widest mt-0.5">Discount</div>
                 </div>
-                <div className="bg-blue-50 border border-blue-100 rounded-xl px-3 py-2 text-center">
-                  <div className="text-sm lg:text-base font-black text-blue-700 tabular-nums">₹{totalGovt.toLocaleString('en-IN')}</div>
-                  <div className="text-[9px] font-black text-slate-400 uppercase tracking-widest mt-0.5">Govt</div>
-                </div>
               </div>
 
               {/* Unified timeline — vertical rail with one dot per entry,
-                  colour-coded by kind. Cash = emerald, discount = indigo,
-                  govt = blue. Mirrors the schedule timeline so the two
-                  tabs read as a coherent visual system. */}
+                  colour-coded by kind. Cash = emerald, discount = indigo.
+                  Mirrors the schedule timeline so the two tabs read as
+                  a coherent visual system. */}
               <div className="relative pl-5 lg:pl-6">
                 <div className="absolute left-2 lg:left-2.5 top-1 bottom-1 w-px bg-slate-200" />
                 <div className="space-y-3">
                 {items.map(item => {
-                  if (item.kind === 'GOVT') {
-                    const g = item.payload;
-                    return (
-                      <div key={`g-${g.id}`} className="relative">
-                        <div className="absolute -left-[14px] top-1.5 w-3 h-3 rounded-full ring-2 ring-white bg-blue-500" />
-                        <div className="bg-white rounded-xl border border-blue-100 px-3.5 py-2.5">
-                          <div className="flex items-center justify-between gap-2">
-                            <div className="min-w-0 flex items-center gap-2 flex-wrap">
-                              <span className="font-black text-slate-900 text-sm">{g.date}</span>
-                              <span className="text-[9px] font-black px-1.5 py-0.5 rounded bg-blue-50 text-blue-700 border border-blue-200 uppercase">Govt RTE</span>
-                            </div>
-                            <div className="font-black text-blue-700 text-sm tabular-nums shrink-0">₹{g.amount.toLocaleString('en-IN')}</div>
-                          </div>
-                          <div className="text-[10px] font-bold text-slate-400 mt-0.5">Ref: {g.referenceNo}</div>
-                          {g.note && <div className="text-[10px] font-bold text-slate-400 italic mt-0.5">{g.note}</div>}
-                        </div>
-                      </div>
-                    );
-                  }
-                  // PAY
                   const txn = item.payload;
                   const isReversal     = !!txn.reversesPaymentId;
                   const isReversedOrig = !!txn.reversedAt && !isReversal;
@@ -1483,111 +1454,6 @@ export const FeeLedger: React.FC<Props> = ({ onBack }) => {
             );
           })()}
 
-          {/* OLD: legacy duplicate cash/govt blocks. Kept commented as a
-              reference for the unified timeline above. */}
-          {false && detailTab === 'HISTORY' && (() => {
-            const txns = paymentTransactions.filter(t => t.studentId === selected.studentId)
-              .sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
-            const govtTxns = govtTransactions.filter(g => g.allocatedStudentIds.includes(selected.studentId))
-              .sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
-            const hasAny = txns.length > 0 || govtTxns.length > 0;
-            if (!hasAny) return (
-              <div className="flex flex-col items-center py-16 text-slate-400">
-                <Receipt size={32} className="mb-3 opacity-40" />
-                <p className="font-bold text-sm">No payments yet</p>
-              </div>
-            );
-            return (
-              <div className="grid grid-cols-1 lg:grid-cols-2 gap-3 lg:gap-4">
-                {txns.map(txn => {
-                  // Card style depends on row kind:
-                  //   reversal entry  → amber tint (it's a correction)
-                  //   reversed entry  → muted + line-through amount (cancelled)
-                  //   normal payment  → default white
-                  const isReversal       = !!txn.reversesPaymentId;
-                  const isReversedOrig   = !!txn.reversedAt && !isReversal;
-                  return (
-                  <div key={txn.id}
-                    className={`bg-white rounded-2xl border shadow-sm p-4 lg:p-5 transition-all ${
-                      isReversal     ? 'border-amber-200 bg-amber-50/40' :
-                      isReversedOrig ? 'border-slate-200 opacity-70' :
-                                       'border-slate-100 hover:shadow-md hover:border-slate-200'
-                    }`}>
-                    <div className="flex items-center justify-between mb-2">
-                      <div className="min-w-0">
-                        <div className="flex items-center gap-1.5 flex-wrap">
-                          <span className={`font-extrabold text-sm lg:text-base ${isReversedOrig ? 'text-slate-500' : 'text-slate-900'}`}>{txn.date}</span>
-                          {isReversal && (
-                            <span className="text-[8px] lg:text-[9px] font-black bg-amber-100 text-amber-700 border border-amber-200 px-1.5 py-0.5 rounded-full uppercase">Reversal</span>
-                          )}
-                          {isReversedOrig && (
-                            <span className="text-[8px] lg:text-[9px] font-black bg-rose-100 text-rose-700 border border-rose-200 px-1.5 py-0.5 rounded-full uppercase">Reversed 🔁</span>
-                          )}
-                        </div>
-                        <div className="text-[10px] lg:text-[11px] font-bold text-slate-400">{txn.method} · #{txn.receiptNo}</div>
-                      </div>
-                      <div className={`font-black text-base lg:text-lg tabular-nums shrink-0 ${
-                        isReversal ? 'text-rose-600' : isReversedOrig ? 'text-slate-400 line-through' : 'text-emerald-600'
-                      }`}>{txn.amount < 0 ? '-' : ''}₹{Math.abs(txn.amount).toLocaleString('en-IN')}</div>
-                    </div>
-                    {/* Discount applied alongside this payment — surfaced as
-                        its own row so the principal can audit the cleared
-                        total at a glance: cash + discount = installments
-                        cleared. Hidden when no discount or when this row is
-                        a reversal entry. */}
-                    {!isReversal && !isReversedOrig && (txn.discountAmount ?? 0) > 0 && (
-                      <div className="flex items-center justify-between mb-2 px-3 py-1.5 rounded-lg bg-indigo-50 border border-indigo-100">
-                        <div className="flex items-center gap-1.5">
-                          <TrendingDown size={11} className="text-indigo-600" />
-                          <span className="text-[10px] lg:text-[11px] font-black text-indigo-700">Discount</span>
-                        </div>
-                        <span className="text-[11px] lg:text-xs font-black text-indigo-700 tabular-nums">
-                          + ₹{(txn.discountAmount ?? 0).toLocaleString('en-IN')} cleared
-                        </span>
-                      </div>
-                    )}
-                    {txn.installmentDetails.length > 0 && (
-                      <div className="text-[9px] lg:text-[10px] font-bold text-slate-400 mb-2.5 line-clamp-2">
-                        → {txn.installmentDetails.map(d => d.month).join(', ')}
-                      </div>
-                    )}
-                    {isReversedOrig && txn.reversalReason && (
-                      <div className="text-[10px] font-bold text-rose-600 italic mb-2.5 line-clamp-2">"{txn.reversalReason}"</div>
-                    )}
-                    <button onClick={() => setReceiptModal(txn)}
-                      className="w-full flex items-center justify-center gap-1.5 text-[11px] font-black px-3 py-2 rounded-xl bg-indigo-50 text-indigo-700 hover:bg-indigo-100 transition-colors active:scale-[0.98]">
-                      <Receipt size={12} /> View Receipt
-                    </button>
-                  </div>
-                  );
-                })}
-
-                {govtTxns.map(g => (
-                  <div key={g.id}
-                    className="bg-white rounded-2xl border border-emerald-100 shadow-sm p-4 lg:p-5">
-                    <div className="flex items-center justify-between mb-1">
-                      <div>
-                        <div className="flex items-center gap-2 mb-0.5">
-                          <span className="font-extrabold text-slate-900 text-sm lg:text-base">{g.date}</span>
-                          <span className="flex items-center gap-0.5 text-[8px] lg:text-[9px] font-black bg-emerald-100 text-emerald-700 px-2 py-0.5 rounded-full">
-                            <ShieldCheck size={8} /> Govt Transfer
-                          </span>
-                        </div>
-                        <div className="text-[10px] lg:text-[11px] font-bold text-slate-400">Ref: {g.referenceNo}</div>
-                      </div>
-                      <div className="text-right">
-                        <div className="font-black text-emerald-600 text-base lg:text-lg tabular-nums">₹{g.amount.toLocaleString('en-IN')}</div>
-                        <div className="text-[9px] lg:text-[10px] font-bold text-slate-400">RTE / Total batch</div>
-                      </div>
-                    </div>
-                    {g.note && (
-                      <div className="text-[9px] lg:text-[10px] font-bold text-slate-400 mt-1.5 italic">{g.note}</div>
-                    )}
-                  </div>
-                ))}
-              </div>
-            );
-          })()}
         </div>
 
         {/* ── PAY MODAL ────────────────────────────────────────────────────── */}
@@ -1602,9 +1468,17 @@ export const FeeLedger: React.FC<Props> = ({ onBack }) => {
           const totalDueNow = (selected?.installments ?? [])
             .reduce((s, i) => s + Math.max(0, i.amount - i.paidAmount - i.writeOffAmount), 0)
             + (applyLateFee ? lateFeeTotal : 0);
-          const cleared = Math.min(cash + disc, totalDueNow);
-          const goesToAdvance = Math.max(0, cash + disc - totalDueNow);
-          const remainingAfter = Math.max(0, totalDueNow - cash - disc);
+          // Allocation rule (mirrors record_fee_payment RPC since 0084):
+          //   1) Apply discount up to outstanding (excess is overpay)
+          //   2) Apply cash to remaining
+          //   3) Cash + discount > outstanding ⇒ overpay (server rejects)
+          // Advance credit feature removed in 0084.
+          const discountUsed     = Math.min(disc, totalDueNow);
+          const afterDisc        = Math.max(0, totalDueNow - discountUsed);
+          const cashUsed         = Math.min(cash, afterDisc);
+          const cleared          = discountUsed + cashUsed;
+          const remainingAfter   = Math.max(0, totalDueNow - cleared);
+          const overpay          = Math.max(0, (cash + disc) - totalDueNow);
           return (
           <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-50 flex items-end justify-center sm:items-center">
             <div className="w-full max-w-lg mx-auto bg-white rounded-t-3xl p-5 pb-7 animate-in slide-in-from-bottom-8 max-h-[92vh] overflow-y-auto">
@@ -1620,16 +1494,26 @@ export const FeeLedger: React.FC<Props> = ({ onBack }) => {
                 </button>
               </div>
 
-              {/* Total due — anchor number so the principal always knows the
-                  target. Replaces the earlier "Advance Credit ₹11,500" first
-                  callout which confused users into thinking that was money
-                  owed. */}
-              <div className="bg-slate-900 text-white rounded-2xl p-4 mb-4">
-                <p className="text-[10px] font-black uppercase tracking-widest text-slate-300 mb-1">Total Due</p>
-                <p className="text-3xl font-black tabular-nums">₹{totalDueNow.toLocaleString('en-IN')}</p>
-                {advance > 0 && (
-                  <p className="text-[10px] font-bold text-violet-300 mt-1">+ ₹{advance.toLocaleString('en-IN')} advance credit on file</p>
-                )}
+              {/* Total due — anchor number, light surface for legibility.
+                  The earlier dark slate-900 tile was hard on the eyes
+                  inside an otherwise light modal. Now: rose tint when
+                  there's outstanding (matches the principal's "this is
+                  owed" mental model), emerald when fully cleared. */}
+              <div className={`rounded-2xl p-4 mb-4 border ${
+                totalDueNow > 0
+                  ? 'bg-rose-50 border-rose-200'
+                  : 'bg-emerald-50 border-emerald-200'
+              }`}>
+                <p className={`text-[10px] font-black uppercase tracking-widest mb-1 ${
+                  totalDueNow > 0 ? 'text-rose-600' : 'text-emerald-700'
+                }`}>
+                  Total Due
+                </p>
+                <p className={`text-3xl font-black tabular-nums ${
+                  totalDueNow > 0 ? 'text-rose-700' : 'text-emerald-700'
+                }`}>
+                  ₹{totalDueNow.toLocaleString('en-IN')}
+                </p>
               </div>
 
               {/* Method — uniform 5-column grid so the buttons line up cleanly
@@ -1646,55 +1530,35 @@ export const FeeLedger: React.FC<Props> = ({ onBack }) => {
                 ))}
               </div>
 
-              {/* Amount + Discount paired — both inline, both labelled. The
-                  Discount row is always present (no toggle) so the principal
-                  doesn't have to hunt for it; it just reads "₹0" until they
-                  type. Pairing them visually makes the relationship obvious:
-                  Total Cleared = Cash + Discount. */}
-              <div className="grid grid-cols-2 gap-3 mb-3">
-                <div>
-                  <p className="text-[10px] font-black uppercase tracking-widest text-emerald-700 mb-1.5">Cash Received</p>
-                  <div className="bg-emerald-50 border border-emerald-200 rounded-xl p-2.5 flex items-center gap-1.5">
-                    <IndianRupee size={16} className="text-emerald-600 shrink-0" />
-                    <input type="number" min="0" value={payAmount}
-                      onChange={e => setPayAmount(e.target.value)}
-                      placeholder="0" className="flex-1 bg-transparent font-black text-emerald-900 text-xl outline-none w-full" />
-                  </div>
-                </div>
-                <div>
-                  <p className="text-[10px] font-black uppercase tracking-widest text-indigo-700 mb-1.5">Discount</p>
-                  <div className="bg-indigo-50 border border-indigo-200 rounded-xl p-2.5 flex items-center gap-1.5">
-                    <IndianRupee size={16} className="text-indigo-500 shrink-0" />
-                    <input type="number" min="0" value={paymentDiscount}
-                      onChange={e => {
-                        const v = e.target.value;
-                        setPaymentDiscount(v);
-                        setApplyDiscount(Number(v) > 0);
-                      }}
-                      placeholder="0" className="flex-1 bg-transparent font-black text-indigo-900 text-xl outline-none w-full" />
-                  </div>
+              {/* Cash field — full-width, primary input. Discount lives
+                  behind More Options (rare action; cluttered the primary
+                  flow when always-visible). */}
+              <div className="mb-3">
+                <p className="text-[10px] font-black uppercase tracking-widest text-emerald-700 mb-1.5">Cash Received</p>
+                <div className="bg-emerald-50 border border-emerald-200 rounded-xl p-3 flex items-center gap-2">
+                  <IndianRupee size={18} className="text-emerald-600 shrink-0" />
+                  <input type="number" min="0" value={payAmount}
+                    onChange={e => setPayAmount(e.target.value)}
+                    placeholder="0" className="flex-1 bg-transparent font-black text-emerald-900 text-2xl outline-none w-full" />
                 </div>
               </div>
               <p className="text-[10px] font-bold text-slate-400 mb-4">
-                Cash + Discount auto-allocate to oldest dues first.
-                Discount only reduces installments — it never goes to advance credit.
+                Auto-allocates to oldest dues first.
               </p>
 
-              {/* Live result — exactly tells the principal what's about to
-                  happen. Three states: nothing entered, partial pay, or
-                  excess (which surfaces "goes to advance"). */}
+              {/* Live result — what'll actually happen on submit. With
+                  advance credit removed (0084), the only states are:
+                  partial pay, exact clear, or overpay (blocked). */}
               {(cash > 0 || disc > 0) && (
                 <div className={`rounded-xl border px-3 py-3 mb-3 ${
-                  goesToAdvance > 0 ? 'bg-violet-50 border-violet-200' :
+                  overpay > 0 ? 'bg-rose-50 border-rose-200' :
                   remainingAfter > 0 ? 'bg-amber-50 border-amber-200' :
                                        'bg-emerald-50 border-emerald-200'
                 }`}>
                   <div className="flex items-center justify-between text-[11px] font-black mb-1">
                     <span className="text-slate-700">Will clear</span>
                     <span className={`tabular-nums ${
-                      goesToAdvance > 0 ? 'text-violet-700' :
-                      remainingAfter > 0 ? 'text-amber-700' :
-                                           'text-emerald-700'
+                      remainingAfter > 0 ? 'text-amber-700' : 'text-emerald-700'
                     }`}>₹{cleared.toLocaleString('en-IN')}</span>
                   </div>
                   {remainingAfter > 0 && (
@@ -1703,10 +1567,10 @@ export const FeeLedger: React.FC<Props> = ({ onBack }) => {
                       <span className="tabular-nums">₹{remainingAfter.toLocaleString('en-IN')}</span>
                     </div>
                   )}
-                  {goesToAdvance > 0 && (
-                    <div className="flex items-center justify-between text-[10px] font-bold text-violet-700">
-                      <span>Excess cash → advance credit</span>
-                      <span className="tabular-nums">₹{goesToAdvance.toLocaleString('en-IN')}</span>
+                  {overpay > 0 && (
+                    <div className="flex items-center justify-between text-[10px] font-bold text-rose-700 mt-0.5">
+                      <span>Overpay — reduce by</span>
+                      <span className="tabular-nums">₹{overpay.toLocaleString('en-IN')}</span>
                     </div>
                   )}
                 </div>
@@ -1729,14 +1593,32 @@ export const FeeLedger: React.FC<Props> = ({ onBack }) => {
                 </div>
               )}
 
-              {/* More — note + custom date hidden by default to keep the
-                  primary flow on one screen. Open only when needed. */}
+              {/* More Options — discount, note, backdate. Hidden by
+                  default to keep the primary cash flow on one screen. */}
               <details className="mb-3 group">
-                <summary className="cursor-pointer text-[11px] font-black text-slate-500 uppercase tracking-widest flex items-center gap-1.5 select-none">
+                <summary className="cursor-pointer text-[11px] font-black text-slate-500 uppercase tracking-widest flex items-center gap-1.5 select-none py-2">
                   <ChevronDown size={12} className="group-open:rotate-180 transition-transform" />
                   More options
                 </summary>
-                <div className="mt-2 space-y-2">
+                <div className="mt-2 space-y-3">
+                  {/* Use Advance Credit toggle removed in 0084 —
+                      advance credit feature dropped. */}
+                  <div>
+                    <p className="text-[10px] font-black uppercase tracking-widest text-indigo-700 mb-1.5">Discount</p>
+                    <div className="bg-indigo-50 border border-indigo-200 rounded-xl p-2.5 flex items-center gap-1.5">
+                      <IndianRupee size={16} className="text-indigo-500 shrink-0" />
+                      <input type="number" min="0" value={paymentDiscount}
+                        onChange={e => {
+                          const v = e.target.value;
+                          setPaymentDiscount(v);
+                          setApplyDiscount(Number(v) > 0);
+                        }}
+                        placeholder="0" className="flex-1 bg-transparent font-black text-indigo-900 text-lg outline-none w-full" />
+                    </div>
+                    <p className="text-[10px] font-bold text-slate-400 mt-1.5">
+                      Reduces installments directly — never goes to advance credit.
+                    </p>
+                  </div>
                   <textarea value={paymentNote} onChange={e => setPaymentNote(e.target.value)}
                     rows={2} placeholder="Note (e.g., scholarship reason, txn id)…"
                     className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 text-sm font-bold text-slate-900 outline-none focus:border-blue-500 resize-none" />
@@ -1754,11 +1636,13 @@ export const FeeLedger: React.FC<Props> = ({ onBack }) => {
               </details>
 
               <button onClick={handlePayment}
-                disabled={paySubmitting || (!payAmount && !paymentDiscount)}
+                disabled={paySubmitting || (!payAmount && !paymentDiscount) || overpay > 0}
                 className="w-full py-3.5 bg-emerald-600 hover:bg-emerald-700 active:scale-[0.98] text-white font-black rounded-xl disabled:opacity-40 disabled:cursor-not-allowed flex items-center justify-center gap-2 transition-all">
                 {paySubmitting
                   ? <><RefreshCw size={16} className="animate-spin" /> Saving payment…</>
-                  : <><CheckCircle2 size={16} /> Collect & Generate Receipt</>
+                  : overpay > 0
+                    ? <>Overpay — reduce by ₹{overpay.toLocaleString('en-IN')}</>
+                    : <><CheckCircle2 size={16} /> Collect & Generate Receipt</>
                 }
               </button>
             </div>
@@ -1768,37 +1652,9 @@ export const FeeLedger: React.FC<Props> = ({ onBack }) => {
 
         {/* ── DISCOUNT MODAL ────────────────────────────────────────────────── */}
 
-        {/* ── GOVT PAY MODAL ─────────────────────────────────────────────────── */}
-        {govtPayModal && (
-          <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-50 flex items-end justify-center sm:items-center">
-            <div className="w-full sm:max-w-lg bg-white rounded-t-3xl sm:rounded-2xl p-6 pb-8 animate-in slide-in-from-bottom-8 max-h-[85vh] overflow-y-auto">
-              <div className="flex justify-between items-center mb-3">
-                <div>
-                  <h3 className="text-lg font-black text-slate-900">RTE Government Payment</h3>
-                  <p className="text-[10px] font-bold text-slate-400">Allocated to all RTE students' oldest dues first</p>
-                </div>
-                <button onClick={() => setGovtPayModal(false)} className="w-8 h-8 bg-slate-100 rounded-full flex items-center justify-center">
-                  <X size={16} className="text-slate-500" />
-                </button>
-              </div>
-              <div className="bg-slate-50 border border-slate-200 rounded-xl p-3 flex items-center gap-2 mb-4 mt-4">
-                <IndianRupee size={20} className="text-slate-400 shrink-0" />
-                <input type="number" value={govtPayAmount} onChange={e => setGovtPayAmount(e.target.value)}
-                  placeholder="0" className="flex-1 bg-transparent font-black text-slate-900 text-2xl outline-none" />
-              </div>
-              <input type="text" value={govtRefNo} onChange={e => setGovtRefNo(e.target.value)}
-                placeholder="Reference No. (e.g. RTE/2026/APR/001)"
-                className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-3 text-sm font-bold text-slate-900 outline-none focus:border-blue-500 mb-3" />
-              <textarea value={govtNote} onChange={e => setGovtNote(e.target.value)}
-                rows={2} placeholder="Note (optional)"
-                className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-2.5 text-sm font-bold text-slate-900 outline-none focus:border-blue-500 resize-none mb-4" />
-              <button onClick={handleGovtPayment} disabled={!govtPayAmount || !govtRefNo.trim()}
-                className="w-full py-3.5 bg-blue-600 text-white font-black rounded-xl disabled:opacity-40 flex items-center justify-center gap-2">
-                <ShieldCheck size={16} /> Record Government Payment
-              </button>
-            </div>
-          </div>
-        )}
+        {/* RTE Govt Pay modal removed in 0083 — government grants now
+            flow through the standard Collect Payment modal with a
+            "Govt grant" note for accounting clarity. */}
 
         {/* ── RECEIPT MODAL ────────────────────────────────────────────────── */}
         {receiptModal && (
@@ -2065,23 +1921,12 @@ export const FeeLedger: React.FC<Props> = ({ onBack }) => {
                     discount or advance toggled on, so the principal sees the
                     current state without having to expand More Options. */}
                 <div className="flex items-center gap-2 flex-wrap text-[10px] font-black">
-                  {rowPayPaidBy === 'GOVERNMENT' ? (
-                    <span className="px-2 py-1 rounded-full bg-blue-50 text-blue-700 flex items-center gap-1 border border-blue-200">
-                      <ShieldCheck size={11} /> Paid by Government
-                    </span>
-                  ) : (
-                    <span className="px-2 py-1 rounded-full bg-slate-100 text-slate-600 flex items-center gap-1">
-                      {METHOD_ICON[rowPayMethod]} {METHOD_LABEL[rowPayMethod]}
-                    </span>
-                  )}
+                  <span className="px-2 py-1 rounded-full bg-slate-100 text-slate-600 flex items-center gap-1">
+                    {METHOD_ICON[rowPayMethod]} {METHOD_LABEL[rowPayMethod]}
+                  </span>
                   {Number(rowPayDiscount) > 0 && (
                     <span className="px-2 py-1 rounded-full bg-indigo-50 text-indigo-700">
                       Discount ₹{Number(rowPayDiscount).toLocaleString('en-IN')}
-                    </span>
-                  )}
-                  {rowPayUseAdvance && (
-                    <span className="px-2 py-1 rounded-full bg-violet-50 text-violet-700">
-                      Use Advance
                     </span>
                   )}
                 </div>
@@ -2097,44 +1942,9 @@ export const FeeLedger: React.FC<Props> = ({ onBack }) => {
                   </button>
                   {rowPayMoreOpen && (
                     <div className="px-3 pb-3 space-y-3 border-t border-slate-100 pt-3">
-                      {/* Paid by — Parent vs Government. When Government, the
-                          method chip + history entry render in blue so RTE /
-                          grant payments are distinguishable from cash receipts. */}
-                      <div>
-                        <label className="text-[10px] font-black text-slate-500 uppercase tracking-wider">Paid By</label>
-                        <div className="mt-1 grid grid-cols-2 gap-2">
-                          <button onClick={() => setRowPayPaidBy('PARENT')}
-                            className={`flex items-center justify-center gap-1.5 py-2 rounded-xl border text-[11px] font-black transition-colors ${rowPayPaidBy === 'PARENT' ? 'bg-slate-900 text-white border-slate-900' : 'bg-white text-slate-500 border-slate-200'}`}>
-                            Parent
-                          </button>
-                          <button onClick={() => setRowPayPaidBy('GOVERNMENT')}
-                            className={`flex items-center justify-center gap-1.5 py-2 rounded-xl border text-[11px] font-black transition-colors ${rowPayPaidBy === 'GOVERNMENT' ? 'bg-blue-600 text-white border-blue-600' : 'bg-white text-blue-600 border-blue-200'}`}>
-                            <ShieldCheck size={12} /> Government
-                          </button>
-                        </div>
-                      </div>
-
-                      {/* Advance credit — shown only when this student has a
-                          positive balance. Tapping the toggle marks the
-                          payment to draw from advance_balances first; cash
-                          field becomes optional in that flow. */}
-                      {selected && feeService.getAdvanceBalance(selected.studentId) > 0 && (
-                        <button
-                          type="button"
-                          onClick={() => setRowPayUseAdvance(v => !v)}
-                          className={`w-full flex items-center justify-between gap-2 px-3 py-2.5 rounded-xl border transition-colors ${rowPayUseAdvance ? 'bg-violet-50 border-violet-300' : 'bg-white border-slate-200 hover:border-violet-300'}`}>
-                          <div className="text-left">
-                            <div className="text-[11px] font-black text-violet-700">Use advance credit</div>
-                            <div className="text-[10px] font-bold text-slate-500 mt-0.5">
-                              ₹{feeService.getAdvanceBalance(selected.studentId).toLocaleString('en-IN')} available
-                            </div>
-                          </div>
-                          <div className={`w-9 h-5 rounded-full p-0.5 transition-colors ${rowPayUseAdvance ? 'bg-violet-600' : 'bg-slate-300'}`}>
-                            <div className={`w-4 h-4 bg-white rounded-full transition-transform ${rowPayUseAdvance ? 'translate-x-4' : ''}`} />
-                          </div>
-                        </button>
-                      )}
-
+                      {/* Advance credit toggle removed in 0084 — feature
+                          dropped to keep collection flow simple. Discount
+                          + Method + Note remain. */}
                       <div>
                         <label className="text-[10px] font-black text-slate-500 uppercase tracking-wider">Discount (optional)</label>
                         <input
@@ -2200,7 +2010,7 @@ export const FeeLedger: React.FC<Props> = ({ onBack }) => {
                 <button
                   onClick={handleRowPaySubmit}
                   disabled={rowPaySubmitting
-                    || ((Number(rowPayAmount) || 0) + (Number(rowPayDiscount) || 0) === 0 && !rowPayUseAdvance)
+                    || ((Number(rowPayAmount) || 0) + (Number(rowPayDiscount) || 0) === 0)
                     || ((Number(rowPayAmount) || 0) + (Number(rowPayDiscount) || 0) > rowPayModal.outstanding)}
                   className="flex-1 py-3 bg-emerald-600 hover:bg-emerald-700 text-white font-black rounded-xl text-sm disabled:opacity-50 active:scale-[0.98] transition-all">
                   {rowPaySubmitting ? 'Recording…' : 'Record Payment'}
@@ -2270,13 +2080,6 @@ export const FeeLedger: React.FC<Props> = ({ onBack }) => {
               </div>
               <p className="text-[9px] font-bold text-slate-400 mb-3 -mt-2">Larger of flat / percent wins per installment.</p>
 
-              <label className="flex items-center gap-2 mb-4 cursor-pointer">
-                <input type="checkbox" checked={regenIsRte} onChange={e => setRegenIsRte(e.target.checked)}
-                  className="accent-emerald-600" />
-                <ShieldCheck size={14} className="text-emerald-600" />
-                <span className="text-[11px] font-bold text-slate-700">Mark tuition as RTE (paid by Government)</span>
-              </label>
-
               <button onClick={handleRegenerate} disabled={!regenStructureId || regenSubmitting}
                 className="w-full py-3.5 bg-amber-600 text-white font-black rounded-xl disabled:opacity-40 flex items-center justify-center gap-2">
                 <RefreshCw size={15} className={regenSubmitting ? 'animate-spin' : ''} />
@@ -2314,17 +2117,8 @@ export const FeeLedger: React.FC<Props> = ({ onBack }) => {
           <div className="w-px bg-slate-100" />
           <div className="flex-1 px-4 lg:px-6 py-3 lg:py-5 text-center">
             <div className="text-lg lg:text-3xl font-black text-rose-600 tabular-nums">₹{totalParentDue.toLocaleString('en-IN')}</div>
-            <div className="text-[9px] lg:text-[11px] font-black text-slate-400 uppercase tracking-widest mt-0.5 lg:mt-1">Parent Due</div>
+            <div className="text-[9px] lg:text-[11px] font-black text-slate-400 uppercase tracking-widest mt-0.5 lg:mt-1">Total Due</div>
           </div>
-          {totalGovtDue > 0 && (
-            <>
-              <div className="w-px bg-slate-100" />
-              <div className="flex-1 px-4 lg:px-6 py-3 lg:py-5 text-center">
-                <div className="text-lg lg:text-3xl font-black text-blue-600 tabular-nums">₹{totalGovtDue.toLocaleString('en-IN')}</div>
-                <div className="text-[9px] lg:text-[11px] font-black text-slate-400 uppercase tracking-widest mt-0.5 lg:mt-1">Govt Due</div>
-              </div>
-            </>
-          )}
         </div>
 
         {/* Search + tabs — stacked mobile, single row desktop */}
@@ -2335,19 +2129,21 @@ export const FeeLedger: React.FC<Props> = ({ onBack }) => {
               placeholder="Search by name or admission no…"
               className="w-full bg-slate-50 border border-slate-200 rounded-2xl pl-10 pr-4 py-2.5 lg:py-3 text-sm font-bold outline-none focus:border-blue-500 transition-colors" />
           </div>
+          {/* Filter tabs — All / Due / Cleared narrow the student list
+              below. History opens the Parent Submissions log inline. */}
           <div className="flex gap-2 shrink-0 overflow-x-auto">
-            {(['ALL', 'DUE', 'PENDING', 'CLEARED'] as ListTab[]).map(t => (
+            {(['ALL', 'DUE', 'CLEARED', 'HISTORY'] as Exclude<ListTab, 'PENDING'>[]).map(t => (
               <button key={t} onClick={() => setListTab(t)}
                 className={`shrink-0 px-3 lg:px-5 py-1.5 lg:py-2.5 rounded-xl text-[10px] lg:text-xs font-black uppercase tracking-widest transition-colors ${listTab === t
                   ? t === 'DUE' ? 'bg-rose-600 text-white'
                     : t === 'CLEARED' ? 'bg-emerald-600 text-white'
-                    : t === 'PENDING' ? 'bg-amber-600 text-white'
+                    : t === 'HISTORY' ? 'bg-blue-600 text-white'
                     : 'bg-slate-900 text-white'
                   : 'bg-slate-100 text-slate-500 hover:bg-slate-200'}`}>
                 {t === 'ALL' ? `All (${students.length})`
                   : t === 'DUE' ? `Due (${dueStudents.length})`
-                  : t === 'PENDING' ? `Pending (${pendingStudents.length})`
-                  : `Cleared (${clearedStudents.length})`}
+                  : t === 'CLEARED' ? `Cleared (${clearedStudents.length})`
+                  : 'History'}
               </button>
             ))}
           </div>
@@ -2356,27 +2152,65 @@ export const FeeLedger: React.FC<Props> = ({ onBack }) => {
 
       {/* List */}
       <div className="flex-1 overflow-y-auto lg:overflow-visible p-4 lg:p-0 lg:pt-2">
-        {/* Parent/student-submitted payment screenshots awaiting principal review. */}
-        <div className="mb-3 lg:mb-4">
-          <FeePaymentSubmissionsQueue />
-        </div>
+        {/* HISTORY tab — full submissions log (approved + rejected +
+            pending), newest first. On other tabs we surface the queue
+            ONLY when there's something pending awaiting review;
+            otherwise no inline banner — the History tab is the
+            dedicated home for the audit trail. */}
+        {listTab === 'HISTORY' ? (
+          <FeePaymentSubmissionsQueue defaultExpanded />
+        ) : (
+          <>
+            {/* Pending banner — auto-hides when there are 0 pending
+                items (the queue component itself returns null in that
+                case now). Keeps the surface clean unless action is
+                actually needed. */}
+            <div className="mb-3 lg:mb-4 empty:hidden">
+              <FeePaymentSubmissionsQueue pendingOnly />
+            </div>
 
-        {visibleStudents.length === 0 && (
-          <div className="flex flex-col items-center py-16 lg:py-24 text-slate-400">
-            <Users size={32} className="mb-3 opacity-30" />
-            <p className="font-bold text-sm">No students</p>
-          </div>
-        )}
+            {visibleStudents.length === 0 && (
+              <div className="flex flex-col items-center py-16 lg:py-24 text-slate-400">
+                <Users size={32} className="mb-3 opacity-30" />
+                <p className="font-bold text-sm">No students</p>
+              </div>
+            )}
 
-        <div className="grid grid-cols-1 lg:grid-cols-2 gap-2.5 lg:gap-3">
-          {pagedStudents.map(student => {
+            <div className="grid grid-cols-1 lg:grid-cols-2 gap-2.5 lg:gap-3">
+              {pagedStudents.map(student => {
+            // Source-of-truth for badges:
+            //  1) If installments are primed in cache → use them (richer:
+            //     per-row outstanding, discount-aware Cleared).
+            //  2) Else fall back to slim-list aggregates from
+            //     student_academic_records (totalFee/paidFee/feeStatus).
+            //     These are kept fresh by a DB trigger after every payment.
+            //     Without (2), every unopened student showed "No schedule /
+            //     Pending" even when they had a real, paid schedule.
             const pd = getParentDue(student.studentId);
-            const gd = student.isRte ? getGovtDue(student.studentId) : { tuition: 0, total: 0 };
-            const isDue = pd.total > 0 || gd.total > 0;
-            const noSchedule = student.installments.length === 0;
-            const totalD = student.installments.reduce((a, i) => a + i.amount, 0);
-            const totalP = student.installments.reduce((a, i) => a + i.paidAmount, 0);
-            const pct = totalD > 0 ? Math.round((totalP / totalD) * 100) : 0;
+            const slim = slimFeeMap.get(student.studentId);
+            const hasCachedInstallments = student.installments.length > 0;
+
+            // No schedule = the row genuinely has no totalFee anywhere
+            // (slim aggregate AND cache both empty).
+            const slimTotal = slim?.totalFee ?? 0;
+            const noSchedule = !hasCachedInstallments && slimTotal === 0;
+
+            // Totals: prefer cache when primed (live + discount-aware),
+            // else use slim aggregates.
+            const totalD = hasCachedInstallments
+              ? student.installments.reduce((a, i) => a + i.amount, 0)
+              : slimTotal;
+            const totalC = hasCachedInstallments
+              ? student.installments.reduce((a, i) => a + i.paidAmount + i.writeOffAmount, 0)
+              : (slim?.paidFee ?? 0);
+            const pct = totalD > 0 ? Math.min(100, Math.round((totalC / totalD) * 100)) : 0;
+
+            // Outstanding: cache wins (it's the only source that knows
+            // discount); slim falls back to totalFee - paidFee.
+            const dueAmount = hasCachedInstallments
+              ? pd.total
+              : Math.max(0, slimTotal - (slim?.paidFee ?? 0));
+            const isDue = dueAmount > 0;
 
             return (
               <button key={student.studentId}
@@ -2391,7 +2225,6 @@ export const FeeLedger: React.FC<Props> = ({ onBack }) => {
                   <div className="flex-1 min-w-0">
                     <div className="flex items-center gap-1.5 mb-0.5">
                       <span className="font-extrabold text-slate-900 text-sm lg:text-base truncate">{student.name}</span>
-                      {student.isRte && <ShieldCheck size={11} className="text-emerald-600 shrink-0" />}
                     </div>
                     <div className="text-[10px] lg:text-[11px] font-bold text-slate-400">{student.className} · {student.admissionNo}</div>
 
@@ -2400,7 +2233,11 @@ export const FeeLedger: React.FC<Props> = ({ onBack }) => {
                       <div className={`h-full rounded-full ${noSchedule ? 'bg-amber-300' : pct === 100 ? 'bg-emerald-500' : 'bg-blue-400'}`} style={{ width: `${noSchedule ? 0 : pct}%` }} />
                     </div>
                     <div className="text-[9px] lg:text-[10px] font-bold text-slate-400 mt-0.5">
-                      {noSchedule ? 'No schedule' : `${pct}% collected · ${student.installments.length} installments`}
+                      {noSchedule
+                        ? 'No schedule'
+                        : hasCachedInstallments
+                          ? `${pct}% cleared · ${student.installments.length} installments`
+                          : `${pct}% cleared`}
                     </div>
                   </div>
 
@@ -2412,12 +2249,16 @@ export const FeeLedger: React.FC<Props> = ({ onBack }) => {
                       </span>
                     ) : isDue ? (
                       <>
-                        {pd.total > 0 && <div className="font-black text-rose-600 text-sm lg:text-base">₹{pd.total.toLocaleString('en-IN')}</div>}
-                        {gd.total > 0 && <div className="font-black text-blue-600 text-sm lg:text-base">₹{gd.total.toLocaleString('en-IN')}</div>}
-                        <div className="flex gap-1 mt-1 justify-end flex-wrap">
-                          {pd.tuition > 0 && <span className="text-[8px] lg:text-[9px] font-black bg-indigo-50 text-indigo-700 px-1.5 py-0.5 rounded-full">Tuition</span>}
-                          {pd.transport > 0 && <span className="text-[8px] lg:text-[9px] font-black bg-orange-50 text-orange-700 px-1.5 py-0.5 rounded-full">Transport</span>}
-                        </div>
+                        <div className="font-black text-rose-600 text-sm lg:text-base">₹{dueAmount.toLocaleString('en-IN')}</div>
+                        {/* Tuition / Transport sub-chips need the cache —
+                            shown only when installments primed. Otherwise
+                            just the rupee figure from the slim aggregate. */}
+                        {hasCachedInstallments && (
+                          <div className="flex gap-1 mt-1 justify-end flex-wrap">
+                            {pd.tuition > 0 && <span className="text-[8px] lg:text-[9px] font-black bg-indigo-50 text-indigo-700 px-1.5 py-0.5 rounded-full">Tuition</span>}
+                            {pd.transport > 0 && <span className="text-[8px] lg:text-[9px] font-black bg-orange-50 text-orange-700 px-1.5 py-0.5 rounded-full">Transport</span>}
+                          </div>
+                        )}
                       </>
                     ) : (
                       <span className="flex items-center gap-0.5 text-[9px] lg:text-[10px] font-black text-emerald-600 bg-emerald-50 px-2 py-1 rounded-full">
@@ -2451,6 +2292,8 @@ export const FeeLedger: React.FC<Props> = ({ onBack }) => {
           <p className="text-center text-[9px] font-bold text-slate-300 py-3 lg:py-4">
             All {stuList.total} students shown
           </p>
+        )}
+          </>
         )}
       </div>
     </div>

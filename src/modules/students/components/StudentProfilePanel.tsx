@@ -8,6 +8,7 @@ import {
   UserCheck, AlertTriangle, Trash2,
   Lock, Edit2, History, Download,
   UserPlus, BookmarkCheck, Banknote, Truck, TruckIcon, FileX, RotateCcw, ArrowUpCircle, Eye,
+  LogOut, X,
 } from 'lucide-react';
 import { studentService } from '@/modules/students/student.service';
 import { apiStudents, apiFees } from '@/lib/apiClient';
@@ -21,6 +22,7 @@ import {
 } from '@/modules/transport/transport.service';
 import { storageService } from '@/shared/utils/storage.service';
 import { StudentClassAssignmentModal } from '@/modules/students/components/StudentClassAssignmentModal';
+import { StudentDocumentsPanel } from '@/modules/students/components/StudentDocumentsPanel';
 import { useAcademicYear } from '@/shared/context/AcademicYearContext';
 import { useEditorModeStore } from '@/store/editorModeStore';
 import { stripClassPrefix } from '@/shared/utils/className';
@@ -67,6 +69,66 @@ export const StudentProfilePanel: React.FC<Props> = ({ student, onBack, onStuden
   // Keep a local mutable copy so post-mutation UI updates are instant
   const [currentStudent, setCurrentStudent] = useState<Student>(student);
   useEffect(() => { setCurrentStudent(student); }, [student]);
+
+  // Lifecycle action modal — issue TC (active student) or re-admit
+  // (inactive student). Both gated server-side by Editor Mode +
+  // active-year + principal-only via the issue_tc_and_leave /
+  // rejoin_student RPCs (migration 0085).
+  const [tcModal, setTcModal] = useState(false);
+  const [tcReason, setTcReason] = useState('');
+  const [tcCustomNumber, setTcCustomNumber] = useState('');
+  const [tcSubmitting, setTcSubmitting] = useState(false);
+  const [readmitModal, setReadmitModal] = useState(false);
+  const [readmitClass, setReadmitClass] = useState('');
+  const [readmitSection, setReadmitSection] = useState('');
+  const [readmitRoll, setReadmitRoll] = useState('');
+  const [readmitSubmitting, setReadmitSubmitting] = useState(false);
+
+  const handleIssueTc = async () => {
+    setTcSubmitting(true);
+    try {
+      const res = await studentService.issueTC(
+        currentStudent.id,
+        tcReason || undefined,
+        tcCustomNumber.trim() || undefined,
+      );
+      showToast(`TC ${res.tcNumber} issued — student marked as left`);
+      setTcModal(false);
+      setTcReason('');
+      setTcCustomNumber('');
+      // Refresh local state so the action button flips to Re-admit.
+      setCurrentStudent(s => ({ ...s, tcNumber: res.tcNumber, isActive: false }));
+      onStudentChanged?.();
+    } catch (e) {
+      showToast(e instanceof Error ? e.message : 'TC issue failed', 'error');
+    } finally { setTcSubmitting(false); }
+  };
+
+  const handleReadmit = async () => {
+    if (!readmitClass.trim()) { showToast('Class is required', 'error'); return; }
+    setReadmitSubmitting(true);
+    try {
+      await studentService.readmitStudent(
+        currentStudent.id,
+        readmitClass.trim(),
+        readmitSection.trim() || undefined,
+        readmitRoll.trim() || undefined,
+      );
+      showToast(`${currentStudent.name} re-admitted to ${readmitClass}-${readmitSection || ''}`);
+      setReadmitModal(false);
+      setCurrentStudent(s => ({
+        ...s, isActive: true,
+        className: readmitClass.trim(),
+        section: readmitSection.trim(),
+        rollNo: readmitRoll.trim() || s.rollNo,
+      }));
+      onStudentChanged?.();
+    } catch (e) {
+      showToast(e instanceof Error ? e.message : 'Re-admit failed', 'error');
+    } finally { setReadmitSubmitting(false); }
+  };
+
+  const lifecycleEnabled = !!activeYear && editorModeActive;
 
   const [activeProfileTab, setActiveProfileTab] = useState<
     'INFO' | 'ALLOTMENT' | 'FAMILY' | 'RESULTS' | 'FEES' | 'ATTENDANCE' | 'CLASS_HISTORY' | 'TRANSPORT' | 'DOCS'
@@ -580,6 +642,33 @@ export const StudentProfilePanel: React.FC<Props> = ({ student, onBack, onStuden
             </div>
           </div>
         </div>
+
+        {/* Lifecycle action — Issue TC (active) OR Re-admit (inactive).
+            Both gated on Editor Mode + an active academic year. The
+            buttons are hidden entirely when the gate is closed so the
+            principal isn't tempted by a disabled-looking control. */}
+        {lifecycleEnabled && (
+          <div className="px-4 pb-3">
+            {currentStudent.isActive ? (
+              <button
+                onClick={() => setTcModal(true)}
+                className="w-full flex items-center justify-center gap-2 bg-rose-50 hover:bg-rose-100 text-rose-700 border border-rose-200 font-black text-xs uppercase tracking-widest py-2.5 rounded-xl active:scale-[0.99] transition-all">
+                <LogOut size={14} /> Issue TC &amp; Mark as Left
+              </button>
+            ) : (
+              <button
+                onClick={() => {
+                  setReadmitClass(currentStudent.className || '');
+                  setReadmitSection(currentStudent.section || '');
+                  setReadmitRoll(currentStudent.rollNo || '');
+                  setReadmitModal(true);
+                }}
+                className="w-full flex items-center justify-center gap-2 bg-emerald-50 hover:bg-emerald-100 text-emerald-700 border border-emerald-200 font-black text-xs uppercase tracking-widest py-2.5 rounded-xl active:scale-[0.99] transition-all">
+                <UserPlus size={14} /> Re-admit to {activeYear?.name ?? 'Active Year'}
+              </button>
+            )}
+          </div>
+        )}
 
         {/* Tabs */}
         <div className="flex gap-1 overflow-x-auto hide-scrollbar px-4 pb-3">
@@ -1307,6 +1396,10 @@ export const StudentProfilePanel: React.FC<Props> = ({ student, onBack, onStuden
           {/* ── DOCS TAB ─────────────────────────────── */}
           {activeProfileTab === 'DOCS' && (
             <>
+              {/* Quick-access certificate generators (Admit Card, Marksheet,
+                  Bonafide). TC issuance lives in the lifecycle action button
+                  above the tabs. */}
+              <StudentDocumentsPanel student={student} />
               {docsLoading && (
                 <div className="flex flex-col items-center py-10 text-slate-400">
                   <div className="w-6 h-6 border-4 border-slate-200 border-t-indigo-500 rounded-full animate-spin" />
@@ -1655,6 +1748,119 @@ export const StudentProfilePanel: React.FC<Props> = ({ student, onBack, onStuden
             }
           }}
         />
+      )}
+
+      {/* Issue TC modal */}
+      {tcModal && (
+        <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-50 flex items-end justify-center sm:items-center">
+          <div className="w-full max-w-md mx-auto bg-white rounded-t-3xl sm:rounded-3xl p-5 pb-7 animate-in slide-in-from-bottom-8">
+            <div className="flex justify-between items-start mb-4">
+              <div>
+                <h3 className="text-lg font-black text-rose-700">Issue Transfer Certificate</h3>
+                <p className="text-[11px] font-bold text-slate-500 mt-0.5">{currentStudent.name} · {currentStudent.admissionNo}</p>
+              </div>
+              <button onClick={() => setTcModal(false)} className="w-8 h-8 bg-slate-100 rounded-full flex items-center justify-center text-slate-500">
+                <X size={16} />
+              </button>
+            </div>
+
+            <div className="bg-amber-50 border border-amber-200 rounded-xl p-3 mb-4 text-[11px] font-bold text-amber-800">
+              ⚠ This will mark <span className="font-black">{currentStudent.name}</span> as left and disable the parent's portal access. TC number will be auto-generated for {activeYear?.name}.
+            </div>
+
+            <div className="space-y-3">
+              <div>
+                <label className="text-[10px] font-black uppercase tracking-wider text-slate-500">Reason (optional)</label>
+                <input
+                  value={tcReason}
+                  onChange={e => setTcReason(e.target.value)}
+                  placeholder="e.g., Family relocation, school change"
+                  className="mt-1 w-full px-3 py-2.5 border border-slate-200 rounded-xl text-sm font-bold text-slate-900 outline-none focus:border-rose-400" />
+              </div>
+              <div>
+                <label className="text-[10px] font-black uppercase tracking-wider text-slate-500">Custom TC number (optional)</label>
+                <input
+                  value={tcCustomNumber}
+                  onChange={e => setTcCustomNumber(e.target.value)}
+                  placeholder="Auto: TC-YYYY-NNN"
+                  className="mt-1 w-full px-3 py-2.5 border border-slate-200 rounded-xl text-sm font-bold text-slate-900 outline-none focus:border-rose-400 font-mono" />
+                <p className="text-[10px] font-bold text-slate-400 mt-1">Leave blank to auto-generate.</p>
+              </div>
+            </div>
+
+            <div className="flex gap-2 mt-5">
+              <button onClick={() => setTcModal(false)} disabled={tcSubmitting}
+                className="flex-1 py-3 bg-slate-100 hover:bg-slate-200 text-slate-700 font-black rounded-xl text-sm">
+                Cancel
+              </button>
+              <button onClick={handleIssueTc} disabled={tcSubmitting}
+                className="flex-1 py-3 bg-rose-600 hover:bg-rose-700 text-white font-black rounded-xl text-sm disabled:opacity-50">
+                {tcSubmitting ? 'Issuing…' : 'Issue TC'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Re-admit modal */}
+      {readmitModal && (
+        <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-50 flex items-end justify-center sm:items-center">
+          <div className="w-full max-w-md mx-auto bg-white rounded-t-3xl sm:rounded-3xl p-5 pb-7 animate-in slide-in-from-bottom-8">
+            <div className="flex justify-between items-start mb-4">
+              <div>
+                <h3 className="text-lg font-black text-emerald-700">Re-admit Student</h3>
+                <p className="text-[11px] font-bold text-slate-500 mt-0.5">{currentStudent.name} · {currentStudent.admissionNo}</p>
+              </div>
+              <button onClick={() => setReadmitModal(false)} className="w-8 h-8 bg-slate-100 rounded-full flex items-center justify-center text-slate-500">
+                <X size={16} />
+              </button>
+            </div>
+
+            <div className="bg-emerald-50 border border-emerald-200 rounded-xl p-3 mb-4 text-[11px] font-bold text-emerald-800">
+              Re-admitting to <span className="font-black">{activeYear?.name}</span>. A fresh academic record will be created with the class &amp; section below.
+            </div>
+
+            <div className="space-y-3">
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="text-[10px] font-black uppercase tracking-wider text-slate-500">Class *</label>
+                  <input
+                    value={readmitClass}
+                    onChange={e => setReadmitClass(e.target.value)}
+                    placeholder="e.g., 10"
+                    className="mt-1 w-full px-3 py-2.5 border border-slate-200 rounded-xl text-sm font-bold text-slate-900 outline-none focus:border-emerald-400" />
+                </div>
+                <div>
+                  <label className="text-[10px] font-black uppercase tracking-wider text-slate-500">Section</label>
+                  <input
+                    value={readmitSection}
+                    onChange={e => setReadmitSection(e.target.value)}
+                    placeholder="A"
+                    className="mt-1 w-full px-3 py-2.5 border border-slate-200 rounded-xl text-sm font-bold text-slate-900 outline-none focus:border-emerald-400" />
+                </div>
+              </div>
+              <div>
+                <label className="text-[10px] font-black uppercase tracking-wider text-slate-500">Roll No (optional)</label>
+                <input
+                  value={readmitRoll}
+                  onChange={e => setReadmitRoll(e.target.value)}
+                  placeholder="e.g., 25"
+                  className="mt-1 w-full px-3 py-2.5 border border-slate-200 rounded-xl text-sm font-bold text-slate-900 outline-none focus:border-emerald-400" />
+              </div>
+            </div>
+
+            <div className="flex gap-2 mt-5">
+              <button onClick={() => setReadmitModal(false)} disabled={readmitSubmitting}
+                className="flex-1 py-3 bg-slate-100 hover:bg-slate-200 text-slate-700 font-black rounded-xl text-sm">
+                Cancel
+              </button>
+              <button onClick={handleReadmit} disabled={readmitSubmitting || !readmitClass.trim()}
+                className="flex-1 py-3 bg-emerald-600 hover:bg-emerald-700 text-white font-black rounded-xl text-sm disabled:opacity-50">
+                {readmitSubmitting ? 'Re-admitting…' : 'Re-admit'}
+              </button>
+            </div>
+          </div>
+        </div>
       )}
     </div>
   );

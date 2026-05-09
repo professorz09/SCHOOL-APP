@@ -315,16 +315,60 @@ principalRouter.post('/expense/add', requireAuth, PRINCIPAL, async (req, res) =>
       category: string; description: string; amount: number; date: string; approvedBy?: string;
     }>(req, ['category', 'description', 'amount', 'date']);
 
+    // Stamp the active academic year so reports / analytics scope correctly.
+    // Falls back to NULL only if the school has no active year (shouldn't
+    // happen in normal flow but doesn't block the write).
+    const { data: yr } = await adminDb.from('academic_years')
+      .select('id').eq('school_id', req.user.school_id!)
+      .eq('is_active', true).maybeSingle();
+
     const { data, error } = await adminDb.from('expenses').insert({
-      school_id:   req.user.school_id,
-      category:    body.category,
-      description: body.description,
-      amount:      body.amount,
-      date:        body.date,
-      created_by:  req.user.id,
-    }).select('id, school_id, category, description, amount, date, created_by, created_at').single();
+      school_id:        req.user.school_id,
+      academic_year_id: (yr as { id: string } | null)?.id ?? null,
+      category:         body.category,
+      description:      body.description,
+      amount:           body.amount,
+      date:             body.date,
+      created_by:       req.user.id,
+    }).select('id, school_id, academic_year_id, category, description, amount, date, created_by, created_at').single();
     if (error) throw new ApiError(500, error.message);
     ok(res, data, 201);
+  } catch (err) { fail(res, err); }
+});
+
+// POST /api/principal/expense/update — same-school only
+principalRouter.post('/expense/update', requireAuth, PRINCIPAL, async (req, res) => {
+  try {
+    const body = requireBody<{
+      id: string; category?: string; description?: string;
+      amount?: number; date?: string;
+    }>(req, ['id']);
+
+    const patch: Record<string, unknown> = {};
+    if (body.category    !== undefined) patch.category    = body.category;
+    if (body.description !== undefined) patch.description = body.description;
+    if (body.amount      !== undefined) patch.amount      = body.amount;
+    if (body.date        !== undefined) patch.date        = body.date;
+    if (Object.keys(patch).length === 0) throw new ApiError(400, 'No fields to update');
+
+    const { data, error } = await adminDb.from('expenses')
+      .update(patch)
+      .eq('id', body.id).eq('school_id', req.user.school_id!)
+      .select('id, school_id, academic_year_id, category, description, amount, date, created_by, created_at').single();
+    if (error) throw new ApiError(500, error.message);
+    if (!data) throw new ApiError(404, 'Expense not found');
+    ok(res, data);
+  } catch (err) { fail(res, err); }
+});
+
+// POST /api/principal/expense/delete
+principalRouter.post('/expense/delete', requireAuth, PRINCIPAL, async (req, res) => {
+  try {
+    const { id } = requireBody<{ id: string }>(req, ['id']);
+    const { error } = await adminDb.from('expenses')
+      .delete().eq('id', id).eq('school_id', req.user.school_id!);
+    if (error) throw new ApiError(500, error.message);
+    ok(res, { id });
   } catch (err) { fail(res, err); }
 });
 
@@ -516,7 +560,13 @@ principalRouter.get('/leave/list', requireAuth, async (req, res) => {
 const inventoryAddLimiter = rateLimit({
   windowMs: 5 * 60_000,
   limit: 30,
+  // The express-rate-limit validator string-greps for `req.ip` and warns
+  // about IPv6 even when our keyGenerator falls back through `req.user.id`
+  // first. Suppress the false positive — auth users (req.user.id) are the
+  // primary identity here; the IP fallback is only for unauthenticated
+  // edge cases (which shouldn't happen on this route at all).
   keyGenerator: (req: any) => `inv-add:${req.user?.id ?? req.ip}`,
+  validate: { keyGeneratorIpFallback: false },
   standardHeaders: 'draft-7',
   legacyHeaders: false,
   message: { ok: false, error: 'Too many inventory additions — slow down for a few minutes.' },

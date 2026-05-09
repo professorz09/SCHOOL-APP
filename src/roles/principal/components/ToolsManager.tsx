@@ -368,6 +368,9 @@ export const ToolsManager: React.FC<Props> = ({ onBack }) => {
       class: '10', section: 'A', subject: 'Mathematics',
       totalMarks: 100, numQuestions: 30, difficulty: 'MIXED' as 'EASY' | 'MIXED' | 'HARD',
       topics: '',
+      // Per-type counts (0 = AI auto-balances). Mirrors the teacher's
+      // ExamPaperGenerator so the principal flow has the same controls.
+      mcqCount: 0, shortCount: 0, longCount: 0,
     });
     const [paper, setPaper] = useState<GeneratedExamPaper | null>(null);
     const [isGenerating, setIsGenerating] = useState(false);
@@ -411,6 +414,9 @@ export const ToolsManager: React.FC<Props> = ({ onBack }) => {
           duration: 180,
           topics: config.topics.trim(),
           difficulty: config.difficulty === 'MIXED' ? 'MEDIUM' : config.difficulty,
+          mcqCount:   config.mcqCount,
+          shortCount: config.shortCount,
+          longCount:  config.longCount,
         });
         setPaper(result);
         teacherService.getGeneratedPapers()
@@ -534,6 +540,49 @@ export const ToolsManager: React.FC<Props> = ({ onBack }) => {
                       </button>
                     ))}
                   </div>
+                </div>
+
+                {/* Question count controls — exact MCQ / short / long
+                    counts. 0 = AI auto-balances. Mirrors teacher's
+                    ExamPaperGenerator. */}
+                <div>
+                  <label className="text-xs font-black uppercase tracking-widest text-slate-400 mb-1.5 block">
+                    Question Counts <span className="text-slate-400">(0 = auto-balance)</span>
+                  </label>
+                  <div className="grid grid-cols-3 gap-2">
+                    {[
+                      { key: 'mcqCount'   as const, label: 'MCQ',   marks: 1, color: 'border-blue-200 focus:border-blue-500',     labelColor: 'text-blue-700' },
+                      { key: 'shortCount' as const, label: 'Short', marks: 2, color: 'border-violet-200 focus:border-violet-500', labelColor: 'text-violet-700' },
+                      { key: 'longCount'  as const, label: 'Long',  marks: 5, color: 'border-rose-200 focus:border-rose-500',     labelColor: 'text-rose-700' },
+                    ].map(({ key, label, marks, color, labelColor }) => (
+                      <div key={key}>
+                        <div className={`text-[9px] font-black uppercase tracking-wider ${labelColor} mb-1 flex items-center justify-between`}>
+                          <span>{label}</span>
+                          <span className="text-slate-400">~{marks}m</span>
+                        </div>
+                        <input
+                          type="number" min={0} max={50}
+                          value={config[key] ?? 0}
+                          onChange={e => setConfig({ ...config, [key]: Math.max(0, +e.target.value || 0) })}
+                          className={`w-full bg-white border rounded-xl px-3 py-2 text-center font-black text-base outline-none ${color}`}
+                        />
+                      </div>
+                    ))}
+                  </div>
+                  {(() => {
+                    const totalQs = (config.mcqCount ?? 0) + (config.shortCount ?? 0) + (config.longCount ?? 0);
+                    const estMarks = (config.mcqCount ?? 0) * 1 + (config.shortCount ?? 0) * 2 + (config.longCount ?? 0) * 5;
+                    if (totalQs === 0) return (
+                      <p className="text-[10px] font-bold text-slate-400 mt-1.5">AI will pick a balanced mix automatically.</p>
+                    );
+                    const overrun = estMarks > config.totalMarks;
+                    return (
+                      <p className={`text-[10px] font-bold mt-1.5 ${overrun ? 'text-rose-600' : 'text-slate-500'}`}>
+                        {totalQs} questions · ≈ {estMarks} marks
+                        {overrun && ` — exceeds total ${config.totalMarks}, AI will rebalance`}
+                      </p>
+                    );
+                  })()}
                 </div>
               </>
             )}
@@ -744,10 +793,13 @@ export const ToolsManager: React.FC<Props> = ({ onBack }) => {
     );
   };
 
-  // ── ID CARD GENERATOR — single + bulk-by-class ────────────────────────────
+  // ── ID CARD GENERATOR — class-wise (Tools is bulk-only) ─────────────────
   const IDCardGenerator = () => {
-    const [mode, setMode] = useState<'SINGLE' | 'BULK'>('BULK');
-    const [picked, setPicked] = useState('');
+    // Tools is class-wise only — single flow is on the student's Documents
+    // tab. Constants kept so the rest of this large component compiles
+    // without rewriting every conditional.
+    const mode = 'BULK' as 'SINGLE' | 'BULK';
+    const picked = '';
     const [pickedClass, setPickedClass] = useState('');
     const [preview, setPreview] = useState(false);
     const [downloadingPdf, setDownloadingPdf] = useState(false);
@@ -883,39 +935,22 @@ export const ToolsManager: React.FC<Props> = ({ onBack }) => {
             </div>
           </div>
 
-          {/* Mode toggle — bulk default. */}
-          <div className="flex gap-2 bg-slate-100 p-1 rounded-2xl">
-            <button type="button" onClick={() => { setMode('BULK'); setPicked(''); }}
-              className={`flex-1 py-2.5 rounded-xl text-xs font-black uppercase tracking-widest transition-colors ${mode === 'BULK' ? 'bg-white text-green-700 shadow-sm' : 'text-slate-500'}`}>
-              Bulk by Class
-            </button>
-            <button type="button" onClick={() => { setMode('SINGLE'); setPickedClass(''); }}
-              className={`flex-1 py-2.5 rounded-xl text-xs font-black uppercase tracking-widest transition-colors ${mode === 'SINGLE' ? 'bg-white text-green-700 shadow-sm' : 'text-slate-500'}`}>
-              Single Student
-            </button>
+          {/* Single-student flow removed — Tools is class-wise only. For a
+              one-off ID card, use the student profile's Documents tab. */}
+          <div>
+            <label className="text-xs font-black uppercase tracking-widest text-slate-400 mb-2 block">Select Class</label>
+            <select value={pickedClass} onChange={e => setPickedClass(e.target.value)}
+              className="w-full border border-slate-200 bg-white rounded-xl px-4 py-3 font-bold text-sm outline-none focus:border-green-400">
+              <option value="">Class chunein…</option>
+              {classes.map(c => {
+                const count = students.filter(s => s.className === c.className && s.section === c.section).length;
+                return <option key={c.id} value={c.id}>{c.className}-{c.section} · {count} students</option>;
+              })}
+            </select>
+            {pickedClass && printList.length > 0 && (
+              <p className="text-[10px] font-bold text-slate-500 mt-1.5">{printList.length} ID card{printList.length > 1 ? 's' : ''} will be generated</p>
+            )}
           </div>
-
-          {mode === 'BULK' ? (
-            <div>
-              <label className="text-xs font-black uppercase tracking-widest text-slate-400 mb-2 block">Select Class</label>
-              <select value={pickedClass} onChange={e => setPickedClass(e.target.value)}
-                className="w-full border border-slate-200 bg-white rounded-xl px-4 py-3 font-bold text-sm outline-none focus:border-green-400">
-                <option value="">Class chunein…</option>
-                {classes.map(c => {
-                  const count = students.filter(s => s.className === c.className && s.section === c.section).length;
-                  return <option key={c.id} value={c.id}>{c.className}-{c.section} · {count} students</option>;
-                })}
-              </select>
-              {pickedClass && printList.length > 0 && (
-                <p className="text-[10px] font-bold text-slate-500 mt-1.5">{printList.length} ID card{printList.length > 1 ? 's' : ''} will be generated</p>
-              )}
-            </div>
-          ) : (
-            <>
-              <StudentPicker value={picked} onChange={setPicked} />
-              {student && <SelectedCard student={student} />}
-            </>
-          )}
 
           {canPreview && (
             <button type="button" onClick={() => setPreview(true)}
@@ -1321,11 +1356,14 @@ export const ToolsManager: React.FC<Props> = ({ onBack }) => {
   ];
 
   const AdmitCardTool = () => {
-    const [mode, setMode]          = useState<'SINGLE' | 'BULK'>('BULK');
+    // Tools is class-wise only — single-student admit card lives on the
+    // student's Documents tab. mode/picked are constants so internal
+    // conditionals still compile.
+    const mode = 'BULK' as 'SINGLE' | 'BULK';
+    const picked = '';
     // examSource = SCHEDULED uses a real test_schedules row; CUSTOM lets the
     // principal type exam details ad-hoc without creating a scheduled exam.
     const [examSource, setExamSource] = useState<'SCHEDULED' | 'CUSTOM'>('SCHEDULED');
-    const [picked, setPicked]      = useState('');
     const [pickedClass, setPickedClass] = useState('');
     const [examId, setExamId]      = useState('');
     const [exams, setExams]        = useState<any[]>([]);
@@ -1569,40 +1607,22 @@ export const ToolsManager: React.FC<Props> = ({ onBack }) => {
             </div>
           </div>
 
-          {/* Mode toggle */}
-          <div className="flex gap-2 bg-slate-100 p-1 rounded-2xl">
-            <button type="button" onClick={() => { setMode('BULK'); setPicked(''); setExamId(''); }}
-              className={`flex-1 py-2.5 rounded-xl text-xs font-black uppercase tracking-widest transition-colors ${mode === 'BULK' ? 'bg-white text-rose-700 shadow-sm' : 'text-slate-500'}`}>
-              Bulk by Class
-            </button>
-            <button type="button" onClick={() => { setMode('SINGLE'); setPickedClass(''); setExamId(''); }}
-              className={`flex-1 py-2.5 rounded-xl text-xs font-black uppercase tracking-widest transition-colors ${mode === 'SINGLE' ? 'bg-white text-rose-700 shadow-sm' : 'text-slate-500'}`}>
-              Single Student
-            </button>
+          {/* Tools is class-wise only — single-student admit card lives on
+              the student's Documents tab. */}
+          <div>
+            <label className="text-xs font-black uppercase tracking-widest text-slate-400 mb-2 block">Select Class</label>
+            <select value={pickedClass} onChange={e => { setPickedClass(e.target.value); setExamId(''); }}
+              className="w-full border border-slate-200 bg-white rounded-xl px-4 py-3 font-bold text-sm outline-none focus:border-rose-400">
+              <option value="">Class chunein…</option>
+              {classes.map(c => {
+                const count = students.filter(s => s.className === c.className && s.section === c.section).length;
+                return <option key={c.id} value={c.id}>{c.className}-{c.section} · {count} students</option>;
+              })}
+            </select>
+            {pickedClass && printList.length > 0 && (
+              <p className="text-[10px] font-bold text-slate-500 mt-1.5">{printList.length} students will get an admit card</p>
+            )}
           </div>
-
-          {/* Selectors */}
-          {mode === 'BULK' ? (
-            <div>
-              <label className="text-xs font-black uppercase tracking-widest text-slate-400 mb-2 block">Select Class</label>
-              <select value={pickedClass} onChange={e => { setPickedClass(e.target.value); setExamId(''); }}
-                className="w-full border border-slate-200 bg-white rounded-xl px-4 py-3 font-bold text-sm outline-none focus:border-rose-400">
-                <option value="">Class chunein…</option>
-                {classes.map(c => {
-                  const count = students.filter(s => s.className === c.className && s.section === c.section).length;
-                  return <option key={c.id} value={c.id}>{c.className}-{c.section} · {count} students</option>;
-                })}
-              </select>
-              {pickedClass && printList.length > 0 && (
-                <p className="text-[10px] font-bold text-slate-500 mt-1.5">{printList.length} students will get an admit card</p>
-              )}
-            </div>
-          ) : (
-            <>
-              <StudentPicker value={picked} onChange={v => { setPicked(v); setExamId(''); }} />
-              {student && <SelectedCard student={student} />}
-            </>
-          )}
 
           {/* Exam source toggle: scheduled exam OR custom-typed details */}
           {targetClassName && (

@@ -62,6 +62,33 @@ export const DriverRouteView: React.FC = () => {
     );
   };
 
+  // One-tap quick add — for the first-trip flow when the driver is
+  // physically at a new stop. Captures GPS, auto-names "Stop N" using
+  // current time as ETA, and writes the stop directly. Driver can
+  // rename later from the stops list. No form, no friction.
+  const handleQuickAddHere = () => {
+    if (!vehicle || !navigator.geolocation) return;
+    setLocating(true);
+    navigator.geolocation.getCurrentPosition(
+      (pos) => {
+        const idx = stops.length + 1;
+        const now = new Date();
+        const hh = String(now.getHours()).padStart(2, '0');
+        const mm = String(now.getMinutes()).padStart(2, '0');
+        transportService.addStop(vehicle.id, {
+          name: `Stop ${idx}`,
+          estimatedTime: `${hh}:${mm}`,
+          lat: +pos.coords.latitude.toFixed(6),
+          lng: +pos.coords.longitude.toFixed(6),
+        });
+        reload();
+        setLocating(false);
+      },
+      () => setLocating(false),
+      { enableHighAccuracy: true, timeout: 8000 },
+    );
+  };
+
   const handleEditStop = () => {
     if (!vehicle || !editingStopId || !editStopName.trim()) return;
     const lat = parseFloat(editStopLat), lng = parseFloat(editStopLng);
@@ -125,10 +152,17 @@ export const DriverRouteView: React.FC = () => {
           <p className="text-[9px] font-black uppercase tracking-widest text-slate-400">
             Stops · {stops.length}
           </p>
-          <button onClick={() => setShowAdd(true)}
-            className="flex items-center gap-1 text-[10px] font-black text-blue-600 bg-blue-50 px-3 py-1.5 rounded-full hover:bg-blue-100">
-            <Plus size={12} /> Add Stop
-          </button>
+          <div className="flex items-center gap-1.5">
+            <button onClick={handleQuickAddHere} disabled={locating}
+              title="One-tap: capture current GPS as a new stop"
+              className="flex items-center gap-1 text-[10px] font-black text-emerald-700 bg-emerald-50 px-3 py-1.5 rounded-full hover:bg-emerald-100 disabled:opacity-60">
+              <MapPin size={12} /> {locating ? '…' : 'Here'}
+            </button>
+            <button onClick={() => setShowAdd(true)}
+              className="flex items-center gap-1 text-[10px] font-black text-blue-600 bg-blue-50 px-3 py-1.5 rounded-full hover:bg-blue-100">
+              <Plus size={12} /> Add Stop
+            </button>
+          </div>
         </div>
 
         {stops.length === 0 ? (

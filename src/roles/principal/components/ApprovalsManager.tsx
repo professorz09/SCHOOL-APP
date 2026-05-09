@@ -32,6 +32,10 @@ export const ApprovalsManager: React.FC<Props> = ({ onBack }) => {
   }, [showToast]);
 
   const filtered = filter === 'ALL' ? approvals : approvals.filter(a => a.status === filter);
+  const [shown, setShown] = useState(50);
+  useEffect(() => { setShown(50); }, [filter]);
+  const visibleApprovals = filtered.slice(0, shown);
+  const remainingApprovals = filtered.length - visibleApprovals.length;
   const pendingCount = approvals.filter(a => a.status === 'PENDING').length;
 
   const handleApprove = async (id: string) => {
@@ -160,7 +164,7 @@ export const ApprovalsManager: React.FC<Props> = ({ onBack }) => {
           ))}
         </div>
         <div className="space-y-2">
-          {filtered.map(ap => (
+          {visibleApprovals.map(ap => (
             <button key={ap.id} onClick={() => { setSelected(ap); setShowRejectForm(false); setRejectReason(''); }}
               className="w-full bg-white rounded-2xl border border-slate-100 shadow-sm p-4 text-left active:bg-slate-50">
               <div className="flex items-start justify-between gap-2 mb-2">
@@ -184,6 +188,12 @@ export const ApprovalsManager: React.FC<Props> = ({ onBack }) => {
               <CheckSquare size={32} className="mb-3 opacity-40" />
               <p className="font-bold text-sm">No approvals</p>
             </div>
+          )}
+          {remainingApprovals > 0 && (
+            <button onClick={() => setShown(s => s + 50)}
+              className="w-full py-3 bg-white border border-slate-200 rounded-2xl font-black text-xs text-slate-700 hover:bg-slate-50 transition-colors">
+              Load More ({remainingApprovals} remaining)
+            </button>
           )}
         </div>
       </div>

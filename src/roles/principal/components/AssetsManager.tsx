@@ -79,6 +79,7 @@ export const AssetsManager: React.FC<Props> = ({ onBack }) => {
   };
   const [view, setView] = useState<'INVENTORY' | 'HISTORY'>('INVENTORY');
   const [history, setHistory] = useState<HistoryEntry[]>([]);
+  const [historyShown, setHistoryShown] = useState(50);
   const [historyLoading, setHistoryLoading] = useState(false);
 
   const [addOpen, setAddOpen]   = useState(false);
@@ -126,8 +127,11 @@ export const AssetsManager: React.FC<Props> = ({ onBack }) => {
   // Group history entries by date for the same timeline pattern as the
   // inventory list. Newest first.
   const historyGroups = useMemo(() => {
+    // Slice BEFORE grouping so the Load More pager shows the latest N
+    // entries grouped by day, not the latest N days.
+    const limited = history.slice(0, historyShown);
     const map = new Map<string, HistoryEntry[]>();
-    for (const h of history) {
+    for (const h of limited) {
       const day = h.done_at.slice(0, 10);
       const arr = map.get(day) ?? [];
       arr.push(h);
@@ -136,7 +140,8 @@ export const AssetsManager: React.FC<Props> = ({ onBack }) => {
     return [...map.entries()]
       .sort((a, b) => b[0].localeCompare(a[0]))
       .map(([date, arr]) => ({ date, entries: arr }));
-  }, [history]);
+  }, [history, historyShown]);
+  const historyRemaining = history.length - Math.min(historyShown, history.length);
 
   // Filter + search applied in one pass; memoised so the long timeline
   // grouping below only re-runs when the inputs actually change.
@@ -404,6 +409,12 @@ export const AssetsManager: React.FC<Props> = ({ onBack }) => {
                     </div>
                   </div>
                 ))}
+                {historyRemaining > 0 && (
+                  <button onClick={() => setHistoryShown(s => s + 50)}
+                    className="w-full py-3 bg-white border border-slate-200 rounded-2xl font-black text-xs text-amber-700 hover:bg-amber-50 transition-colors">
+                    Load More ({historyRemaining} remaining)
+                  </button>
+                )}
               </div>
             </>
           )

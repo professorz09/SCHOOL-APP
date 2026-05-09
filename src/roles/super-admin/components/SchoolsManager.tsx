@@ -80,6 +80,11 @@ export const SchoolsManager: React.FC<Props> = ({ onBack }) => {
   const [studentsLoading, setStudentsLoading] = useState(false);
   const [staffSearch, setStaffSearch]       = useState('');
   const [studentsSearch, setStudentsSearch] = useState('');
+  const [stuShown, setStuShown]             = useState(50);
+  const [staffShown, setStaffShown]         = useState(50);
+  const [paymentsShown, setPaymentsShown]   = useState(50);
+  useEffect(() => { setStuShown(50); }, [studentsSearch]);
+  useEffect(() => { setStaffShown(50); }, [staffSearch]);
   const [overview, setOverview]             = useState<SchoolOverview | null>(null);
   const [overviewLoading, setOverviewLoading] = useState(false);
 
@@ -881,9 +886,9 @@ export const SchoolsManager: React.FC<Props> = ({ onBack }) => {
                   </div>
                 ) : (
                   <div>
-                    {billingInfo.payments.map((p, idx) => (
+                    {billingInfo.payments.slice(0, paymentsShown).map((p, idx) => (
                       <div key={p.id}
-                        className={`flex items-center gap-3 px-4 py-3 ${idx < billingInfo.payments.length - 1 ? 'border-b border-slate-50' : ''}`}>
+                        className={`flex items-center gap-3 px-4 py-3 ${idx < Math.min(billingInfo.payments.length, paymentsShown) - 1 ? 'border-b border-slate-50' : ''}`}>
                         <div className="w-9 h-9 rounded-xl bg-emerald-50 text-emerald-600 flex items-center justify-center shrink-0">
                           <IndianRupee size={15} />
                         </div>
@@ -900,6 +905,12 @@ export const SchoolsManager: React.FC<Props> = ({ onBack }) => {
                         </div>
                       </div>
                     ))}
+                    {billingInfo.payments.length > paymentsShown && (
+                      <button onClick={() => setPaymentsShown(s => s + 50)}
+                        className="w-full py-3 border-t border-slate-100 font-black text-xs text-emerald-700 hover:bg-emerald-50 transition-colors">
+                        Load More ({billingInfo.payments.length - paymentsShown} remaining)
+                      </button>
+                    )}
                   </div>
                 )}
               </div>
@@ -1065,9 +1076,9 @@ export const SchoolsManager: React.FC<Props> = ({ onBack }) => {
             </div>
           ) : (
             <div className="bg-white rounded-2xl border border-slate-100 shadow-sm overflow-hidden">
-              {filtered_stu.map((s, idx) => (
+              {filtered_stu.slice(0, stuShown).map((s, idx) => (
                 <div key={s.id}
-                  className={`flex items-center gap-3 px-4 py-3 ${idx < filtered_stu.length - 1 ? 'border-b border-slate-50' : ''}`}>
+                  className={`flex items-center gap-3 px-4 py-3 ${idx < Math.min(filtered_stu.length, stuShown) - 1 ? 'border-b border-slate-50' : ''}`}>
                   <div className="w-9 h-9 rounded-xl bg-indigo-50 text-indigo-700 flex items-center justify-center font-black text-xs shrink-0">
                     {s.name.split(' ').map(w => w[0]).join('').slice(0, 2).toUpperCase()}
                   </div>
@@ -1088,6 +1099,12 @@ export const SchoolsManager: React.FC<Props> = ({ onBack }) => {
                 </div>
               ))}
             </div>
+          )}
+          {filtered_stu.length > stuShown && (
+            <button onClick={() => setStuShown(s => s + 50)}
+              className="w-full mt-3 py-3 bg-white border border-slate-200 rounded-2xl font-black text-xs text-indigo-700 hover:bg-indigo-50 transition-colors">
+              Load More ({filtered_stu.length - stuShown} remaining)
+            </button>
           )}
         </div>
       </div>
@@ -1129,9 +1146,9 @@ export const SchoolsManager: React.FC<Props> = ({ onBack }) => {
             </div>
           ) : (
             <div className="bg-white rounded-2xl border border-slate-100 shadow-sm overflow-hidden">
-              {filtered_staff.map((s, idx) => (
+              {filtered_staff.slice(0, staffShown).map((s, idx) => (
                 <div key={s.id}
-                  className={`flex items-center gap-3 px-4 py-3 ${idx < filtered_staff.length - 1 ? 'border-b border-slate-50' : ''}`}>
+                  className={`flex items-center gap-3 px-4 py-3 ${idx < Math.min(filtered_staff.length, staffShown) - 1 ? 'border-b border-slate-50' : ''}`}>
                   <div className={`w-10 h-10 rounded-xl flex items-center justify-center font-bold text-sm shrink-0 ${s.role === 'TEACHER' ? 'bg-emerald-50 text-emerald-700' : 'bg-blue-50 text-blue-700'}`}>
                     {s.name.split(' ').map(w => w[0]).join('').slice(0, 2).toUpperCase()}
                   </div>
@@ -1159,6 +1176,12 @@ export const SchoolsManager: React.FC<Props> = ({ onBack }) => {
                 </div>
               ))}
             </div>
+          )}
+          {filtered_staff.length > staffShown && (
+            <button onClick={() => setStaffShown(s => s + 50)}
+              className="w-full mt-3 py-3 bg-white border border-slate-200 rounded-2xl font-black text-xs text-indigo-700 hover:bg-indigo-50 transition-colors">
+              Load More ({filtered_staff.length - staffShown} remaining)
+            </button>
           )}
         </div>
       </div>

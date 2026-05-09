@@ -28,6 +28,10 @@ export interface Student {
   penNumber: string;
   birthCertNo: string;
   tcNumber: string;
+  /** Lifecycle flag — false when TC has been issued or student dropped
+   *  out. Drives the StudentProfilePanel action button (Issue TC vs
+   *  Re-admit) and hides inactive rows from default list views. */
+  isActive: boolean;
   rte: boolean;
   fatherName: string;
   fatherPhone: string;
@@ -96,4 +100,4 @@ export interface StudentAcademicRecord {
   complaints: Complaint[];
 }
 
-export type CreateStudentInput = Omit<Student, 'id' | 'docs' | 'attendancePercent' | 'feeStatus' | 'paidFee'>;
+export type CreateStudentInput = Omit<Student, 'id' | 'docs' | 'attendancePercent' | 'feeStatus' | 'paidFee' | 'isActive'>;

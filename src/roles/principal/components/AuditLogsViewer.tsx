@@ -48,6 +48,7 @@ function fmtValue(v: unknown): string {
 export const AuditLogsViewer: React.FC<Props> = ({ onBack }) => {
   const { showToast } = useUIStore();
   const [rows, setRows] = useState<AuditLogEntry[]>([]);
+  const [shown, setShown] = useState(50);
   const [loading, setLoading] = useState(false);
   const [expanded, setExpanded] = useState<string | null>(null);
 
@@ -84,17 +85,24 @@ export const AuditLogsViewer: React.FC<Props> = ({ onBack }) => {
     setModules(prev => prev.includes(m) ? prev.filter(x => x !== m) : [...prev, m]);
   };
 
-  // Group rows by date for a more scannable feed.
+  // Reset pager when the filter set changes (the parent component refetches
+  // rows, so this component can't know directly — but bumping shown back to
+  // 50 whenever rows length drops keeps the pager honest).
+  useEffect(() => { setShown(50); }, [rows.length]);
+  const visibleRows = rows.slice(0, shown);
+  const remainingRows = rows.length - visibleRows.length;
+
+  // Group VISIBLE rows by date for a scannable feed.
   const grouped = useMemo(() => {
     const buckets = new Map<string, AuditLogEntry[]>();
-    for (const r of rows) {
+    for (const r of visibleRows) {
       const key = r.createdAt.slice(0, 10);
       const list = buckets.get(key) ?? [];
       list.push(r);
       buckets.set(key, list);
     }
     return Array.from(buckets.entries()).sort(([a], [b]) => (a < b ? 1 : -1));
-  }, [rows]);
+  }, [visibleRows]);
 
   return (
     <div className="w-full bg-slate-50 flex flex-col animate-in slide-in-from-right-8 duration-300 min-h-screen">
@@ -294,6 +302,17 @@ export const AuditLogsViewer: React.FC<Props> = ({ onBack }) => {
             })}
           </div>
         ))}
+        {remainingRows > 0 && (
+          <button onClick={() => setShown(s => s + 50)}
+            className="w-full py-3 bg-white border border-slate-200 rounded-2xl font-black text-xs text-slate-700 hover:bg-slate-50 transition-colors">
+            Load More ({remainingRows} remaining)
+          </button>
+        )}
+        {rows.length > 0 && (
+          <p className="text-center text-[10px] font-bold text-slate-300 pt-1">
+            Showing {visibleRows.length} of {rows.length} events
+          </p>
+        )}
       </div>
     </div>
   );

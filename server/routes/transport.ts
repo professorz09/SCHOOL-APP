@@ -302,15 +302,18 @@ transportRouter.post('/stops/remove', requireAuth, requireRole('PRINCIPAL'), asy
 // POST /api/transport/assign — full atomic transport assignment with fee schedule
 transportRouter.post('/assign', requireAuth, requireRole('PRINCIPAL'), async (req, res) => {
   try {
+    // stopId is now OPTIONAL — schools can assign a student to a vehicle
+    // before the route is mapped (driver builds stops on the first trip
+    // via /api/transport/stop/add-current). Vehicle is still required.
     const body = requireBody<{
-      studentId: string; vehicleId: string; stopId: string;
+      studentId: string; vehicleId: string; stopId?: string;
       monthlyAmount: number; startDate: string; academicYearId: string;
       endDate?: string; reason?: string; feeStructureId?: string;
-    }>(req, ['studentId', 'vehicleId', 'stopId', 'monthlyAmount', 'startDate', 'academicYearId']);
+    }>(req, ['studentId', 'vehicleId', 'monthlyAmount', 'startDate', 'academicYearId']);
 
     await assertStudentInSchool(body.studentId, req.user.school_id!);
     await assertVehicleInSchool(body.vehicleId, req.user.school_id!);
-    await assertStopInSchool(body.stopId, req.user.school_id!);
+    if (body.stopId) await assertStopInSchool(body.stopId, req.user.school_id!);
 
     // 1. Snapshot prior active assignment for rollback
     const { data: priorRow } = await adminDb
@@ -341,7 +344,7 @@ transportRouter.post('/assign', requireAuth, requireRole('PRINCIPAL'), async (re
         student_id:       body.studentId,
         academic_year_id: body.academicYearId,
         vehicle_id:       body.vehicleId,
-        stop_id:          body.stopId,
+        stop_id:          body.stopId ?? null,
         monthly_amount:   Math.round(body.monthlyAmount),
         start_date:       body.startDate,
         end_date:         body.endDate ?? null,

@@ -9304,3 +9304,771 @@ END $$;
 DROP TRIGGER IF EXISTS trg_school_limit_floor ON public.schools;
 CREATE TRIGGER trg_school_limit_floor BEFORE UPDATE OF max_students, max_staff ON public.schools
   FOR EACH ROW EXECUTE FUNCTION public.enforce_school_limit_floor();
+-- =============================================================
+-- 0083_drop_govt_payments.sql
+-- =============================================================
+-- Removes the RTE / government-payments parallel flow. Schools
+-- should record any government grant as a regular payment with a
+-- "Govt grant" note in the standard Collect Payment modal — the
+-- separate RTE schedule + govt payment ledger added too much
+-- complexity for the value it delivered.
+--
+-- What's dropped:
+--   • record_govt_payment(...) RPC
+--   • govt_payment_student_links table
+--   • government_payments table
+--   • /api/fees/govt-pay endpoint (handled in client; route now stub-404s)
+--
+-- What's KEPT (intentionally):
+--   • students.is_rte boolean — admission-record flag, surfaces only
+--     on the student profile.
+--   • fee_installments.payer_type column — still present for back-compat
+--     with historical rows; new rows always insert 'PARENT'. UI ignores it.
+--
+-- The columns / table drops are CASCADE because the linkage is one-way
+-- (UI doesn't read these tables anymore).
+-- =============================================================
+
+DROP FUNCTION IF EXISTS public.record_govt_payment(BIGINT, DATE, TEXT, TEXT, UUID[]);
+DROP TABLE IF EXISTS public.govt_payment_student_links CASCADE;
+DROP TABLE IF EXISTS public.government_payments CASCADE;
+-- =============================================================
+-- 0084_drop_advance_credit.sql
+-- =============================================================
+-- Removes the "advance credit" concept. Schools that use this app
+-- collect monthly fees; surplus payments held as a school liability
+-- caused more confusion than it solved (98% case: family pays the
+-- exact installment; overpay was either a typo or a refund event).
+--
+-- After this migration:
+--   • record_fee_payment    REJECTS overpay (no silent advance dump)
+--   • pay_installment       drops p_use_advance parameter
+--   • advance_balances rows zeroed via audit-friendly write-off
+--   • Existing balances logged into audit_logs as 'advance_credit_zeroed'
+--     so the school can refund those families manually.
+--
+-- The advance_balances table itself is KEPT (empty) for back-compat;
+-- nothing reads it anymore in app code, but a few legacy reports and
+-- the FK from payment_records.advance_amount hold references.
+-- =============================================================
+
+-- 1. Audit + zero existing advance balances ──────────────────────
+DO $$
+DECLARE
+  r RECORD;
+BEGIN
+  FOR r IN
+    SELECT ab.student_id, ab.amount, s.school_id, s.name
+      FROM public.advance_balances ab
+      JOIN public.students s ON s.id = ab.student_id
+     WHERE ab.amount > 0
+  LOOP
+    INSERT INTO public.audit_logs
+      (user_id, school_id, action, entity_type, entity_id, details)
+    VALUES
+      (NULL, r.school_id, 'advance_credit_zeroed', 'student', r.student_id,
+       jsonb_build_object(
+         'student_name', r.name,
+         'previous_balance', r.amount,
+         'reason', 'Advance credit feature removed in 0084 — refund manually if needed'
+       ));
+  END LOOP;
+
+  UPDATE public.advance_balances SET amount = 0, updated_at = NOW();
+END $$;
+
+-- 2. Replace record_fee_payment to reject overpay ────────────────
+DROP FUNCTION IF EXISTS public.record_fee_payment(UUID, BIGINT, TEXT, DATE, TEXT, BOOLEAN, BOOLEAN, BIGINT);
+
+CREATE OR REPLACE FUNCTION public.record_fee_payment(
+  p_student_id      UUID,
+  p_amount          BIGINT,
+  p_method          TEXT    DEFAULT 'CASH',
+  p_date            DATE    DEFAULT CURRENT_DATE,
+  p_note            TEXT    DEFAULT NULL,
+  p_apply_late_fee  BOOLEAN DEFAULT TRUE,
+  p_discount_amount BIGINT  DEFAULT 0
+) RETURNS UUID
+LANGUAGE plpgsql SECURITY DEFINER SET search_path = public AS $$
+DECLARE
+  v_school_id          UUID;
+  v_year_id            UUID;
+  v_payment_id         UUID;
+  v_remaining          BIGINT;
+  v_receipt            TEXT;
+  v_inst               RECORD;
+  v_apply              BIGINT;
+  v_late_total         BIGINT := 0;
+  v_late_existing      BIGINT := 0;
+  v_late_delta         BIGINT := 0;
+  v_outstanding        BIGINT := 0;
+  v_caller             UUID   := auth.uid();
+  v_effective_discount BIGINT;
+BEGIN
+  IF v_caller IS NULL THEN RAISE EXCEPTION 'unauthenticated'; END IF;
+  IF p_amount < 0 THEN RAISE EXCEPTION 'amount must be non-negative'; END IF;
+
+  v_effective_discount := GREATEST(0, COALESCE(p_discount_amount, 0));
+
+  IF p_amount = 0 AND v_effective_discount = 0 THEN
+    RAISE EXCEPTION 'amount and discount cannot both be zero';
+  END IF;
+
+  SELECT school_id INTO v_school_id FROM public.students WHERE id = p_student_id;
+  IF v_school_id IS NULL THEN RAISE EXCEPTION 'student not found'; END IF;
+  IF NOT (public.is_super_admin()
+          OR (public.is_principal() AND public.current_user_school_id() = v_school_id)) THEN
+    RAISE EXCEPTION 'forbidden';
+  END IF;
+
+  SELECT id INTO v_year_id FROM public.academic_years
+   WHERE school_id = v_school_id AND is_active = TRUE LIMIT 1;
+  IF v_year_id IS NULL THEN RAISE EXCEPTION 'no active academic year for school'; END IF;
+
+  -- Late-fee policy applied idempotently before allocation.
+  IF p_apply_late_fee THEN
+    SELECT COALESCE(SUM(late_fee), 0) INTO v_late_total
+      FROM public.preview_student_late_fees(p_student_id, p_date);
+    SELECT COALESCE(SUM(amount), 0) INTO v_late_existing
+      FROM public.fee_installments
+     WHERE student_id = p_student_id AND fee_type = 'OTHER' AND month = 'Late Fee';
+    v_late_delta := v_late_total - v_late_existing;
+    IF v_late_delta > 0 THEN
+      INSERT INTO public.fee_installments
+        (student_id, academic_year_id, school_id, month, due_date, fee_type, amount)
+      VALUES
+        (p_student_id, v_year_id, v_school_id, 'Late Fee',
+         p_date - INTERVAL '1 day', 'OTHER', v_late_delta);
+    END IF;
+  END IF;
+
+  -- Compute total outstanding AFTER any late-fee row was inserted.
+  SELECT COALESCE(SUM(GREATEST(0, amount - paid_amount - write_off_amount)), 0)
+    INTO v_outstanding
+    FROM public.fee_installments
+   WHERE student_id = p_student_id;
+
+  -- HARD STOP on overpay. The previous behaviour silently dumped the
+  -- surplus into advance_balances; that's gone in 0084.
+  IF (p_amount + v_effective_discount) > v_outstanding THEN
+    RAISE EXCEPTION 'Cannot exceed total due (₹%). Reduce cash or discount.', v_outstanding
+      USING ERRCODE = 'check_violation';
+  END IF;
+
+  v_remaining := p_amount + v_effective_discount;
+  v_receipt := 'RCT-' || to_char(NOW(),'YYYYMMDDHH24MISS') || '-' || substr(p_student_id::text, 1, 4);
+
+  -- Record payment row (cash + discount tracked separately).
+  INSERT INTO public.payment_records
+    (student_id, school_id, academic_year_id, amount, discount_amount,
+     method, date, receipt_no, note)
+  VALUES
+    (p_student_id, v_school_id, v_year_id, p_amount, v_effective_discount,
+     p_method, p_date, v_receipt, p_note)
+  RETURNING id INTO v_payment_id;
+
+  -- Allocate (cash + discount) oldest-due-first.
+  FOR v_inst IN
+    SELECT id, amount, paid_amount, write_off_amount, due_date
+      FROM public.fee_installments
+     WHERE student_id = p_student_id
+       AND (amount - paid_amount - write_off_amount) > 0
+     ORDER BY due_date ASC, created_at ASC
+     FOR UPDATE
+  LOOP
+    EXIT WHEN v_remaining <= 0;
+    v_apply := LEAST(v_remaining, v_inst.amount - v_inst.paid_amount - v_inst.write_off_amount);
+    UPDATE public.fee_installments
+       SET paid_amount = paid_amount + v_apply,
+           status = public.compute_installment_status(amount, paid_amount + v_apply, write_off_amount, due_date),
+           updated_at = NOW()
+     WHERE id = v_inst.id;
+    INSERT INTO public.payment_installment_links
+      (payment_id, installment_id, amount_applied)
+    VALUES (v_payment_id, v_inst.id, v_apply);
+    v_remaining := v_remaining - v_apply;
+  END LOOP;
+
+  PERFORM public.refresh_student_fee_aggregate(p_student_id, v_year_id);
+
+  INSERT INTO public.audit_logs (user_id, school_id, action, entity_type, entity_id, details)
+  VALUES (v_caller, v_school_id, 'fee_payment', 'payment', v_payment_id,
+          jsonb_build_object('amount', p_amount, 'discount_amount', v_effective_discount,
+                             'student_id', p_student_id, 'receipt', v_receipt));
+
+  RETURN v_payment_id;
+END $$;
+
+GRANT EXECUTE ON FUNCTION public.record_fee_payment(UUID, BIGINT, TEXT, DATE, TEXT, BOOLEAN, BIGINT)
+  TO authenticated;
+
+-- 3. Drop p_use_advance from pay_installment ─────────────────────
+DROP FUNCTION IF EXISTS public.pay_installment(UUID, BIGINT, BIGINT, TEXT, DATE, TEXT, BOOLEAN);
+
+CREATE OR REPLACE FUNCTION public.pay_installment(
+  p_installment_id UUID,
+  p_amount         BIGINT,
+  p_discount       BIGINT  DEFAULT 0,
+  p_method         TEXT    DEFAULT 'CASH',
+  p_date           DATE    DEFAULT CURRENT_DATE,
+  p_note           TEXT    DEFAULT NULL
+) RETURNS UUID
+LANGUAGE plpgsql SECURITY DEFINER SET search_path = public AS $$
+DECLARE
+  v_caller       UUID := auth.uid();
+  v_inst         RECORD;
+  v_outstanding  BIGINT;
+  v_payment_id   UUID;
+  v_receipt      TEXT;
+  v_disc         BIGINT;
+  v_amt          BIGINT;
+BEGIN
+  IF v_caller IS NULL THEN RAISE EXCEPTION 'unauthenticated'; END IF;
+  v_amt  := COALESCE(p_amount, 0);
+  v_disc := GREATEST(0, COALESCE(p_discount, 0));
+  IF v_amt < 0 THEN RAISE EXCEPTION 'amount must be non-negative'; END IF;
+  IF v_amt = 0 AND v_disc = 0 THEN RAISE EXCEPTION 'nothing to apply'; END IF;
+
+  SELECT id, student_id, school_id, academic_year_id, amount, paid_amount,
+         write_off_amount, fee_type, month, due_date
+    INTO v_inst FROM public.fee_installments
+   WHERE id = p_installment_id FOR UPDATE;
+  IF NOT FOUND THEN RAISE EXCEPTION 'installment not found'; END IF;
+
+  IF NOT (public.is_super_admin()
+          OR (public.is_principal() AND public.current_user_school_id() = v_inst.school_id)) THEN
+    RAISE EXCEPTION 'forbidden';
+  END IF;
+
+  v_outstanding := v_inst.amount - v_inst.paid_amount - v_inst.write_off_amount;
+  IF v_outstanding <= 0 THEN RAISE EXCEPTION 'installment already cleared'; END IF;
+  IF (v_amt + v_disc) > v_outstanding THEN
+    RAISE EXCEPTION 'overpay blocked (outstanding=%, attempted=%)', v_outstanding, v_amt + v_disc;
+  END IF;
+
+  v_receipt := 'RCT-' || to_char(NOW(),'YYYYMMDDHH24MISS') || '-' || substr(v_inst.student_id::text, 1, 4);
+
+  INSERT INTO public.payment_records
+    (student_id, school_id, academic_year_id, amount, discount_amount, method, date, receipt_no, note)
+  VALUES
+    (v_inst.student_id, v_inst.school_id, v_inst.academic_year_id,
+     v_amt, v_disc, p_method, p_date, v_receipt, p_note)
+  RETURNING id INTO v_payment_id;
+
+  IF v_amt > 0 THEN
+    INSERT INTO public.payment_installment_links (payment_id, installment_id, amount_applied)
+    VALUES (v_payment_id, v_inst.id, v_amt);
+  END IF;
+
+  IF v_disc > 0 THEN
+    INSERT INTO public.fee_write_offs (installment_id, student_id, school_id, amount, reason, approved_by)
+    VALUES (v_inst.id, v_inst.student_id, v_inst.school_id, v_disc, COALESCE(p_note, 'Discount'), v_caller);
+  END IF;
+
+  UPDATE public.fee_installments
+     SET paid_amount = paid_amount + v_amt,
+         write_off_amount = write_off_amount + v_disc,
+         write_off_reason = CASE WHEN v_disc > 0 THEN COALESCE(p_note, write_off_reason, 'Discount') ELSE write_off_reason END,
+         status = public.compute_installment_status(amount, paid_amount + v_amt, write_off_amount + v_disc, due_date),
+         updated_at = NOW()
+   WHERE id = v_inst.id;
+
+  PERFORM public.refresh_student_fee_aggregate(v_inst.student_id, v_inst.academic_year_id);
+
+  INSERT INTO public.audit_logs (user_id, school_id, action, entity_type, entity_id, details)
+  VALUES (v_caller, v_inst.school_id, 'fee_payment_per_installment', 'payment', v_payment_id,
+    jsonb_build_object('installment_id', v_inst.id, 'student_id', v_inst.student_id,
+                       'month', v_inst.month, 'fee_type', v_inst.fee_type,
+                       'amount', v_amt, 'discount', v_disc, 'method', p_method, 'receipt', v_receipt));
+
+  RETURN v_payment_id;
+END $$;
+
+GRANT EXECUTE ON FUNCTION public.pay_installment(UUID, BIGINT, BIGINT, TEXT, DATE, TEXT) TO authenticated;
+-- =============================================================
+-- 0085_student_tc_lifecycle.sql
+-- =============================================================
+-- Adds two RPCs for student lifecycle from the profile panel:
+--
+--   issue_tc_and_leave(student_id, reason)
+--     • Generates a sequential TC number (school-scoped)
+--     • Stamps students.tc_number
+--     • Sets students.is_active = FALSE
+--     • Writes a TC_ISSUED row in student_change_history (audit trail)
+--
+--   rejoin_student(student_id, class_name, section, roll_no)
+--     • Sets students.is_active = TRUE
+--     • Creates a student_academic_records row for the ACTIVE year
+--       (idempotent — no-op if already present)
+--     • Writes a REJOINED row in student_change_history
+--
+-- Both gated server-side by:
+--   • Caller is principal of the student's school (or super_admin)
+--   • Editor Mode active (users.editor_mode_until > now())
+--   • Active academic year exists for the school
+--
+-- No new columns — uses existing students.tc_number / is_active +
+-- the existing student_change_history audit table.
+-- =============================================================
+
+CREATE OR REPLACE FUNCTION public.issue_tc_and_leave(
+  p_student_id UUID,
+  p_reason     TEXT DEFAULT NULL
+) RETURNS TEXT
+LANGUAGE plpgsql SECURITY DEFINER SET search_path = public AS $$
+DECLARE
+  v_caller    UUID := auth.uid();
+  v_school    UUID;
+  v_year_id   UUID;
+  v_year_lbl  TEXT;
+  v_tc_number TEXT;
+  v_seq       INT;
+BEGIN
+  IF v_caller IS NULL THEN RAISE EXCEPTION 'unauthenticated'; END IF;
+
+  -- Authorise: principal of the student's school OR super_admin.
+  SELECT school_id INTO v_school FROM public.students WHERE id = p_student_id;
+  IF v_school IS NULL THEN RAISE EXCEPTION 'student not found'; END IF;
+  IF NOT (public.is_super_admin()
+          OR (public.is_principal() AND public.current_user_school_id() = v_school)) THEN
+    RAISE EXCEPTION 'forbidden';
+  END IF;
+
+  -- Editor Mode required — irreversible action, must be deliberate.
+  IF NOT public.is_super_admin() THEN
+    IF NOT EXISTS (
+      SELECT 1 FROM public.users
+       WHERE id = v_caller AND editor_mode_until > NOW()
+    ) THEN
+      RAISE EXCEPTION 'Editor Mode not active — enable it from the principal dashboard first';
+    END IF;
+  END IF;
+
+  -- Active year required — TC is dated to the active year.
+  SELECT id, label INTO v_year_id, v_year_lbl
+    FROM public.academic_years
+   WHERE school_id = v_school AND is_active = TRUE LIMIT 1;
+  IF v_year_id IS NULL THEN
+    RAISE EXCEPTION 'No active academic year — TC cannot be issued';
+  END IF;
+
+  -- Generate next school-scoped TC sequence: TC-{year}-{NNN}
+  -- Counts existing tc_number rows for this school in the active year.
+  SELECT COALESCE(MAX(
+           NULLIF(regexp_replace(tc_number, '^.*-(\d+)$', '\1'), '')::INT
+         ), 0) + 1
+    INTO v_seq
+    FROM public.students
+   WHERE school_id = v_school
+     AND tc_number IS NOT NULL
+     AND tc_number ~ ('^TC-' || split_part(v_year_lbl, '-', 1) || '-\d+$');
+
+  v_tc_number := 'TC-' || split_part(v_year_lbl, '-', 1) || '-' || lpad(v_seq::text, 3, '0');
+
+  UPDATE public.students
+     SET tc_number = v_tc_number,
+         is_active = FALSE,
+         updated_at = NOW()
+   WHERE id = p_student_id;
+
+  INSERT INTO public.student_change_history
+    (student_id, field_name, old_value, new_value, reason, changed_by, approved_by)
+  VALUES
+    (p_student_id, 'TC_ISSUED', NULL, v_tc_number,
+     COALESCE(p_reason, 'Transfer Certificate issued'),
+     v_caller, v_caller);
+
+  INSERT INTO public.audit_logs (user_id, school_id, action, entity_type, entity_id, details)
+  VALUES (v_caller, v_school, 'tc_issued', 'student', p_student_id,
+          jsonb_build_object('tc_number', v_tc_number, 'reason', p_reason, 'year', v_year_lbl));
+
+  RETURN v_tc_number;
+END $$;
+
+GRANT EXECUTE ON FUNCTION public.issue_tc_and_leave(UUID, TEXT) TO authenticated;
+
+
+-- ─── Rejoin ──────────────────────────────────────────────────────
+CREATE OR REPLACE FUNCTION public.rejoin_student(
+  p_student_id UUID,
+  p_class_name TEXT,
+  p_section    TEXT,
+  p_roll_no    TEXT DEFAULT NULL
+) RETURNS VOID
+LANGUAGE plpgsql SECURITY DEFINER SET search_path = public AS $$
+DECLARE
+  v_caller  UUID := auth.uid();
+  v_school  UUID;
+  v_year_id UUID;
+BEGIN
+  IF v_caller IS NULL THEN RAISE EXCEPTION 'unauthenticated'; END IF;
+
+  SELECT school_id INTO v_school FROM public.students WHERE id = p_student_id;
+  IF v_school IS NULL THEN RAISE EXCEPTION 'student not found'; END IF;
+  IF NOT (public.is_super_admin()
+          OR (public.is_principal() AND public.current_user_school_id() = v_school)) THEN
+    RAISE EXCEPTION 'forbidden';
+  END IF;
+
+  IF NOT public.is_super_admin() THEN
+    IF NOT EXISTS (
+      SELECT 1 FROM public.users
+       WHERE id = v_caller AND editor_mode_until > NOW()
+    ) THEN
+      RAISE EXCEPTION 'Editor Mode not active — enable it from the principal dashboard first';
+    END IF;
+  END IF;
+
+  SELECT id INTO v_year_id
+    FROM public.academic_years
+   WHERE school_id = v_school AND is_active = TRUE LIMIT 1;
+  IF v_year_id IS NULL THEN
+    RAISE EXCEPTION 'No active academic year — student cannot be re-admitted';
+  END IF;
+
+  IF p_class_name IS NULL OR length(trim(p_class_name)) = 0 THEN
+    RAISE EXCEPTION 'class_name is required';
+  END IF;
+
+  -- Reactivate the student.
+  UPDATE public.students
+     SET is_active = TRUE,
+         updated_at = NOW()
+   WHERE id = p_student_id;
+
+  -- Create AR row for the active year. Idempotent — if a row already
+  -- exists for this (student, year) we just update class/section.
+  INSERT INTO public.student_academic_records
+    (student_id, academic_year_id, class_name, section, roll_no, fee_status)
+  VALUES (p_student_id, v_year_id, trim(p_class_name), COALESCE(trim(p_section), ''), p_roll_no, 'PENDING')
+  ON CONFLICT (student_id, academic_year_id) DO UPDATE
+    SET class_name = EXCLUDED.class_name,
+        section    = EXCLUDED.section,
+        roll_no    = COALESCE(EXCLUDED.roll_no, public.student_academic_records.roll_no);
+
+  INSERT INTO public.student_change_history
+    (student_id, field_name, old_value, new_value, reason, changed_by, approved_by)
+  VALUES
+    (p_student_id, 'REJOINED', NULL,
+     trim(p_class_name) || COALESCE('-' || trim(p_section), ''),
+     'Re-admitted to ' || trim(p_class_name) || COALESCE('-' || trim(p_section), ''),
+     v_caller, v_caller);
+
+  INSERT INTO public.audit_logs (user_id, school_id, action, entity_type, entity_id, details)
+  VALUES (v_caller, v_school, 'student_rejoined', 'student', p_student_id,
+          jsonb_build_object('class', p_class_name, 'section', p_section));
+END $$;
+
+GRANT EXECUTE ON FUNCTION public.rejoin_student(UUID, TEXT, TEXT, TEXT) TO authenticated;
+-- =============================================================
+-- 0086_financial_analytics.sql
+-- =============================================================
+-- Single-round-trip aggregate for the Analytics dashboard's top
+-- summary cards. Returns 10 totals scoped to (school, academic year)
+-- so the UI never has to ship row-level data for these tiles.
+--
+-- All inputs are explicitly bounded by school_id (RLS-safe) and the
+-- supplied year's start/end dates. "This month" is calendar-current
+-- (date_trunc('month', now())), "this year" tracks the supplied
+-- academic year window.
+--
+-- Indexed columns used: payment_records(school_id, date),
+-- fee_installments(student_id, academic_year_id),
+-- expenses(school_id, date), salary_payments(school_id, paid_at).
+-- =============================================================
+
+CREATE OR REPLACE FUNCTION public.get_financial_analytics(
+  p_year_id UUID
+) RETURNS TABLE (
+  fees_collected_month       BIGINT,
+  fees_collected_year        BIGINT,
+  fees_pending               BIGINT,
+  discounts_given            BIGINT,
+  expenses_month             BIGINT,
+  expenses_year              BIGINT,
+  salary_paid_month          BIGINT,
+  salary_pending             BIGINT,
+  transport_collection_year  BIGINT,
+  net_balance_year           BIGINT
+)
+LANGUAGE plpgsql STABLE SECURITY DEFINER SET search_path = public AS $$
+DECLARE
+  v_school_id   UUID;
+  v_year_start  DATE;
+  v_year_end    DATE;
+  v_month_start DATE := date_trunc('month', CURRENT_DATE)::date;
+BEGIN
+  IF NOT (public.is_super_admin() OR public.is_principal()) THEN
+    RAISE EXCEPTION 'forbidden';
+  END IF;
+
+  v_school_id := public.current_user_school_id();
+
+  SELECT start_date, end_date INTO v_year_start, v_year_end
+    FROM public.academic_years
+   WHERE id = p_year_id
+     AND (school_id = v_school_id OR public.is_super_admin());
+  IF v_year_start IS NULL THEN
+    RAISE EXCEPTION 'academic year not found';
+  END IF;
+
+  RETURN QUERY
+  WITH
+  -- Cash receipts (excludes reversals via amount > 0 + reversed_at NULL).
+  pay_year AS (
+    SELECT COALESCE(SUM(amount), 0)::BIGINT AS total
+      FROM public.payment_records
+     WHERE school_id = v_school_id
+       AND amount > 0
+       AND reversed_at IS NULL
+       AND date BETWEEN v_year_start AND v_year_end
+  ),
+  pay_month AS (
+    SELECT COALESCE(SUM(amount), 0)::BIGINT AS total
+      FROM public.payment_records
+     WHERE school_id = v_school_id
+       AND amount > 0
+       AND reversed_at IS NULL
+       AND date >= v_month_start
+       AND date <= CURRENT_DATE
+  ),
+  -- Outstanding fee balance across the year's installments.
+  fees_due AS (
+    SELECT COALESCE(SUM(GREATEST(0, amount - paid_amount - write_off_amount)), 0)::BIGINT AS total
+      FROM public.fee_installments
+     WHERE school_id = v_school_id
+       AND academic_year_id = p_year_id
+  ),
+  -- Discounts applied (write-offs) on the year's installments.
+  discounts AS (
+    SELECT COALESCE(SUM(write_off_amount), 0)::BIGINT AS total
+      FROM public.fee_installments
+     WHERE school_id = v_school_id
+       AND academic_year_id = p_year_id
+  ),
+  -- Operational expenses.
+  exp_year AS (
+    SELECT COALESCE(SUM(amount), 0)::BIGINT AS total
+      FROM public.expenses
+     WHERE school_id = v_school_id
+       AND date BETWEEN v_year_start AND v_year_end
+  ),
+  exp_month AS (
+    SELECT COALESCE(SUM(amount), 0)::BIGINT AS total
+      FROM public.expenses
+     WHERE school_id = v_school_id
+       AND date >= v_month_start
+       AND date <= CURRENT_DATE
+  ),
+  -- Salary payouts.
+  sal_month AS (
+    SELECT COALESCE(SUM(amount), 0)::BIGINT AS total
+      FROM public.salary_payments
+     WHERE school_id = v_school_id
+       AND paid_at >= v_month_start
+       AND paid_at <= CURRENT_DATE
+  ),
+  sal_year AS (
+    SELECT COALESCE(SUM(amount), 0)::BIGINT AS total
+      FROM public.salary_payments
+     WHERE school_id = v_school_id
+       AND paid_at BETWEEN v_year_start AND v_year_end
+  ),
+  -- Total expected salary in the year so far: active staff × monthly
+  -- salary × (months elapsed since year_start, capped at year_end).
+  sal_expected AS (
+    SELECT
+      COALESCE(SUM(s.salary), 0)::BIGINT *
+      GREATEST(1,
+        LEAST(
+          12,
+          extract(year  from age(LEAST(CURRENT_DATE, v_year_end), v_year_start))::INT * 12
+            + extract(month from age(LEAST(CURRENT_DATE, v_year_end), v_year_start))::INT
+            + 1
+        )
+      )::BIGINT AS total
+    FROM public.staff s
+    WHERE s.school_id = v_school_id
+      AND s.is_active = TRUE
+  ),
+  -- Transport-tagged receipts only (joined via payment_installment_links).
+  transport AS (
+    SELECT COALESCE(SUM(pil.amount_applied), 0)::BIGINT AS total
+      FROM public.payment_installment_links pil
+      JOIN public.fee_installments fi ON fi.id = pil.installment_id
+      JOIN public.payment_records   pr ON pr.id = pil.payment_id
+     WHERE fi.school_id = v_school_id
+       AND fi.academic_year_id = p_year_id
+       AND fi.fee_type = 'TRANSPORT'
+       AND pr.amount > 0
+       AND pr.reversed_at IS NULL
+  )
+  SELECT
+    pm.total,
+    py.total,
+    fd.total,
+    dc.total,
+    em.total,
+    ey.total,
+    sm.total,
+    GREATEST(0, se.total - sy.total),
+    tr.total,
+    py.total - ey.total - sy.total
+  FROM pay_month pm, pay_year py, fees_due fd, discounts dc,
+       exp_month em, exp_year ey, sal_month sm, sal_year sy,
+       sal_expected se, transport tr;
+END $$;
+
+GRANT EXECUTE ON FUNCTION public.get_financial_analytics(UUID) TO authenticated;
+-- 0087_reversal_24h_guard.sql
+--
+-- Server-side enforcement of the 24-hour reversal window. The UI in
+-- src/modules/fees/components/FeeLedger.tsx already disables the Reverse
+-- button outside the same-day window, but a client clock can be wrong
+-- and the principal could in principle hit the API directly. This guard
+-- closes that loophole.
+--
+-- Rule: a payment can only be reversed within 24 hours of its
+-- `created_at` timestamp. Beyond that, the function raises
+-- `reversal_window_expired` so the caller surfaces a clean message.
+--
+-- Idempotent: CREATE OR REPLACE replaces the prior body unchanged except
+-- for the new guard near the top of the validation block.
+
+BEGIN;
+
+CREATE OR REPLACE FUNCTION public.reverse_payment(
+  p_payment_id uuid,
+  p_user_id    uuid,
+  p_reason     text
+)
+RETURNS TABLE (reversal_id uuid, original_id uuid)
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public
+AS $$
+DECLARE
+  v_orig         record;
+  v_reversal_id  uuid;
+  v_link         record;
+  v_inst         record;
+  v_new_paid     numeric;
+  v_new_status   text;
+  v_total        numeric;
+  v_writeoff     numeric;
+  v_remaining    numeric;
+  v_stamped      int;
+BEGIN
+  SELECT id, school_id, student_id, academic_year_id, amount, method, date,
+         receipt_no, advance_amount, note, reversed_at, reverses_payment_id,
+         created_at
+    INTO v_orig
+    FROM public.payment_records
+   WHERE id = p_payment_id
+   FOR UPDATE;
+
+  IF NOT FOUND THEN
+    RAISE EXCEPTION 'payment_not_found' USING ERRCODE = 'no_data_found';
+  END IF;
+  IF v_orig.reversed_at IS NOT NULL THEN
+    RAISE EXCEPTION 'already_reversed' USING ERRCODE = 'unique_violation';
+  END IF;
+  IF v_orig.reverses_payment_id IS NOT NULL THEN
+    RAISE EXCEPTION 'cannot_reverse_a_reversal' USING ERRCODE = 'check_violation';
+  END IF;
+  IF v_orig.amount <= 0 THEN
+    RAISE EXCEPTION 'non_positive_amount' USING ERRCODE = 'check_violation';
+  END IF;
+  -- 24-hour window. Beyond this, principals must record a corrective
+  -- payment / write-off rather than rewriting history.
+  IF v_orig.created_at < (now() - INTERVAL '24 hours') THEN
+    RAISE EXCEPTION 'reversal_window_expired'
+      USING ERRCODE = 'check_violation',
+            HINT = '24 ghante ke baad reverse nahi kar sakte. Naya correction payment / write-off use karein.';
+  END IF;
+
+  UPDATE public.payment_records
+     SET reversed_at     = now(),
+         reversed_by     = p_user_id,
+         reversal_reason = p_reason
+   WHERE id = p_payment_id
+     AND reversed_at IS NULL;
+  GET DIAGNOSTICS v_stamped = ROW_COUNT;
+  IF v_stamped = 0 THEN
+    RAISE EXCEPTION 'already_reversed' USING ERRCODE = 'unique_violation';
+  END IF;
+
+  INSERT INTO public.payment_records (
+    school_id, student_id, academic_year_id,
+    amount, method, date, receipt_no,
+    advance_amount, note, reverses_payment_id, reversed_by, reversal_reason
+  ) VALUES (
+    v_orig.school_id, v_orig.student_id, v_orig.academic_year_id,
+    -abs(v_orig.amount),
+    v_orig.method, (now() AT TIME ZONE 'Asia/Kolkata')::date,
+    'REV-' || v_orig.receipt_no,
+    -abs(coalesce(v_orig.advance_amount, 0)),
+    'Reversal of ' || v_orig.receipt_no || ': ' || p_reason,
+    v_orig.id, p_user_id, p_reason
+  )
+  RETURNING id INTO v_reversal_id;
+
+  FOR v_link IN
+    SELECT installment_id, amount_applied
+      FROM public.payment_installment_links
+     WHERE payment_id = v_orig.id
+  LOOP
+    SELECT id, amount, paid_amount, write_off_amount, status
+      INTO v_inst
+      FROM public.fee_installments
+     WHERE id = v_link.installment_id
+     FOR UPDATE;
+
+    IF FOUND THEN
+      v_new_paid := greatest(0, v_inst.paid_amount - v_link.amount_applied);
+      v_total    := v_inst.amount;
+      v_writeoff := coalesce(v_inst.write_off_amount, 0);
+      v_remaining := v_total - v_writeoff;
+
+      IF v_writeoff >= v_total THEN
+        v_new_status := 'WAIVED';
+      ELSIF v_new_paid >= v_remaining AND v_remaining > 0 THEN
+        v_new_status := 'PAID';
+      ELSIF v_new_paid + v_writeoff >= v_total AND v_writeoff > 0 THEN
+        v_new_status := 'WAIVED';
+      ELSIF v_new_paid > 0 THEN
+        v_new_status := 'PARTIAL';
+      ELSE
+        v_new_status := 'UNPAID';
+      END IF;
+
+      UPDATE public.fee_installments
+         SET paid_amount = v_new_paid,
+             status      = v_new_status,
+             updated_at  = now()
+       WHERE id = v_inst.id;
+
+      INSERT INTO public.payment_installment_links (
+        payment_id, installment_id, amount_applied
+      ) VALUES (
+        v_reversal_id, v_inst.id, -v_link.amount_applied
+      );
+    END IF;
+  END LOOP;
+
+  IF coalesce(v_orig.advance_amount, 0) > 0 THEN
+    INSERT INTO public.advance_balances (student_id, amount)
+    VALUES (v_orig.student_id, 0)
+    ON CONFLICT (student_id) DO NOTHING;
+
+    UPDATE public.advance_balances
+       SET amount = greatest(0, amount - v_orig.advance_amount)
+     WHERE student_id = v_orig.student_id;
+  END IF;
+
+  RETURN QUERY SELECT v_reversal_id, v_orig.id;
+END;
+$$;
+
+COMMIT;
+

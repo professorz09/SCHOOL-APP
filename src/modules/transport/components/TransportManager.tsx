@@ -48,6 +48,7 @@ export const TransportManager: React.FC<Props> = ({ onBack }) => {
   const [driverHistoryId,      setDriverHistoryId]      = useState<string | null>(null);
   const [driverHistoryVehicle, setDriverHistoryVehicle] = useState<string>('');
   const [driverHistoryItems,   setDriverHistoryItems]   = useState<{ id: string; action: string; details: Record<string, unknown>; createdAt: string }[]>([]);
+  const [driverHistoryShown,   setDriverHistoryShown]   = useState(50);
   const [driverHistoryLoading, setDriverHistoryLoading] = useState(false);
 
   // ── Vehicles tab state ──────────────────────────────────────────────────────
@@ -237,16 +238,19 @@ export const TransportManager: React.FC<Props> = ({ onBack }) => {
   };
 
   const handleAssignStudent = async () => {
-    if (!selStudentId || !selVehicleId || !selStopId) return;
+    // Stop is now optional — if the vehicle's route hasn't been mapped
+    // yet, the principal can still assign the student to the vehicle;
+    // the driver fills in stops on their first trip.
+    if (!selStudentId || !selVehicleId) return;
     const student = students.find(s => s.id === selStudentId);
     const vehicle = vehicles.find(v => v.id === selVehicleId);
-    const stop = vehicle?.stops.find(s => s.id === selStopId);
-    if (!student || !vehicle || !stop) return;
+    if (!student || !vehicle) return;
+    const stop = selStopId ? vehicle.stops.find(s => s.id === selStopId) : null;
     setAssigning(true);
     try {
       await transportService.assignStudent(
         student.id, student.name, student.className,
-        vehicle.id, stop.id, stop.name,
+        vehicle.id, stop?.id ?? null, stop?.name ?? '',
       );
       studentsLoadedRef.current = false;
       await reloadCore();
@@ -266,6 +270,7 @@ export const TransportManager: React.FC<Props> = ({ onBack }) => {
     setDriverHistoryId(driverId);
     setDriverHistoryVehicle(vehicleNo);
     setDriverHistoryItems([]);
+    setDriverHistoryShown(50);
     setDriverHistoryLoading(true);
     try {
       const items = await transportService.getDriverHistory(driverId);
@@ -785,14 +790,17 @@ export const TransportManager: React.FC<Props> = ({ onBack }) => {
                 </div>
               )}
 
-              {/* Stop selector */}
+              {/* Stop selector — OPTIONAL. When the vehicle's route
+                  isn't mapped yet, principal can still assign on the
+                  vehicle alone; the driver builds stops on the first
+                  trip via Driver Settings → "Add stop here". */}
               {selVehicleId && (() => {
                 const veh = vehicles.find(v => v.id === selVehicleId);
                 return veh?.stops.length ? (
                   <div className="relative">
-                    <select value={selStopId || ''} onChange={e => setSelStopId(e.target.value)}
+                    <select value={selStopId || ''} onChange={e => setSelStopId(e.target.value || null)}
                       className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3 py-2.5 text-sm font-bold outline-none focus:border-blue-500 appearance-none">
-                      <option value="">Select Boarding Stop…</option>
+                      <option value="">No specific stop (optional)</option>
                       {veh.stops.map(s => (
                         <option key={s.id} value={s.id}>{s.name} · {s.estimatedTime}</option>
                       ))}
@@ -800,19 +808,15 @@ export const TransportManager: React.FC<Props> = ({ onBack }) => {
                     <ChevronDown size={13} className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 pointer-events-none" />
                   </div>
                 ) : (
-                  <div className="bg-amber-50 border border-amber-100 rounded-xl p-3 flex items-center gap-2">
-                    <AlertTriangle size={13} className="text-amber-500 shrink-0" />
-                    <p className="text-xs font-bold text-amber-700">This vehicle has no stops yet. Set up routes first.</p>
-                    <button onClick={() => { setRouteVehicleId(selVehicleId); setTab('VEHICLES'); }}
-                      className="ml-auto text-[9px] font-black text-blue-600 bg-blue-50 px-2 py-1 rounded-full shrink-0">
-                      Add Stops
-                    </button>
+                  <div className="bg-blue-50 border border-blue-100 rounded-xl p-3 flex items-center gap-2">
+                    <AlertTriangle size={13} className="text-blue-500 shrink-0" />
+                    <p className="text-xs font-bold text-blue-700">No stops on this vehicle yet — that's fine. Driver will add them on the route.</p>
                   </div>
                 );
               })()}
 
               <button onClick={handleAssignStudent}
-                disabled={assigning || !selStudentId || !selVehicleId || !selStopId}
+                disabled={assigning || !selStudentId || !selVehicleId}
                 className="w-full py-3 bg-emerald-600 text-white font-black rounded-xl flex items-center justify-center gap-1.5 disabled:opacity-40 active:scale-95 transition-transform">
                 <Check size={16} /> {assigning ? 'Assigning…' : 'Assign Student'}
               </button>
@@ -889,7 +893,7 @@ export const TransportManager: React.FC<Props> = ({ onBack }) => {
                 </div>
               ) : (
                 <div className="space-y-1">
-                  {driverHistoryItems.map(item => {
+                  {driverHistoryItems.slice(0, driverHistoryShown).map(item => {
                     const d = item.details as { vehicleNo?: string; vehicleId?: string; previousDriverName?: string };
                     const isAssigned  = item.action === 'driver_vehicle_assigned';
                     const isRemoved   = item.action === 'driver_vehicle_removed';
@@ -920,6 +924,12 @@ export const TransportManager: React.FC<Props> = ({ onBack }) => {
                       </div>
                     );
                   })}
+                  {driverHistoryItems.length > driverHistoryShown && (
+                    <button onClick={() => setDriverHistoryShown(s => s + 50)}
+                      className="w-full mt-2 py-2.5 bg-white border border-slate-200 rounded-xl font-black text-[11px] text-violet-700 hover:bg-violet-50 transition-colors">
+                      Load More ({driverHistoryItems.length - driverHistoryShown} remaining)
+                    </button>
+                  )}
                 </div>
               )}
             </div>

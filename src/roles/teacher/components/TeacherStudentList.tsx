@@ -11,11 +11,14 @@ interface Props {
   onBack: () => void;
 }
 
+const PAGE_SIZE = 50;
+
 export const TeacherStudentList: React.FC<Props> = ({ onBack }) => {
   const [students, setStudents] = useState<StudentProfile[]>([]);
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState('');
   const [selectedClass, setSelectedClass] = useState<string>('ALL');
+  const [shown, setShown] = useState(PAGE_SIZE);
 
   useEffect(() => {
     teacherService.getStudentProfiles()
@@ -42,6 +45,12 @@ export const TeacherStudentList: React.FC<Props> = ({ onBack }) => {
       s.fatherName.toLowerCase().includes(q);
     return matchesClass && matchesSearch;
   });
+
+  // Reset visible count when the filter narrows (avoids showing a stale
+  // higher offset on a smaller filtered list).
+  useEffect(() => { setShown(PAGE_SIZE); }, [search, selectedClass]);
+  const visible = filtered.slice(0, shown);
+  const remaining = filtered.length - visible.length;
 
   return (
     <div className="w-full lg:max-w-5xl lg:mx-auto bg-slate-50 flex flex-col animate-in slide-in-from-right-8 duration-300">
@@ -108,7 +117,7 @@ export const TeacherStudentList: React.FC<Props> = ({ onBack }) => {
           </div>
         ) : (
           <div className="space-y-2">
-            {filtered.map(student => (
+            {visible.map(student => (
               <div key={student.id}
                 className="flex items-center gap-3 bg-white rounded-2xl border border-slate-100 shadow-sm px-4 py-3">
                 <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-indigo-400 to-violet-500 text-white flex items-center justify-center font-black text-sm shrink-0">
@@ -135,8 +144,14 @@ export const TeacherStudentList: React.FC<Props> = ({ onBack }) => {
                 </div>
               </div>
             ))}
+            {remaining > 0 && (
+              <button onClick={() => setShown(s => s + PAGE_SIZE)}
+                className="w-full mt-1 py-3 bg-white border border-slate-200 rounded-2xl font-black text-xs text-indigo-700 hover:bg-indigo-50 transition-colors">
+                Load More ({remaining} remaining)
+              </button>
+            )}
             <p className="text-center text-[10px] font-bold text-slate-300 pt-2">
-              {filtered.length} student{filtered.length !== 1 ? 's' : ''}
+              Showing {visible.length} of {filtered.length} student{filtered.length !== 1 ? 's' : ''}
             </p>
           </div>
         )}

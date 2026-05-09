@@ -21,11 +21,25 @@ function formatDate(iso: string): string {
   return d.toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' });
 }
 
-export const FeePaymentSubmissionsQueue: React.FC = () => {
+interface QueueProps {
+  /** When true, opens with the full review history (approved +
+   *  rejected) shown — used inside the History tab. */
+  defaultExpanded?: boolean;
+  /** When true, the component renders NOTHING when there are 0
+   *  pending submissions (no "View history" pill, no empty state).
+   *  Used inline on the main fee list where a dedicated History tab
+   *  already owns the audit trail. */
+  pendingOnly?: boolean;
+}
+
+export const FeePaymentSubmissionsQueue: React.FC<QueueProps> = ({
+  defaultExpanded = false,
+  pendingOnly = false,
+}) => {
   const [items, setItems] = useState<FeePaymentUploadRecord[]>([]);
   const [loading, setLoading] = useState(true);
   const [busyId, setBusyId] = useState<string | null>(null);
-  const [expanded, setExpanded] = useState(false);
+  const [expanded, setExpanded] = useState(defaultExpanded);
   const showToast = useUIStore(s => s.showToast);
 
   const reload = async () => {
@@ -70,6 +84,13 @@ export const FeePaymentSubmissionsQueue: React.FC = () => {
     }
   };
 
+  // pendingOnly mode: the inline banner on the main fee list. Skip
+  // EVERYTHING (loader, empty state, history pill) — only renders
+  // when there's actually a pending item to review.
+  if (pendingOnly && (loading || items.length === 0 || items.every(i => i.status !== 'PENDING'))) {
+    return null;
+  }
+
   if (loading) {
     return (
       <div className="bg-white rounded-2xl border border-slate-100 shadow-sm p-4 text-xs font-bold text-slate-400">
@@ -78,7 +99,22 @@ export const FeePaymentSubmissionsQueue: React.FC = () => {
     );
   }
 
-  if (items.length === 0) return null;
+  if (items.length === 0) {
+    // In History tab (defaultExpanded) we surface an empty state so
+    // the principal sees confirmation that nothing has been submitted
+    // yet, instead of a blank pane.
+    if (defaultExpanded) {
+      return (
+        <div className="bg-white rounded-2xl border border-slate-100 shadow-sm p-8 text-center">
+          <div className="text-sm font-black text-slate-500">No submissions yet</div>
+          <p className="text-[11px] font-bold text-slate-400 mt-1">
+            Parent / student fee-payment screenshots will appear here once submitted.
+          </p>
+        </div>
+      );
+    }
+    return null;
+  }
 
   const pendingCount = items.filter(i => i.status === 'PENDING').length;
   const visible = expanded ? items : items.filter(i => i.status === 'PENDING');
@@ -86,10 +122,12 @@ export const FeePaymentSubmissionsQueue: React.FC = () => {
   if (visible.length === 0 && !expanded) return (
     <button
       onClick={() => setExpanded(true)}
-      className="w-full bg-white rounded-2xl border border-slate-100 shadow-sm px-4 py-3 flex items-center justify-between text-xs font-bold text-slate-500"
+      className="w-full bg-white rounded-2xl border border-slate-100 shadow-sm px-4 py-3 flex items-center justify-between text-xs font-bold text-slate-500 hover:bg-slate-50 transition-colors"
     >
-      <span>No pending fee submissions · {items.length} reviewed</span>
-      <ChevronDown size={14} />
+      <span>No pending submissions</span>
+      <span className="flex items-center gap-1 text-blue-600">
+        View history ({items.length}) <ChevronDown size={14} />
+      </span>
     </button>
   );
 
@@ -98,17 +136,19 @@ export const FeePaymentSubmissionsQueue: React.FC = () => {
       <div className="flex items-center justify-between px-4 py-3 border-b border-slate-100">
         <div>
           <h3 className="text-sm font-black text-slate-900 uppercase tracking-tight">
-            Parent Payment Submissions
+            Parent Submissions
           </h3>
           <p className="text-[10px] font-bold text-slate-400 mt-0.5">
-            {pendingCount} pending · {items.length} total
+            {expanded
+              ? `${pendingCount} pending · ${items.length - pendingCount} reviewed`
+              : `${pendingCount} pending`}
           </p>
         </div>
         <button
           onClick={() => setExpanded(e => !e)}
-          className="flex items-center gap-1 text-[10px] font-black text-blue-600 uppercase tracking-widest"
+          className="flex items-center gap-1 text-[10px] font-black text-blue-600 uppercase tracking-widest hover:text-blue-700"
         >
-          {expanded ? 'Pending only' : 'Show all'}
+          {expanded ? 'Pending only' : `View history (${items.length - pendingCount})`}
           {expanded ? <ChevronUp size={12} /> : <ChevronDown size={12} />}
         </button>
       </div>

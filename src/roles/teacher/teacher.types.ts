@@ -101,6 +101,11 @@ export interface ExamPaperRequest {
   duration: number;
   topics: string;
   difficulty: 'EASY' | 'MEDIUM' | 'HARD';
+  /** Exact question counts the AI must produce. Optional — when all
+   *  three are 0 the model picks a balanced mix automatically. */
+  mcqCount?: number;
+  shortCount?: number;
+  longCount?: number;
 }
 
 export interface GeneratedExamPaper {

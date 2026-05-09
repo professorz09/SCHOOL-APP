@@ -103,14 +103,9 @@ export interface StudentFeeProfile {
   isRte: boolean;
 }
 
-export interface GovernmentPaymentRecord {
-  id: string;
-  amount: number;
-  date: string;
-  referenceNo: string;
-  note: string;
-  allocatedStudentIds: string[];
-}
+// GovernmentPaymentRecord removed — government_payments table dropped.
+// See migration 0083_drop_govt_payments.sql. Components that previously
+// consumed this should record govt grants as regular payments with a note.
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -193,7 +188,6 @@ function rowToInstallment(r: InstallmentRow): FeeInstallment {
 
 let _installmentsCache: FeeInstallment[] = [];
 let _paymentHistoryCache: PaymentRecord[] = [];
-let _govtPaymentsCache: GovernmentPaymentRecord[] = [];
 let _advanceCache = new Map<string, number>();
 let _cacheLoadedFor: string | null = null;
 // In-flight refresh promise — coalesces concurrent refreshAll() calls so
@@ -206,7 +200,6 @@ let _refreshInFlight: Promise<void> | null = null;
 function _resetCache(): void {
   _installmentsCache = [];
   _paymentHistoryCache = [];
-  _govtPaymentsCache = [];
   _advanceCache = new Map<string, number>();
   _cacheLoadedFor = null;
   _refreshInFlight = null;
@@ -418,25 +411,10 @@ async function _loadPaymentHistory(schoolId: string): Promise<void> {
   });
 }
 
-async function _loadGovtPayments(schoolId: string): Promise<void> {
-  const { data, error } = await supabase
-    .from('government_payments')
-    .select('id, amount, date, reference_no, note, govt_payment_student_links(student_id)')
-    .eq('school_id', schoolId)
-    .order('date', { ascending: false }).limit(500);
-  if (error) throw new Error(error.message);
-  _govtPaymentsCache = ((data ?? []) as Array<{
-    id: string; amount: number; date: string; reference_no: string; note: string | null;
-    govt_payment_student_links: { student_id: string }[];
-  }>).map(g => ({
-    id: g.id,
-    amount: Number(g.amount),
-    date: g.date,
-    referenceNo: g.reference_no,
-    note: g.note ?? '',
-    allocatedStudentIds: (g.govt_payment_student_links ?? []).map(l => l.student_id),
-  }));
-}
+// _loadGovtPayments removed — government_payments table dropped (migration
+// 0083). FeeLedger no longer renders a separate RTE/govt history; if a
+// school receives a government grant, the principal records it as a
+// regular payment with a note like "Govt grant 2026-Q1".
 
 async function _loadAdvances(schoolId: string): Promise<void> {
   const { data, error } = await supabase
@@ -497,7 +475,6 @@ export const feeService = {
         await Promise.all([
           _loadInstallments(schoolId),
           _loadPaymentHistory(schoolId),
-          _loadGovtPayments(schoolId),
           _loadAdvances(schoolId),
         ]);
         _cacheLoadedFor = schoolId;
@@ -532,7 +509,6 @@ export const feeService = {
     const schoolId = getSchoolId();
     await Promise.all([
       _loadPaymentHistory(schoolId),
-      _loadGovtPayments(schoolId),
       _loadAdvances(schoolId),
     ]);
   },
@@ -576,12 +552,10 @@ export const feeService = {
   // and races. Receipt numbers must come from the server (apiFees.pay returns
   // the canonical receipt_no on the persisted payment row).
 
-  getAdvanceBalance(studentId: string): number {
-    return _advanceCache.get(studentId) ?? 0;
-  },
-
-  getGovernmentPayments(): GovernmentPaymentRecord[] {
-    return [..._govtPaymentsCache];
+  // getAdvanceBalance removed in 0084 — advance credit feature dropped.
+  // Stub kept to avoid breaking any external caller mid-deploy; always 0.
+  getAdvanceBalance(_studentId: string): number {
+    return 0;
   },
 
   /** Direct DB query for a single student's installments, bypassing cache.
@@ -605,7 +579,7 @@ export const feeService = {
   },
 
   getPaidTillMonth(studentId: string): { lastClearedMonth: string | null; allCleared: boolean } {
-    const insts = this.getStudentInstallments(studentId).filter(i => i.payerType === 'PARENT');
+    const insts = this.getStudentInstallments(studentId);
     if (!insts.length) return { lastClearedMonth: null, allCleared: false };
     const monthDueMap = new Map<string, string>();
     for (const inst of insts) if (!monthDueMap.has(inst.month)) monthDueMap.set(inst.month, inst.dueDate);
@@ -625,14 +599,17 @@ export const feeService = {
     return { lastClearedMonth: last, allCleared: last === months[months.length - 1] && months.length > 0 };
   },
 
-  // Aggregate parent-payable outstanding across ALL years and ALL fee types
+  // Aggregate outstanding across ALL years and ALL fee types
   // (TUITION, TRANSPORT, EXAM, OTHER — including any 'Late Fee' rows). The
   // top "Total Outstanding" card in FeesView reads `total`; per-type lines
-  // render the individual fields. Government-payable (RTE) rows are excluded.
+  // render the individual fields. RTE/govt distinction removed in 0083 —
+  // every installment is now treated as parent-payable; if a school
+  // receives a government grant, the principal records it as a regular
+  // payment with a note.
   getParentDueSummary(studentId: string): {
     tuition: number; transport: number; exam: number; other: number; total: number;
   } {
-    const insts = this.getStudentInstallments(studentId).filter(i => i.payerType === 'PARENT');
+    const insts = this.getStudentInstallments(studentId);
     const sumOf = (t: FeeType) => insts
       .filter(i => i.feeType === t)
       .reduce((s, i) => s + Math.max(0, i.amount - i.paidAmount - i.writeOffAmount), 0);
@@ -643,12 +620,6 @@ export const feeService = {
     return { tuition, transport, exam, other, total: tuition + transport + exam + other };
   },
 
-  getGovernmentDueSummary(studentId: string): { tuition: number; total: number } {
-    const insts = this.getStudentInstallments(studentId).filter(i => i.payerType === 'GOVERNMENT');
-    const tuition = insts.filter(i => i.feeType === 'TUITION').reduce((s, i) => s + Math.max(0, i.amount - i.paidAmount - i.writeOffAmount), 0);
-    return { tuition, total: tuition };
-  },
-
   getFeeTypeSummary(studentId: string): { tuition: number; transport: number; total: number } {
     const insts = this.getStudentInstallments(studentId);
     const tuition = insts.filter(i => i.feeType === 'TUITION').reduce((s, i) => s + Math.max(0, i.amount - i.paidAmount - i.writeOffAmount), 0);
@@ -656,24 +627,19 @@ export const feeService = {
     return { tuition, transport, total: tuition + transport };
   },
 
-  getSchoolRtePending(): { totalGovtPending: number; totalParentPending: number; rteStudentCount: number } {
+  /** Total school-wide outstanding (any payer kind, any fee type). Replaces
+   *  the old getSchoolRtePending() which split rows into PARENT vs GOVT —
+   *  RTE/govt distinction removed in 0083. */
+  getSchoolPending(): { totalPending: number } {
     const allInsts = _installmentsCache;
-    // Outstanding = amount the school is still owed. The legacy DB statuses
-    // ('UNPAID' / 'OVERDUE') are rewritten by computeEffectiveStatus into the
-    // richer set ('DUE','PARTIAL_DUE','UPCOMING',…). Use a denylist of
-    // settled statuses instead so we don't silently exclude DUE/UPCOMING rows.
     const isOutstanding = (i: FeeInstallment) =>
       i.status !== 'PAID' && i.status !== 'WAIVED' &&
       i.status !== 'WRITTEN_OFF' && i.status !== 'CANCELLED' &&
       (i.amount - i.paidAmount - i.writeOffAmount) > 0;
-    const govtPending = allInsts
-      .filter(i => i.payerType === 'GOVERNMENT' && isOutstanding(i))
+    const totalPending = allInsts
+      .filter(isOutstanding)
       .reduce((s, i) => s + Math.max(0, i.amount - i.paidAmount - i.writeOffAmount), 0);
-    const parentPending = allInsts
-      .filter(i => i.payerType === 'PARENT' && isOutstanding(i))
-      .reduce((s, i) => s + Math.max(0, i.amount - i.paidAmount - i.writeOffAmount), 0);
-    const rte = new Set(allInsts.filter(i => i.payerType === 'GOVERNMENT').map(i => i.studentId));
-    return { totalGovtPending: govtPending, totalParentPending: parentPending, rteStudentCount: rte.size };
+    return { totalPending };
   },
 
   /** Get unpaid/partial fees from previous academic years (not current active year). */
@@ -734,44 +700,30 @@ export const feeService = {
    */
   async recordPayment(
     studentId: string, amount: number, method = 'CASH',
-    date?: string, note?: string, useAdvance = false, applyLateFee = true, discountAmount = 0,
-  ): Promise<{ applied: number; advance: number; paymentId: string }> {
-    if (amount <= 0) return { applied: 0, advance: 0, paymentId: '' };
-
-    // Money must be integer rupees end-to-end. Math.round() silently shaved
-    // 1500.50 → 1501 (or .49 → 1500), confusing parents whose receipts didn't
-    // match their bank statements. Reject decimals at the boundary so the
-    // form layer is forced to validate user input.
+    date?: string, note?: string, applyLateFee = true, discountAmount = 0,
+  ): Promise<{ applied: number; paymentId: string }> {
+    if (amount < 0) throw new Error('Amount must be non-negative');
     if (!Number.isInteger(amount)) {
       throw new Error('Fee amount must be a whole rupee value (decimals not allowed)');
     }
     if (!Number.isInteger(discountAmount)) {
       throw new Error('Discount must be a whole rupee value');
     }
-
-    const beforeAdv = this.getAdvanceBalance(studentId);
-
-    // All fee writes go through the API server (uses auth.uid() context correctly).
+    if (amount === 0 && discountAmount === 0) {
+      throw new Error('Amount and discount cannot both be zero');
+    }
+    // Server hard-rejects overpay since 0084 — advance credit removed.
     const result = await apiFees.pay({
       studentId, amount, method,
-      date, note, useAdvance, applyLateFee, discountAmount,
+      date, note, applyLateFee, discountAmount,
     });
-
     const paymentId = (result as any).paymentId as string;
-
-    // Authoritative applied total: sum payment_installment_links from API response.
     const links = ((result as any).payment?.payment_installment_links ?? []) as {
       amount_applied: number | string;
     }[];
     const applied = links.reduce((s, r) => s + Number(r.amount_applied ?? 0), 0);
-
-    // Only the paying student's cache needs to refresh — the rest of the
-    // school is unchanged. Was triggering a full refreshAll() before.
     await this.refreshStudent(studentId);
-
-    const afterAdv = this.getAdvanceBalance(studentId);
-    const advance = Math.max(0, afterAdv - (useAdvance ? 0 : beforeAdv));
-    return { applied, advance, paymentId };
+    return { applied, paymentId };
   },
 
   /**
@@ -787,7 +739,7 @@ export const feeService = {
    */
   async recordPaymentForInstallment(
     installmentId: string, amount: number, discount = 0,
-    method = 'CASH', date?: string, note?: string, useAdvance = false,
+    method = 'CASH', date?: string, note?: string,
   ): Promise<{ paymentId: string }> {
     if (!Number.isInteger(amount) || amount < 0) {
       throw new Error('Amount must be a non-negative whole rupee value');
@@ -795,11 +747,11 @@ export const feeService = {
     if (!Number.isInteger(discount) || discount < 0) {
       throw new Error('Discount must be a non-negative whole rupee value');
     }
-    if (amount === 0 && discount === 0 && !useAdvance) {
-      throw new Error('Enter an amount, discount, or use advance before submitting');
+    if (amount === 0 && discount === 0) {
+      throw new Error('Enter an amount or discount before submitting');
     }
     const result = await apiFees.payInstallment({
-      installmentId, amount, discount, method, date, note, useAdvance,
+      installmentId, amount, discount, method, date, note,
     });
     // Differential refresh — only the affected student needs fresh data.
     // Look up student_id from the in-memory cache (we know the installment).
@@ -807,19 +759,6 @@ export const feeService = {
     if (inst) await this.refreshStudent(inst.studentId);
     else      await this.refreshAll();
     return { paymentId: (result as any).paymentId as string };
-  },
-
-  /** Bulk RTE / govt payment over multiple students' tuition installments. */
-  async recordGovernmentPayment(
-    studentIds: string[], totalAmount: number, referenceNo: string, note: string,
-  ): Promise<boolean> {
-    if (totalAmount <= 0 || !studentIds.length) return false;
-    if (!Number.isInteger(totalAmount)) {
-      throw new Error('Government payment amount must be a whole rupee value');
-    }
-    await apiFees.govtPay({ studentIds, totalAmount, referenceNo, note });
-    await this.refreshAll();
-    return true;
   },
 
   /** Apply a write-off directly to a single installment. */

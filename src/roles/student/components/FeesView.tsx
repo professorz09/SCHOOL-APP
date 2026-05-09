@@ -60,11 +60,12 @@ export const FeesView: React.FC<Props> = ({ onBack }) => {
   const [feeSummary, setFeeSummary] = useState<{
     tuition: number; transport: number; exam: number; other: number; total: number;
   }>({ tuition: 0, transport: 0, exam: 0, other: 0, total: 0 });
-  const [isRte, setIsRte] = useState(false);
+  // isRte state removed in 0083 — RTE no longer drives fee UI; it stays
+  // as an admission flag on the student profile only.
   const [installments, setInstallments] = useState<FeeInstallment[]>([]);
   const [yearGroups, setYearGroups] = useState<YearGroup[]>([]);
   const [collapsedYears, setCollapsedYears] = useState<Record<string, boolean>>({});
-  const [advanceBalance, setAdvanceBalance] = useState(0);
+  // advanceBalance state removed in 0084 — advance credit feature dropped.
   const [paidTill, setPaidTill] = useState<{ lastClearedMonth: string | null; allCleared: boolean }>({ lastClearedMonth: null, allCleared: false });
   const [history, setHistory] = useState<PaymentRecord[]>([]);
   const [nextDueDate, setNextDueDate] = useState<string | null>(null);
@@ -90,7 +91,7 @@ export const FeesView: React.FC<Props> = ({ onBack }) => {
         await feeService.refreshAll();
         if (cancelled) return;
 
-        const insts = feeService.getStudentInstallments(sid).filter(i => i.payerType === 'PARENT');
+        const insts = feeService.getStudentInstallments(sid);
         const nextUnpaid = insts
           .filter(i => Math.max(0, i.amount - i.paidAmount - i.writeOffAmount) > 0)
           .sort((a, b) => new Date(a.dueDate).getTime() - new Date(b.dueDate).getTime())[0] ?? null;
@@ -102,14 +103,13 @@ export const FeesView: React.FC<Props> = ({ onBack }) => {
         ]);
         if (cancelled) return;
 
-        // Parents only see their PARENT-payer rows; the GOVERNMENT-paid RTE
-        // schedule is hidden from the family view.
+        // RTE/govt split removed in 0083 — every installment is shown.
         const parentGroups: YearGroup[] = allGroupsRaw
           .map(g => ({
             academicYearId: g.academicYearId,
             yearLabel: g.yearLabel,
             isActive: g.isActive,
-            installments: g.installments.filter(i => i.payerType === 'PARENT'),
+            installments: g.installments,
           }))
           .filter(g => g.installments.length > 0);
 
@@ -122,12 +122,11 @@ export const FeesView: React.FC<Props> = ({ onBack }) => {
           return next;
         });
         setFeeSummary(feeService.getParentDueSummary(sid));
-        setAdvanceBalance(feeService.getAdvanceBalance(sid));
+        // advance balance fetch removed in 0084
         setPaidTill(feeService.getPaidTillMonth(sid));
         setHistory(feeService.getPaymentHistory(sid));
         setNextDueDate(nextUnpaid?.dueDate ?? null);
         setUploads(uploadsRows);
-        setIsRte(studentRow?.rte ?? false);
         const sch = await schoolInfoService.get().catch(() => null);
         setUpiId(sch?.upiId ?? '');
         if (sch?.paymentQrPath) {
@@ -302,18 +301,8 @@ export const FeesView: React.FC<Props> = ({ onBack }) => {
       </div>
 
       <div>
-        {/* RTE Banner */}
-        {isRte && (
-          <div className="mx-4 mt-4 bg-emerald-50 border border-emerald-200 rounded-2xl p-4 flex items-center gap-3">
-            <div className="bg-emerald-600 text-white rounded-full p-2 shrink-0">
-              <Zap size={16} />
-            </div>
-            <div>
-              <div className="font-black text-emerald-900 text-sm">Covered Under RTE</div>
-              <div className="text-[11px] font-bold text-emerald-700">Tuition fee covered by government. Only transport due.</div>
-            </div>
-          </div>
-        )}
+        {/* RTE banner removed in 0083 — RTE flag stays on student profile
+            but doesn't affect the fee view anymore. */}
 
         {/* ── Big Fee Card — centered hero, mirrors the reference design ──── */}
         <div className="mx-4 mt-4">
@@ -364,24 +353,7 @@ export const FeesView: React.FC<Props> = ({ onBack }) => {
           </div>
         </div>
 
-        {/* ── Advance Balance Card ───────────────────────────────────────── */}
-        {advanceBalance > 0 && (
-          <div className="mx-4 mt-3">
-            <div className="bg-violet-50 border border-violet-200 rounded-2xl p-4 flex items-center gap-3">
-              <div className="bg-violet-600 text-white rounded-full p-2 shrink-0">
-                <Wallet size={16} />
-              </div>
-              <div className="flex-1">
-                <div className="font-black text-violet-900 text-sm">
-                  ₹{advanceBalance.toLocaleString('en-IN')} Advance Credit
-                </div>
-                <div className="text-[11px] font-bold text-violet-600 mt-0.5">
-                  Will be auto-applied to your next due
-                </div>
-              </div>
-            </div>
-          </div>
-        )}
+        {/* Advance Balance card removed in 0084. */}
 
         {/* ── Fee Breakdown ──────────────────────────────────────────────── */}
         {feeSummary.total > 0 && (

@@ -9,12 +9,14 @@ import React, { useEffect, useMemo, useState } from 'react';
 import {
   ArrowLeft, Download, IndianRupee, TrendingDown, TrendingUp, Users,
   GraduationCap, Calendar, Loader, ChartBar,
+  Wallet, AlertCircle, Receipt, Briefcase, Bus, Banknote,
 } from 'lucide-react';
 import JSZip from 'jszip';
 import { supabase } from '@/lib/supabase';
 import { useAuthStore } from '@/store/authStore';
 import { useUIStore } from '@/store/uiStore';
 import { useAcademicYear } from '@/shared/context/AcademicYearContext';
+import { principalService, type FinancialAnalyticsSummary } from '@/roles/principal/principal.service';
 
 interface Props { onBack: () => void; }
 
@@ -113,6 +115,24 @@ export const AnalyticsManager: React.FC<Props> = ({ onBack }) => {
   const [data, setData] = useState<AnalyticsData | null>(null);
   const [loading, setLoading] = useState(true);
   const [exporting, setExporting] = useState(false);
+
+  // Top-of-page financial summary — separate fetch from the heavy
+  // detail aggregation (which still loads payments / expenses / staff
+  // for the chart + class breakdown). One server-side aggregate via
+  // get_financial_analytics RPC; refetched only when the academic
+  // year changes, not on date-range tweaks.
+  const [finSummary, setFinSummary] = useState<FinancialAnalyticsSummary | null>(null);
+  const [finLoading, setFinLoading] = useState(true);
+  useEffect(() => {
+    if (!currentYear?.id) { setFinSummary(null); setFinLoading(false); return; }
+    let cancelled = false;
+    setFinLoading(true);
+    principalService.getFinancialAnalytics(currentYear.id)
+      .then(s => { if (!cancelled) setFinSummary(s); })
+      .catch(err => { if (!cancelled) console.warn('[analytics] financial summary failed', err); })
+      .finally(() => { if (!cancelled) setFinLoading(false); });
+    return () => { cancelled = true; };
+  }, [currentYear?.id]);
 
   const load = async () => {
     if (!session?.schoolId) return;
@@ -356,6 +376,52 @@ export const AnalyticsManager: React.FC<Props> = ({ onBack }) => {
       </div>
 
       <div className="flex-1 overflow-y-auto p-4 lg:p-6 space-y-5 lg:space-y-7 lg:max-w-6xl lg:mx-auto lg:w-full">
+        {/* ── Financial summary cards — top of dashboard. School- and
+            year-scoped via the get_financial_analytics RPC; loads
+            independently of the heavier KPI/chart fetch below so the
+            cards paint first. ─────────────────────────────────────── */}
+        <section>
+          <div className="flex items-center justify-between mb-3">
+            <h3 className="text-base lg:text-lg font-black text-slate-900">Financial Summary</h3>
+            <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">
+              {currentYear?.name ?? 'No year selected'}
+            </span>
+          </div>
+          {finLoading ? (
+            <div className="grid grid-cols-2 lg:grid-cols-5 gap-2.5 lg:gap-3">
+              {Array.from({ length: 10 }).map((_, i) => (
+                <div key={i} className="bg-white rounded-2xl border border-slate-100 shadow-sm p-3 lg:p-4 animate-pulse">
+                  <div className="h-3 w-16 bg-slate-200 rounded mb-2" />
+                  <div className="h-5 w-20 bg-slate-200 rounded" />
+                </div>
+              ))}
+            </div>
+          ) : finSummary ? (
+            <div className="grid grid-cols-2 lg:grid-cols-5 gap-2.5 lg:gap-3">
+              <FinTile icon={<Wallet size={14} />}      tone="emerald" label="Collected · Month" value={fmtINR(finSummary.feesCollectedMonth)} />
+              <FinTile icon={<Wallet size={14} />}      tone="emerald" label="Collected · Year"  value={fmtINR(finSummary.feesCollectedYear)}  />
+              <FinTile icon={<AlertCircle size={14} />} tone="rose"    label="Fees Pending"      value={fmtINR(finSummary.feesPending)}        />
+              <FinTile icon={<Receipt size={14} />}     tone="indigo"  label="Discounts Given"   value={fmtINR(finSummary.discountsGiven)}     />
+              <FinTile icon={<TrendingDown size={14}/>} tone="amber"   label="Expenses · Month"  value={fmtINR(finSummary.expensesMonth)}      />
+              <FinTile icon={<TrendingDown size={14}/>} tone="amber"   label="Expenses · Year"   value={fmtINR(finSummary.expensesYear)}       />
+              <FinTile icon={<Briefcase size={14}/>}    tone="violet"  label="Salary · Month"    value={fmtINR(finSummary.salaryPaidMonth)}    />
+              <FinTile icon={<Briefcase size={14}/>}    tone="rose"    label="Salary Pending"    value={fmtINR(finSummary.salaryPending)}      />
+              <FinTile icon={<Bus size={14}/>}          tone="orange"  label="Transport · Year"  value={fmtINR(finSummary.transportCollectionYear)} />
+              <FinTile
+                icon={<Banknote size={14}/>}
+                tone={finSummary.netBalanceYear >= 0 ? 'blue' : 'rose'}
+                label="Net Balance"
+                value={fmtINR(finSummary.netBalanceYear)}
+                emphasised
+              />
+            </div>
+          ) : (
+            <div className="bg-amber-50 border border-amber-200 rounded-2xl px-4 py-3 text-[12px] font-bold text-amber-700">
+              Pick an academic year to load the financial summary.
+            </div>
+          )}
+        </section>
+
         {loading ? (
           <div className="flex flex-col items-center py-24 text-slate-400">
             <Loader size={28} className="animate-spin mb-3"/>
@@ -411,6 +477,73 @@ export const AnalyticsManager: React.FC<Props> = ({ onBack }) => {
               )}
             </div>
 
+            {/* ── Profit / Loss strip — derived from the same monthly
+                buckets (no extra fetch). Visualises net per month so
+                the principal can spot loss-making months at a glance.
+                Centre-aligned baseline; bars grow up (profit) or
+                down (loss) from the centre line. ─────────────────── */}
+            {data.monthly.length > 0 && (() => {
+              const series = data.monthly.map(m => ({
+                ym: m.ym,
+                label: m.label,
+                net: m.income - m.expense,
+              }));
+              const peak = Math.max(1, ...series.map(s => Math.abs(s.net)));
+              const totalNet = series.reduce((sum, s) => sum + s.net, 0);
+              const profitMonths = series.filter(s => s.net >= 0).length;
+              return (
+                <div className="bg-white rounded-2xl border border-slate-100 shadow-sm p-4 lg:p-5">
+                  <div className="flex items-center justify-between mb-4">
+                    <div>
+                      <h3 className="text-base lg:text-lg font-black text-slate-900">Profit / Loss trend</h3>
+                      <p className="text-[10px] lg:text-xs font-bold text-slate-400">
+                        Net per month · {profitMonths}/{series.length} profitable
+                      </p>
+                    </div>
+                    <span className={`text-sm lg:text-base font-black tabular-nums ${totalNet >= 0 ? 'text-emerald-700' : 'text-rose-600'}`}>
+                      {totalNet >= 0 ? '+' : ''}{fmtINR(totalNet)}
+                    </span>
+                  </div>
+                  <div className="grid grid-cols-6 lg:grid-cols-12 gap-2">
+                    {series.map(s => {
+                      const isProfit = s.net >= 0;
+                      const heightPct = Math.round((Math.abs(s.net) / peak) * 90); // cap at 90% of half-cell
+                      return (
+                        <div key={s.ym} className="flex flex-col items-center gap-1 group">
+                          {/* 60px tall split-axis cell — top half for
+                              profit (emerald grows up), bottom half for
+                              loss (rose grows down). */}
+                          <div className="relative w-full h-16 flex flex-col justify-center">
+                            <div className="h-px w-full bg-slate-200" />
+                            <div className="absolute inset-0 flex flex-col">
+                              <div className="h-1/2 flex items-end justify-center">
+                                {isProfit && (
+                                  <div className="w-3/4 bg-emerald-500 rounded-t-md transition-all"
+                                       style={{ height: `${heightPct}%` }} />
+                                )}
+                              </div>
+                              <div className="h-1/2 flex items-start justify-center">
+                                {!isProfit && (
+                                  <div className="w-3/4 bg-rose-500 rounded-b-md transition-all"
+                                       style={{ height: `${heightPct}%` }} />
+                                )}
+                              </div>
+                            </div>
+                          </div>
+                          <div className="text-[8px] lg:text-[9px] font-black text-slate-400 leading-none">
+                            {s.label.split(' ')[0]}
+                          </div>
+                          <div className={`text-[9px] font-black tabular-nums leading-none ${isProfit ? 'text-emerald-700' : 'text-rose-600'}`}>
+                            {isProfit ? '+' : ''}{Math.round(s.net / 1000)}k
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+              );
+            })()}
+
             {/* Class-wise + Staff-by-role */}
             <div className="grid lg:grid-cols-2 gap-5 lg:gap-7">
               <div className="bg-white rounded-2xl border border-slate-100 shadow-sm p-4 lg:p-5">
@@ -451,6 +584,37 @@ export const AnalyticsManager: React.FC<Props> = ({ onBack }) => {
             </div>
           </>
         )}
+      </div>
+    </div>
+  );
+};
+
+// Compact financial tile — denser than KpiTile because there are 10
+// of them stacked at the top of the analytics dashboard. Tone colour
+// only on the small leading icon so the value reads cleanly in black.
+const FinTile: React.FC<{
+  icon: React.ReactNode; label: string; value: string;
+  tone: 'emerald' | 'rose' | 'blue' | 'amber' | 'violet' | 'indigo' | 'orange';
+  emphasised?: boolean;
+}> = ({ icon, label, value, tone, emphasised }) => {
+  const TONE: Record<string, { chip: string; valueText: string }> = {
+    emerald: { chip: 'bg-emerald-100 text-emerald-700', valueText: 'text-emerald-700' },
+    rose:    { chip: 'bg-rose-100 text-rose-700',       valueText: 'text-rose-700' },
+    blue:    { chip: 'bg-blue-100 text-blue-700',       valueText: 'text-blue-700' },
+    amber:   { chip: 'bg-amber-100 text-amber-700',     valueText: 'text-amber-700' },
+    violet:  { chip: 'bg-violet-100 text-violet-700',   valueText: 'text-violet-700' },
+    indigo:  { chip: 'bg-indigo-100 text-indigo-700',   valueText: 'text-indigo-700' },
+    orange:  { chip: 'bg-orange-100 text-orange-700',   valueText: 'text-orange-700' },
+  };
+  const t = TONE[tone];
+  return (
+    <div className={`bg-white rounded-2xl border shadow-sm p-3 lg:p-4 ${emphasised ? 'border-blue-300 ring-1 ring-blue-100' : 'border-slate-100'}`}>
+      <div className="flex items-center gap-1.5 mb-1.5">
+        <div className={`w-5 h-5 rounded-md ${t.chip} flex items-center justify-center shrink-0`}>{icon}</div>
+        <span className="text-[9px] lg:text-[10px] font-black uppercase tracking-wider text-slate-500 truncate">{label}</span>
+      </div>
+      <div className={`text-base lg:text-xl font-black tabular-nums leading-none ${emphasised ? t.valueText : 'text-slate-900'}`}>
+        {value}
       </div>
     </div>
   );

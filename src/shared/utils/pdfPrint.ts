@@ -22,12 +22,20 @@ async function loadPdfDeps(): Promise<{ html2canvas: typeof import('html2canvas'
   return { html2canvas, jsPDF };
 }
 
-/** Tailwind v4 emits modern color spaces (oklch, oklab, color-mix) that
- *  html2canvas v1 can't parse — capture either fails or returns blank/black.
- *  Workaround: inside the cloned DOM, we read each element's *computed*
- *  color via getComputedStyle, convert anything non-RGB to RGB by drawing it
- *  on a 1×1 canvas, and apply the rgb() string as an inline style so
- *  html2canvas only ever sees legacy color formats.
+/** Tailwind v4 emits modern color spaces (oklch, oklab, color-mix, lab,
+ *  lch, hwb, color()) that html2canvas v1 can't parse — capture either
+ *  fails or returns blank/black.
+ *
+ *  Workaround: inside the cloned DOM, walk every element, read its
+ *  *computed* color via getComputedStyle, and unconditionally rewrite each
+ *  color-bearing property as an inline rgb()/rgba() string so html2canvas
+ *  only ever sees legacy formats. The browser does the parse for us via
+ *  ctx.fillStyle (which always returns a legacy form).
+ *
+ *  We rewrite ALL elements (not just those whose computed value contains
+ *  "oklch") because Tailwind v4 also pushes color-mix() and CSS variables
+ *  whose substring check is unreliable. The inline-style write is cheap
+ *  and html2canvas reads inline styles directly.
  */
 function srgbify(clonedDoc: Document): void {
   const probe = clonedDoc.createElement('canvas');
@@ -35,20 +43,24 @@ function srgbify(clonedDoc: Document): void {
   const ctx = probe.getContext('2d');
   if (!ctx) return;
 
-  const props: Array<keyof CSSStyleDeclaration> = [
+  const colorProps = [
     'color', 'backgroundColor', 'borderTopColor', 'borderRightColor',
     'borderBottomColor', 'borderLeftColor', 'outlineColor', 'fill', 'stroke',
-  ];
+    'textDecorationColor', 'caretColor', 'columnRuleColor',
+  ] as const;
 
-  const toRgb = (val: string): string => {
-    if (!val || val === 'transparent' || val === 'none') return val;
-    if (val.startsWith('rgb')) return val; // already legacy
+  const toRgb = (val: string): string | null => {
+    if (!val) return null;
+    if (val === 'transparent' || val === 'none' || val === 'currentcolor') return val;
+    if (val.startsWith('rgb(') || val.startsWith('rgba(') || val.startsWith('#')) {
+      return val; // already legacy
+    }
     try {
       ctx.fillStyle = '#000';
-      ctx.fillStyle = val; // browser parses oklch/lab/etc
-      const computed = ctx.fillStyle as string; // returns rgb()/rgba()/#hex
-      return computed;
-    } catch { return val; }
+      ctx.fillStyle = val; // browser parses oklch/lab/color-mix/etc
+      const out = ctx.fillStyle as string;
+      return typeof out === 'string' ? out : null;
+    } catch { return null; }
   };
 
   const walker = clonedDoc.createTreeWalker(clonedDoc.body, NodeFilter.SHOW_ELEMENT);
@@ -57,11 +69,24 @@ function srgbify(clonedDoc: Document): void {
     if (node instanceof HTMLElement) {
       const style = clonedDoc.defaultView?.getComputedStyle(node);
       if (style) {
-        for (const p of props) {
-          const v = style.getPropertyValue(p as string);
-          if (v && (v.includes('oklch') || v.includes('oklab') || v.includes('color('))) {
-            (node.style as unknown as Record<string, string>)[p as string] = toRgb(v);
+        for (const p of colorProps) {
+          const v = style.getPropertyValue(p);
+          const replacement = toRgb(v);
+          if (replacement && replacement !== v) {
+            (node.style as unknown as Record<string, string>)[p] = replacement;
           }
+        }
+        // Also flatten gradients / shadows that reference modern color
+        // functions — html2canvas chokes the same way on these. We can't
+        // parse them piece-wise, so blank them when they contain a modern
+        // colour function. Cards still render correctly without shadows.
+        const bgImage = style.getPropertyValue('backgroundImage');
+        if (bgImage && /oklch|oklab|color-mix|lab\(|lch\(|hwb\(|color\(/i.test(bgImage)) {
+          node.style.backgroundImage = 'none';
+        }
+        const boxShadow = style.getPropertyValue('boxShadow');
+        if (boxShadow && /oklch|oklab|color-mix|lab\(|lch\(|hwb\(|color\(/i.test(boxShadow)) {
+          node.style.boxShadow = 'none';
         }
       }
     }
@@ -71,13 +96,23 @@ function srgbify(clonedDoc: Document): void {
 
 /** Render one DOM node and place it (centered, fit-to-page) on a new A4 page. */
 async function placeNodeOnPdf(pdf: JsPDFInstance, node: HTMLElement, html2canvas: typeof import('html2canvas').default): Promise<void> {
-  const canvas = await html2canvas(node, {
-    scale: 2,
-    backgroundColor: '#ffffff',
-    useCORS: true,
-    logging: false,
-    onclone: (doc) => srgbify(doc),
-  });
+  let canvas: HTMLCanvasElement;
+  try {
+    canvas = await html2canvas(node, {
+      scale: 2,
+      backgroundColor: '#ffffff',
+      useCORS: true,
+      logging: false,
+      onclone: (doc) => srgbify(doc),
+    });
+  } catch (e) {
+    // Surface the real cause — silent failures here historically led the
+    // user to think the button "did nothing". Wrap with a friendlier
+    // prefix while preserving the original message for diagnosis.
+    const msg = e instanceof Error ? e.message : String(e);
+    console.error('[pdfPrint] html2canvas failed:', e);
+    throw new Error(`PDF render failed: ${msg}`);
+  }
   const pageW = pdf.internal.pageSize.getWidth();
   const pageH = pdf.internal.pageSize.getHeight();
   const margin = 30; // pt — tight enough to feel "designed", roomy enough to look clean

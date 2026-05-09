@@ -28,6 +28,8 @@ export const LogsViewer: React.FC<Props> = ({ onBack }) => {
   const [search, setSearch] = useState('');
   const [fromDate, setFromDate] = useState('');
   const [toDate, setToDate] = useState('');
+  const [shown, setShown] = useState(50);
+  useEffect(() => { setShown(50); }, [activeFilter, search, fromDate, toDate]);
 
   useEffect(() => {
     fetchLogs().catch(e => showToast(e instanceof Error ? e.message : 'Failed to load logs', 'error'));
@@ -164,7 +166,7 @@ export const LogsViewer: React.FC<Props> = ({ onBack }) => {
             <p className="font-bold text-sm">No logs for this filter</p>
           </div>
         )}
-        {visible.map(log => {
+        {visible.slice(0, shown).map(log => {
           const meta = LOG_META[log.entityType];
           return (
             <div key={log.id} className="bg-white rounded-2xl border border-slate-100 shadow-sm p-4 flex gap-3 items-start">
@@ -190,6 +192,17 @@ export const LogsViewer: React.FC<Props> = ({ onBack }) => {
             </div>
           );
         })}
+        {visible.length > shown && (
+          <button onClick={() => setShown(s => s + 50)}
+            className="w-full py-3 bg-white border border-slate-200 rounded-2xl font-black text-xs text-blue-700 hover:bg-blue-50 transition-colors">
+            Load More ({visible.length - shown} remaining)
+          </button>
+        )}
+        {visible.length > 0 && (
+          <p className="text-center text-[10px] font-bold text-slate-300 pt-1">
+            Showing {Math.min(shown, visible.length)} of {visible.length}
+          </p>
+        )}
       </div>
     </div>
   );

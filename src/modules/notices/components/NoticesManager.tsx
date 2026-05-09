@@ -35,6 +35,7 @@ export const NoticesManager: React.FC<Props> = ({ onBack }) => {
   const { showToast } = useUIStore();
   const [view, setView] = useState<View>('LIST');
   const [notices, setNotices] = useState<Notice[]>([]);
+  const [shown, setShown] = useState(50);
   const [form, setForm] = useState<{
     title: string; body: string; audience: NoticeAudience; pinned: boolean;
     targetStudentId: string | null; targetStudentName: string;
@@ -249,7 +250,7 @@ export const NoticesManager: React.FC<Props> = ({ onBack }) => {
             ))}
           </div>
         )}
-        {notices.map(notice => (
+        {notices.slice(0, shown).map(notice => (
           <div key={notice.id} className={`bg-white rounded-2xl border shadow-sm p-4 ${notice.pinned ? 'border-violet-200 bg-violet-50/30' : 'border-slate-100'}`}>
             <div className="flex items-start justify-between gap-2 mb-2">
               <div className="flex items-center gap-2 min-w-0 flex-wrap">
@@ -280,6 +281,17 @@ export const NoticesManager: React.FC<Props> = ({ onBack }) => {
             <Bell size={32} className="mb-3 opacity-40" />
             <p className="font-bold text-sm">No notices sent yet</p>
           </div>
+        )}
+        {notices.length > shown && (
+          <button onClick={() => setShown(s => s + 50)}
+            className="w-full py-3 bg-white border border-slate-200 rounded-2xl font-black text-xs text-violet-700 hover:bg-violet-50 transition-colors">
+            Load More ({notices.length - shown} remaining)
+          </button>
+        )}
+        {notices.length > 0 && (
+          <p className="text-center text-[10px] font-bold text-slate-300 pt-1">
+            Showing {Math.min(shown, notices.length)} of {notices.length}
+          </p>
         )}
       </div>
     </div>
