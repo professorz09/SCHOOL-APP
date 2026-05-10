@@ -52,7 +52,15 @@ export const staffStorageService = {
     if (file.size > cap) {
       throw new Error(`File must be < ${fmtSize(cap)} (got ${fmtSize(file.size)})`);
     }
-    if (file.type && !ALLOWED_MIME.has(file.type)) {
+    // Reject empty MIME and unknown MIME both. Earlier the `file.type && ...`
+    // guard short-circuited on an empty string and let any file with
+    // browser-stripped MIME (HEIC on some Linux browsers, raw blobs,
+    // .exe renamed to .pdf in some browsers) bypass the type check.
+    // Mirrors the stricter check in shared/utils/storage.service.ts.
+    if (!file.type) {
+      throw new Error('File type missing — please re-pick the file');
+    }
+    if (!ALLOWED_MIME.has(file.type)) {
       throw new Error(`Unsupported file type: ${file.type}`);
     }
 

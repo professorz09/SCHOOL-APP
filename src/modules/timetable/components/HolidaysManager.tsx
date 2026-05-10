@@ -43,6 +43,10 @@ export const HolidaysManager: React.FC<Props> = ({ onBack }) => {
   const [addName, setAddName] = useState('');
   const [addNotes, setAddNotes] = useState('');
   const [adding, setAdding] = useState(false);
+  // Custom delete-confirmation modal — replaces window.confirm() which
+  // exposed the dev hostname as the dialog title on Codespaces.
+  const [deleteTarget, setDeleteTarget] = useState<Holiday | null>(null);
+  const [deleting, setDeleting] = useState(false);
 
   const reload = React.useCallback(async () => {
     if (!currentYear?.id) { setHolidays([]); setLoading(false); return; }
@@ -101,16 +105,18 @@ export const HolidaysManager: React.FC<Props> = ({ onBack }) => {
     } finally { setAdding(false); }
   };
 
-  const handleDelete = async (h: Holiday) => {
-    if (!window.confirm(`Delete holiday "${h.name}" on ${h.date}?`)) return;
+  const confirmDelete = async () => {
+    if (!deleteTarget) return;
+    setDeleting(true);
     try {
-      await apiPrincipal.holidayDelete(h.id);
-      await logAudit('holiday_deleted', 'school_holiday', h.id, { date: h.date, name: h.name });
-      setHolidays(prev => prev.filter(x => x.id !== h.id));
+      await apiPrincipal.holidayDelete(deleteTarget.id);
+      await logAudit('holiday_deleted', 'school_holiday', deleteTarget.id, { date: deleteTarget.date, name: deleteTarget.name });
+      setHolidays(prev => prev.filter(x => x.id !== deleteTarget.id));
       showToast('Holiday removed');
+      setDeleteTarget(null);
     } catch (e) {
       showToast(e instanceof Error ? e.message : 'Failed to delete', 'error');
-    }
+    } finally { setDeleting(false); }
   };
 
   // Group holidays by month for a scannable list.
@@ -272,7 +278,7 @@ export const HolidaysManager: React.FC<Props> = ({ onBack }) => {
                         <div className="text-[10px] font-bold text-slate-500 mt-0.5 truncate">{h.notes}</div>
                       )}
                     </div>
-                    <button onClick={() => handleDelete(h)}
+                    <button onClick={() => setDeleteTarget(h)}
                       className="p-2 text-slate-400 hover:text-rose-500 transition-colors">
                       <Trash2 size={14} />
                     </button>
@@ -283,6 +289,45 @@ export const HolidaysManager: React.FC<Props> = ({ onBack }) => {
           ))
         )}
       </div>
+
+      {deleteTarget && (
+        <div className="fixed inset-0 z-50 bg-black/50 flex items-end lg:items-center justify-center p-4 animate-in fade-in duration-150"
+          onClick={() => !deleting && setDeleteTarget(null)}>
+          <div onClick={e => e.stopPropagation()}
+            className="bg-white rounded-3xl w-full lg:max-w-md p-5 lg:p-6 shadow-2xl animate-in slide-in-from-bottom-4 lg:zoom-in-95 duration-200">
+            <div className="flex items-center gap-3 mb-3">
+              <div className="w-11 h-11 rounded-2xl bg-rose-50 text-rose-600 flex items-center justify-center shrink-0">
+                <Trash2 size={20}/>
+              </div>
+              <div className="min-w-0">
+                <p className="text-base font-black text-slate-900">Delete this holiday?</p>
+                <p className="text-[11px] font-bold text-slate-400 mt-0.5 truncate">
+                  {deleteTarget.name} · {deleteTarget.date}
+                </p>
+              </div>
+            </div>
+            <div className="bg-slate-50 border border-slate-100 rounded-2xl p-3 mb-4">
+              <p className="text-[12px] font-bold text-slate-600 leading-relaxed">
+                Attendance grids me yeh date phir se "school open" treat hogi. Kabhi bhi wapas add kar sakte hain.
+              </p>
+            </div>
+            <div className="flex gap-3">
+              <button
+                onClick={() => setDeleteTarget(null)}
+                disabled={deleting}
+                className="flex-1 py-3 bg-slate-100 text-slate-700 font-black rounded-2xl text-sm uppercase tracking-widest active:scale-95 transition-transform disabled:opacity-50">
+                Cancel
+              </button>
+              <button
+                onClick={confirmDelete}
+                disabled={deleting}
+                className="flex-1 flex items-center justify-center gap-1.5 py-3 bg-rose-600 hover:bg-rose-700 text-white font-black rounded-2xl text-sm uppercase tracking-widest active:scale-95 transition-transform disabled:opacity-60">
+                {deleting ? 'Deleting…' : <><Trash2 size={14}/> Delete</>}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 };

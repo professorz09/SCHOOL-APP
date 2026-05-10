@@ -1,4 +1,5 @@
 import { Router } from 'express';
+import rateLimit from 'express-rate-limit';
 import { adminDb, userDb } from '../lib/db';
 import { ok, fail, ApiError, requireBody } from '../lib/helpers';
 import { requireAuth, requireRole } from '../middleware/auth';
@@ -428,5 +429,185 @@ transportRouter.post('/remove', requireAuth, requireRole('PRINCIPAL'), async (re
     const { deleted, cancelled } = await cancelInstallmentsAfter(assignmentId, body.endDate);
 
     ok(res, { assignmentId, endDate: body.endDate, deleted, cancelled });
+  } catch (err) { fail(res, err); }
+});
+
+
+// ─── LIVE GPS / TRIP STATE ────────────────────────────────────────────────
+//
+// Driver client UPDATEs vehicle_live every 15 sec while tracking. We
+// rate-limit at the route level (1 ping per 5 sec per driver) so a
+// runaway client can't flood the table — the driver UI is hard-capped
+// at 15 sec already, this is just defence in depth.
+
+const driverPingLimiter = rateLimit({
+  windowMs: 5_000,
+  limit: 1,
+  // The express-rate-limit validator string-greps for `req.ip` and warns
+  // about IPv6 even when our keyGenerator resolves req.user.id first.
+  // Suppress the false positive — auth users are the primary identity here.
+  keyGenerator: (req: any) => `transport-ping:${req.user?.id ?? req.ip}`,
+  validate: { keyGeneratorIpFallback: false },
+  standardHeaders: 'draft-7',
+  legacyHeaders: false,
+  message: { ok: false, error: 'Too many pings — driver UI should send 1 every 15s, not faster.' },
+});
+
+// Resolve the staff_id (driver) for the calling auth user. Driver
+// rows live on staff.user_id; vehicles join on staff.id (driver_id).
+async function resolveDriverStaffIdForUser(userId: string, schoolId: string): Promise<string | null> {
+  const { data } = await adminDb
+    .from('staff').select('id')
+    .eq('user_id', userId).eq('school_id', schoolId).maybeSingle();
+  return (data as { id: string } | null)?.id ?? null;
+}
+
+// POST /api/transport/ping — driver upserts their vehicle's live state.
+// Body: { lat, lng, speedKmh?, currentStopIdx?, isTracking, tripStartedAt? }
+// Stops the trip if isTracking=false.
+transportRouter.post('/ping', requireAuth, requireRole('DRIVER'), driverPingLimiter, async (req, res) => {
+  try {
+    const body = requireBody<{
+      lat: number; lng: number;
+      speedKmh?: number;
+      currentStopIdx?: number | null;
+      isTracking: boolean;
+      tripStartedAt?: string | null;
+    }>(req, ['lat', 'lng', 'isTracking']);
+
+    if (typeof body.lat !== 'number' || typeof body.lng !== 'number'
+        || isNaN(body.lat) || isNaN(body.lng)
+        || body.lat < -90 || body.lat > 90
+        || body.lng < -180 || body.lng > 180) {
+      throw new ApiError(400, 'Invalid coordinates');
+    }
+
+    const schoolId = req.user.school_id;
+    if (!schoolId) throw new ApiError(403, 'Driver has no school');
+
+    // Resolve which vehicle this driver is assigned to. The driver
+    // can only ping for their own vehicle — the join below is the
+    // authorisation check.
+    const staffId = await resolveDriverStaffIdForUser(req.user.id, schoolId);
+    if (!staffId) throw new ApiError(404, 'No staff record for this driver account');
+
+    const { data: vehicle } = await adminDb
+      .from('transport_vehicles').select('id')
+      .eq('school_id', schoolId)
+      .eq('driver_id', staffId)
+      .maybeSingle();
+    const vehicleId = (vehicle as { id: string } | null)?.id;
+    if (!vehicleId) throw new ApiError(404, 'No vehicle assigned to this driver');
+
+    // UPSERT the live row. PK is vehicle_id so a re-ping just updates
+    // the existing row — table size never grows beyond N vehicles.
+    const now = new Date().toISOString();
+    const tripEnded = body.isTracking === false;
+    const payload: Record<string, unknown> = {
+      vehicle_id:        vehicleId,
+      school_id:         schoolId,
+      lat:               body.lat,
+      lng:               body.lng,
+      speed_kmh:         typeof body.speedKmh === 'number' ? body.speedKmh : null,
+      last_seen:         now,
+      is_tracking:       body.isTracking,
+      current_stop_idx:  body.currentStopIdx ?? null,
+      trip_started_at:   body.tripStartedAt ?? null,
+      trip_ended_at:     tripEnded ? now : null,
+      updated_at:        now,
+    };
+
+    const { error } = await adminDb.from('vehicle_live')
+      .upsert(payload, { onConflict: 'vehicle_id' });
+    if (error) throw new ApiError(500, error.message);
+
+    ok(res, { vehicleId, lastSeen: now });
+  } catch (err) { fail(res, err); }
+});
+
+// POST /api/transport/emergency-alert — driver triggers an emergency.
+// Inserts an audit_logs row + a high-priority notice for the principal.
+// Rate-limited heavily because false alarms / mis-taps are common.
+const emergencyLimiter = rateLimit({
+  windowMs: 5 * 60_000, // 5 min
+  limit: 3,
+  keyGenerator: (req: any) => `emergency:${req.user?.id ?? req.ip}`,
+  validate: { keyGeneratorIpFallback: false },
+  standardHeaders: 'draft-7',
+  legacyHeaders: false,
+  message: { ok: false, error: 'Emergency alert limit (3/5min) reached. Call school directly if real emergency.' },
+});
+transportRouter.post('/emergency-alert', requireAuth, requireRole('DRIVER'), emergencyLimiter, async (req, res) => {
+  try {
+    const body = requireBody<{ lat?: number; lng?: number; note?: string }>(req, []);
+    const schoolId = req.user.school_id;
+    if (!schoolId) throw new ApiError(403, 'Driver has no school');
+
+    const staffId = await resolveDriverStaffIdForUser(req.user.id, schoolId);
+    const { data: vehicle } = await adminDb
+      .from('transport_vehicles').select('id, vehicle_no')
+      .eq('school_id', schoolId)
+      .eq('driver_id', staffId ?? '')
+      .maybeSingle();
+    const v = vehicle as { id: string; vehicle_no: string } | null;
+
+    await adminDb.from('audit_logs').insert({
+      user_id:     req.user.id,
+      school_id:   schoolId,
+      action:      'driver_emergency_alert',
+      entity_type: 'transport_vehicle',
+      entity_id:   v?.id ?? null,
+      details:     {
+        driverName: req.user.name,
+        vehicleNo:  v?.vehicle_no ?? null,
+        lat:        body.lat ?? null,
+        lng:        body.lng ?? null,
+        note:       body.note ?? null,
+      },
+    });
+
+    ok(res, { ok: true, vehicleId: v?.id ?? null });
+  } catch (err) { fail(res, err); }
+});
+
+// GET /api/transport/live — read all vehicle_live rows for the
+// caller's school. Used by the principal's "Live Buses" widget on
+// initial paint; subsequent updates come via Realtime subscription.
+transportRouter.get('/live', requireAuth, requireRole('PRINCIPAL', 'TEACHER', 'DRIVER'), async (req, res) => {
+  try {
+    const schoolId = req.user.school_id;
+    if (!schoolId) { ok(res, []); return; }
+
+    // 30-min staleness cutoff — anything older is reported as offline
+    // even if its row says is_tracking=true (driver phone died, etc).
+    const STALE_MIN = 30;
+    const cutoff = new Date(Date.now() - STALE_MIN * 60_000).toISOString();
+
+    const { data, error } = await adminDb
+      .from('vehicle_live')
+      .select('vehicle_id, lat, lng, speed_kmh, last_seen, is_tracking, current_stop_idx, trip_started_at')
+      .eq('school_id', schoolId);
+    if (error) throw new ApiError(500, error.message);
+
+    // Server-side normalisation so the client doesn't have to redo
+    // staleness logic in 3 places.
+    type Row = {
+      vehicle_id: string; lat: number | null; lng: number | null;
+      speed_kmh: number | null; last_seen: string;
+      is_tracking: boolean; current_stop_idx: number | null;
+      trip_started_at: string | null;
+    };
+    const rows = ((data ?? []) as Row[]).map(r => ({
+      vehicleId:      r.vehicle_id,
+      lat:            r.lat,
+      lng:            r.lng,
+      speedKmh:       r.speed_kmh,
+      lastSeen:       r.last_seen,
+      isLive:         r.is_tracking && r.last_seen >= cutoff,
+      isTracking:     r.is_tracking,
+      currentStopIdx: r.current_stop_idx,
+      tripStartedAt:  r.trip_started_at,
+    }));
+    ok(res, rows);
   } catch (err) { fail(res, err); }
 });

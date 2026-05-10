@@ -1,4 +1,5 @@
 import { Router } from 'express';
+import rateLimit from 'express-rate-limit';
 import { createClient } from '@supabase/supabase-js';
 import { adminDb, userDb } from '../lib/db';
 import { ok, fail, ApiError, requireBody } from '../lib/helpers';
@@ -9,8 +10,29 @@ export const authRouter = Router();
 const MOBILE_EMAIL_DOMAIN = '@edugrow.local';
 const toEmail = (m: string) => `${m.trim()}${MOBILE_EMAIL_DOMAIN}`;
 
+// ─── Brute-force defence ─────────────────────────────────────────────
+// Per-mobile lockout. The global authLimiter on /api/auth (app.ts) already
+// caps at 20/15min PER IP, which handles drive-by bots hitting many
+// accounts from one host. This per-mobile limit specifically targets
+// brute-forcing ONE account from many IPs (botnet) — without it, an
+// attacker with even 50 IPs could land 1000 guesses on the principal's
+// password in 15 min while staying under each IP's per-IP cap.
+//
+// 8 attempts per 15 min: enough room for the principal's own mistypes,
+// narrow enough that password guessing is infeasible. The error message
+// is generic so the attacker can't tell whether the mobile exists.
+const loginLimiterByMobile = rateLimit({
+  windowMs: 15 * 60_000,
+  limit: 8,
+  keyGenerator: (req: any) => `login-mob:${(req.body?.mobile ?? '').toString().trim().slice(-10) || req.ip}`,
+  validate: { keyGeneratorIpFallback: false },
+  standardHeaders: 'draft-7',
+  legacyHeaders: false,
+  message: { ok: false, error: 'Too many login attempts. Try again in a few minutes.' },
+});
+
 // POST /api/auth/login
-authRouter.post('/login', async (req, res) => {
+authRouter.post('/login', loginLimiterByMobile, async (req, res) => {
   try {
     const { mobile, password } = requireBody<{ mobile: string; password: string }>(req, ['mobile', 'password']);
 
@@ -31,7 +53,7 @@ authRouter.post('/login', async (req, res) => {
 
     const { data: profile, error: profileErr } = await adminDb
       .from('users')
-      .select('id, name, role, school_id, first_login_changed, is_active')
+      .select('id, name, role, school_id, first_login_changed, is_active, email, email_otp_2fa')
       .eq('id', data.user.id)
       .maybeSingle();
     if (profileErr) {
@@ -42,11 +64,35 @@ authRouter.post('/login', async (req, res) => {
       console.warn('[auth.login] no profile row for', data.user.id);
       throw new ApiError(401, GENERIC_ERR);
     }
-    if (!(profile as { is_active: boolean }).is_active) {
-      // Sign the supabase session out so a stale refresh token can't be used.
+    type ProfileRow = {
+      id: string; name: string; role: string; school_id: string | null;
+      first_login_changed: boolean; is_active: boolean;
+      email: string | null; email_otp_2fa: boolean;
+    };
+    const p = profile as ProfileRow;
+    if (!p.is_active) {
       try { await adminDb.auth.admin.signOut(data.user.id); } catch { /* ignore */ }
-      console.warn('[auth.login] inactive account', { mobile, role: (profile as { role: string }).role });
+      console.warn('[auth.login] inactive account', { mobile, role: p.role });
       throw new ApiError(401, GENERIC_ERR);
+    }
+
+    // ── 2FA gate ─────────────────────────────────────────────────────
+    // Principal / super-admin accounts that toggled email-OTP 2FA on
+    // get their just-minted Supabase session immediately revoked here.
+    // The client then drives an OTP round-trip via supabase.auth's
+    // native signInWithOtp + verifyOtp — which creates a fresh session
+    // only after the OTP from the user's email is presented. Password
+    // alone never gets through.
+    if (p.email_otp_2fa && p.email && p.email.trim().length > 0) {
+      try { await adminDb.auth.admin.signOut(data.user.id); } catch { /* ignore */ }
+      ok(res, {
+        requires2FA: true,
+        email: p.email,
+        // Echo the basics so the client can show "Hi, principal_name —
+        // we sent a code to ***@school.com" in the OTP step UI.
+        userHint: { name: p.name, role: p.role },
+      });
+      return;
     }
 
     ok(res, {
@@ -54,13 +100,39 @@ authRouter.post('/login', async (req, res) => {
       refreshToken:  data.session.refresh_token,
       expiresAt:     data.session.expires_at,
       user: {
-        id:                profile?.id,
-        name:              profile?.name,
-        role:              profile?.role,
-        school_id:         profile?.school_id,
-        mustChangePassword: !(profile?.first_login_changed),
+        id:                p.id,
+        name:              p.name,
+        role:              p.role,
+        school_id:         p.school_id,
+        mustChangePassword: !p.first_login_changed,
       },
     });
+  } catch (err) { fail(res, err); }
+});
+
+// POST /api/auth/2fa/toggle — flip email_otp_2fa for the calling user.
+// Only PRINCIPAL / SUPER_ADMIN allowed; the BEFORE UPDATE trigger
+// (migration 0095) double-enforces eligibility at the DB level, so a
+// rogue RPC or direct-REST attempt also bounces.
+authRouter.post('/2fa/toggle', requireAuth, async (req, res) => {
+  try {
+    const { enabled } = requireBody<{ enabled: boolean }>(req, ['enabled']);
+    if (req.user.role !== 'PRINCIPAL' && req.user.role !== 'SUPER_ADMIN') {
+      throw new ApiError(403, '2FA is only available for principal / super-admin accounts');
+    }
+    if (enabled) {
+      // Email is mandatory for the OTP to have a destination.
+      const { data } = await adminDb.from('users').select('email').eq('id', req.user.id).maybeSingle();
+      const email = (data as { email: string | null } | null)?.email;
+      if (!email || email.trim().length === 0) {
+        throw new ApiError(400, 'Set an email on your profile first — that\'s where the OTP will be sent.');
+      }
+    }
+    const { error } = await adminDb.from('users')
+      .update({ email_otp_2fa: enabled })
+      .eq('id', req.user.id);
+    if (error) throw new ApiError(500, error.message);
+    ok(res, { ok: true, enabled });
   } catch (err) { fail(res, err); }
 });
 

@@ -30,18 +30,59 @@ interface Actions {
   resetAll(): void;
 }
 
+// Auto-off timer per yearId. Correction Mode flips to OFF after
+// 10 min so the principal doesn't accidentally leave a closed
+// year writable across coffee breaks. In-flight saves complete
+// normally (the correctionStore.gate already authorized them);
+// only NEW saves attempted after the auto-off get the read-only
+// rejection. This is safe by construction — same model as the
+// 30-min Editor Mode timer.
+const CORRECTION_AUTO_OFF_MS = 10 * 60 * 1000;
+const _autoOffTimers = new Map<string, ReturnType<typeof setTimeout>>();
+
+const clearAutoOff = (yearId: string) => {
+  const t = _autoOffTimers.get(yearId);
+  if (t) { clearTimeout(t); _autoOffTimers.delete(yearId); }
+};
+
+const scheduleAutoOff = (
+  yearId: string,
+  set: (updater: (s: State & Actions) => Partial<State>) => void,
+) => {
+  clearAutoOff(yearId);
+  const t = setTimeout(async () => {
+    _autoOffTimers.delete(yearId);
+    set((s) => ({ enabledByYear: { ...s.enabledByYear, [yearId]: false } }));
+    try {
+      const { useUIStore } = await import('@/store/uiStore');
+      useUIStore.getState().showToast(
+        'Correction Mode auto-disabled (10 min over). Re-enable from Academic Year if needed.',
+        'info',
+      );
+    } catch { /* never block the auto-off */ }
+  }, CORRECTION_AUTO_OFF_MS);
+  _autoOffTimers.set(yearId, t);
+};
+
 export const useCorrectionStore = create<State & Actions>((set, get) => ({
   enabledByYear: {},
   countsByYear: {},
 
   enable(yearId) {
     set((s) => ({ enabledByYear: { ...s.enabledByYear, [yearId]: true } }));
+    scheduleAutoOff(yearId, set as any);
   },
   disable(yearId) {
+    clearAutoOff(yearId);
     set((s) => ({ enabledByYear: { ...s.enabledByYear, [yearId]: false } }));
   },
   toggle(yearId) {
     const current = get().enabledByYear[yearId] ?? false;
+    if (current) {
+      clearAutoOff(yearId);
+    } else {
+      scheduleAutoOff(yearId, set as any);
+    }
     set((s) => ({ enabledByYear: { ...s.enabledByYear, [yearId]: !current } }));
   },
   isOn(yearId) {
@@ -59,6 +100,10 @@ export const useCorrectionStore = create<State & Actions>((set, get) => ({
     }));
   },
   resetAll() {
+    // Cancel every pending auto-off too so a logout-then-login
+    // doesn't fire a stale toast against a different session.
+    for (const t of _autoOffTimers.values()) clearTimeout(t);
+    _autoOffTimers.clear();
     set({ enabledByYear: {}, countsByYear: {} });
   },
 }));
@@ -127,7 +172,15 @@ export function useEditGuard(
   ): Promise<T | undefined> {
     if (!isYearClosed) return action();
     if (!isCorrectionOn || !activeYearId) return undefined;
-    const reason = (window.prompt('Reason for correction (required):') ?? '').trim();
+    // Lazy import to avoid a circular dep at module init (uiStore →
+    // correctionStore is OK; the other direction would be weird if
+    // imported at the top).
+    const { useUIStore } = await import('@/store/uiStore');
+    const reason = await useUIStore.getState().askReason({
+      message: 'Reason for correction',
+      placeholder: 'Why is this closed-year edit being made?',
+      required: true,
+    });
     if (!reason) return undefined;
     // Record the correction BEFORE running the mutation. If the audit
     // write fails (RPC error / RLS / network), the mutation is aborted

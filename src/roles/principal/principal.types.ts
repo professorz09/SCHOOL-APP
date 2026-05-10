@@ -1,6 +1,6 @@
 export type ComplaintStatus = 'PENDING' | 'IN_REVIEW' | 'RESOLVED' | 'REJECTED';
 export type ComplaintFrom = 'STUDENT' | 'TEACHER' | 'PARENT';
-export type ApprovalType = 'LEAVE' | 'FEE_PAYMENT' | 'ATTENDANCE_CORRECTION';
+export type ApprovalType = 'LEAVE' | 'FEE_PAYMENT' | 'ATTENDANCE_CORRECTION' | 'ADMISSION';
 export type ApprovalStatus = 'PENDING' | 'APPROVED' | 'REJECTED';
 export type AssetCategory = 'BOOK' | 'LAB_EQUIPMENT' | 'VEHICLE';
 export type NoticeAudience = 'ALL' | 'STUDENTS' | 'TEACHERS' | 'STAFF' | 'PARENTS';
@@ -67,6 +67,12 @@ export interface Approval {
   attachmentUrl: string | null;
   studentId?: string;
   rejectionReason?: string | null;
+  /** ADMISSION drafts only: the full form payload the teacher submitted.
+   *  Stored in approvals.new_value alongside the human-readable summary
+   *  fields above. Principal review panel deserialises this into editable
+   *  inputs and re-submits via the standard student create flow on
+   *  approve. */
+  draftPayload?: Record<string, unknown> | null;
 }
 
 export interface LibraryBook {

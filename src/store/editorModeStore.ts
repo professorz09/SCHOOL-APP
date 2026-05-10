@@ -33,7 +33,20 @@ const scheduleExpire = (set: (s: Partial<EditorModeStore>) => void, expiresAt: n
   if (_timer) { clearTimeout(_timer); _timer = null; }
   const remaining = expiresAt - Date.now();
   if (remaining > 0) {
-    _timer = setTimeout(() => set({ expiresAt: 0 }), remaining);
+    _timer = setTimeout(async () => {
+      set({ expiresAt: 0 });
+      // Toast the principal so they know future saves will fail
+      // until they re-enable. Earlier the auto-off was silent → user
+      // discovered it only via a 403 mid-save. Lazy-import the UI
+      // store to avoid a static circular dep at module init.
+      try {
+        const { useUIStore } = await import('@/store/uiStore');
+        useUIStore.getState().showToast(
+          'Editor Mode auto-disabled (30 min over). Re-enable from Settings if you still need it.',
+          'info',
+        );
+      } catch { /* import shouldn't fail; never block expiry */ }
+    }, remaining);
   }
 };
 

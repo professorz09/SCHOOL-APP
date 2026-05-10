@@ -9,6 +9,7 @@ import { useUIStore } from '@/store/uiStore';
 import { apiPromotion } from '@/lib/apiClient';
 import { feeService } from '@/modules/fees/fee.service';
 import type { FeeStructureRecord } from '@/modules/fees/fees.types';
+import { todayIST } from '@/shared/utils/date';
 
 interface StudentPromotion {
   studentId: string;
@@ -84,7 +85,10 @@ export const PromotionWizard: React.FC<Props> = ({ onBack }) => {
     promoted: number; retained: number; tcIssued: number; skipped: number;
   } | null>(null);
 
-  const today = new Date().toISOString().split('T')[0];
+  // IST today — earlier the UTC version put TC date defaults
+  // a day in the past during early-morning IST hours, surprising
+  // principals who thought they were issuing TC for "today".
+  const today = todayIST();
 
   const fromYear = academicYears.find(y => y.id === fromYearId);
   const toYear   = academicYears.find(y => y.id === toYearId);
@@ -180,6 +184,42 @@ export const PromotionWizard: React.FC<Props> = ({ onBack }) => {
         return;
       }
 
+      // Validate: NO duplicate roll-no within the SAME (toClass, toSection).
+      // The DB has a partial unique index on (academic_year_id, section_id,
+      // roll_no), so the server would reject a duplicate anyway — but the
+      // failure surfaces as an opaque "duplicate key" string and only the
+      // FIRST conflict gets reported, leaving the principal hunting through
+      // 30 cards. Client-side catch lists ALL collisions upfront.
+      const rollByGroup = new Map<string, Map<string, string[]>>();
+      for (const s of pending) {
+        if (s.decision !== 'PROMOTE') continue;
+        const roll = (s.rollNo ?? '').trim();
+        if (!roll) continue; // empty roll is allowed (NULL → ignored by index)
+        const groupKey = `${s.toClass}|${s.toSection || ''}`;
+        const inner = rollByGroup.get(groupKey) ?? new Map<string, string[]>();
+        const arr = inner.get(roll) ?? [];
+        arr.push(s.studentName);
+        inner.set(roll, arr);
+        rollByGroup.set(groupKey, inner);
+      }
+      const dupes: string[] = [];
+      for (const [groupKey, rolls] of rollByGroup.entries()) {
+        for (const [roll, names] of rolls.entries()) {
+          if (names.length > 1) {
+            const [cls, sec] = groupKey.split('|');
+            const where = sec ? `${cls}-${sec}` : cls;
+            dupes.push(`Roll #${roll} in ${where}: ${names.join(', ')}`);
+          }
+        }
+      }
+      if (dupes.length > 0) {
+        showToast(
+          `Duplicate roll numbers — fix before promoting:\n${dupes.slice(0, 3).join(' | ')}${dupes.length > 3 ? ` | …+${dupes.length - 3} more` : ''}`,
+          'error',
+        );
+        return;
+      }
+
       // Re-fetch the preview to detect cross-tab / parallel-promotion races.
       // If another principal already promoted some of these rows, the server
       // will now return them as ALREADY_ASSIGNED — abort so the user can re-decide.
@@ -232,6 +272,31 @@ export const PromotionWizard: React.FC<Props> = ({ onBack }) => {
     tc:      students.filter(s => s.decision === 'TC'      && s.status === 'PENDING').length,
     done:    students.filter(s => s.status === 'ALREADY_ASSIGNED').length,
   }), [students]);
+
+  // Set of studentIds whose roll number collides with another row in the
+  // same target (toClass, toSection). Surfaced as a red badge in the row
+  // header so the principal sees the conflict before tapping Confirm.
+  const duplicateRollIds = useMemo(() => {
+    const dupSet = new Set<string>();
+    const rollByGroup = new Map<string, Map<string, string[]>>();
+    for (const s of students) {
+      if (s.status !== 'PENDING' || s.decision !== 'PROMOTE') continue;
+      const roll = (s.rollNo ?? '').trim();
+      if (!roll) continue;
+      const groupKey = `${s.toClass}|${s.toSection || ''}`;
+      const inner = rollByGroup.get(groupKey) ?? new Map<string, string[]>();
+      const arr = inner.get(roll) ?? [];
+      arr.push(s.studentId);
+      inner.set(roll, arr);
+      rollByGroup.set(groupKey, inner);
+    }
+    for (const inner of rollByGroup.values()) {
+      for (const ids of inner.values()) {
+        if (ids.length > 1) ids.forEach(id => dupSet.add(id));
+      }
+    }
+    return dupSet;
+  }, [students]);
 
   const decisionColor = (d: string) =>
     d === 'PROMOTE' ? 'bg-emerald-100 text-emerald-700 border-emerald-200' :
@@ -436,11 +501,25 @@ export const PromotionWizard: React.FC<Props> = ({ onBack }) => {
                               {s.studentName.split(' ').map(w => w[0]).join('').slice(0, 2).toUpperCase()}
                             </div>
                             <div className="flex-1 min-w-0">
-                              <div className="font-black text-slate-900 text-sm truncate">{s.studentName}</div>
-                              <div className="text-[10px] font-bold text-slate-400 flex items-center gap-1 flex-wrap">
+                              <div className="flex items-baseline gap-2">
+                                <div className="font-black text-slate-900 text-sm truncate flex-1">{s.studentName}</div>
+                                {s.rollNo && (
+                                  <span className={`text-[10px] font-black tabular-nums shrink-0 ${
+                                    duplicateRollIds.has(s.studentId) ? 'text-rose-600' : 'text-slate-500'
+                                  }`}>#{s.rollNo}{duplicateRollIds.has(s.studentId) ? ' ⚠' : ''}</span>
+                                )}
+                              </div>
+                              <div className="text-[10px] font-bold text-slate-400 flex items-center gap-1 flex-wrap mt-0.5">
                                 <span>{s.fromSection ? `${s.fromClass}-${s.fromSection}` : s.fromClass}</span>
+                                {/* Side-by-side preview of the user's choices in the
+                                    collapsed row — roll / toClass / fee structure.
+                                    Lets the principal scan a long list without
+                                    expanding each card. */}
                                 {s.decision === 'PROMOTE' && s.toClass && (
-                                  <> → <span className="text-emerald-600">{s.toClass}</span></>
+                                  <> → <span className="text-emerald-600">{s.toClass}{s.toSection ? `-${s.toSection}` : ''}</span></>
+                                )}
+                                {s.decision === 'PROMOTE' && s.feeStructureId && (
+                                  <span className="ml-1 text-[8px] font-black bg-emerald-50 text-emerald-700 px-1.5 py-0.5 rounded-full uppercase">₹ Fee set</span>
                                 )}
                                 {is12 && <span className="ml-1 text-[8px] font-black bg-blue-100 text-blue-600 px-1.5 py-0.5 rounded-full uppercase">12th Passout</span>}
                                 {is10 && !isDone && <span className="ml-1 text-[8px] font-black bg-violet-100 text-violet-600 px-1.5 py-0.5 rounded-full uppercase">Stream Chunein</span>}
@@ -550,14 +629,43 @@ export const PromotionWizard: React.FC<Props> = ({ onBack }) => {
                                     </div>
                                   )}
 
-                                  {/* Section (for non-"not allotting now") */}
+                                  {/* Section + Roll No side-by-side. Roll no
+                                      is editable now — earlier the wizard
+                                      fetched it from the preview but never
+                                      let the principal change it, so a
+                                      promoted student kept their old roll
+                                      forever (which broke ordering when
+                                      classes merged / split sections). */}
                                   {(s.toClass || !is10) && (
-                                    <div>
-                                      <label className="text-[9px] font-black uppercase text-slate-400 block mb-1">Section</label>
-                                      <input value={s.toSection}
-                                        onChange={e => patch(s.studentId, { toSection: e.target.value })}
-                                        placeholder="A"
-                                        className="w-full border border-slate-200 rounded-lg px-2 py-1.5 text-xs font-bold text-slate-800 focus:outline-none focus:border-indigo-400" />
+                                    <div className="grid grid-cols-2 gap-2">
+                                      <div>
+                                        <label className="text-[9px] font-black uppercase text-slate-400 block mb-1">Section</label>
+                                        <input value={s.toSection}
+                                          onChange={e => patch(s.studentId, { toSection: e.target.value })}
+                                          placeholder="A"
+                                          className="w-full border border-slate-200 rounded-lg px-2 py-1.5 text-xs font-bold text-slate-800 focus:outline-none focus:border-indigo-400" />
+                                      </div>
+                                      <div>
+                                        <label className={`text-[9px] font-black uppercase block mb-1 ${
+                                          duplicateRollIds.has(s.studentId) ? 'text-rose-600' : 'text-slate-400'
+                                        }`}>
+                                          Roll No {duplicateRollIds.has(s.studentId) && '— DUPLICATE'}
+                                        </label>
+                                        <input value={s.rollNo}
+                                          onChange={e => patch(s.studentId, { rollNo: e.target.value.replace(/\D/g, '').slice(0, 4) })}
+                                          inputMode="numeric"
+                                          placeholder="01"
+                                          className={`w-full border rounded-lg px-2 py-1.5 text-xs font-bold text-slate-800 focus:outline-none ${
+                                            duplicateRollIds.has(s.studentId)
+                                              ? 'border-rose-400 bg-rose-50 focus:border-rose-500'
+                                              : 'border-slate-200 focus:border-indigo-400'
+                                          }`} />
+                                        {duplicateRollIds.has(s.studentId) && (
+                                          <p className="text-[9px] font-black text-rose-600 mt-0.5">
+                                            Same roll already in this class — change one.
+                                          </p>
+                                        )}
+                                      </div>
                                     </div>
                                   )}
 

@@ -16,6 +16,7 @@ import { apiStudents, apiFees } from '@/lib/apiClient';
 import { Student, StudentAcademicRecord, StudentDoc } from '@/modules/students/student.types';
 import { useUIStore } from '@/store/uiStore';
 import { schoolInfoService, SchoolInfo } from '@/shared/utils/schoolInfo.service';
+import { todayIST } from '@/shared/utils/date';
 import { AdmissionFormPrint } from '@/shared/components/AdmissionFormPrint';
 import {
   transportService, TransportVehicle, StudentTransportAssignment,
@@ -364,7 +365,9 @@ export const StudentProfilePanel: React.FC<Props> = ({ student, onBack, onStuden
     setFeePayModal(installment);
     setFeePayAmount(String(due));
     setFeePayMethod('CASH');
-    setFeePayDate(new Date().toISOString().split('T')[0]);
+    // IST default — UTC version backdated payments by 1 day for any
+    // open between 12:00–05:30 AM IST.
+    setFeePayDate(todayIST());
     setFeePayNote('');
     setFeePayBusy(false);
   };
@@ -498,7 +501,13 @@ export const StudentProfilePanel: React.FC<Props> = ({ student, onBack, onStuden
       showToast('Delete requires Editor Mode (Settings → Security)', 'error');
       return;
     }
-    if (!confirm('Permanently remove this document? This action is logged.')) return;
+    const ok = await useUIStore.getState().askConfirm({
+      title: 'Permanently remove this document?',
+      message: 'Action audit log me record hoga. Editor Mode ke saath hi possible hai.',
+      confirmLabel: 'Delete',
+      destructive: true,
+    });
+    if (!ok) return;
     try {
       const removed = profileDocsLive.find(d => d.id === docId);
       await studentService.removeDocument(docId);

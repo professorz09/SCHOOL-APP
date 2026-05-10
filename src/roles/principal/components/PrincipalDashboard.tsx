@@ -4,7 +4,7 @@ import {
   Wallet, MapPin, ChevronRight, Bell, ClipboardCheck, Clock,
   Settings, UserCog, CalendarCheck, Sparkles,
   Calendar, GraduationCap, ArrowRight, TrendingUp, AlertCircle, BarChart3,
-  Library, Cake,
+  Library,
 } from 'lucide-react';
 import { studentService } from '@/modules/students/student.service';
 import { staffService } from '@/modules/staff/staff.service';
@@ -14,6 +14,7 @@ import { apiPrincipal } from '@/lib/apiClient';
 import { supabase } from '@/lib/supabase';
 import { PrincipalView } from '@/roles/principal/pages/PrincipalLayout';
 import { useAuthStore } from '@/store/authStore';
+import { useUIStore } from '@/store/uiStore';
 import { useAcademicYear } from '@/shared/context/AcademicYearContext';
 import { SalaryReminderCard } from '@/roles/principal/components/SalaryReminderCard';
 
@@ -21,7 +22,14 @@ interface Props {
   onNavigate: (view: PrincipalView) => void;
 }
 
-type Action = { icon: React.ReactNode; label: string; view: PrincipalView; tint: string };
+type Action = {
+  icon: React.ReactNode; label: string; view: PrincipalView; tint: string;
+  /** When true, the tile renders greyed out, ignores taps, and shows
+   *  `disabledReason` as a toast on click. Used by the Transport tile
+   *  when super-admin has set max_vehicles=0 for this school. */
+  disabled?: boolean;
+  disabledReason?: string;
+};
 type Hub = {
   key: 'STUDENTS' | 'STAFF' | 'ACADEMICS' | 'OPERATIONS';
   label: string;
@@ -62,17 +70,141 @@ export const PrincipalDashboard: React.FC<Props> = ({ onNavigate }) => {
     id: string; vehicleNo: string; routeName: string; driverName: string;
     isLive: boolean; lastPing: string | null; currentStop: string;
   }[]>([]);
-  // Upcoming birthdays (next 7 days inclusive of today). Computed from each
-  // student's DOB by stripping the year and comparing month/day to today.
-  const [birthdays, setBirthdays] = useState<{
-    id: string; name: string; className: string; section: string;
-    dob: string; daysAway: number; isToday: boolean;
-  }[]>([]);
+  // Total live count, separate from `vehicles` (which is sliced at 2
+  // for the dashboard tile grid). Earlier the "N on road" badge used
+  // vehicles.length so a fleet of 5 live buses read "2 on road" —
+  // misleading. This holds the real count for the badge.
+  const [liveCount, setLiveCount] = useState(0);
+  // Transport service kill-switch — set by super-admin via
+  // schools.max_vehicles. 0 → tile + Live Buses widget hidden, every
+  // vehicle-write blocked at the DB trigger anyway. NULL/undefined =
+  // unlimited (legacy default for older schools).
+  const [maxVehicles, setMaxVehicles] = useState<number | null>(null);
+  useEffect(() => {
+    if (!session?.schoolId) return;
+    let cancelled = false;
+    supabase.from('schools').select('max_vehicles').eq('id', session.schoolId).maybeSingle()
+      .then(({ data }) => {
+        if (cancelled) return;
+        setMaxVehicles((data as { max_vehicles: number | null } | null)?.max_vehicles ?? null);
+      });
+    return () => { cancelled = true; };
+  }, [session?.schoolId]);
+  const transportEnabled = maxVehicles !== 0; // null + any positive number → on
+  // "Needs your attention" — pending approvals + unresolved complaints,
+  // newest first, capped to a small list. Replaces the birthday widget
+  // which now lives only on the teacher's home (and only for students
+  // they actually teach). Principals don't usually wish students happy
+  // birthday personally, so the screen real estate is better spent on
+  // items that block downstream work — leave/result approvals, parent
+  // complaints, etc.
+  const [attentionItems, setAttentionItems] = useState<Array<{
+    id: string;
+    kind: 'APPROVAL' | 'COMPLAINT';
+    title: string;
+    sub: string;
+    createdAt: string;
+  }>>([]);
   // liveClasses state was removed when the "Live Classes" panel was
   // dropped. The setter call below is preserved as a no-op (variable
   // intentionally unused) so the parallel Promise.all keeps its shape
   // and we don't accidentally drop the attendance-records query that
   // also informs the alert counter elsewhere.
+
+  // Pull /api/transport/live + merge with static vehicle metadata.
+  // Single source of truth used by both the initial load AND the
+  // Realtime subscription handler so they don't drift in shape.
+  type LiveRow = {
+    vehicleId: string; lat: number | null; lng: number | null;
+    speedKmh: number | null; lastSeen: string;
+    isLive: boolean; isTracking: boolean;
+    currentStopIdx: number | null; tripStartedAt: string | null;
+  };
+  const loadAndMergeLive = async (
+    allVehicles: Awaited<ReturnType<typeof transportService.getVehicles>>,
+  ): Promise<typeof vehicles> => {
+    let liveRows: LiveRow[] = [];
+    try {
+      const sess = await supabase.auth.getSession();
+      const token = sess.data.session?.access_token;
+      const res = await fetch('/api/transport/live', {
+        headers: token ? { authorization: `Bearer ${token}` } : {},
+      });
+      if (res.ok) {
+        const j = await res.json();
+        if (j.ok && Array.isArray(j.data)) liveRows = j.data as LiveRow[];
+      }
+    } catch (e) {
+      console.warn('[dashboard] /transport/live fetch failed', e);
+    }
+    const liveById = new Map<string, LiveRow>();
+    for (const r of liveRows) liveById.set(r.vehicleId, r);
+
+    const merged = allVehicles
+      .filter(v => v.isActive)
+      .map(v => {
+        const live = liveById.get(v.id);
+        return { v, live };
+      })
+      .filter(x => x.live?.isLive)
+      .sort((a, b) =>
+        new Date(b.live!.lastSeen).getTime() - new Date(a.live!.lastSeen).getTime(),
+      );
+    // Update the real count BEFORE slicing so the badge always
+    // reflects the actual fleet-wide live total, not the displayed
+    // (capped) tile count.
+    setLiveCount(merged.length);
+    return merged
+      .slice(0, 2)
+      .map(({ v, live }) => {
+        const stops = v.stops ?? [];
+        const idx = live!.currentStopIdx;
+        const currentStop = idx !== null && idx >= 0 && idx < stops.length
+          ? stops[idx].name
+          : 'En Route';
+        return {
+          id:         v.id,
+          vehicleNo:  v.vehicleNo,
+          routeName:  v.routeName,
+          driverName: v.driverName,
+          isLive:     true,
+          lastPing:   live!.lastSeen,
+          currentStop,
+        };
+      });
+  };
+
+  // ── Realtime subscription — vehicle_live changes flow in here.
+  // Postgres Changes streams INSERT/UPDATE events for this school's
+  // vehicle_live rows. On each event we re-merge with cached vehicle
+  // metadata and update the panel without a full /transport/live
+  // round-trip. Falls back gracefully if Realtime is disabled in the
+  // Supabase project (channel.subscribe rejects → we just skip).
+  useEffect(() => {
+    if (!session?.schoolId) return;
+    const channel = supabase
+      .channel(`vehicle-live-${session.schoolId}`)
+      .on(
+        'postgres_changes',
+        { event: '*', schema: 'public', table: 'vehicle_live', filter: `school_id=eq.${session.schoolId}` },
+        async () => {
+          // Cheap full re-merge; vehicle list stays small (<30) so
+          // recomputing the top-2 is faster than a partial update.
+          try {
+            const allVehicles = transportService.getVehicles();
+            const merged = await loadAndMergeLive(allVehicles);
+            setVehicles(merged);
+          } catch { /* ignore */ }
+        },
+      )
+      .subscribe();
+    // removeChannel fully tears down the WebSocket binding —
+    // unsubscribe alone leaves the channel handle dangling on
+    // some Supabase JS versions and can leak listeners across
+    // logout/login cycles.
+    return () => { void supabase.removeChannel(channel); };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [session?.schoolId]);
 
   useEffect(() => {
     const load = async () => {
@@ -135,65 +267,39 @@ export const PrincipalDashboard: React.FC<Props> = ({ onNavigate }) => {
       // Stash so the next mount paints instantly with the last seen
       // numbers while the fresh fetch is still in flight.
       try { sessionStorage.setItem(STATS_CACHE_KEY, JSON.stringify(next)); } catch { /* quota / private mode */ }
-      // Vehicles shown on dashboard = currently LIVE only (driver has the
-      // tracking app open and pinged GPS in the last 5 min). The earlier
-      // logic showed every is_active vehicle which clutters the screen
-      // off-hours when none are actually moving. Cap to 2 cards so the
-      // section stays compact even on a 30-bus fleet.
-      const LIVE_WINDOW_MS = 5 * 60 * 1000;
-      const liveNow = Date.now();
-      const liveVehicles = allVehicles
-        .filter(v => v.isActive)
-        .map(v => {
-          const rawTs = v.currentLocation?.timestamp;
-          // Number.isFinite guards against malformed timestamps (e.g. driver
-          // app pushed "yesterday") which produce NaN — old code treated NaN
-          // as "not live" silently; explicit guard documents intent.
-          const pingTs = rawTs ? new Date(rawTs).getTime() : null;
-          const validPing = pingTs !== null && Number.isFinite(pingTs);
-          const isLive = validPing && (liveNow - (pingTs as number)) <= LIVE_WINDOW_MS;
-          return { v, isLive, pingTs: validPing ? pingTs : null };
-        })
-        .filter(x => x.isLive)
-        .sort((a, b) => (b.pingTs ?? 0) - (a.pingTs ?? 0))
-        .slice(0, 2)
-        .map(({ v, isLive, pingTs }) => {
-          const stops = v.stops ?? [];
-          return {
-            id: v.id,
-            vehicleNo: v.vehicleNo,
-            routeName: v.routeName,
-            driverName: v.driverName,
-            isLive,
-            lastPing: pingTs ? new Date(pingTs).toISOString() : null,
-            // Crash-safe: stops can be null/undefined for older records.
-            currentStop: stops[Math.floor(stops.length / 2)]?.name ?? 'En Route',
-          };
-        });
+      // Vehicles shown on dashboard come from vehicle_live (real GPS
+      // pings from the driver client). Earlier logic read a stale
+      // in-memory field that no driver actually wrote to.
+      // Realtime subscription below keeps this live without polling.
+      const liveVehicles = await loadAndMergeLive(allVehicles);
       setVehicles(liveVehicles);
 
-      // Birthdays — bucket students by days-until-next-birthday and keep
-      // only those happening within the next 7 days. We ignore the year on
-      // the DOB so a 2009-05-08 birthday matches 2026-05-08.
-      const today0 = new Date();
-      today0.setHours(0, 0, 0, 0);
-      const upcoming = students
-        .filter(s => !!s.dob)
-        .map(s => {
-          const dob = new Date(s.dob);
-          if (Number.isNaN(dob.getTime())) return null;
-          const next = new Date(today0.getFullYear(), dob.getMonth(), dob.getDate());
-          if (next < today0) next.setFullYear(today0.getFullYear() + 1);
-          const daysAway = Math.round((next.getTime() - today0.getTime()) / 86400000);
-          return {
-            id: s.id, name: s.name, className: s.className, section: s.section,
-            dob: s.dob, daysAway, isToday: daysAway === 0,
-          };
-        })
-        .filter((x): x is NonNullable<typeof x> => x !== null && x.daysAway <= 7)
-        .sort((a, b) => a.daysAway - b.daysAway)
-        .slice(0, 8);
-      setBirthdays(upcoming);
+      // "Needs your attention" feed — interleave pending approvals +
+      // unresolved complaints, newest first. We surface the 6 most-recent
+      // overall; a separate count-bubble in each row's header tells the
+      // principal there's more to see in the dedicated tab.
+      const attApprovals = approvals
+        .filter(a => a.status === 'PENDING')
+        .map(a => ({
+          id: a.id,
+          kind: 'APPROVAL' as const,
+          title: a.subject || `${a.type.replace('_', ' ')} request`,
+          sub: `${a.fromName}${a.fromClass ? ` · ${a.fromClass}` : ''} · ${a.type.replace('_', ' ')}`,
+          createdAt: a.createdAt,
+        }));
+      const attComplaints = complaints
+        .filter(c => c.status !== 'RESOLVED' && c.status !== 'REJECTED')
+        .map(c => ({
+          id: c.id,
+          kind: 'COMPLAINT' as const,
+          title: c.subject,
+          sub: `${c.isAnonymous ? 'Anonymous' : c.fromName}${c.fromClass ? ` · ${c.fromClass}` : ''} · ${c.from}`,
+          createdAt: c.createdAt,
+        }));
+      const merged = [...attApprovals, ...attComplaints]
+        .sort((a, b) => (b.createdAt ?? '').localeCompare(a.createdAt ?? ''))
+        .slice(0, 6);
+      setAttentionItems(merged);
       } catch (e) {
         // Surface a single toast so the principal knows the dashboard is
         // showing stale data rather than silently rendering empty cards.
@@ -234,12 +340,12 @@ export const PrincipalDashboard: React.FC<Props> = ({ onNavigate }) => {
       items: [
         { icon: <Users size={20}/>,         label: 'Staff List',  view: 'STAFF',            tint: 'bg-blue-50 text-blue-600' },
         { icon: <CalendarCheck size={20}/>, label: 'Attendance',  view: 'STAFF_ATTENDANCE', tint: 'bg-teal-50 text-teal-600' },
-        // Salary tile removed — pay / edit-salary lives inside each staff
-        // profile's Salary tab now, so a separate ledger entry was just a
-        // duplicate route. SalaryLedger view itself stays mounted in the
-        // layout for backward compat with any deep-links + the Salary
-        // Reminder widget which still pushes here.
         { icon: <Wallet size={20}/>,        label: 'Expenses',    view: 'EXPENSES',         tint: 'bg-red-50 text-red-500' },
+        // Assets moved here from Academics — inventory / library are
+        // custodial duties (who issued, who returned), so it sits more
+        // naturally with the people-and-admin hub. Keeps ACADEMICS at 4
+        // tiles too.
+        { icon: <Library size={20}/>,       label: 'Assets',      view: 'ASSETS',           tint: 'bg-amber-50 text-amber-600' },
       ],
     },
     {
@@ -252,7 +358,6 @@ export const PrincipalDashboard: React.FC<Props> = ({ onNavigate }) => {
         { icon: <GraduationCap size={20}/>, label: 'Exams',     view: 'EXAMS',        tint: 'bg-rose-50 text-rose-600' },
         { icon: <Clock size={20}/>,         label: 'Timetable', view: 'TIMETABLE',    tint: 'bg-fuchsia-50 text-fuchsia-600' },
         { icon: <CalendarCheck size={20}/>, label: 'Attendance',view: 'ATTENDANCE',   tint: 'bg-teal-50 text-teal-600' },
-        { icon: <Library size={20}/>,       label: 'Assets',    view: 'ASSETS',       tint: 'bg-amber-50 text-amber-600' },
         { icon: <ArrowRight size={20}/>,    label: 'Promotion', view: 'PROMOTION',    tint: 'bg-emerald-50 text-emerald-600' },
       ],
     },
@@ -263,7 +368,13 @@ export const PrincipalDashboard: React.FC<Props> = ({ onNavigate }) => {
       gradient: 'from-amber-500 to-orange-500',
       ring: 'ring-amber-300',
       items: [
-        { icon: <Bus size={20}/>,            label: 'Transport',  view: 'TRANSPORT_MGMT', tint: 'bg-orange-50 text-orange-500' },
+        // Transport tile stays visible always — but when super-admin
+        // has set max_vehicles=0, it's disabled (no onClick, locked
+        // appearance). Hiding it would confuse principals who think
+        // the feature was removed; greyed-out tile makes the
+        // "service not enabled" state obvious without losing the
+        // affordance for when admin enables it later.
+        { icon: <Bus size={20}/>,            label: 'Transport',  view: 'TRANSPORT_MGMT', tint: 'bg-orange-50 text-orange-500', disabled: !transportEnabled, disabledReason: 'Transport service abhi enable nahi hai. Super-admin se kahein.' },
         { icon: <Bell size={20}/>,           label: 'Notices',    view: 'NOTICES',        tint: 'bg-sky-50 text-sky-600' },
         { icon: <ClipboardCheck size={20}/>, label: 'Approvals',  view: 'APPROVALS',      tint: 'bg-indigo-50 text-indigo-600' },
         { icon: <CircleAlert size={20}/>,    label: 'Complaints', view: 'COMPLAINTS',     tint: 'bg-rose-50 text-rose-600' },
@@ -366,13 +477,38 @@ export const PrincipalDashboard: React.FC<Props> = ({ onNavigate }) => {
                 {hub.label} Actions
               </div>
               <div className="grid grid-cols-4 lg:grid-cols-8 gap-2 lg:gap-3">
-                {hub.items.map(({ icon, label, view, tint }) => (
-                  <button key={label} onClick={() => { onNavigate(view); setOpenHub(null); }}
-                    className="flex flex-col items-center gap-1.5 lg:gap-2 p-2 lg:p-3 rounded-xl active:scale-95 hover:bg-slate-50 transition-all">
-                    <div className={`w-11 h-11 lg:w-14 lg:h-14 rounded-2xl flex items-center justify-center ${tint}`}>{icon}</div>
-                    <span className="text-[9px] lg:text-[11px] font-black text-slate-600 uppercase tracking-wide text-center leading-tight">{label}</span>
-                  </button>
-                ))}
+                {hub.items.map(item => {
+                  const { icon, label, view, tint } = item;
+                  const isDisabled = (item as { disabled?: boolean }).disabled === true;
+                  const reason = (item as { disabledReason?: string }).disabledReason;
+                  return (
+                    <button
+                      key={label}
+                      onClick={() => {
+                        if (isDisabled) {
+                          if (reason) useUIStore.getState().showToast(reason, 'info');
+                          return;
+                        }
+                        onNavigate(view);
+                        setOpenHub(null);
+                      }}
+                      className={`flex flex-col items-center gap-1.5 lg:gap-2 p-2 lg:p-3 rounded-xl transition-all ${
+                        isDisabled
+                          ? 'cursor-not-allowed opacity-50'
+                          : 'active:scale-95 hover:bg-slate-50'
+                      }`}>
+                      <div className={`relative w-11 h-11 lg:w-14 lg:h-14 rounded-2xl flex items-center justify-center ${tint}`}>
+                        {icon}
+                        {isDisabled && (
+                          <span className="absolute -top-1 -right-1 w-4 h-4 rounded-full bg-slate-400 text-white text-[8px] font-black flex items-center justify-center" aria-hidden>
+                            🔒
+                          </span>
+                        )}
+                      </div>
+                      <span className="text-[9px] lg:text-[11px] font-black text-slate-600 uppercase tracking-wide text-center leading-tight">{label}</span>
+                    </button>
+                  );
+                })}
               </div>
             </div>
           );
@@ -410,44 +546,51 @@ export const PrincipalDashboard: React.FC<Props> = ({ onNavigate }) => {
       {/* ── Salary Reminder Widget ─────────────────────────────────────── */}
       <SalaryReminderCard onNavigate={onNavigate} />
 
-      {/* ── Birthdays — only renders when at least one student has a
-            birthday in the next 7 days. Today's birthdays get a confetti
-            tint; the rest show "in N days". Tap the row to jump into the
-            student's profile via the STUDENTS view. */}
-      {birthdays.length > 0 && (
+      {/* ── Needs your attention — pending approvals + open complaints,
+            newest first. Tapping a row routes to the relevant tab. Hidden
+            entirely when both queues are empty so the dashboard doesn't
+            carry a perpetual "all clear" panel. */}
+      {attentionItems.length > 0 && (
         <div className="bg-white rounded-2xl border border-slate-100 shadow-sm p-4 lg:p-5">
           <div className="flex items-center justify-between mb-3">
             <div className="flex items-center gap-2.5">
-              <div className="w-10 h-10 lg:w-11 lg:h-11 rounded-xl bg-gradient-to-br from-pink-400 to-rose-500 flex items-center justify-center text-white shadow-md">
-                <Cake size={18}/>
+              <div className="w-10 h-10 lg:w-11 lg:h-11 rounded-xl bg-gradient-to-br from-amber-400 to-rose-500 flex items-center justify-center text-white shadow-md">
+                <CircleAlert size={18}/>
               </div>
               <div>
-                <h2 className="text-sm lg:text-base font-black text-slate-900 uppercase tracking-tight">Birthdays</h2>
-                <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">Next 7 days</p>
+                <h2 className="text-sm lg:text-base font-black text-slate-900 uppercase tracking-tight">Needs Attention</h2>
+                <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">Pending approvals & complaints</p>
               </div>
             </div>
             <span className="text-[10px] font-black text-rose-700 bg-rose-50 px-2 py-1 rounded-full uppercase tracking-widest">
-              {birthdays.filter(b => b.isToday).length > 0
-                ? `${birthdays.filter(b => b.isToday).length} today`
-                : `${birthdays.length} upcoming`}
+              {attentionItems.length} open
             </span>
           </div>
           <div className="space-y-1.5">
-            {birthdays.map(b => (
-              <button key={b.id} onClick={() => onNavigate('STUDENTS')}
-                className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-xl border text-left transition-colors ${b.isToday ? 'border-rose-200 bg-rose-50' : 'border-slate-100 bg-slate-50 hover:bg-slate-100'}`}>
-                <div className={`w-9 h-9 rounded-xl flex items-center justify-center shrink-0 ${b.isToday ? 'bg-rose-500 text-white' : 'bg-white text-rose-500 border border-rose-100'}`}>
-                  <Cake size={14}/>
-                </div>
-                <div className="flex-1 min-w-0">
-                  <p className="text-xs font-black text-slate-900 truncate">{b.name}</p>
-                  <p className="text-[10px] font-bold text-slate-500">Class {b.className}-{b.section}</p>
-                </div>
-                <span className={`text-[10px] font-black px-2 py-1 rounded-full uppercase tracking-widest shrink-0 ${b.isToday ? 'bg-rose-500 text-white' : 'bg-white text-slate-600 border border-slate-200'}`}>
-                  {b.isToday ? '🎉 Today' : b.daysAway === 1 ? 'Tomorrow' : `In ${b.daysAway} days`}
-                </span>
-              </button>
-            ))}
+            {attentionItems.map(item => {
+              const isApproval = item.kind === 'APPROVAL';
+              return (
+                <button
+                  key={`${item.kind}:${item.id}`}
+                  onClick={() => onNavigate(isApproval ? 'APPROVALS' : 'COMPLAINTS')}
+                  className="w-full flex items-center gap-3 px-3 py-2.5 rounded-xl border border-slate-100 bg-slate-50 hover:bg-slate-100 text-left transition-colors">
+                  <div className={`w-9 h-9 rounded-xl flex items-center justify-center shrink-0 ${
+                    isApproval ? 'bg-indigo-50 text-indigo-600' : 'bg-rose-50 text-rose-500'
+                  }`}>
+                    {isApproval ? <ClipboardCheck size={14}/> : <CircleAlert size={14}/>}
+                  </div>
+                  <div className="flex-1 min-w-0">
+                    <p className="text-xs font-black text-slate-900 truncate">{item.title}</p>
+                    <p className="text-[10px] font-bold text-slate-500 truncate">{item.sub}</p>
+                  </div>
+                  <span className={`text-[9px] font-black px-2 py-1 rounded-full uppercase tracking-widest shrink-0 border ${
+                    isApproval ? 'bg-white text-indigo-600 border-indigo-200' : 'bg-white text-rose-600 border-rose-200'
+                  }`}>
+                    {isApproval ? 'Approve' : 'Open'}
+                  </span>
+                </button>
+              );
+            })}
           </div>
         </div>
       )}
@@ -464,7 +607,7 @@ export const PrincipalDashboard: React.FC<Props> = ({ onNavigate }) => {
             <div className="flex items-center gap-2">
               <h2 className="text-sm lg:text-base font-black text-slate-900 uppercase tracking-tight">Live Buses</h2>
               <span className="flex items-center gap-1 text-[9px] font-black text-emerald-700 bg-emerald-50 border border-emerald-200 px-2 py-0.5 rounded-full uppercase">
-                <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse"/> {vehicles.length} on road
+                <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse"/> {liveCount} on road
               </span>
             </div>
             <button onClick={() => onNavigate('TRANSPORT_MGMT')} className="flex items-center gap-0.5 text-[10px] lg:text-xs font-black text-blue-600 uppercase tracking-wide hover:text-blue-700">

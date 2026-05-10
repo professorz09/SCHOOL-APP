@@ -81,11 +81,21 @@ principalRouter.get('/users/list', requireAuth, PRINCIPAL, async (req, res) => {
 
     if (role) q = q.eq('role', role);
     if (search) {
-      // Escape ILIKE wildcards so a literal % / _ in a phone number can't
-      // widen the match (defence-in-depth — Supabase parameterises these,
-      // but explicit escaping makes the intent obvious in the logs).
-      const safe = search.replace(/[%_]/g, ch => `\\${ch}`);
-      q = q.or(`name.ilike.%${safe}%,mobile_number.ilike.%${safe}%`);
+      // Escape both ILIKE wildcards (% / _) AND PostgREST or-filter
+      // delimiters (comma, paren, dot, double-quote). Without the
+      // second layer, a search value containing a literal `,` would
+      // break out of the value slot and extend the OR clause with
+      // attacker-controlled conditions — still bounded by RLS, but
+      // strictly more rows than intended.
+      const safe = search
+        .replace(/[%_]/g, ch => `\\${ch}`)
+        // Drop characters that have meaning to PostgREST or() syntax.
+        // No legitimate name / phone search needs these.
+        .replace(/[,()."]/g, '')
+        .slice(0, 60); // bound the LIKE pattern length too
+      if (safe) {
+        q = q.or(`name.ilike.%${safe}%,mobile_number.ilike.%${safe}%`);
+      }
     }
 
     const { data, count, error } = await q
@@ -365,6 +375,17 @@ principalRouter.post('/expense/add', requireAuth, PRINCIPAL, async (req, res) =>
       category: string; description: string; amount: number; date: string; approvedBy?: string;
     }>(req, ['category', 'description', 'amount', 'date']);
 
+    // Validate amount: positive, integer, within sane bound. Without
+    // these the row would happily accept negatives (which break the
+    // expense category totals) or 12-digit garbage from a malicious
+    // client bypassing the form.
+    if (!Number.isFinite(body.amount) || body.amount <= 0) {
+      throw new ApiError(400, 'Amount must be positive');
+    }
+    if (body.amount > 100_000_000) {
+      throw new ApiError(400, 'Expense amount exceeds the per-transaction cap.');
+    }
+
     // Stamp the active academic year so reports / analytics scope correctly.
     // Falls back to NULL only if the school has no active year (shouldn't
     // happen in normal flow but doesn't block the write).
@@ -393,6 +414,18 @@ principalRouter.post('/expense/update', requireAuth, PRINCIPAL, async (req, res)
       id: string; category?: string; description?: string;
       amount?: number; date?: string;
     }>(req, ['id']);
+
+    // Same amount validation as /expense/add — reject negatives and
+    // 12-digit-large values regardless of which write path the client
+    // used.
+    if (body.amount !== undefined) {
+      if (!Number.isFinite(body.amount) || body.amount <= 0) {
+        throw new ApiError(400, 'Amount must be positive');
+      }
+      if (body.amount > 100_000_000) {
+        throw new ApiError(400, 'Expense amount exceeds the per-transaction cap.');
+      }
+    }
 
     const patch: Record<string, unknown> = {};
     if (body.category    !== undefined) patch.category    = body.category;
@@ -655,6 +688,18 @@ principalRouter.post('/leave/submit', requireAuth, async (req, res) => {
       fromDate: body.fromDate, toDate: body.toDate, reason: body.reason,
     };
 
+    // Diagnostic — log the resolved insert payload + the key role
+    // adminDb is using so we can confirm in dev logs whether the
+    // server-side client is actually service_role at runtime.
+    const supaKey = (process.env.SUPABASE_SERVICE_ROLE_KEY ?? '').slice(0, 30);
+    console.log('[leave/submit]', {
+      school_id:    req.user.school_id,
+      requested_by: req.user.id,
+      caller_role:  req.user.role,
+      entity_id:    body.studentId,
+      keyHead:      supaKey,
+    });
+
     const { data, error } = await adminDb.from('approvals').insert({
       school_id:    req.user.school_id,
       request_type: 'LEAVE',
@@ -665,11 +710,10 @@ principalRouter.post('/leave/submit', requireAuth, async (req, res) => {
       status:       'PENDING',
     }).select(APPROVAL_FIELDS).single();
     if (error) {
-      // Surface the actual Postgres error verbatim — the earlier
-      // "service role key missing" rewrite was over-aggressive and
-      // misled users into chasing an env-config issue when the real
-      // cause was something else (trigger CHECK violation, FK,
-      // etc.). Pass the raw message through.
+      // Surface the actual Postgres error verbatim along with a
+      // diagnostic prefix so we can spot RLS hits vs other failures
+      // in the toast itself while debugging.
+      console.error('[leave/submit] insert error:', error);
       throw new ApiError(500, error.message);
     }
     ok(res, data, 201);
@@ -706,6 +750,366 @@ principalRouter.get('/leave/list', requireAuth, async (req, res) => {
     ok(res, data ?? []);
   } catch (err) { fail(res, err); }
 });
+
+// ─── Admission drafts (TEACHER → PRINCIPAL approval flow) ─────────────────
+//
+// Schools where the principal delegates admission paperwork to a trusted
+// teacher (typically the office in-charge). The teacher fills the standard
+// admission form, but instead of inserting into `students` directly we drop
+// the full payload into `approvals` as request_type='ADMISSION'. The principal
+// reviews, optionally edits, and on approve the client re-runs the regular
+// /students/create with the (possibly edited) payload — keeping all the side
+// effects of the existing admission code path (auth provisioning, fee schedule
+// generation, audit logs) instead of duplicating them here.
+//
+// Permission to submit drafts is gated by a school-wide row in
+// staff_permissions (permission='CREATE_ADMISSION', section_id IS NULL). The
+// principal toggles this from the staff profile page. PRINCIPAL itself can
+// always submit (and would normally use the direct flow anyway).
+
+async function teacherHasCreateAdmission(userId: string, schoolId: string): Promise<boolean> {
+  const { data: staff } = await adminDb
+    .from('staff').select('id').eq('user_id', userId).eq('school_id', schoolId).maybeSingle();
+  if (!staff) return false;
+  const { data: perm } = await adminDb
+    .from('staff_permissions')
+    .select('id')
+    .eq('staff_id', (staff as { id: string }).id)
+    .eq('school_id', schoolId)
+    .eq('permission', 'CREATE_ADMISSION')
+    .is('section_id', null)
+    .maybeSingle();
+  return !!perm;
+}
+
+// Rate limits — guards against a teacher's compromised account or buggy
+// retry loop spamming the approvals queue. 10 drafts / 10 min is well above
+// any real onboarding (one teacher rarely admits more than a handful of
+// students per session) but tight enough that runaway behaviour gets
+// caught before the queue is unusable. Keyed per user so two teachers
+// don't share a budget.
+const admissionDraftSubmitLimiter = rateLimit({
+  windowMs: 10 * 60_000,
+  limit: 10,
+  keyGenerator: (req: any) => `adm-draft:${req.user?.id ?? req.ip}`,
+  validate: { keyGeneratorIpFallback: false },
+  standardHeaders: 'draft-7',
+  legacyHeaders: false,
+  message: { ok: false, error: 'Too many admission drafts in a short window. Please wait 10 minutes.' },
+});
+
+// Reject endpoint can also be abused (mass-reject every PENDING row would
+// silently lose teacher work). 60/hr per principal is generous for normal
+// review pace and well below "scripted attack" rates.
+const admissionDraftMutateLimiter = rateLimit({
+  windowMs: 60 * 60_000,
+  limit: 60,
+  keyGenerator: (req: any) => `adm-mutate:${req.user?.id ?? req.ip}`,
+  validate: { keyGeneratorIpFallback: false },
+  standardHeaders: 'draft-7',
+  legacyHeaders: false,
+  message: { ok: false, error: 'Too many approve/reject actions in an hour — slow down.' },
+});
+
+// Permission toggling spam = silent privilege escalation/revocation noise
+// in the audit log. 30/hr is plenty for real principal usage.
+const permToggleLimiter = rateLimit({
+  windowMs: 60 * 60_000,
+  limit: 30,
+  keyGenerator: (req: any) => `perm-toggle:${req.user?.id ?? req.ip}`,
+  validate: { keyGeneratorIpFallback: false },
+  standardHeaders: 'draft-7',
+  legacyHeaders: false,
+  message: { ok: false, error: 'Too many permission changes in an hour — slow down.' },
+});
+
+// POST /api/principal/admission/draft-submit — write a teacher-filled
+// admission as a PENDING approval. Body is the full admission form payload;
+// we don't validate field-by-field here (the principal will see exactly
+// what was submitted in the review panel and can fix anything before
+// approve).
+principalRouter.post('/admission/draft-submit', requireAuth, admissionDraftSubmitLimiter, async (req, res) => {
+  try {
+    if (req.user.role !== 'TEACHER' && req.user.role !== 'PRINCIPAL') {
+      throw new ApiError(403, 'Only teachers / principals can submit admission drafts');
+    }
+    if (req.user.role === 'TEACHER') {
+      const allowed = await teacherHasCreateAdmission(req.user.id, req.user.school_id!);
+      if (!allowed) {
+        throw new ApiError(403, 'You don\'t have permission to submit admission drafts. Ask the principal to enable it on your profile.');
+      }
+    }
+
+    const body = requireBody<{
+      payload: Record<string, unknown>;
+      studentName: string;
+      admissionNo: string;
+    }>(req, ['payload', 'studentName', 'admissionNo']);
+
+    if (!body.studentName.trim()) throw new ApiError(400, 'Student name is required');
+    if (!body.admissionNo.trim()) throw new ApiError(400, 'Admission no is required');
+
+    // Reject if the admission no is already in use within this school —
+    // saves the principal a wasted review cycle on a duplicate.
+    const { data: dupe } = await adminDb
+      .from('students').select('id')
+      .eq('school_id', req.user.school_id!)
+      .eq('admission_no', body.admissionNo.trim())
+      .maybeSingle();
+    if (dupe) throw new ApiError(409, `Admission no "${body.admissionNo.trim()}" already exists in this school`);
+
+    const newValue = {
+      // Summary fields surface in the approvals queue list (same fields
+      // the LEAVE flow uses).
+      fromName:        body.studentName.trim(),
+      fromRole:        'TEACHER',
+      fromAdmissionNo: body.admissionNo.trim(),
+      subject:         `Admission: ${body.studentName.trim()}`,
+      description:     `New admission draft submitted by ${req.user.name}.`,
+      // Full form payload for the principal review panel.
+      draftPayload:    body.payload,
+    };
+
+    const { data, error } = await adminDb.from('approvals').insert({
+      school_id:    req.user.school_id,
+      request_type: 'ADMISSION',
+      requested_by: req.user.id,
+      entity_type:  'admission',
+      entity_id:    null,
+      new_value:    newValue,
+      status:       'PENDING',
+    }).select(APPROVAL_FIELDS).single();
+    if (error) {
+      // eslint-disable-next-line no-console
+      console.error('[admission/draft-submit] insert error:', error);
+      throw new ApiError(500, error.message);
+    }
+    ok(res, data, 201);
+  } catch (err) { fail(res, err); }
+});
+
+// GET /api/principal/admission/my-drafts — teacher's own pending drafts so
+// they can see what's still in the queue. PRINCIPAL gets all PENDING +
+// REJECTED admission rows from the regular approvals queue, this is the
+// teacher-only view.
+principalRouter.get('/admission/my-drafts', requireAuth, async (req, res) => {
+  try {
+    if (req.user.role !== 'TEACHER') throw new ApiError(403, 'Teachers only');
+    const { data, error } = await adminDb
+      .from('approvals').select(APPROVAL_FIELDS)
+      .eq('school_id', req.user.school_id!)
+      .eq('request_type', 'ADMISSION')
+      .eq('requested_by', req.user.id)
+      .order('created_at', { ascending: false })
+      .limit(50);
+    if (error) throw new ApiError(500, error.message);
+    ok(res, data ?? []);
+  } catch (err) { fail(res, err); }
+});
+
+// POST /api/principal/admission/draft-approve — mark approval APPROVED. The
+// client is expected to have already created the student row via the regular
+// /students/create endpoint (re-using all the admission-day side effects).
+// This route just closes the loop on the approval row so it stops showing in
+// the queue.
+principalRouter.post('/admission/draft-approve', requireAuth, PRINCIPAL, admissionDraftMutateLimiter, async (req, res) => {
+  try {
+    const body = requireBody<{ approvalId: string; createdStudentId?: string }>(req, ['approvalId']);
+    const { data: existing } = await adminDb
+      .from('approvals').select('id, school_id, status, request_type')
+      .eq('id', body.approvalId).maybeSingle();
+    type Row = { id: string; school_id: string; status: string; request_type: string };
+    const row = existing as Row | null;
+    if (!row) throw new ApiError(404, 'Approval not found');
+    if (row.school_id !== req.user.school_id) throw new ApiError(403, 'Different school');
+    if (row.request_type !== 'ADMISSION') throw new ApiError(400, 'Not an admission approval');
+    if (row.status !== 'PENDING') throw new ApiError(409, `Already ${row.status.toLowerCase()}`);
+
+    const { data, error } = await adminDb.from('approvals')
+      .update({
+        status: 'APPROVED',
+        entity_id: body.createdStudentId ?? null,
+        approved_by: req.user.id,
+        approved_at: new Date().toISOString(),
+      })
+      .eq('id', body.approvalId)
+      .select(APPROVAL_FIELDS)
+      .single();
+    if (error) throw new ApiError(500, error.message);
+    ok(res, data);
+  } catch (err) { fail(res, err); }
+});
+
+// POST /api/principal/admission/draft-reject — hard delete. A draft is just
+// a holding row for the teacher's submission; rejecting it should leave no
+// trace on the principal's queue or the teacher's "my drafts" view (per
+// product call: "wo bs ek draft hi to hai"). The audit_logs entry written
+// by principalService.rejectAdmissionDraft preserves who rejected and the
+// reason for compliance, separate from the approvals table.
+principalRouter.post('/admission/draft-reject', requireAuth, PRINCIPAL, admissionDraftMutateLimiter, async (req, res) => {
+  try {
+    const body = requireBody<{ approvalId: string; reason: string }>(req, ['approvalId', 'reason']);
+    if (!body.reason.trim()) throw new ApiError(400, 'Reason required');
+
+    const { data: existing } = await adminDb
+      .from('approvals').select('id, school_id, status, request_type')
+      .eq('id', body.approvalId).maybeSingle();
+    type Row = { id: string; school_id: string; status: string; request_type: string };
+    const row = existing as Row | null;
+    if (!row) throw new ApiError(404, 'Approval not found');
+    if (row.school_id !== req.user.school_id) throw new ApiError(403, 'Different school');
+    if (row.request_type !== 'ADMISSION') throw new ApiError(400, 'Not an admission approval');
+    if (row.status !== 'PENDING') throw new ApiError(409, `Already ${row.status.toLowerCase()}`);
+
+    const { error } = await adminDb.from('approvals')
+      .delete()
+      .eq('id', body.approvalId);
+    if (error) throw new ApiError(500, error.message);
+    // Echo back the deleted id + reason so the client can update its
+    // optimistic state and audit log without another fetch.
+    ok(res, { id: body.approvalId, deleted: true, reason: body.reason.trim() });
+  } catch (err) { fail(res, err); }
+});
+
+// POST /api/principal/admission/draft-update — principal edits the draft
+// payload before approving. Stores the updated payload into new_value and
+// keeps status PENDING. The approve route then reads the latest version.
+principalRouter.post('/admission/draft-update', requireAuth, PRINCIPAL, admissionDraftMutateLimiter, async (req, res) => {
+  try {
+    const body = requireBody<{
+      approvalId: string;
+      payload: Record<string, unknown>;
+      studentName: string;
+      admissionNo: string;
+    }>(req, ['approvalId', 'payload', 'studentName', 'admissionNo']);
+
+    const { data: existing } = await adminDb
+      .from('approvals').select('id, school_id, status, request_type, new_value')
+      .eq('id', body.approvalId).maybeSingle();
+    type Row = {
+      id: string; school_id: string; status: string;
+      request_type: string; new_value: Record<string, unknown> | null;
+    };
+    const row = existing as Row | null;
+    if (!row) throw new ApiError(404, 'Approval not found');
+    if (row.school_id !== req.user.school_id) throw new ApiError(403, 'Different school');
+    if (row.request_type !== 'ADMISSION') throw new ApiError(400, 'Not an admission approval');
+    if (row.status !== 'PENDING') throw new ApiError(409, 'Cannot edit a closed draft');
+
+    const newValue = {
+      ...(row.new_value ?? {}),
+      fromName:        body.studentName.trim(),
+      fromAdmissionNo: body.admissionNo.trim(),
+      subject:         `Admission: ${body.studentName.trim()}`,
+      draftPayload:    body.payload,
+    };
+
+    const { data, error } = await adminDb.from('approvals')
+      .update({ new_value: newValue })
+      .eq('id', body.approvalId)
+      .select(APPROVAL_FIELDS)
+      .single();
+    if (error) throw new ApiError(500, error.message);
+    ok(res, data);
+  } catch (err) { fail(res, err); }
+});
+
+// ─── School-wide staff permissions (CREATE_ADMISSION etc.) ────────────────
+//
+// The existing /permissions/set endpoint is per-section. School-wide
+// permissions (no section context, just "this teacher can do X across the
+// whole school") need their own surface so the per-class UI doesn't
+// confuse the two namespaces.
+
+// GET /api/principal/staff-permissions/school-wide?staffId=... — returns the
+// list of school-wide permissions currently granted to one staff member.
+principalRouter.get('/staff-permissions/school-wide', requireAuth, PRINCIPAL, async (req, res) => {
+  try {
+    const staffId = String(req.query.staffId ?? '');
+    if (!staffId) throw new ApiError(400, 'staffId required');
+
+    const { data: ay } = await adminDb
+      .from('academic_years').select('id')
+      .eq('school_id', req.user.school_id!).eq('is_active', true).maybeSingle();
+    if (!ay) { ok(res, []); return; }
+
+    const { data, error } = await adminDb
+      .from('staff_permissions')
+      .select('permission')
+      .eq('school_id', req.user.school_id!)
+      .eq('staff_id', staffId)
+      .eq('academic_year_id', (ay as { id: string }).id)
+      .is('section_id', null);
+    if (error) throw new ApiError(500, error.message);
+    ok(res, ((data ?? []) as Array<{ permission: string }>).map(r => r.permission));
+  } catch (err) { fail(res, err); }
+});
+
+// POST /api/principal/staff-permissions/school-wide/set — toggle one school-
+// wide permission. Body: { staffId, permission, enabled }.
+principalRouter.post('/staff-permissions/school-wide/set', requireAuth, PRINCIPAL, permToggleLimiter, async (req, res) => {
+  try {
+    const body = requireBody<{ staffId: string; permission: string; enabled: boolean }>(
+      req, ['staffId', 'permission', 'enabled']);
+    if (!['CREATE_ADMISSION'].includes(body.permission)) {
+      throw new ApiError(400, `Unknown school-wide permission: ${body.permission}`);
+    }
+
+    const { data: ay } = await adminDb
+      .from('academic_years').select('id')
+      .eq('school_id', req.user.school_id!).eq('is_active', true).maybeSingle();
+    if (!ay) throw new ApiError(400, 'No active academic year');
+    const ayId = (ay as { id: string }).id;
+
+    if (body.enabled) {
+      // Idempotent: insert ignoring duplicate (unique idx on
+      // staff_id+section_id+permission).
+      const { error } = await adminDb.from('staff_permissions').insert({
+        school_id:        req.user.school_id,
+        staff_id:         body.staffId,
+        academic_year_id: ayId,
+        section_id:       null,
+        permission:       body.permission,
+      });
+      if (error && !error.message.includes('duplicate')) throw new ApiError(500, error.message);
+    } else {
+      const { error } = await adminDb.from('staff_permissions').delete()
+        .eq('school_id', req.user.school_id!)
+        .eq('staff_id', body.staffId)
+        .eq('academic_year_id', ayId)
+        .is('section_id', null)
+        .eq('permission', body.permission);
+      if (error) throw new ApiError(500, error.message);
+    }
+    ok(res, { ok: true });
+  } catch (err) { fail(res, err); }
+});
+
+// GET /api/principal/staff-permissions/me — the calling user's own
+// school-wide permissions, used by teacher UI to gate features.
+principalRouter.get('/staff-permissions/me', requireAuth, async (req, res) => {
+  try {
+    if (req.user.role !== 'TEACHER') { ok(res, []); return; }
+    const { data: staff } = await adminDb
+      .from('staff').select('id')
+      .eq('user_id', req.user.id).eq('school_id', req.user.school_id!).maybeSingle();
+    if (!staff) { ok(res, []); return; }
+    const { data: ay } = await adminDb
+      .from('academic_years').select('id')
+      .eq('school_id', req.user.school_id!).eq('is_active', true).maybeSingle();
+    if (!ay) { ok(res, []); return; }
+
+    const { data, error } = await adminDb
+      .from('staff_permissions').select('permission')
+      .eq('school_id', req.user.school_id!)
+      .eq('staff_id', (staff as { id: string }).id)
+      .eq('academic_year_id', (ay as { id: string }).id)
+      .is('section_id', null);
+    if (error) throw new ApiError(500, error.message);
+    ok(res, ((data ?? []) as Array<{ permission: string }>).map(r => r.permission));
+  } catch (err) { fail(res, err); }
+});
+
 
 // ─── Library — Books ──────────────────────────────────────────────────────────
 

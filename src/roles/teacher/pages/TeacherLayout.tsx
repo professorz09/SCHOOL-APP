@@ -2,7 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { useUIStore } from '@/store/uiStore';
 import {
   FileCheck2, ClipboardList, ScrollText, CircleAlert,
-  Bell, CalendarDays, Clock, Users, Sparkles, Play, BookOpen,
+  Bell, CalendarDays, Clock, Users, Sparkles, Play, BookOpen, UserPlus, Cake,
 } from 'lucide-react';
 import { teacherService } from '@/roles/teacher/teacher.service';
 import { AttendanceManager } from '@/modules/attendance/components/TeacherAttendanceManager';
@@ -13,8 +13,10 @@ import { TeacherNoticesView } from '@/modules/notices/components/TeacherNoticesV
 import { TeacherTimetableView } from '@/modules/timetable/components/TeacherTimetableView';
 import { TeacherStudentList } from '@/roles/teacher/components/TeacherStudentList';
 import { useAuthStore } from '@/store/authStore';
+import { principalService } from '@/roles/principal/principal.service';
+import { StudentsManager } from '@/modules/students/components/StudentsManager';
 
-type TeacherView = 'DASHBOARD' | 'ATTENDANCE' | 'TESTS' | 'EXAM_GEN' | 'COMPLAINTS' | 'NOTICES' | 'TIMETABLE' | 'STUDENTS';
+type TeacherView = 'DASHBOARD' | 'ATTENDANCE' | 'TESTS' | 'EXAM_GEN' | 'COMPLAINTS' | 'NOTICES' | 'TIMETABLE' | 'STUDENTS' | 'NEW_ADMISSION';
 
 interface TodayEntry {
   id: string;
@@ -42,7 +44,7 @@ const isPast = (endTime: string): boolean => {
 
 export const TeacherLayout: React.FC = () => {
   const [view, setView] = useState<TeacherView>('DASHBOARD');
-  const { isSubView, setSubView } = useUIStore();
+  const { isSubView, setSubView, showToast } = useUIStore();
   const goTo = (v: TeacherView) => { setView(v); setSubView(true); };
   const goBack = () => { setView('DASHBOARD'); setSubView(false); };
 
@@ -60,22 +62,57 @@ export const TeacherLayout: React.FC = () => {
   const [assignedClassCount, setAssignedClassCount] = useState<number | null>(null);
   const [studentCount, setStudentCount] = useState<number | null>(null);
   const [pendingTestCount, setPendingTestCount] = useState<number | null>(null);
+  // Upcoming birthdays in the teacher's own classes only. Principal's
+  // dashboard used to show this for every student in school; now it lives
+  // here, scoped to assigned sections, so the teacher can wish them in
+  // class without opening the full student list.
+  const [birthdays, setBirthdays] = useState<Array<{
+    id: string; name: string; className: string; section: string;
+    dob: string; daysAway: number; isToday: boolean;
+  }>>([]);
+  // School-wide permissions granted by the principal. Drives the
+  // optional "New Admission" tile — only teachers with
+  // CREATE_ADMISSION see it. `null` while loading; `[]` on failure
+  // (fail closed — no extra tiles unless the API confirms).
+  const [schoolPerms, setSchoolPerms] = useState<string[] | null>(null);
+
+  // Re-fetch on every dashboard re-entry so a permission revoked
+  // mid-session locks the tile within one navigation. Without this
+  // the teacher could keep tapping the (cached-as-unlocked) tile and
+  // hit a 403 toast on every submit.
+  useEffect(() => {
+    if (view !== 'DASHBOARD') return;
+    let cancelled = false;
+    principalService.getMySchoolWidePermissions()
+      .then(p => { if (!cancelled) setSchoolPerms(p); })
+      .catch(() => { if (!cancelled) setSchoolPerms([]); });
+    return () => { cancelled = true; };
+  }, [view]);
 
   useEffect(() => {
     teacherService.getTodayClasses().then(setTodayClasses).catch(() => setTodayClasses([]));
+    // Classes are the essential data for the teacher dashboard — lift
+    // the app-root splash once this resolves (success or failure) so
+    // the user doesn't see an empty "0 / 0 / 0" stats card flash
+    // between the auth loader and the populated dashboard.
     teacherService.getClasses().then(list => {
       setAssignedClassCount(list.length);
-      // Sum unique student count across classes — same student in two
-      // subjects shouldn't be double-counted.
       const ids = new Set<string>();
       for (const c of list) for (const s of c.students) ids.add(s.id);
       setStudentCount(ids.size);
-    }).catch(() => { setAssignedClassCount(0); setStudentCount(0); });
+      useUIStore.getState().setAppReady(true);
+    }).catch(() => {
+      setAssignedClassCount(0); setStudentCount(0);
+      useUIStore.getState().setAppReady(true);
+    });
     teacherService.getTests().then(list => {
       // "Pending" = results not yet uploaded. Best signal for "what needs
       // my attention" without an extra schema.
       setPendingTestCount(list.filter(t => !t.resultsUploaded).length);
     }).catch(() => setPendingTestCount(0));
+    teacherService.getMyStudentBirthdays()
+      .then(setBirthdays)
+      .catch(() => setBirthdays([]));
   }, []);
 
   if (view === 'ATTENDANCE')  return <AttendanceManager      onBack={goBack} />;
@@ -85,6 +122,19 @@ export const TeacherLayout: React.FC = () => {
   if (view === 'NOTICES')     return <TeacherNoticesView     onBack={goBack} />;
   if (view === 'TIMETABLE')   return <TeacherTimetableView   onBack={goBack} />;
   if (view === 'STUDENTS')    return <TeacherStudentList     onBack={goBack} />;
+  // Admission draft — gated by CREATE_ADMISSION (also enforced server-side
+  // in /admission/draft-submit, so direct API call from a teacher without
+  // permission still 403s).
+  if (view === 'NEW_ADMISSION') return (
+    // key forces a fresh mount each time the teacher reopens the
+    // form so HMR-stale state from a prior session can't sneak in.
+    <StudentsManager
+      key="teacher-admission-draft"
+      mode="TEACHER_DRAFT"
+      onBack={goBack}
+      onDraftDone={goBack}
+    />
+  );
 
   // Module grid — 7 daily-use teacher actions. 4-cols on mobile means tile
   // 8 sits on row 2 by itself; that's fine since "Helpdesk" is rare. Desktop
@@ -102,7 +152,13 @@ export const TeacherLayout: React.FC = () => {
     { icon: CalendarDays,  label: 'Timetable',  view: 'TIMETABLE',  color: 'text-sky-600'     },
     { icon: Users,         label: 'Students',   view: 'STUDENTS',   color: 'text-indigo-600'  },
     { icon: CircleAlert,   label: 'Helpdesk',   view: 'COMPLAINTS', color: 'text-rose-500'    },
+    // Admission tile is permanent — visible to every teacher so they
+    // know the feature exists. Tapping it without the CREATE_ADMISSION
+    // permission shows a hint toast instead of opening the form.
+    { icon: UserPlus, label: 'Admission', view: 'NEW_ADMISSION' as TeacherView, color: 'text-pink-600' },
   ];
+
+  const canAdmit = (schoolPerms ?? []).includes('CREATE_ADMISSION');
 
   return (
     <div className="flex flex-col gap-6 lg:gap-8 animate-in fade-in duration-300 px-5 lg:px-10 xl:px-16 max-w-7xl mx-auto w-full pt-4 lg:pt-8 pb-8 lg:pb-12">
@@ -165,15 +221,34 @@ export const TeacherLayout: React.FC = () => {
 
       {/* ── Module grid ────────────────────────────────────────────────── */}
       <div className="grid grid-cols-4 lg:grid-cols-7 gap-2.5 lg:gap-3">
-        {MODULES.map(({ icon: Icon, label, view: v, color }) => (
-          <button key={label} onClick={() => goTo(v)}
-            className="flex flex-col items-center justify-center gap-2 py-4 px-1 bg-white border border-slate-100 rounded-2xl shadow-sm active:scale-95 hover:shadow-md hover:border-slate-200 hover:-translate-y-0.5 transition-all">
-            <Icon size={24} className={color} strokeWidth={2} />
-            <span className="text-[10px] font-black uppercase tracking-wide text-slate-700 text-center leading-none whitespace-nowrap">
-              {label}
-            </span>
-          </button>
-        ))}
+        {MODULES.map(({ icon: Icon, label, view: v, color }) => {
+          // Admission tile is locked for teachers without the
+          // CREATE_ADMISSION permission. Render it dimmed + show a
+          // toast on tap instead of opening the form.
+          const locked = v === 'NEW_ADMISSION' && !canAdmit;
+          return (
+            <button
+              key={label}
+              onClick={() => {
+                if (locked) {
+                  showToast('Admission permission nahi hai — principal se enable karwayein.', 'info');
+                  return;
+                }
+                goTo(v);
+              }}
+              className={`flex flex-col items-center justify-center gap-2 py-4 px-1 bg-white border border-slate-100 rounded-2xl shadow-sm active:scale-95 hover:shadow-md hover:border-slate-200 hover:-translate-y-0.5 transition-all ${
+                locked ? 'opacity-60' : ''
+              }`}>
+              <Icon size={24} className={color} strokeWidth={2} />
+              <span className="text-[10px] font-black uppercase tracking-wide text-slate-700 text-center leading-none whitespace-nowrap">
+                {label}
+              </span>
+              {locked && (
+                <span className="text-[8px] font-black uppercase tracking-widest text-slate-400 leading-none">Locked</span>
+              )}
+            </button>
+          );
+        })}
       </div>
 
       {/* ── Today's Classes ────────────────────────────────────────────── */}
@@ -219,7 +294,10 @@ export const TeacherLayout: React.FC = () => {
                     </div>
                     <div className="flex items-center gap-1.5 mt-1 flex-wrap">
                       <span className="text-[11px] lg:text-xs font-bold text-slate-500">
-                        Class {entry.className}-{entry.section}
+                        {/* className already carries its own prefix
+                            (e.g. "Class 1", "Nursery", "11th Science"),
+                            so don't double-prepend "Class". */}
+                        {entry.className}{entry.section ? `-${entry.section}` : ''}
                       </span>
                       <span className="text-slate-300">·</span>
                       <Clock size={11} className="text-slate-400" />
@@ -261,6 +339,49 @@ export const TeacherLayout: React.FC = () => {
           </div>
         )}
       </section>
+
+      {/* ── Birthdays — only this teacher's students, next 7 days.
+          Hidden when nothing is upcoming so the dashboard doesn't carry
+          a perpetually empty card. */}
+      {birthdays.length > 0 && (
+        <section>
+          <div className="bg-white rounded-2xl border border-slate-100 shadow-sm p-4 lg:p-5">
+            <div className="flex items-center justify-between mb-3">
+              <div className="flex items-center gap-2.5">
+                <div className="w-10 h-10 lg:w-11 lg:h-11 rounded-xl bg-gradient-to-br from-pink-400 to-rose-500 flex items-center justify-center text-white shadow-md">
+                  <Cake size={18}/>
+                </div>
+                <div>
+                  <h2 className="text-sm lg:text-base font-black text-slate-900 uppercase tracking-tight">Birthdays</h2>
+                  <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">Your classes · Next 7 days</p>
+                </div>
+              </div>
+              <span className="text-[10px] font-black text-rose-700 bg-rose-50 px-2 py-1 rounded-full uppercase tracking-widest">
+                {birthdays.filter(b => b.isToday).length > 0
+                  ? `${birthdays.filter(b => b.isToday).length} today`
+                  : `${birthdays.length} upcoming`}
+              </span>
+            </div>
+            <div className="space-y-1.5">
+              {birthdays.map(b => (
+                <div key={b.id}
+                  className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-xl border ${b.isToday ? 'border-rose-200 bg-rose-50' : 'border-slate-100 bg-slate-50'}`}>
+                  <div className={`w-9 h-9 rounded-xl flex items-center justify-center shrink-0 ${b.isToday ? 'bg-rose-500 text-white' : 'bg-white text-rose-500 border border-rose-100'}`}>
+                    <Cake size={14}/>
+                  </div>
+                  <div className="flex-1 min-w-0">
+                    <p className="text-xs font-black text-slate-900 truncate">{b.name}</p>
+                    <p className="text-[10px] font-bold text-slate-500">Class {b.className}{b.section ? `-${b.section}` : ''}</p>
+                  </div>
+                  <span className={`text-[10px] font-black px-2 py-1 rounded-full uppercase tracking-widest shrink-0 ${b.isToday ? 'bg-rose-500 text-white' : 'bg-white text-slate-600 border border-slate-200'}`}>
+                    {b.isToday ? '🎉 Today' : b.daysAway === 1 ? 'Tomorrow' : `In ${b.daysAway} days`}
+                  </span>
+                </div>
+              ))}
+            </div>
+          </div>
+        </section>
+      )}
 
       {/* ── My Classes — quick reference roster of assigned class+sections.
           Skips on first paint (loading) so the empty state doesn't flash.

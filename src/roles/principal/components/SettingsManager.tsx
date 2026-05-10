@@ -1,5 +1,5 @@
 import React, { useEffect, useState, useRef } from 'react';
-import { ArrowLeft, Plus, Trash2, ChevronDown, ChevronUp, Save, QrCode, CreditCard, CheckCircle2, Lock, Eye, EyeOff, ShieldCheck, IndianRupee, Edit2, Building2, BookOpen, ChevronRight, X, Download, Database, History, ShieldOff, Unlock, Users, Search, KeyRound, AlertTriangle, Calendar } from 'lucide-react';
+import { ArrowLeft, Plus, Trash2, ChevronDown, ChevronUp, Save, QrCode, CreditCard, CheckCircle2, Lock, Eye, EyeOff, ShieldCheck, IndianRupee, Edit2, Building2, BookOpen, ChevronRight, X, Download, Database, History, ShieldOff, Unlock, Users, Search, KeyRound, AlertTriangle, Calendar, LogOut } from 'lucide-react';
 import { apiPrincipal } from '@/lib/apiClient';
 import { BackupCard } from '@/shared/components/BackupCard';
 import { supabase } from '@/lib/supabase';
@@ -39,6 +39,11 @@ export const SettingsManager: React.FC<Props> = ({ onBack, initialView }) => {
   const [qrUploading, setQrUploading] = useState(false);
   const [feeStructures, setFeeStructures] = useState<FeeStructureItem[]>([]);
   const [editingFs, setEditingFs] = useState<FeeStructureItem | null>(null);
+  // "Apply to whole class?" prompt after saving a CLASS-scoped fee
+  // structure. Replaces a window.confirm() that exposed the codespaces
+  // dev hostname as the dialog title.
+  const [applyFsTarget, setApplyFsTarget] = useState<FeeStructureItem | null>(null);
+  const [applyFsBusy, setApplyFsBusy] = useState(false);
   const [feeStructuresLoading, setFeeStructuresLoading] = useState(false);
   const [schoolInfo, setSchoolInfo] = useState<SchoolInfo>({
     name: '', tagline: '', address: '', city: '', state: '', pin: '',
@@ -69,6 +74,31 @@ export const SettingsManager: React.FC<Props> = ({ onBack, initialView }) => {
   const [pwShow, setPwShow] = useState(false);
   const [pwError, setPwError] = useState('');
   const [pwSaving, setPwSaving] = useState(false);
+  // Loading flag for the "sign out from other devices" button. Gates
+  // re-tap during the in-flight Supabase call so we don't fire two
+  // global token revocations in parallel.
+  const [signOutOthersBusy, setSignOutOthersBusy] = useState(false);
+
+  // Email-OTP 2FA — current state from public.users.email_otp_2fa.
+  // Loaded on mount so the toggle reflects what's persisted, not an
+  // optimistic placeholder. Only shown for principal / super-admin.
+  const [otp2faEnabled, setOtp2faEnabled] = useState<boolean | null>(null);
+  const [otp2faSaving, setOtp2faSaving] = useState(false);
+  useEffect(() => {
+    let cancelled = false;
+    if (!session?.userId) return;
+    if (session.role !== 'PRINCIPAL' && session.role !== 'SUPER_ADMIN') return;
+    (async () => {
+      try {
+        const { data } = await supabase.from('users').select('email_otp_2fa').eq('id', session.userId).maybeSingle();
+        if (cancelled) return;
+        setOtp2faEnabled(!!(data as { email_otp_2fa?: boolean } | null)?.email_otp_2fa);
+      } catch {
+        if (!cancelled) setOtp2faEnabled(false);
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [session?.userId, session?.role]);
 
   // Editor Mode
   const editorEnabled = useEditorModeStore(s => s.isActive());
@@ -76,7 +106,10 @@ export const SettingsManager: React.FC<Props> = ({ onBack, initialView }) => {
   const editorEnable  = useEditorModeStore(s => s.enable);
   const editorDisable = useEditorModeStore(s => s.disable);
   const editorRemMs   = useEditorModeStore(s => s.remainingMs);
-  const [editorConfirm, setEditorConfirm] = useState(false);
+  // Editor Mode confirmation went through a local boolean +
+  // inline modal earlier; both call sites (toggle and main button)
+  // now route through the global askMobileConfirm flow above, so
+  // there's no local state needed here anymore.
   // tick refreshes every second so the countdown display updates
   const [, setTick] = useState(0);
   useEffect(() => {
@@ -193,36 +226,42 @@ export const SettingsManager: React.FC<Props> = ({ onBack, initialView }) => {
 
       // After saving a CLASS-scoped structure, offer to fan it out to every
       // student in that class who doesn't yet have a schedule. Without this
-      // step the structure is dormant — students show "0 installments" even
-      // though their class is configured. We confirm because regeneration
-      // is destructive on existing unpaid rows; the server endpoint
-      // additionally guards by skipping students who already have any
-      // installments in the active year.
+      // step the structure is dormant. The decision goes through a modal
+      // (see applyFsTarget below) instead of window.confirm so the dialog
+      // title doesn't surface the codespaces dev hostname.
       const isClassScope = saved.structureType === 'CLASS'
         && saved.className && saved.className !== 'TRANSPORT' && saved.className !== 'ALL_CLASSES';
       if (isClassScope) {
-        const proceed = window.confirm(
-          `Apply this structure to all students of ${saved.className}?\n\n` +
-          `Students who already have a schedule for this year will be skipped.`,
-        );
-        if (proceed) {
-          try {
-            const result = await apiPrincipal.feeStructureApplyToClass({ structureId: saved.id });
-            showToast(
-              `Generated for ${result.generated} student${result.generated === 1 ? '' : 's'}` +
-              (result.skipped > 0 ? ` · ${result.skipped} already had a schedule` : ''),
-            );
-            return;
-          } catch (e) {
-            showToast(e instanceof Error ? e.message : 'Schedule generation failed', 'error');
-            return;
-          }
-        }
+        setApplyFsTarget(saved);
+        return;
       }
       showToast(`Fee structure "${saved.name}" saved`);
     } catch (e) {
       showToast(e instanceof Error ? e.message : 'Failed to save fee structure', 'error');
     }
+  };
+
+  const runApplyFs = async () => {
+    if (!applyFsTarget) return;
+    setApplyFsBusy(true);
+    try {
+      const result = await apiPrincipal.feeStructureApplyToClass({ structureId: applyFsTarget.id });
+      showToast(
+        `Generated for ${result.generated} student${result.generated === 1 ? '' : 's'}` +
+        (result.skipped > 0 ? ` · ${result.skipped} already had a schedule` : ''),
+      );
+      setApplyFsTarget(null);
+    } catch (e) {
+      showToast(e instanceof Error ? e.message : 'Schedule generation failed', 'error');
+    } finally {
+      setApplyFsBusy(false);
+    }
+  };
+
+  const skipApplyFs = () => {
+    if (!applyFsTarget) return;
+    showToast(`Fee structure "${applyFsTarget.name}" saved`);
+    setApplyFsTarget(null);
   };
 
   const handleSaveSchoolInfo = async () => {
@@ -283,12 +322,28 @@ export const SettingsManager: React.FC<Props> = ({ onBack, initialView }) => {
             </div>
             <button
               disabled={editorPending}
-              onClick={() => {
+              onClick={async () => {
                 if (editorPending) return;
                 if (editorEnabled) {
                   editorDisable().catch(e => showToast(e instanceof Error ? e.message : 'Disable failed', 'error'));
-                } else {
-                  setEditorConfirm(true);
+                  return;
+                }
+                // Type-to-confirm gate. Replaces the simple yes/no
+                // confirm — that was one careless tap away from
+                // opening Editor Mode. Mobile last-4 is something
+                // only the principal knows from memory.
+                const last4 = (session?.mobileNumber ?? '').replace(/\D/g, '').slice(-4);
+                if (last4.length !== 4) {
+                  showToast('Mobile number missing on profile — set it first', 'error');
+                  return;
+                }
+                const ok = await useUIStore.getState().askMobileConfirm({
+                  title: 'Enable Editor Mode?',
+                  message: 'Editor Mode 30 minute baad automatically band ho jayega. Sensitive cheejen change ho sakti hain — sirf zarurat par enable karein.',
+                  expectedLast4: last4,
+                });
+                if (ok) {
+                  editorEnable().catch(e => showToast(e instanceof Error ? e.message : 'Enable failed', 'error'));
                 }
               }}
               className={`px-4 py-2 rounded-xl text-[11px] font-black transition-colors disabled:opacity-50 ${
@@ -310,42 +365,9 @@ export const SettingsManager: React.FC<Props> = ({ onBack, initialView }) => {
           )}
         </div>
 
-        {/* Confirm enable dialog */}
-        {editorConfirm && (
-          <div className="fixed inset-0 z-50 bg-black/50 flex items-end sm:items-center justify-center p-4"
-               onClick={() => setEditorConfirm(false)}>
-            <div className="bg-white rounded-2xl shadow-2xl w-full max-w-sm p-5"
-                 onClick={e => e.stopPropagation()}>
-              <div className="flex items-center gap-3 mb-4">
-                <div className="w-10 h-10 rounded-xl bg-amber-100 flex items-center justify-center">
-                  <Unlock size={20} className="text-amber-600" />
-                </div>
-                <div>
-                  <h3 className="font-black text-slate-900 text-sm">Enable Editor Mode?</h3>
-                  <p className="text-[10px] font-bold text-slate-400 mt-0.5">Auto-disables after 30 minutes</p>
-                </div>
-              </div>
-              <p className="text-xs font-bold text-slate-600 mb-4 leading-relaxed">
-                Editor Mode allows changing student class assignments, roll numbers, and other
-                locked fields. Only enable when you need to make corrections.
-              </p>
-              <div className="flex gap-2">
-                <button onClick={() => setEditorConfirm(false)}
-                  className="flex-1 py-3 bg-slate-100 text-slate-700 font-black text-xs rounded-xl">
-                  Cancel
-                </button>
-                <button onClick={() => {
-                    editorEnable()
-                      .catch(e => showToast(e instanceof Error ? e.message : 'Enable failed', 'error'));
-                    setEditorConfirm(false);
-                  }}
-                  className="flex-1 py-3 bg-amber-500 text-white font-black text-xs rounded-xl">
-                  Enable
-                </button>
-              </div>
-            </div>
-          </div>
-        )}
+        {/* Editor-mode confirmation moved to the global
+            <MobileConfirmModal /> mounted at the app root — single
+            source of truth for type-to-confirm gates. */}
 
         {/* Academic Year summary — moved from the dashboard hero so the
             chip lives where year-level configuration belongs. Shows the
@@ -539,6 +561,7 @@ export const SettingsManager: React.FC<Props> = ({ onBack, initialView }) => {
 
   // FEE STRUCT — list view
   if (view === 'FEE_STRUCT') return (
+    <>
     <div className="w-full bg-slate-50 flex flex-col animate-in slide-in-from-right-8 duration-300">
       {renderHeader('Fee Structure')}
       <div className="flex-1 overflow-y-auto p-4  space-y-4">
@@ -623,6 +646,35 @@ export const SettingsManager: React.FC<Props> = ({ onBack, initialView }) => {
         </div>
       </div>
     </div>
+
+    {applyFsTarget && (
+      <div className="fixed inset-0 z-50 bg-black/50 flex items-end lg:items-center justify-center p-4 animate-in fade-in duration-150"
+        onClick={() => !applyFsBusy && skipApplyFs()}>
+        <div onClick={e => e.stopPropagation()}
+          className="bg-white rounded-3xl w-full lg:max-w-md p-5 lg:p-6 shadow-2xl animate-in slide-in-from-bottom-4 lg:zoom-in-95 duration-200">
+          <p className="text-base font-black text-slate-900">Apply to whole class?</p>
+          <p className="text-[12px] font-bold text-slate-500 mt-2 leading-relaxed">
+            Generate this fee schedule for every student of <span className="text-slate-900 font-black">{applyFsTarget.className}</span>?
+            Students who already have a schedule for this year will be skipped.
+          </p>
+          <div className="flex gap-3 mt-5">
+            <button
+              onClick={skipApplyFs}
+              disabled={applyFsBusy}
+              className="flex-1 py-3 bg-slate-100 text-slate-700 font-black rounded-2xl text-sm uppercase tracking-widest active:scale-95 transition-transform disabled:opacity-50">
+              Skip
+            </button>
+            <button
+              onClick={runApplyFs}
+              disabled={applyFsBusy}
+              className="flex-1 py-3 bg-indigo-600 hover:bg-indigo-700 text-white font-black rounded-2xl text-sm uppercase tracking-widest active:scale-95 transition-transform disabled:opacity-60">
+              {applyFsBusy ? 'Generating…' : 'Apply'}
+            </button>
+          </div>
+        </div>
+      </div>
+    )}
+    </>
   );
 
   // FEE STRUCT — create/edit form (delegates to FeeStructureForm component)
@@ -762,7 +814,29 @@ export const SettingsManager: React.FC<Props> = ({ onBack, initialView }) => {
               : 'Enable to allow changes to class assignments, roll numbers, and other locked student fields.'}
           </p>
           <button
-            onClick={() => editorEnabled ? editorDisable() : setEditorConfirm(true)}
+            onClick={async () => {
+              if (editorEnabled) {
+                editorDisable().catch(e => showToast(e instanceof Error ? e.message : 'Disable failed', 'error'));
+                return;
+              }
+              // Same type-to-confirm gate as the toggle above. Both
+              // call paths route through askMobileConfirm so a casual
+              // tap can't open Editor Mode regardless of which UI
+              // surface the principal touched.
+              const last4 = (session?.mobileNumber ?? '').replace(/\D/g, '').slice(-4);
+              if (last4.length !== 4) {
+                showToast('Mobile number missing on profile — set it first', 'error');
+                return;
+              }
+              const ok = await useUIStore.getState().askMobileConfirm({
+                title: 'Enable Editor Mode?',
+                message: 'Editor Mode 30 minute baad automatically band ho jayega. Sensitive cheejen change ho sakti hain — sirf zarurat par enable karein.',
+                expectedLast4: last4,
+              });
+              if (ok) {
+                editorEnable().catch(e => showToast(e instanceof Error ? e.message : 'Enable failed', 'error'));
+              }
+            }}
             className={`w-full flex items-center justify-center gap-2 py-3 rounded-xl font-black text-xs transition-colors ${
               editorEnabled
                 ? 'bg-rose-100 text-rose-700 active:bg-rose-200'
@@ -805,6 +879,104 @@ export const SettingsManager: React.FC<Props> = ({ onBack, initialView }) => {
 
           <button onClick={handleChangePassword} disabled={pwSaving} className="w-full flex items-center justify-center gap-2 bg-slate-900 text-white font-black text-xs uppercase tracking-widest py-3 rounded-2xl active:scale-95 transition-transform disabled:opacity-60">
             {pwSaving ? 'Saving…' : <><Save size={14} /> Update Password</>}
+          </button>
+        </div>
+
+        {/* Email-OTP 2FA — principal / super-admin only. Off by
+            default. When on, every login goes through password
+            then a 6-digit code from email. Mobile / parent / student
+            / teacher / driver accounts don't see this card at all
+            (they login by mobile and most don't have email on file). */}
+        {(session?.role === 'PRINCIPAL' || session?.role === 'SUPER_ADMIN') && (
+          <div className="bg-white rounded-2xl border border-slate-100 shadow-sm p-4 space-y-3">
+            <div className="flex items-center gap-2 mb-1">
+              <ShieldCheck size={16} className="text-emerald-600" />
+              <p className="text-[10px] font-black uppercase tracking-widest text-slate-400">Two-Factor Auth (Email OTP)</p>
+            </div>
+            <p className="text-[11px] font-bold text-slate-500 leading-relaxed">
+              Login ke time password ke baad ek <span className="text-slate-900">6-digit code</span> aapke email par bheja jayega. Bina us code ke koi sign-in nahi kar sakta — chahe password leak ho.
+              {!session?.email && (
+                <span className="block mt-1.5 text-amber-700 font-black">
+                  ⚠ Profile par email set karein pehle (Supabase Dashboard ya principal Users panel se).
+                </span>
+              )}
+            </p>
+            <button
+              onClick={async () => {
+                if (otp2faSaving || otp2faEnabled === null) return;
+                if (!otp2faEnabled && !session?.email) {
+                  showToast('Profile par email set karein pehle', 'error');
+                  return;
+                }
+                setOtp2faSaving(true);
+                const next = !otp2faEnabled;
+                try {
+                  const res = await fetch('/api/auth/2fa/toggle', {
+                    method: 'POST',
+                    headers: {
+                      'content-type': 'application/json',
+                      'authorization': `Bearer ${(await supabase.auth.getSession()).data.session?.access_token ?? ''}`,
+                    },
+                    body: JSON.stringify({ enabled: next }),
+                  });
+                  if (!res.ok) {
+                    const j = await res.json().catch(() => ({}));
+                    throw new Error(j.error ?? `Failed (HTTP ${res.status})`);
+                  }
+                  setOtp2faEnabled(next);
+                  showToast(next ? '2FA enabled — next login me OTP step add ho gaya' : '2FA disabled');
+                } catch (e) {
+                  showToast(e instanceof Error ? e.message : 'Could not update 2FA', 'error');
+                } finally {
+                  setOtp2faSaving(false);
+                }
+              }}
+              disabled={otp2faSaving || otp2faEnabled === null || (!otp2faEnabled && !session?.email)}
+              className={`w-full flex items-center justify-between gap-2 font-black text-xs uppercase tracking-widest py-3 px-4 rounded-2xl active:scale-95 transition-transform disabled:opacity-60 border ${
+                otp2faEnabled
+                  ? 'bg-emerald-50 text-emerald-800 border-emerald-200 hover:bg-emerald-100'
+                  : 'bg-slate-50 text-slate-700 border-slate-200 hover:bg-slate-100'
+              }`}
+            >
+              <span>{otp2faEnabled === null ? 'Loading…' : otp2faEnabled ? 'Email OTP 2FA — ON' : 'Email OTP 2FA — OFF'}</span>
+              <span className={`w-9 h-5 rounded-full p-0.5 transition-colors ${otp2faEnabled ? 'bg-emerald-500' : 'bg-slate-300'}`}>
+                <span className={`block w-4 h-4 rounded-full bg-white shadow-sm transition-transform ${otp2faEnabled ? 'translate-x-4' : 'translate-x-0'}`} />
+              </span>
+            </button>
+          </div>
+        )}
+
+        {/* Sign-out from other devices — Supabase native scope:'others'
+            keeps THIS session alive and invalidates every other refresh
+            token. Useful when the principal forgets to log out at home
+            / a shared computer / suspects unauthorised access. No new
+            tables, no listing — just a single safety button. */}
+        <div className="bg-white rounded-2xl border border-slate-100 shadow-sm p-4 space-y-3">
+          <div className="flex items-center gap-2 mb-1">
+            <LogOut size={16} className="text-amber-600" />
+            <p className="text-[10px] font-black uppercase tracking-widest text-slate-400">Active Sessions</p>
+          </div>
+          <p className="text-[11px] font-bold text-slate-500 leading-relaxed">
+            Agar kahin aur (school computer, ghar, kisi aur device par) login chod diya ho, ya suspect ho ki kisi ne access kiya hai — ye button dabate hi sabhi <span className="text-slate-900">dusre devices</span> se logout ho jayega. Yeh device login rahega.
+          </p>
+          <button
+            onClick={async () => {
+              if (signOutOthersBusy) return;
+              setSignOutOthersBusy(true);
+              try {
+                const { error } = await supabase.auth.signOut({ scope: 'others' });
+                if (error) throw error;
+                showToast('Sabhi dusre devices se logout ho gaya');
+              } catch (e) {
+                showToast(e instanceof Error ? e.message : 'Sign-out failed', 'error');
+              } finally {
+                setSignOutOthersBusy(false);
+              }
+            }}
+            disabled={signOutOthersBusy}
+            className="w-full flex items-center justify-center gap-2 bg-amber-50 text-amber-800 border border-amber-200 hover:bg-amber-100 font-black text-xs uppercase tracking-widest py-3 rounded-2xl active:scale-95 transition-transform disabled:opacity-60"
+          >
+            {signOutOthersBusy ? 'Logging out…' : <><LogOut size={14} /> Dusre devices se logout karein</>}
           </button>
         </div>
       </div>

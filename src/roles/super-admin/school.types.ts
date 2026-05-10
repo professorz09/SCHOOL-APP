@@ -28,6 +28,13 @@ export interface School {
   maxStudents: number | null;
   /** Same as maxStudents but for staff. */
   maxStaff: number | null;
+  /** Hard cap on active transport vehicles. SUPER_ADMIN only.
+   *    NULL → unlimited (legacy default for older schools)
+   *    0    → transport service DISABLED — principal can't add the
+   *           first vehicle, and the Transport tile hides on the
+   *           dashboard so the school looks clean.
+   *    N    → up to N active vehicles. */
+  maxVehicles: number | null;
 }
 
 export interface SchoolAcademicYear {

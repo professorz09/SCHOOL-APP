@@ -260,10 +260,18 @@ export const studentService = {
       .eq('school_id', schoolId).eq('is_active', true);
 
     if (search) {
-      // Escape % and _ so a literal phone number / admission code with
-      // those chars doesn't accidentally widen the match.
-      const safe = search.replace(/[%_]/g, ch => `\\${ch}`);
-      q = q.or(`name.ilike.%${safe}%,admission_no.ilike.%${safe}%`);
+      // Escape ILIKE wildcards AND PostgREST or-filter delimiters so a
+      // literal `,` / paren / dot / quote in the search value can't
+      // break out of the value slot and inject extra OR conditions.
+      // RLS bounds the worst case to the same school, but defensive
+      // sanitisation is still right.
+      const safe = search
+        .replace(/[%_]/g, ch => `\\${ch}`)
+        .replace(/[,()."]/g, '')
+        .slice(0, 60);
+      if (safe) {
+        q = q.or(`name.ilike.%${safe}%,admission_no.ilike.%${safe}%`);
+      }
     }
 
     const { data, count, error } = await q

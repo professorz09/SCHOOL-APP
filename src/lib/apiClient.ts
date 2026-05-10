@@ -446,6 +446,38 @@ export const apiPrincipal = {
   leaveList: (studentId: string) =>
     get<any[]>(`/principal/leave/list?studentId=${encodeURIComponent(studentId)}`),
 
+  // Admission drafts (TEACHER → PRINCIPAL approval flow). Teacher submits
+  // the full admission form payload as a PENDING approval row; principal
+  // reviews / edits / approves; on approve the regular /students/create is
+  // called with the (possibly edited) payload to perform the real admission.
+  admissionDraftSubmit: (body: {
+    payload: Record<string, unknown>;
+    studentName: string;
+    admissionNo: string;
+  }) => post<any>('/principal/admission/draft-submit', body),
+  admissionMyDrafts: () =>
+    get<any[]>('/principal/admission/my-drafts'),
+  admissionDraftApprove: (approvalId: string, createdStudentId?: string) =>
+    post<any>('/principal/admission/draft-approve', { approvalId, createdStudentId }),
+  admissionDraftReject: (approvalId: string, reason: string) =>
+    post<any>('/principal/admission/draft-reject', { approvalId, reason }),
+  admissionDraftUpdate: (body: {
+    approvalId: string;
+    payload: Record<string, unknown>;
+    studentName: string;
+    admissionNo: string;
+  }) => post<any>('/principal/admission/draft-update', body),
+
+  // School-wide staff permissions (currently just CREATE_ADMISSION). Per-
+  // section permissions live in /principal/permissions/* — keep these two
+  // namespaces separate so the UI can't accidentally cross-write.
+  staffPermissionsSchoolWide: (staffId: string) =>
+    get<string[]>(`/principal/staff-permissions/school-wide?staffId=${encodeURIComponent(staffId)}`),
+  staffPermissionsSchoolWideSet: (body: { staffId: string; permission: string; enabled: boolean }) =>
+    post<{ ok: true }>('/principal/staff-permissions/school-wide/set', body),
+  staffPermissionsMine: () =>
+    get<string[]>('/principal/staff-permissions/me'),
+
   // Unified Inventory — flat school-wide asset list (no per-student loans).
   inventoryList: () =>
     get<Array<{
@@ -578,6 +610,14 @@ export const apiAdminSchools = {
   setAiLimit: (schoolId: string, monthlyLimit: number) =>
     put<{ schoolId: string; monthlyLimit: number; unlimited: boolean }>(
       `/admin/schools/${schoolId}/ai-limit`, { monthlyLimit },
+    ),
+  // Atomically update auth + users + schools rows for a principal mobile
+  // change. Bare-bones update on schools.principal_phone alone leaves
+  // auth.users.email stale and breaks login — ALWAYS go through this
+  // route from any super-admin UI that mutates the principal's mobile.
+  updatePrincipalMobile: (schoolId: string, newPhone: string) =>
+    post<{ ok: true; mobile: string; principalName?: string; unchanged?: boolean }>(
+      `/admin/schools/${schoolId}/update-principal-mobile`, { newPhone },
     ),
 };
 

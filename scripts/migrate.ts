@@ -49,7 +49,8 @@ function main() {
   console.log(`     1. Open: ${dashboardUrl}`);
   console.log('     2. Paste the contents of supabase/_apply.sql');
   console.log('     3. Click "Run"');
-  console.log('\n   After it succeeds, run:  npm run db:seed');
+  console.log('\n   After it succeeds, manually create your first super-admin');
+  console.log('   via the Supabase dashboard (auth.users + public.users row).');
 }
 
 main();

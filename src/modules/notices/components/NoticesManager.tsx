@@ -92,10 +92,19 @@ export const NoticesManager: React.FC<Props> = ({ onBack }) => {
   };
 
   const handleDelete = async (notice: Notice) => {
-    await noticeService.delete(notice.id);
-    setNotices(prev => prev.filter(n => n.id !== notice.id));
-    showToast('Notice deleted', 'info');
-    setConfirmDelete(null);
+    // Earlier this updated UI optimistically AFTER the awaited
+    // delete — fine on success, but a server failure left the
+    // notice still in the list with no error toast (the throw
+    // bubbled silently into onClick's promise sink). Wrap the call.
+    try {
+      await noticeService.delete(notice.id);
+      setNotices(prev => prev.filter(n => n.id !== notice.id));
+      showToast('Notice deleted', 'info');
+    } catch (e) {
+      showToast(e instanceof Error ? e.message : 'Could not delete notice', 'error');
+    } finally {
+      setConfirmDelete(null);
+    }
   };
 
   const renderHeader = (title: string, back: () => void, action?: React.ReactNode) => (

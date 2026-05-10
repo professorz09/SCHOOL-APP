@@ -31,6 +31,11 @@ export const StudentComplaintsView: React.FC<Props> = ({ onBack }) => {
   const [shown, setShown] = useState(50);
   const [form, setForm] = useState({ subject: '', description: '', isAnonymous: false });
   const [isSubmitting, setIsSubmitting] = useState(false);
+  // Modal state for the hide-from-dashboard confirmation. Replaces a
+  // window.confirm() that exposed the dev URL ("foo-5000.app.github.dev
+  // says...") which looked broken to a non-technical parent.
+  const [hideTarget, setHideTarget] = useState<StudentComplaint | null>(null);
+  const [isHiding, setIsHiding] = useState(false);
 
   const loadComplaints = useCallback(() => {
     studentDashboardService.getComplaints().then(setComplaints);
@@ -39,35 +44,16 @@ export const StudentComplaintsView: React.FC<Props> = ({ onBack }) => {
   useEffect(() => { loadComplaints(); }, [loadComplaints]);
   useRealtimeTable('complaints', loadComplaints);
 
-  // Anti-spam cap: max 3 complaints PER CHILD per IST day (per migration 0056).
-  // DB trigger enforces it server-side; UI mirrors the budget so the user
-  // sees it before submitting. `complaints` here is already scoped to the
-  // active selected student via studentDashboardService.getComplaints, so
-  // counting them all is correct.
-  const istToday = new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Kolkata' });
-  const todayCount = complaints.filter(c => (c.createdAt ?? '').slice(0, 10) === istToday).length;
-  const DAILY_CAP = 3;
-  const reachedCap = todayCount >= DAILY_CAP;
-
-  // Anonymous complaints get a separate, stricter cap of 1 per rolling 7
-  // days. The DB trigger (migration 0070) is the source of truth; this is
-  // a UX mirror so the option grays out before the user types a paragraph.
-  const sevenDaysAgo = Date.now() - 7 * 86_400_000;
-  const recentAnonCount = complaints.filter(c =>
-    c.isAnonymous && new Date(c.createdAt).getTime() >= sevenDaysAgo,
-  ).length;
-  const anonCapReached = recentAnonCount >= 1;
+  // Caps live entirely on the DB triggers now (3/day + 7/week for normal,
+  // 1/30 days for anonymous — see migration 0094). UI used to mirror the
+  // counters as visible badges + pre-block submit, but that confused
+  // students into thinking the school had assigned them a quota and also
+  // broke when hidden rows were excluded from the count. Cleaner: just
+  // try to insert; surface whatever the trigger says verbatim if it
+  // refuses.
 
   const handleSubmit = async () => {
     if (!form.subject || !form.description) { showToast('Subject and description required', 'error'); return; }
-    if (reachedCap) {
-      showToast('Daily limit reached — only 3 complaints per day. Contact the school office.', 'error');
-      return;
-    }
-    if (form.isAnonymous && anonCapReached) {
-      showToast('Anonymous limit: only 1 anonymous complaint per 7 days', 'error');
-      return;
-    }
     setIsSubmitting(true);
     try {
       const c = await studentDashboardService.submitComplaint(form.subject, form.description, form.isAnonymous);
@@ -96,22 +82,9 @@ export const StudentComplaintsView: React.FC<Props> = ({ onBack }) => {
     <div className="w-full lg:max-w-5xl lg:mx-auto bg-slate-50 flex flex-col animate-in slide-in-from-right-8 duration-300">
       {renderHeader('File Complaint', () => setView('LIST'))}
       <div className="flex-1 overflow-y-auto p-4  space-y-4">
-        {reachedCap ? (
-          <div className="bg-rose-50 border border-rose-200 rounded-2xl p-3 flex gap-2">
-            <AlertTriangle size={14} className="text-rose-500 mt-0.5 shrink-0"/>
-            <p className="text-[11px] font-bold text-rose-700 leading-relaxed">
-              Daily limit reached — only 3 complaints per day. Misuse rokne ke liye limit hai.
-              Please contact the school office for another submission.
-            </p>
-          </div>
-        ) : (
-          <div className="bg-blue-50 border border-blue-100 rounded-2xl p-3 flex items-center justify-between gap-2">
-            <p className="text-xs font-bold text-blue-700">Your complaint will be reviewed by the principal.</p>
-            <span className="text-[10px] font-black bg-white border border-blue-200 text-blue-700 px-2 py-0.5 rounded-full shrink-0">
-              {todayCount}/{DAILY_CAP} today
-            </span>
-          </div>
-        )}
+        <div className="bg-blue-50 border border-blue-100 rounded-2xl p-3">
+          <p className="text-xs font-bold text-blue-700">Your complaint will be reviewed by the principal.</p>
+        </div>
         <div className="bg-white rounded-2xl border border-slate-100 shadow-sm p-4 space-y-4">
           <div>
             <label className="block text-[10px] font-black uppercase tracking-widest text-slate-500 mb-1.5">Subject *</label>
@@ -131,9 +104,8 @@ export const StudentComplaintsView: React.FC<Props> = ({ onBack }) => {
               internal audit record so misuse can be traced if needed. */}
           <div className={`rounded-xl border p-3 ${form.isAnonymous ? 'border-violet-200 bg-violet-50' : 'border-slate-200 bg-slate-50'}`}>
             <button type="button"
-              onClick={() => !anonCapReached && setForm(f => ({ ...f, isAnonymous: !f.isAnonymous }))}
-              disabled={anonCapReached}
-              className="w-full flex items-center justify-between gap-3 disabled:opacity-60">
+              onClick={() => setForm(f => ({ ...f, isAnonymous: !f.isAnonymous }))}
+              className="w-full flex items-center justify-between gap-3">
               <div className="flex items-center gap-2 min-w-0">
                 <div className={`w-9 h-9 rounded-xl flex items-center justify-center shrink-0 ${form.isAnonymous ? 'bg-violet-500 text-white' : 'bg-white text-slate-500 border border-slate-200'}`}>
                   {form.isAnonymous ? <EyeOff size={14}/> : <Eye size={14}/>}
@@ -141,7 +113,7 @@ export const StudentComplaintsView: React.FC<Props> = ({ onBack }) => {
                 <div className="text-left min-w-0">
                   <p className="text-xs font-black text-slate-900">File Anonymously</p>
                   <p className="text-[10px] font-bold text-slate-500 leading-tight">
-                    Principal won't see your name. Limit: 1 per 7 days.
+                    Principal won't see your name. For sensitive issues only.
                   </p>
                 </div>
               </div>
@@ -149,14 +121,9 @@ export const StudentComplaintsView: React.FC<Props> = ({ onBack }) => {
                 <div className={`w-5 h-5 rounded-full bg-white shadow-md transition-transform ${form.isAnonymous ? 'translate-x-4' : ''}`}/>
               </div>
             </button>
-            {anonCapReached && (
-              <div className="flex items-center gap-1.5 text-[10px] font-bold text-rose-700 mt-2 pt-2 border-t border-violet-200">
-                <ShieldAlert size={11}/> Already used your weekly anonymous slot
-              </div>
-            )}
           </div>
         </div>
-        <button onClick={handleSubmit} disabled={isSubmitting || reachedCap}
+        <button onClick={handleSubmit} disabled={isSubmitting}
           className="w-full flex items-center justify-center gap-2 bg-rose-600 text-white font-black text-xs uppercase tracking-widest py-4 rounded-2xl active:scale-95 transition-transform shadow-lg disabled:opacity-60 disabled:cursor-not-allowed">
           {isSubmitting ? 'Submitting…' : <><Plus size={16} /> Submit Complaint</>}
         </button>
@@ -168,26 +135,19 @@ export const StudentComplaintsView: React.FC<Props> = ({ onBack }) => {
     <div className="w-full lg:max-w-5xl lg:mx-auto bg-slate-50 flex flex-col animate-in slide-in-from-right-8 duration-300">
       {renderHeader('My Complaints', onBack,
         <div className="flex items-center gap-2">
-          <span className={`text-[10px] font-black px-2 py-0.5 rounded-full border ${
-            reachedCap
-              ? 'bg-rose-50 text-rose-600 border-rose-200'
-              : todayCount > 0
-                ? 'bg-amber-50 text-amber-700 border-amber-200'
-                : 'bg-slate-50 text-slate-500 border-slate-200'
-          }`}>
-            {todayCount}/{DAILY_CAP} today
-          </span>
           <button
             onClick={() => setView('CREATE')}
-            disabled={reachedCap}
-            title={reachedCap ? 'Daily limit reached — contact school office' : 'New complaint'}
+            title="New complaint"
             className="p-2 bg-rose-500 text-white rounded-full shadow-md disabled:opacity-50 disabled:cursor-not-allowed">
             <Plus size={18} />
           </button>
         </div>
       )}
       <div className="flex-1 overflow-y-auto p-4  space-y-3">
-        {complaints.slice(0, shown).map(c => (
+        {/* Hidden rows stay in `complaints` so the rolling cap math
+            counts them (otherwise hide() would silently free up another
+            anonymous slot). They're filtered out only at render time. */}
+        {complaints.filter(c => !c.hiddenFromSubmitter).slice(0, shown).map(c => (
           <div key={c.id} className="bg-white rounded-2xl border border-slate-100 shadow-sm p-4">
             <div className="flex items-start justify-between gap-2 mb-2">
               <div className="flex items-center gap-1.5 flex-wrap">
@@ -210,6 +170,22 @@ export const StudentComplaintsView: React.FC<Props> = ({ onBack }) => {
                 <p className="text-[11px] font-bold text-slate-600">{c.response}</p>
               </div>
             )}
+            {/* Hide-from-my-dashboard — gated to anonymous rows only.
+                Normal complaints aren't sensitive in the same way (filer's
+                identity is already on the row), so adding a Hide button
+                there just lets students bury legitimate paper-trail.
+                Anonymous is the actual privacy-on-shared-device case the
+                feature was built for. */}
+            {c.isAnonymous && (
+              <div className="mt-3 pt-3 border-t border-slate-50 flex justify-end">
+                <button
+                  onClick={() => setHideTarget(c)}
+                  className="text-[10px] font-black uppercase tracking-widest text-slate-400 hover:text-rose-600 inline-flex items-center gap-1.5 transition-colors"
+                  title="Removes this row from your view; principal still sees it">
+                  <EyeOff size={11}/> Hide from my dashboard
+                </button>
+              </div>
+            )}
           </div>
         ))}
         {complaints.length === 0 && (
@@ -225,6 +201,64 @@ export const StudentComplaintsView: React.FC<Props> = ({ onBack }) => {
           </button>
         )}
       </div>
+
+      {/* Hide-from-dashboard confirmation. Custom modal because
+          window.confirm renders the dev URL as the dialog title on
+          mobile Chromium ("foo-5000.app.github.dev says…"), which
+          alarmed parents into thinking the app was hijacked. */}
+      {hideTarget && (
+        <div className="fixed inset-0 z-50 bg-black/50 flex items-end lg:items-center justify-center p-4 animate-in fade-in duration-150"
+          onClick={() => !isHiding && setHideTarget(null)}>
+          <div onClick={e => e.stopPropagation()}
+            className="bg-white rounded-3xl w-full lg:max-w-md p-5 lg:p-6 shadow-2xl animate-in slide-in-from-bottom-4 lg:zoom-in-95 duration-200">
+            <div className="flex items-center gap-3 mb-3">
+              <div className="w-11 h-11 rounded-2xl bg-rose-50 text-rose-600 flex items-center justify-center shrink-0">
+                <EyeOff size={20}/>
+              </div>
+              <div className="min-w-0">
+                <p className="text-base font-black text-slate-900">Hide from your dashboard?</p>
+                <p className="text-[11px] font-bold text-slate-400 mt-0.5 truncate">{hideTarget.subject}</p>
+              </div>
+            </div>
+            <div className="bg-slate-50 border border-slate-100 rounded-2xl p-3 mb-4">
+              <p className="text-[12px] font-bold text-slate-600 leading-relaxed">
+                Sirf aapke dashboard se hat jayegi. Principal aur audit log ke liye record waise hi rahega.
+                {hideTarget.isAnonymous && ' Anonymous complaint — identity already hidden from principal.'}
+              </p>
+            </div>
+            <div className="flex gap-3">
+              <button
+                onClick={() => setHideTarget(null)}
+                disabled={isHiding}
+                className="flex-1 py-3 bg-slate-100 text-slate-700 font-black rounded-2xl text-sm uppercase tracking-widest active:scale-95 transition-transform disabled:opacity-50">
+                Cancel
+              </button>
+              <button
+                onClick={async () => {
+                  if (!hideTarget) return;
+                  setIsHiding(true);
+                  try {
+                    await studentDashboardService.hideMyComplaint(hideTarget.id);
+                    // Mark hidden in place — DON'T remove. The cap math
+                    // still needs to see the row; render filter hides
+                    // it from the visible list.
+                    setComplaints((prev: StudentComplaint[]) => prev.map(x =>
+                      x.id === hideTarget.id ? { ...x, hiddenFromSubmitter: true } : x,
+                    ));
+                    showToast('Hidden from your dashboard');
+                    setHideTarget(null);
+                  } catch (e) {
+                    showToast(e instanceof Error ? e.message : 'Could not hide', 'error');
+                  } finally { setIsHiding(false); }
+                }}
+                disabled={isHiding}
+                className="flex-1 flex items-center justify-center gap-1.5 py-3 bg-rose-600 hover:bg-rose-700 text-white font-black rounded-2xl text-sm uppercase tracking-widest active:scale-95 transition-transform disabled:opacity-60">
+                {isHiding ? 'Hiding…' : <><EyeOff size={14}/> Hide</>}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 };

@@ -75,4 +75,10 @@ export interface StudentComplaint {
   createdAt: string;
   response: string | null;
   isAnonymous: boolean;
+  /** Submitter flipped this on so the row doesn't show up in their own
+   *  list anymore. The server still returns hidden rows so the client can
+   *  count them toward the rolling 30-day anonymous cap (otherwise hide
+   *  would silently free up a slot to refile). UI filters them out at
+   *  render time. */
+  hiddenFromSubmitter?: boolean;
 }

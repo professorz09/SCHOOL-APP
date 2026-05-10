@@ -10369,5 +10369,42 @@ CREATE TRIGGER ai_paper_history_trim_fifo_trg
 AFTER INSERT ON public.ai_paper_history
 FOR EACH ROW EXECUTE FUNCTION public.ai_paper_history_trim_fifo();
 
+
+-- =============================================================
+-- 0092_attendance_records_parent_select.sql
+-- =============================================================
+-- Migration 0011 dropped attendance_records_parent_select in a loop
+-- and only rebuilt the fee_installments / payment_records variants
+-- afterwards. Result: PARENT/STUDENT can't read attendance_records, so
+-- the !inner join in studentDashboard.getMyAttendance returns 0 rows
+-- and the homepage hero shows "—". Same fix for test_schedules.
+
+-- Scope by school of the linked student. An earlier draft joined through
+-- attendance_student_details — that triggered "infinite recursion detected
+-- in policy for relation attendance_records" because attsd_select itself
+-- selects from attendance_records. Going through `students` breaks the
+-- cycle (students_parent_select doesn't touch either attendance table).
+DROP POLICY IF EXISTS attendance_records_parent_select ON public.attendance_records;
+CREATE POLICY attendance_records_parent_select ON public.attendance_records
+  FOR SELECT
+  USING (
+    EXISTS (
+      SELECT 1 FROM public.students s
+      WHERE s.id = ANY(public.linked_student_ids())
+        AND s.school_id = attendance_records.school_id
+    )
+  );
+
+DROP POLICY IF EXISTS test_schedules_parent_select ON public.test_schedules;
+CREATE POLICY test_schedules_parent_select ON public.test_schedules
+  FOR SELECT
+  USING (
+    EXISTS (
+      SELECT 1 FROM public.students s
+      WHERE s.id = ANY(public.linked_student_ids())
+        AND s.school_id = test_schedules.school_id
+    )
+  );
+
 COMMIT;
 

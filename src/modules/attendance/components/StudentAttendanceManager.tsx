@@ -110,6 +110,21 @@ export const StudentAttendanceManager: React.FC<Props> = ({ onBack }) => {
   const [editRecord, setEditRecord]         = useState<SharedAttendanceRecord | null>(null);
   const [editStudents, setEditStudents]     = useState<AttendanceStudentRecord[]>([]);
   const [correctionReason, setCorrectionReason] = useState('');
+  // Promise-based reason picker — replaces two window.prompt() calls
+  // that exposed the codespaces dev hostname as the dialog title.
+  // Holds the prompt message + the awaiting resolver; call askReason()
+  // from anywhere to get the user's input back as a Promise.
+  const [reasonPrompt, setReasonPrompt] = useState<{
+    message: string;
+    resolve: (reason: string | null) => void;
+  } | null>(null);
+  const [reasonInput, setReasonInput] = useState('');
+  const askReason = useCallback((message: string): Promise<string | null> => {
+    setReasonInput('');
+    return new Promise<string | null>(resolve => {
+      setReasonPrompt({ message, resolve });
+    });
+  }, []);
 
   // Mark state (principal direct mark)
   const [markClass, setMarkClass]     = useState('');
@@ -395,7 +410,7 @@ export const StudentAttendanceManager: React.FC<Props> = ({ onBack }) => {
 
     let reason: string | undefined;
     if (isLockedEdit) {
-      const r = window.prompt('Reason for editing this locked date:')?.trim();
+      const r = await askReason('Reason for editing this locked date');
       if (!r) return false;
       reason = r;
     }
@@ -454,15 +469,28 @@ export const StudentAttendanceManager: React.FC<Props> = ({ onBack }) => {
       // Export the full academic year, not just the current month viewport.
       const startDate = currentYear.startDate;
       const endDate   = currentYear.endDate;
-      const url = apiAttendance.exportExcelUrl(sectionId, startDate, endDate, gridClass, gridSection);
-      const res = await fetch(url, { headers: { authorization: `Bearer ${token}` } });
+      const exportUrl = apiAttendance.exportExcelUrl(sectionId, startDate, endDate, gridClass, gridSection);
+      const res = await fetch(exportUrl, { headers: { authorization: `Bearer ${token}` } });
       if (!res.ok) throw new Error('Export failed');
       const blob = await res.blob();
+      // Cross-browser-safe download: anchor must be in the DOM
+      // (Safari + older WebKit ignore .click() on detached <a>),
+      // and revokeObjectURL must be deferred — synchronous revoke
+      // races the browser's download fetch in some engines and the
+      // file ends up empty or "Failed - No file".
+      const blobUrl = URL.createObjectURL(blob);
       const link = document.createElement('a');
-      link.href = URL.createObjectURL(blob);
+      link.href = blobUrl;
       link.download = `Attendance_${gridClass}_${gridSection}_${currentYear.name}.xlsx`;
+      link.style.display = 'none';
+      document.body.appendChild(link);
       link.click();
-      URL.revokeObjectURL(link.href);
+      // Give the browser a tick to start the download before
+      // freeing the blob URL. 1 sec is well past any sane race.
+      setTimeout(() => {
+        document.body.removeChild(link);
+        URL.revokeObjectURL(blobUrl);
+      }, 1000);
       showToast('Excel file downloaded (full year)');
     } catch (e) {
       showToast((e as Error).message || 'Export failed', 'error');
@@ -536,7 +564,7 @@ export const StudentAttendanceManager: React.FC<Props> = ({ onBack }) => {
       return;
     }
     if (markConflict) {
-      const reason = window.prompt('Reason for editing this locked record:')?.trim();
+      const reason = await askReason('Reason for editing this locked record');
       if (!reason) return;
       setIsSubmitting(true);
       try {
@@ -1417,6 +1445,45 @@ export const StudentAttendanceManager: React.FC<Props> = ({ onBack }) => {
             kiya" is surfaced as the marker name in cell tooltips on the
             grid. */}
       </div>
+
+      {reasonPrompt && (
+        <div className="fixed inset-0 z-50 bg-black/50 flex items-end lg:items-center justify-center p-4 animate-in fade-in duration-150"
+          onClick={() => { reasonPrompt.resolve(null); setReasonPrompt(null); }}>
+          <div onClick={e => e.stopPropagation()}
+            className="bg-white rounded-3xl w-full lg:max-w-md p-5 lg:p-6 shadow-2xl animate-in slide-in-from-bottom-4 lg:zoom-in-95 duration-200">
+            <p className="text-base font-black text-slate-900">{reasonPrompt.message}</p>
+            <p className="text-[11px] font-bold text-slate-400 mt-1 mb-3">
+              Audit log me ye reason save hoga.
+            </p>
+            <textarea
+              autoFocus
+              value={reasonInput}
+              onChange={e => setReasonInput(e.target.value)}
+              rows={3}
+              placeholder="Likhne ka reason…"
+              className="w-full border border-slate-200 bg-slate-50 rounded-xl px-3 py-2.5 font-bold text-sm outline-none focus:border-blue-500 resize-none"
+            />
+            <div className="flex gap-3 mt-4">
+              <button
+                onClick={() => { reasonPrompt.resolve(null); setReasonPrompt(null); }}
+                className="flex-1 py-3 bg-slate-100 text-slate-700 font-black rounded-2xl text-sm uppercase tracking-widest active:scale-95 transition-transform">
+                Cancel
+              </button>
+              <button
+                onClick={() => {
+                  const t = reasonInput.trim();
+                  if (!t) return;
+                  reasonPrompt.resolve(t);
+                  setReasonPrompt(null);
+                }}
+                disabled={!reasonInput.trim()}
+                className="flex-1 py-3 bg-blue-600 hover:bg-blue-700 text-white font-black rounded-2xl text-sm uppercase tracking-widest active:scale-95 transition-transform disabled:opacity-60">
+                Save
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 };

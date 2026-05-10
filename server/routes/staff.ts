@@ -1,9 +1,24 @@
 import { Router } from 'express';
+import rateLimit from 'express-rate-limit';
 import { adminDb, userDb } from '../lib/db';
 import { ok, fail, ApiError, requireBody } from '../lib/helpers';
 import { requireAuth, requireRole } from '../middleware/auth';
 
 export const staffRouter = Router();
+
+// Each /staff/create call provisions a Supabase auth.users + public.users +
+// staff row. Schools typically add staff a handful of times a year — 20/hour
+// is generous for legitimate bulk-onboarding while still blocking automated
+// abuse of a compromised principal account. Cap is per-principal.
+const staffCreateLimiter = rateLimit({
+  windowMs: 60 * 60_000,
+  limit: 20,
+  keyGenerator: (req: any) => `staff-create:${req.user?.id ?? req.ip}`,
+  validate: { keyGeneratorIpFallback: false },
+  standardHeaders: 'draft-7',
+  legacyHeaders: false,
+  message: { ok: false, error: 'Staff onboarding rate limit reached (20/hour). Try again later.' },
+});
 
 // POST /api/staff/deactivate
 // Suspends a staff member AND clears their dangling references in
@@ -54,6 +69,11 @@ staffRouter.post('/salary/pay', requireAuth, requireRole('PRINCIPAL'), async (re
 
     if (!Number.isFinite(body.amount) || body.amount <= 0)
       throw new ApiError(400, 'Amount must be positive');
+    // Defense-in-depth upper bound — a single salary > 1 crore is
+    // wildly outside any realistic Indian school's range; the cap
+    // catches accidental UI misclicks and malicious bypass attempts.
+    if (body.amount > 100_000_000)
+      throw new ApiError(400, 'Salary amount exceeds the per-transaction cap.');
 
     // paid_at defaults to today server-side. Reject anything that doesn't
     // look like an ISO date so a typo can't sneak past the RPC's future-
@@ -236,7 +256,7 @@ staffRouter.post('/document/delete', requireAuth, requireRole('PRINCIPAL'), asyn
 });
 
 // POST /api/staff/create — insert staff row + seed salary + class assignments
-staffRouter.post('/create', requireAuth, requireRole('PRINCIPAL'), async (req, res) => {
+staffRouter.post('/create', requireAuth, requireRole('PRINCIPAL'), staffCreateLimiter, async (req, res) => {
   try {
     const body = requireBody<{
       userId: string | null;

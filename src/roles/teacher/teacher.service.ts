@@ -306,6 +306,53 @@ function rowToComplaint(r: ComplaintRow): TeacherComplaint {
 
 // ─── Public API ─────────────────────────────────────────────────────────────
 
+// Salvage near-JSON output from Gemini exam-paper prompts. Tried in
+// order:
+//   1. stripJsonFence + raw JSON.parse (the happy path)
+//   2. extract the largest balanced {...} substring (drops trailing
+//      prose like "Here is your paper:" / "Hope this helps!" that
+//      Gemini sometimes appends after the JSON)
+//   3. light repairs: smart quotes → straight, trailing commas
+//      removed, then parse again
+// Returns null only when every strategy fails — caller toasts a
+// retry hint instead of burning the user's quota silently.
+type ParsedPaper = {
+  sections: Array<{
+    title: string;
+    instructions?: string;
+    questions: Array<{ no?: number; text: string; marks: number; type?: string; options?: unknown }>;
+  }>;
+};
+function tryParsePaperJson(raw: string): ParsedPaper | null {
+  const candidates: string[] = [];
+  const cleaned = stripJsonFence(raw).trim();
+  candidates.push(cleaned);
+
+  // Largest balanced {…} block — handles "intro… { json } …closing".
+  const firstBrace = cleaned.indexOf('{');
+  const lastBrace  = cleaned.lastIndexOf('}');
+  if (firstBrace >= 0 && lastBrace > firstBrace) {
+    candidates.push(cleaned.slice(firstBrace, lastBrace + 1));
+  }
+
+  // Light repairs applied to the largest brace block.
+  if (candidates[1]) {
+    const repaired = candidates[1]
+      .replace(/[“”]/g, '"')   // smart double quotes
+      .replace(/[‘’]/g, "'")    // smart single quotes
+      .replace(/,(\s*[}\]])/g, '$1');     // trailing commas
+    candidates.push(repaired);
+  }
+
+  for (const c of candidates) {
+    try {
+      const obj = JSON.parse(c) as ParsedPaper;
+      if (obj && Array.isArray(obj.sections)) return obj;
+    } catch { /* try the next candidate */ }
+  }
+  return null;
+}
+
 const TODAY_DAY_NAMES = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
 
 // Mirror of `DEFAULT_SLOTS` in modules/timetable/timetable.service.ts. When
@@ -346,6 +393,55 @@ export const teacherService = {
         students,
       };
     }).sort((a, b) => a.className.localeCompare(b.className) || a.section.localeCompare(b.section));
+  },
+
+  // ── Birthdays ─────────────────────────────────────────────────────────────
+  //
+  // Same shape as the principal's old birthday widget (which was removed
+  // because principals don't usually wish students personally), but scoped
+  // to the sections this teacher actually teaches. Returns at most 8 rows
+  // for the next 7 days.
+  async getMyStudentBirthdays(): Promise<Array<{
+    id: string; name: string; className: string; section: string;
+    dob: string; daysAway: number; isToday: boolean;
+  }>> {
+    const sectionIds = await resolveMySectionIds();
+    if (!sectionIds.length) return [];
+    const yearId = await getActiveYearId();
+    const { data, error } = await supabase
+      .from('student_academic_records')
+      .select('student_id, class_name, section, students!inner(id, name, dob, is_active)')
+      .eq('academic_year_id', yearId)
+      .in('section_id', sectionIds);
+    if (error) throw new Error(error.message);
+
+    type Row = {
+      student_id: string; class_name: string | null; section: string | null;
+      students: { id: string; name: string; dob: string | null; is_active: boolean }
+              | { id: string; name: string; dob: string | null; is_active: boolean }[]
+              | null;
+    };
+    const today = new Date(); today.setHours(0, 0, 0, 0);
+
+    return ((data ?? []) as unknown as Row[])
+      .map(r => {
+        const stu = Array.isArray(r.students) ? r.students[0] : r.students;
+        if (!stu || !stu.is_active || !stu.dob) return null;
+        const dob = new Date(stu.dob);
+        if (Number.isNaN(dob.getTime())) return null;
+        const next = new Date(today.getFullYear(), dob.getMonth(), dob.getDate());
+        if (next < today) next.setFullYear(today.getFullYear() + 1);
+        const daysAway = Math.round((next.getTime() - today.getTime()) / 86400000);
+        if (daysAway > 7) return null;
+        return {
+          id: stu.id, name: stu.name, className: r.class_name ?? '',
+          section: r.section ?? '', dob: stu.dob,
+          daysAway, isToday: daysAway === 0,
+        };
+      })
+      .filter((x): x is NonNullable<typeof x> => x !== null)
+      .sort((a, b) => a.daysAway - b.daysAway)
+      .slice(0, 8);
   },
 
   // ── Attendance ────────────────────────────────────────────────────────────
@@ -842,21 +938,43 @@ export const teacherService = {
       if (err instanceof GeminiUnavailableError) throw err;
       throw new Error(err instanceof Error ? err.message : 'AI generation failed');
     }
-    const cleaned = stripJsonFence(raw);
-    let parsed: { sections: Array<{ title: string; instructions?: string; questions: Array<{ no?: number; text: string; marks: number; type?: string }> }> };
-    try {
-      parsed = JSON.parse(cleaned);
-    } catch {
-      throw new Error('AI returned an unparseable response — please try again');
+    // Gemini occasionally returns near-JSON: trailing prose after the
+    // payload, smart quotes, trailing commas, or a partial object on
+    // long generations. Run a few cheap repairs before giving up so a
+    // single sloppy response doesn't waste the user's quota.
+    const parsed = tryParsePaperJson(raw);
+    if (!parsed) {
+      throw new Error('AI returned an unparseable response — please try again. Topic ko thoda chhota karke retry karein.');
     }
 
+    type RawQ = { no?: number; text: string; marks: number; type?: string; options?: unknown };
     const sections: ExamSection[] = (parsed.sections ?? []).map(sec => {
-      const qs: ExamQuestion[] = (sec.questions ?? []).map((q, i) => ({
-        no: q.no ?? i + 1,
-        text: q.text,
-        marks: q.marks,
-        type: ((['MCQ', 'SHORT', 'LONG', 'DIAGRAM']).includes(q.type ?? '') ? q.type : 'SHORT') as ExamQuestion['type'],
-      }));
+      const qs: ExamQuestion[] = ((sec.questions ?? []) as RawQ[]).map((q, i) => {
+        const type = ((['MCQ', 'SHORT', 'LONG', 'DIAGRAM']).includes(q.type ?? '')
+          ? q.type
+          : 'SHORT') as ExamQuestion['type'];
+        // MCQ options come back as either an array of strings or
+        // { A: '...', B: '...' } object — normalise both. Trim each
+        // option and drop empties so the renderer doesn't show
+        // ghost choices.
+        let options: string[] | undefined;
+        if (type === 'MCQ' && q.options) {
+          if (Array.isArray(q.options)) {
+            options = q.options.map(o => String(o).trim()).filter(Boolean);
+          } else if (typeof q.options === 'object') {
+            options = Object.values(q.options as Record<string, unknown>)
+              .map(o => String(o).trim()).filter(Boolean);
+          }
+          if (options && options.length === 0) options = undefined;
+        }
+        return {
+          no: q.no ?? i + 1,
+          text: q.text,
+          marks: q.marks,
+          type,
+          ...(options ? { options } : {}),
+        };
+      });
       return {
         title: sec.title,
         instructions: sec.instructions ?? '',

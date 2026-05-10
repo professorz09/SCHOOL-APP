@@ -9,6 +9,7 @@ import {
   Lock, Edit2, History, Eye, Upload, Download,
 } from 'lucide-react';
 import { exportCsv } from '@/shared/utils/csv';
+import { todayIST } from '@/shared/utils/date';
 import { stripClassPrefix } from '@/shared/utils/className';
 import { studentService } from '@/modules/students/student.service';
 import { storageService } from '@/shared/utils/storage.service';
@@ -39,7 +40,29 @@ const ARCHIVE_TABS: Array<{ key: ArchiveTab; label: string; icon: React.Componen
   { key: 'ALUMNI',     label: 'Alumni',     icon: Award,        tone: 'indigo' },
 ];
 
-interface Props { onBack: () => void; initialView?: MainView; }
+/** How the admission UI should behave.
+ *
+ *  - PRINCIPAL_FULL  — default. Full StudentsManager: list, archive, fees, admission etc.
+ *  - TEACHER_DRAFT   — only the admission form. Submit writes to approvals (draft).
+ *  - PRINCIPAL_REVIEW — only the admission form, prefilled from a teacher's draft.
+ *                      Submit runs the regular admission and then closes the
+ *                      approval (status APPROVED).
+ */
+type AdmissionMode = 'PRINCIPAL_FULL' | 'TEACHER_DRAFT' | 'PRINCIPAL_REVIEW';
+
+interface Props {
+  onBack: () => void;
+  initialView?: MainView;
+  mode?: AdmissionMode;
+  /** Only used when mode === 'PRINCIPAL_REVIEW'. */
+  draftId?: string;
+  /** Pre-filled CreateStudentInput payload. Used by PRINCIPAL_REVIEW (prefilled
+   *  from an existing approval) and ignored otherwise. */
+  draftPrefill?: Partial<CreateStudentInput>;
+  /** Called after a successful TEACHER_DRAFT submit or PRINCIPAL_REVIEW
+   *  approve so the parent screen can navigate away. */
+  onDraftDone?: () => void;
+}
 
 const CLASS_OPTIONS = [
   'Nursery','LKG','UKG',
@@ -67,7 +90,7 @@ const BLANK_FORM: CreateStudentInput = {
   dob: '', gender: 'MALE', bloodGroup: 'O+', aadhaarNo: '', phone: '',
   email: '', address: '', photo: '', fatherName: '', fatherPhone: '',
   motherName: '', motherPhone: '', academicYearId: '',
-  admissionDate: new Date().toISOString().split('T')[0], totalFee: 0,
+  admissionDate: todayIST(), totalFee: 0,
   religion: '', caste: '', penNumber: '', birthCertNo: '', tcNumber: '', rte: false,
   fatherOccupation: '', fatherIncome: '', fatherEmail: '', motherOccupation: '',
   guardianName: '', guardianPhone: '', guardianRelation: '',
@@ -93,11 +116,24 @@ const BLANK_FORM_WITH_PARENT: FormWithParent = {
   parentEmail: '',
 };
 
-export const StudentsManager: React.FC<Props> = ({ onBack, initialView }) => {
+export const StudentsManager: React.FC<Props> = ({
+  onBack, initialView,
+  mode = 'PRINCIPAL_FULL',
+  draftId,
+  draftPrefill,
+  onDraftDone,
+}) => {
   const { showToast } = useUIStore();
   const { activeYear, academicYears } = useAcademicYear();
-const [mainView, setMainView] = useState<MainView>(initialView ?? 'CLASSES');
-  const [subView, setSubView] = useState<SubView>('LIST');
+// In TEACHER_DRAFT / PRINCIPAL_REVIEW modes we skip straight to the
+  // admission form (mainView='ADMISSION', subView='CREATE'). Otherwise
+  // honour the explicit initialView, falling back to the classes home.
+  const [mainView, setMainView] = useState<MainView>(
+    mode === 'PRINCIPAL_FULL' ? (initialView ?? 'CLASSES') : 'ADMISSION',
+  );
+  const [subView, setSubView] = useState<SubView>(
+    mode === 'PRINCIPAL_FULL' ? 'LIST' : 'CREATE',
+  );
   // Admission stepper — 3 steps to keep the form scannable on
   // mobile. Earlier the entire form was one giant scroll which
   // most principals found overwhelming. Order matches the user's
@@ -127,8 +163,77 @@ const [mainView, setMainView] = useState<MainView>(initialView ?? 'CLASSES');
     | { type: 'CLASS'; value: string }
     | { type: 'UNASSIGNED' }
     | { type: 'FEE'; value: string }
+    // 'REVIEW' shows pending teacher-submitted admission drafts. Sits
+    // alongside the other filters but draws from the approvals queue,
+    // not the students table — its count is intentionally separate
+    // from the All / class / fee buckets.
+    | { type: 'REVIEW' }
   >({ type: 'ALL' });
-  const [form, setForm] = useState<FormWithParent>(BLANK_FORM_WITH_PARENT);
+  // Pending admission drafts from teachers (request_type='ADMISSION',
+  // status='PENDING'). Refreshed on mount + after any approve/reject.
+  const [pendingDrafts, setPendingDrafts] = useState<import('@/roles/principal/principal.types').Approval[]>([]);
+  const [reviewing, setReviewing] = useState<import('@/roles/principal/principal.types').Approval | null>(null);
+  const refreshPendingDrafts = React.useCallback(async () => {
+    if (mode !== 'PRINCIPAL_FULL') return;
+    try {
+      const list = await principalService.getApprovals();
+      setPendingDrafts(list.filter(a => a.type === 'ADMISSION' && a.status === 'PENDING'));
+    } catch { /* swallow — list will retry on next mount/filter switch */ }
+  }, [mode]);
+  useEffect(() => { void refreshPendingDrafts(); }, [refreshPendingDrafts]);
+  // If the user is parked on the REVIEW filter and the queue empties
+  // (after they approved/rejected the last draft), bounce them back
+  // to ALL — otherwise they stare at an empty list with the chip
+  // already hidden and no obvious way out.
+  useEffect(() => {
+    if (admFilter.type === 'REVIEW' && pendingDrafts.length === 0) {
+      setAdmFilter({ type: 'ALL' });
+    }
+  }, [pendingDrafts.length, admFilter.type]);
+
+  // Reject-draft modal state. Captured at the row level so the principal
+  // can reject without opening the full form.
+  const [rejectingDraft, setRejectingDraft] = useState<import('@/roles/principal/principal.types').Approval | null>(null);
+  const [rejectReasonText, setRejectReasonText] = useState('');
+  const [rejectingBusy, setRejectingBusy] = useState(false);
+  const submitDraftReject = async () => {
+    if (!rejectingDraft) return;
+    if (!rejectReasonText.trim()) { showToast('Reason daalein', 'error'); return; }
+    setRejectingBusy(true);
+    try {
+      await principalService.rejectAdmissionDraft(rejectingDraft.id, rejectReasonText.trim());
+      showToast('Draft rejected', 'info');
+      setRejectingDraft(null);
+      setRejectReasonText('');
+      await refreshPendingDrafts();
+    } catch (e) {
+      showToast(e instanceof Error ? e.message : 'Reject failed', 'error');
+    } finally {
+      setRejectingBusy(false);
+    }
+  };
+  const [form, setForm] = useState<FormWithParent>({ ...BLANK_FORM_WITH_PARENT, ...(draftPrefill as object ?? {}) });
+  // PRINCIPAL_REVIEW mode: when a teacher's draft is opened for review,
+  // hydrate the form from the saved payload. Re-runs if the parent passes
+  // a different draft (rare but defensive).
+  useEffect(() => {
+    if (mode === 'PRINCIPAL_REVIEW' && draftPrefill) {
+      setForm(prev => ({ ...prev, ...(draftPrefill as object) }));
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [draftId]);
+
+  // Guard rail: useState initial values run only on first mount, so if a
+  // hot-reload replaces this component without remount, mainView/subView
+  // can still be 'CLASSES'/'LIST' from before. Force-correct them whenever
+  // mode is non-PRINCIPAL_FULL — cheap, idempotent, only fires on mode
+  // change.
+  useEffect(() => {
+    if (mode !== 'PRINCIPAL_FULL') {
+      setMainView('ADMISSION');
+      setSubView('CREATE');
+    }
+  }, [mode]);
   const [religionIsOther, setReligionIsOther] = useState(false);
   const [casteIsOther, setCasteIsOther] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
@@ -160,6 +265,20 @@ const [mainView, setMainView] = useState<MainView>(initialView ?? 'CLASSES');
   // Actual File objects collected during form fill — uploaded after student is created
   const [documentFiles, setDocumentFiles] = useState<Map<DocumentUpload['type'], File>>(new Map());
 
+  // Photo preview URL — memoized + revoked on file change / unmount.
+  // Earlier the form recomputed `URL.createObjectURL(...)` inline in
+  // JSX on every render → a new blob URL each render, never revoked.
+  // Hundred form edits = 100 leaked blob URLs in browser memory.
+  const photoFile = documentFiles.get('PHOTO');
+  const photoPreviewUrl = React.useMemo(
+    () => (photoFile ? URL.createObjectURL(photoFile) : null),
+    [photoFile],
+  );
+  React.useEffect(() => {
+    if (!photoPreviewUrl) return;
+    return () => URL.revokeObjectURL(photoPreviewUrl);
+  }, [photoPreviewUrl]);
+
   // Archive state ─────────────────────────────────────────────────────────
   const [archiveTab, setArchiveTab] = useState<ArchiveTab>('ACTIVE');
   const [archiveLoading, setArchiveLoading] = useState(false);
@@ -179,6 +298,11 @@ const [mainView, setMainView] = useState<MainView>(initialView ?? 'CLASSES');
   const [tcModal, setTcModal] = useState<{ student: Student; tcNumber: string; reason: string } | null>(null);
 
   useEffect(() => {
+    // Teacher-draft / principal-review modes only render the admission
+    // form — no list, no archive, no fees. Skip the heavy
+    // students-of-school fetch (which hits a PRINCIPAL/TEACHER-only
+    // surface and would 403 for any future expanded role).
+    if (mode !== 'PRINCIPAL_FULL') { setStudentsLoading(false); return; }
     setStudentsLoading(true);
     void studentService.getAll()
       .then(rows => { setStudents(rows); setStudentsLoading(false); })
@@ -186,12 +310,13 @@ const [mainView, setMainView] = useState<MainView>(initialView ?? 'CLASSES');
         showToast(e instanceof Error ? e.message : 'Failed to load students', 'error');
         setStudentsLoading(false);
       });
-  }, [activeYear?.id]);
+  }, [activeYear?.id, mode]);
   useEffect(() => {
+    if (mode !== 'PRINCIPAL_FULL') { setDbSections([]); return; }
     if (!activeYear?.id) { setDbSections([]); return; }
     void principalService.getSectionsForYear(activeYear.id)
       .then(setDbSections).catch(() => setDbSections([]));
-  }, [activeYear?.id]);
+  }, [activeYear?.id, mode]);
   useEffect(() => { schoolInfoService.get().then(setSchoolInfo).catch(() => setSchoolInfo(null)); }, []);
 
   const refreshArchive = React.useCallback(async () => {
@@ -271,6 +396,36 @@ const [mainView, setMainView] = useState<MainView>(initialView ?? 'CLASSES');
     // student lands in the UNASSIGNED bucket and the principal places
     // them via the "Assign to Class" modal. So no stream guard here.
 
+    // ── TEACHER_DRAFT branch ────────────────────────────────────────────
+    // A teacher can't directly create a student; their submission becomes
+    // a PENDING approval row that the principal reviews. We skip the
+    // studentService.create() side effects entirely (auth account, fee
+    // schedule, etc.) — those run later, when the principal approves.
+    if (mode === 'TEACHER_DRAFT') {
+      setIsSubmitting(true);
+      try {
+        // Strip the legacy parent* fields off — they shadow the explicit
+        // Father/Mother fields in the saved payload.
+        const { parentMobileNumber: _pm, parentName: _pn, parentEmail: _pe, ...rest } = form;
+        void _pm; void _pn; void _pe;
+        const payload = { ...rest } as Record<string, unknown>;
+        await principalService.submitAdmissionDraft(
+          payload, form.name.trim(), form.admissionNo.trim(),
+        );
+        showToast('Admission draft submitted — principal will review.');
+        setForm(BLANK_FORM_WITH_PARENT);
+        setReligionIsOther(false);
+        setCasteIsOther(false);
+        setDocumentFiles(new Map());
+        if (onDraftDone) onDraftDone();
+      } catch (e) {
+        showToast(e instanceof Error ? e.message : 'Draft submit failed', 'error');
+      } finally {
+        setIsSubmitting(false);
+      }
+      return;
+    }
+
     setIsSubmitting(true);
     try {
       // student.service.create() handles the parent Auth account, parent_student_links,
@@ -299,6 +454,19 @@ const [mainView, setMainView] = useState<MainView>(initialView ?? 'CLASSES');
         fatherName: rest.fatherName || rest.motherName || rest.guardianName || 'Parent',
       };
       const { student, parent } = await studentService.create(studentData);
+
+      // PRINCIPAL_REVIEW: close the linked teacher draft so it stops
+      // showing in the approvals queue. We do this *after* the student
+      // row is in so the queue update reflects the real outcome.
+      if (mode === 'PRINCIPAL_REVIEW' && draftId) {
+        try {
+          await principalService.approveAdmissionDraft(draftId, student.id);
+        } catch (closeErr) {
+          // eslint-disable-next-line no-console
+          console.error('[admission] failed to close approval row', closeErr);
+          showToast('Student admitted, but draft row could not be closed — refresh approvals.', 'error');
+        }
+      }
 
       if (parent) {
         if (parent.reused) {
@@ -350,6 +518,8 @@ const [mainView, setMainView] = useState<MainView>(initialView ?? 'CLASSES');
         setDocumentFiles(new Map());
         setDocuments(prev => prev.map(d => ({ ...d, uploaded: false })));
         setSubView('LIST');
+        // PRINCIPAL_REVIEW done — bounce back to the approvals queue.
+        if (mode === 'PRINCIPAL_REVIEW' && onDraftDone) onDraftDone();
         // Admission-print modal is rendered at a top-level branch which is
         // unreachable while mainView==='ADMISSION', so flipping this flag
         // here was a no-op that risked leaving the modal stuck open if the
@@ -391,7 +561,13 @@ const [mainView, setMainView] = useState<MainView>(initialView ?? 'CLASSES');
 
   // ── Archive lifecycle handlers ──────────────────────────────────────────
   const handleMarkFailed = async (student: Student) => {
-    if (!confirm(`Mark ${student.name} as FAILED for the active year?`)) return;
+    const ok = await useUIStore.getState().askConfirm({
+      title: `Mark ${student.name} as FAILED?`,
+      message: 'Active year ke promotion records me FAIL ho jayega. Reverse karne ke liye principal ko Editor Mode chahiye.',
+      confirmLabel: 'Mark Failed',
+      destructive: true,
+    });
+    if (!ok) return;
     try {
       await studentService.markStudentFailed(student.id);
       showToast(`${student.name} marked as failed`);
@@ -403,7 +579,12 @@ const [mainView, setMainView] = useState<MainView>(initialView ?? 'CLASSES');
   };
 
   const handleReadmit = async (student: Student) => {
-    if (!confirm(`Re-admit ${student.name}? You'll need to assign them to a class next.`)) return;
+    const ok = await useUIStore.getState().askConfirm({
+      title: `Re-admit ${student.name}?`,
+      message: 'Iss student ko aap manually class assign karna padega next step me.',
+      confirmLabel: 'Re-admit',
+    });
+    if (!ok) return;
     try {
       // Server requires class+section now (creates AR row for active year).
       // Use the student's last-known class as the default placeholder; the
@@ -505,6 +686,23 @@ const [mainView, setMainView] = useState<MainView>(initialView ?? 'CLASSES');
   // ─── ADMISSION (Add/Search) ────────────────────────────────────────────
 
   if (!renderProfile && mainView === 'ADMISSION') {
+    // Principal opened a teacher's draft from the REVIEW filter. Mount
+    // a nested StudentsManager in PRINCIPAL_REVIEW mode prefilled from
+    // the saved payload — same flow as the Approvals queue Review &
+    // Admit button. On done/back we clear `reviewing` to restore the
+    // queue list.
+    if (reviewing && reviewing.type === 'ADMISSION') {
+      const prefill = (reviewing.draftPayload ?? {}) as Partial<CreateStudentInput>;
+      return (
+        <StudentsManager
+          mode="PRINCIPAL_REVIEW"
+          draftId={reviewing.id}
+          draftPrefill={prefill}
+          onBack={() => setReviewing(null)}
+          onDraftDone={() => { setReviewing(null); void refreshPendingDrafts(); }}
+        />
+      );
+    }
     const q = search.trim().toLowerCase();
     const digits = q.replace(/\D/g, '');
     // Filter pills — class chips driven by what's actually in the data, plus
@@ -540,15 +738,34 @@ const [mainView, setMainView] = useState<MainView>(initialView ?? 'CLASSES');
       .sort((a, b) => new Date(b.admissionDate ?? 0).getTime() - new Date(a.admissionDate ?? 0).getTime());
 
     const unassignedCount = students.filter(s => !s.className).length;
+    // Filters here are FEE statuses, not admission statuses. Earlier this
+    // chip read just "Pending" which read like "admission pending" — a
+    // principal saw a class-assigned student under it and assumed a bug.
+    // Prefix every label with "Fee" so it's unambiguous.
     const feeStatusOptions: Array<{ key: string; label: string; cls: string }> = [
-      { key: 'PAID',    label: 'Paid',    cls: 'bg-emerald-50 text-emerald-700 border-emerald-200' },
-      { key: 'PARTIAL', label: 'Partial', cls: 'bg-amber-50 text-amber-700 border-amber-200' },
-      { key: 'PENDING', label: 'Pending', cls: 'bg-rose-50 text-rose-700 border-rose-200' },
+      { key: 'PAID',    label: 'Fee Paid',    cls: 'bg-emerald-50 text-emerald-700 border-emerald-200' },
+      { key: 'PARTIAL', label: 'Fee Partial', cls: 'bg-amber-50 text-amber-700 border-amber-200' },
+      { key: 'PENDING', label: 'Fee Unpaid',  cls: 'bg-rose-50 text-rose-700 border-rose-200' },
     ];
 
     if (subView === 'CREATE') return (
-      <div className="w-full bg-slate-50 flex flex-col animate-in slide-in-from-right-8 duration-300">
-        {renderHeader('New Admission', () => { setAdmStep(1); setSubView('LIST'); })}
+      // h-full so the inner flex-1 scroll area gets a real height to
+      // distribute. Without it the outer box is content-sized, sticky
+      // children can't extend past form-bottom, and the Cancel/Next
+      // bar lands in the middle of the form on short pages.
+      <div className="w-full h-full bg-slate-50 flex flex-col animate-in slide-in-from-right-8 duration-300">
+        {renderHeader(
+          mode === 'TEACHER_DRAFT' ? 'New Admission Draft'
+          : mode === 'PRINCIPAL_REVIEW' ? 'Review Draft'
+          : 'New Admission',
+          () => {
+            // In non-PRINCIPAL_FULL modes there's no LIST behind the form
+            // — bail all the way back to the parent screen instead of
+            // landing on an empty Students list.
+            if (mode !== 'PRINCIPAL_FULL') { onBack(); return; }
+            setAdmStep(1); setSubView('LIST');
+          },
+        )}
 
         {/* Stepper progress — 3 dots with labels. Tap a completed
             step to jump back; future steps are locked behind
@@ -599,9 +816,9 @@ const [mainView, setMainView] = useState<MainView>(initialView ?? 'CLASSES');
           <div className="bg-white rounded-2xl border border-slate-100 shadow-sm p-3.5">
             <div className="flex items-center gap-3.5">
               <div className="w-20 h-24 rounded-xl border-2 border-dashed border-slate-300 bg-slate-50 overflow-hidden flex items-center justify-center shrink-0">
-                {documentFiles.get('PHOTO') ? (
+                {photoPreviewUrl ? (
                   <img
-                    src={URL.createObjectURL(documentFiles.get('PHOTO')!)}
+                    src={photoPreviewUrl}
                     alt="Passport"
                     className="w-full h-full object-cover"
                   />
@@ -640,20 +857,62 @@ const [mainView, setMainView] = useState<MainView>(initialView ?? 'CLASSES');
           <div className="bg-white rounded-2xl border border-slate-100 shadow-sm p-4 space-y-4">
             <p className="text-[10px] font-black uppercase tracking-widest text-slate-400">Student Info</p>
 
-            {/* Basic text fields */}
-            {[
-              { label: 'Full Name', key: 'name', placeholder: 'Student full name', req: true },
-              { label: 'Admission No.', key: 'admissionNo', placeholder: 'ADM-2024-XXX', req: true },
-            ].map(({ label, key, placeholder, req }) => (
-              <div key={key}>
-                <label className="block text-[10px] font-black uppercase tracking-widest text-slate-500 mb-1.5">
-                  {label}{req && <sup className="text-rose-500 font-black ml-0.5">*</sup>}
-                </label>
-                <input value={(form as any)[key] ?? ''} onChange={e => setForm(f => ({ ...f, [key]: e.target.value }))}
-                  placeholder={placeholder}
-                  className="w-full border border-slate-200 bg-slate-50 rounded-xl px-4 py-3 font-bold text-sm outline-none focus:border-indigo-500 focus:bg-white transition-colors" />
+            {/* Full Name */}
+            <div>
+              <label className="block text-[10px] font-black uppercase tracking-widest text-slate-500 mb-1.5">
+                Full Name<sup className="text-rose-500 font-black ml-0.5">*</sup>
+              </label>
+              <input value={form.name ?? ''} onChange={e => setForm(f => ({ ...f, name: e.target.value }))}
+                placeholder="Student full name"
+                className="w-full border border-slate-200 bg-slate-50 rounded-xl px-4 py-3 font-bold text-sm outline-none focus:border-indigo-500 focus:bg-white transition-colors" />
+            </div>
+
+            {/* Admission No. with Auto-generate chip on the right.
+                Format: <3-letter school code><2-digit year><001…>.
+                Sequential per (schoolCode, yearCode) — scans existing
+                admissionNo's in the loaded students[] for the highest
+                trailing number that matches the prefix and adds 1.
+                Principal can still type a custom number to override. */}
+            <div>
+              <label className="block text-[10px] font-black uppercase tracking-widest text-slate-500 mb-1.5">
+                Admission No.<sup className="text-rose-500 font-black ml-0.5">*</sup>
+              </label>
+              <div className="flex gap-2">
+                <input value={form.admissionNo ?? ''} onChange={e => setForm(f => ({ ...f, admissionNo: e.target.value }))}
+                  placeholder="ADM-2024-XXX"
+                  className="flex-1 min-w-0 border border-slate-200 bg-slate-50 rounded-xl px-4 py-3 font-bold text-sm outline-none focus:border-indigo-500 focus:bg-white transition-colors" />
+                <button type="button"
+                  onClick={() => {
+                    const rawName = (schoolInfo?.name ?? '').replace(/[^A-Za-z]/g, '').toUpperCase();
+                    if (rawName.length < 3) {
+                      showToast('School name set karein (min 3 letters) — Settings → School Info', 'error');
+                      return;
+                    }
+                    const code = rawName.slice(0, 3);
+                    // Year: first 4-digit number in activeYear.name (e.g. "2024-2025" → 24).
+                    const yearMatch = (activeYear?.name ?? '').match(/\d{4}/);
+                    const yr = yearMatch ? yearMatch[0].slice(-2) : new Date().getFullYear().toString().slice(-2);
+                    const prefix = `${code}${yr}`;
+                    // Find highest existing sequence for this prefix in the
+                    // already-loaded students. Pads to 3 digits, but if the
+                    // school has crossed 999 it'll still increment correctly.
+                    let max = 0;
+                    const re = new RegExp(`^${prefix}(\\d+)$`);
+                    for (const s of students) {
+                      const m = (s.admissionNo ?? '').match(re);
+                      if (m) max = Math.max(max, parseInt(m[1], 10));
+                    }
+                    const next = String(max + 1).padStart(3, '0');
+                    setForm(f => ({ ...f, admissionNo: `${prefix}${next}` }));
+                  }}
+                  className="shrink-0 px-3 py-3 bg-indigo-600 hover:bg-indigo-700 active:scale-95 text-white text-[11px] font-black uppercase tracking-widest rounded-xl transition-transform shadow-sm shadow-indigo-200">
+                  Auto
+                </button>
               </div>
-            ))}
+              <p className="text-[10px] font-bold text-slate-400 mt-1.5">
+                Auto = School-3 + Year-2 + 001 (e.g. ABC25001). Aap manually bhi likh sakte hain.
+              </p>
+            </div>
 
             {/* "Show more details" disclosure — hides every optional
                 step-1 field below until the principal asks. Keeps the
@@ -848,6 +1107,15 @@ const [mainView, setMainView] = useState<MainView>(initialView ?? 'CLASSES');
 
           {/* ─── STEP 3: DOCUMENTS ────────────────────────────────── */}
           {admStep === 3 && (<>
+          {mode === 'TEACHER_DRAFT' && (
+            <div className="bg-amber-50 border border-amber-200 rounded-2xl p-3.5">
+              <p className="text-[10px] font-black uppercase tracking-widest text-amber-700">Note</p>
+              <p className="text-xs font-bold text-amber-800 mt-1.5 leading-relaxed">
+                Draft submission me document upload nahi hota — principal review ke time documents add karenge.
+                Aap step 3 ko skip kar ke "Submit Draft" pe tap kar sakte hain.
+              </p>
+            </div>
+          )}
           <div className="bg-white rounded-2xl border border-slate-100 shadow-sm p-4 space-y-3">
             <div>
               <p className="text-[10px] font-black uppercase tracking-widest text-slate-400">Documents</p>
@@ -872,7 +1140,16 @@ const [mainView, setMainView] = useState<MainView>(initialView ?? 'CLASSES');
                     <div className="flex items-center gap-1.5 shrink-0">
                       {file && (
                         <button type="button"
-                          onClick={() => window.open(URL.createObjectURL(file), '_blank', 'noopener')}
+                          onClick={() => {
+                            // Revoke after the new tab has had a chance
+                            // to fetch + render — synchronous revoke
+                            // breaks the preview tab, leaked URL on
+                            // every click adds up over a long admission
+                            // session.
+                            const previewUrl = URL.createObjectURL(file);
+                            window.open(previewUrl, '_blank', 'noopener');
+                            setTimeout(() => URL.revokeObjectURL(previewUrl), 60_000);
+                          }}
                           className="flex items-center gap-1 text-[9px] font-black px-2 py-1.5 bg-emerald-100 text-emerald-700 hover:bg-emerald-200 rounded-full transition-colors">
                           <Eye size={10} /> View
                         </button>
@@ -908,7 +1185,10 @@ const [mainView, setMainView] = useState<MainView>(initialView ?? 'CLASSES');
           <button
             type="button"
             onClick={() => {
-              if (admStep === 1) { setSubView('LIST'); return; }
+              if (admStep === 1) {
+                if (mode !== 'PRINCIPAL_FULL') { onBack(); return; }
+                setSubView('LIST'); return;
+              }
               setAdmStep(s => (s - 1) as 1 | 2 | 3);
             }}
             className="flex items-center gap-1.5 px-4 py-2.5 bg-slate-100 hover:bg-slate-200 text-slate-700 font-black text-xs uppercase tracking-widest rounded-xl active:scale-95 transition-transform">
@@ -946,7 +1226,13 @@ const [mainView, setMainView] = useState<MainView>(initialView ?? 'CLASSES');
               onClick={handleCreate}
               disabled={isSubmitting}
               className="flex items-center gap-1.5 px-5 py-2.5 bg-indigo-600 hover:bg-indigo-700 text-white font-black text-xs uppercase tracking-widest rounded-xl active:scale-95 transition-transform shadow-md shadow-indigo-200 disabled:opacity-60">
-              {isSubmitting ? 'Admitting…' : <><Plus size={14} /> Admit Student</>}
+              {isSubmitting
+                ? (mode === 'TEACHER_DRAFT' ? 'Submitting…' : 'Admitting…')
+                : mode === 'TEACHER_DRAFT'
+                  ? <><Plus size={14} /> Submit Draft</>
+                  : mode === 'PRINCIPAL_REVIEW'
+                    ? <><CheckCircle2 size={14} /> Approve & Admit</>
+                    : <><Plus size={14} /> Admit Student</>}
             </button>
           )}
         </div>
@@ -1064,11 +1350,74 @@ const [mainView, setMainView] = useState<MainView>(initialView ?? 'CLASSES');
                   </button>
                 );
               })}
+              {/* Pending teacher-submitted admission drafts. Sits at the
+                  end of the filter row so the count is visible without
+                  scrolling on mobile. Distinct violet chip so it can't
+                  be confused with the green/red fee chips. */}
+              {pendingDrafts.length > 0 && (
+                <button onClick={() => setAdmFilter({ type: 'REVIEW' })}
+                  className={`shrink-0 px-3 py-1.5 rounded-full text-[10px] font-black uppercase tracking-widest border transition-colors ${
+                    admFilter.type === 'REVIEW'
+                      ? 'bg-violet-600 text-white border-violet-600'
+                      : 'bg-violet-50 text-violet-700 border-violet-200 hover:border-violet-300'
+                  }`}>
+                  Review ({pendingDrafts.length})
+                </button>
+              )}
             </div>
           </div>
         </div>
 
         <div className="flex-1 overflow-y-auto p-4">
+          {/* REVIEW filter: render the pending teacher-submitted drafts
+              instead of the students list. Tapping a row opens the
+              admission form prefilled (PRINCIPAL_REVIEW mode). */}
+          {admFilter.type === 'REVIEW' ? (
+            <div className="space-y-2">
+              {pendingDrafts.length === 0 ? (
+                <div className="flex flex-col items-center py-16 text-slate-400">
+                  <FileText size={32} className="mb-3 opacity-40" />
+                  <p className="font-bold text-sm">No drafts pending review</p>
+                  <p className="text-xs font-medium mt-1">Teacher submissions will appear here</p>
+                </div>
+              ) : (
+                pendingDrafts.map(d => {
+                  const initials = (d.fromName || '?').split(' ').map(w => w[0]).join('').slice(0, 2);
+                  return (
+                    <div key={d.id}
+                      className="bg-white rounded-2xl border border-violet-100 shadow-sm p-4">
+                      <div className="flex items-center gap-3">
+                        <div className="w-11 h-11 rounded-xl bg-violet-100 text-violet-700 flex items-center justify-center font-black text-sm shrink-0">
+                          {initials.toUpperCase()}
+                        </div>
+                        <div className="flex-1 min-w-0">
+                          <div className="font-extrabold text-slate-900 text-sm truncate">{d.fromName || 'Unnamed'}</div>
+                          <div className="flex items-center gap-2 mt-0.5 flex-wrap">
+                            <span className="text-[10px] font-bold text-slate-400">Adm No:</span>
+                            <span className="text-[10px] font-bold text-indigo-500">{d.fromAdmissionNo || '—'}</span>
+                            <span className="text-[9px] font-bold text-slate-300">·</span>
+                            <span className="text-[10px] font-bold text-slate-400">{d.createdAt}</span>
+                          </div>
+                        </div>
+                      </div>
+                      <div className="flex gap-2 mt-3">
+                        <button
+                          onClick={() => { setRejectingDraft(d); setRejectReasonText(''); }}
+                          className="flex-1 py-2.5 bg-rose-50 text-rose-700 border border-rose-200 font-black text-[11px] uppercase tracking-widest rounded-xl active:scale-95 transition-transform">
+                          Reject
+                        </button>
+                        <button
+                          onClick={() => setReviewing(d)}
+                          className="flex-[2] py-2.5 bg-violet-600 text-white font-black text-[11px] uppercase tracking-widest rounded-xl active:scale-95 transition-transform">
+                          Review &amp; Admit
+                        </button>
+                      </div>
+                    </div>
+                  );
+                })
+              )}
+            </div>
+          ) : (
           <div className="space-y-2">
             {filteredStudents.slice(0, showCountAdmission).map(student => {
               const initials = student.name.split(' ').map(w => w[0]).join('').slice(0, 2);
@@ -1123,7 +1472,43 @@ const [mainView, setMainView] = useState<MainView>(initialView ?? 'CLASSES');
               </p>
             )}
           </div>
+          )}
         </div>
+
+        {/* Reject-draft modal — opened from a draft row in the Review filter. */}
+        {rejectingDraft && (
+          <div className="fixed inset-0 z-50 bg-black/50 flex items-end sm:items-center justify-center p-4"
+               onClick={() => { if (!rejectingBusy) { setRejectingDraft(null); setRejectReasonText(''); } }}>
+            <div className="bg-white rounded-2xl w-full max-w-sm p-5 space-y-3"
+                 onClick={e => e.stopPropagation()}>
+              <p className="text-[10px] font-black uppercase tracking-widest text-rose-500">Reject Draft</p>
+              <p className="text-sm font-bold text-slate-700">
+                {rejectingDraft.fromName || 'Unnamed'} <span className="text-slate-400">· {rejectingDraft.fromAdmissionNo || '—'}</span>
+              </p>
+              <textarea
+                placeholder="Reason (teacher ko nahi dikhta — internal audit ke liye)"
+                value={rejectReasonText}
+                onChange={e => setRejectReasonText(e.target.value)}
+                rows={3}
+                className="w-full border border-slate-200 rounded-xl px-3 py-2.5 text-sm font-bold text-slate-800 placeholder:text-slate-400 focus:outline-none focus:border-rose-400 resize-none"
+              />
+              <div className="flex gap-2">
+                <button
+                  disabled={rejectingBusy}
+                  onClick={() => { setRejectingDraft(null); setRejectReasonText(''); }}
+                  className="flex-1 py-3 bg-slate-100 text-slate-600 font-black rounded-xl text-sm">
+                  Cancel
+                </button>
+                <button
+                  disabled={rejectingBusy || !rejectReasonText.trim()}
+                  onClick={submitDraftReject}
+                  className="flex-1 py-3 bg-rose-600 text-white font-black rounded-xl text-sm disabled:opacity-50">
+                  {rejectingBusy ? 'Rejecting…' : 'Confirm Reject'}
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
       </div>
     );
   }

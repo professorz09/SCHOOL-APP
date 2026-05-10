@@ -206,8 +206,17 @@ export const schoolInfoService = {
 async function uploadAsset(file: File, kind: 'logo' | 'principal-signature' | 'payment-qr'): Promise<string> {
   const schoolId = getSchoolId();
   if (!schoolId) throw new Error('No school in session');
-  // Validate so a 50 MB phone photo doesn't bomb the bucket.
-  if (!/^image\//.test(file.type)) throw new Error('Only image files are allowed');
+  // Validate so a 50 MB phone photo doesn't bomb the bucket. Whitelist
+  // safe raster formats only — `image/*` would have allowed
+  // `image/svg+xml`, which can carry embedded <script> that executes
+  // when the asset is later rendered via getPublicUrl (XSS in the
+  // school's own pages). PNG / JPEG / WebP / HEIC are safe-by-format.
+  const SAFE_IMG = new Set([
+    'image/jpeg', 'image/png', 'image/webp', 'image/heic', 'image/heif',
+  ]);
+  if (!SAFE_IMG.has(file.type)) {
+    throw new Error('Only JPEG / PNG / WebP / HEIC images are allowed');
+  }
   if (file.size > 4 * 1024 * 1024) throw new Error('Image must be under 4 MB');
   const ext = (file.name.split('.').pop() || 'png').toLowerCase().replace(/[^a-z0-9]/g, '');
   const path = `${schoolId}/${kind}.${ext}`;

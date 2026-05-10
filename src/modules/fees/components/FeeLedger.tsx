@@ -13,6 +13,7 @@ import type { FeeStructureRecord } from '@/modules/fees/fees.types';
 import { useUIStore } from '@/store/uiStore';
 import { useEditorModeStore } from '@/store/editorModeStore';
 import { useAcademicYear } from '@/shared/context/AcademicYearContext';
+import { todayIST } from '@/shared/utils/date';
 import { AppLoader } from '@/shared/components/AppLoader';
 import { FeePaymentSubmissionsQueue } from '@/modules/fees/components/FeePaymentSubmissionsQueue';
 import { PreviousYearDues } from '@/modules/fees/components/PreviousYearDues';
@@ -279,7 +280,14 @@ export const FeeLedger: React.FC<Props> = ({ onBack }) => {
           refreshAggregate(),
         ]);
       } catch (e) {
+        // Surface to the user — earlier this only console.error'd and
+        // the user saw an empty list with no idea network was down /
+        // RLS denied / etc. They'd assume "no students enrolled".
         console.error('[FeeLedger] load error', e);
+        showToast(
+          e instanceof Error ? e.message : 'Failed to load fees — try again or check connection',
+          'error',
+        );
       } finally {
         setLoading(false);
       }
@@ -638,7 +646,11 @@ export const FeeLedger: React.FC<Props> = ({ onBack }) => {
       showToast('Amount looks too large — please re-check', 'error');
       return;
     }
-    const today = new Date().toISOString().split('T')[0];
+    // IST date — earlier this used `.toISOString().split('T')[0]`
+    // which is UTC. A principal recording payment at 2 AM IST would
+    // see today's receipt dated yesterday. Money records should
+    // never be backdated by a timezone bug.
+    const today = todayIST();
     const chosenDate = useCustomDate && paymentDate ? paymentDate : today;
     if (useCustomDate && paymentDate && paymentDate > today) {
       showToast('Future date not allowed', 'error');
@@ -1049,21 +1061,42 @@ export const FeeLedger: React.FC<Props> = ({ onBack }) => {
               principal with no obvious next step. We now surface a clear
               CTA pointing to Regenerate, and don't gate first-time
               generation behind editor mode. */}
-          {detailTab === 'SCHEDULE' && !yearGroupsLoading && yearGroups.length === 0 && selected.installments.length === 0 && (
-            <div className="bg-white rounded-2xl border border-slate-200 shadow-sm p-6 lg:p-8 text-center">
-              <div className="w-12 h-12 rounded-2xl bg-amber-50 text-amber-600 flex items-center justify-center mx-auto mb-3">
-                <Calendar size={20} />
+          {detailTab === 'SCHEDULE' && !yearGroupsLoading && yearGroups.length === 0 && selected.installments.length === 0 && (() => {
+            // Schedule generation is a no-op without a class — fee
+            // structures are per-class, so an UNASSIGNED student has no
+            // structure to copy from. Block the CTA and tell the
+            // principal exactly what to do next.
+            const noClass = !selected.className || selected.className.trim() === '' || selected.className === '-';
+            return (
+              <div className="bg-white rounded-2xl border border-slate-200 shadow-sm p-6 lg:p-8 text-center">
+                <div className="w-12 h-12 rounded-2xl bg-amber-50 text-amber-600 flex items-center justify-center mx-auto mb-3">
+                  <Calendar size={20} />
+                </div>
+                <p className="font-black text-slate-900 text-sm lg:text-base mb-1">No fee schedule yet</p>
+                {noClass ? (
+                  <>
+                    <p className="text-xs lg:text-sm font-bold text-slate-500 mb-4 max-w-md mx-auto">
+                      Student abhi kisi class me assigned nahi hai. Pehle Students → Assign to Class se class de, fir yahan se schedule generate hoga.
+                    </p>
+                    <button disabled
+                      className="inline-flex items-center gap-2 bg-slate-200 text-slate-400 font-black text-xs uppercase tracking-widest px-5 py-3 rounded-xl cursor-not-allowed">
+                      <RefreshCw size={14} /> Class assign karein pehle
+                    </button>
+                  </>
+                ) : (
+                  <>
+                    <p className="text-xs lg:text-sm font-bold text-slate-500 mb-4 max-w-md mx-auto">
+                      This student doesn't have any installments. Generate one from a saved fee structure for {selected.className.split('-')[0] || 'this class'}.
+                    </p>
+                    <button onClick={openRegenModal}
+                      className="inline-flex items-center gap-2 bg-amber-600 hover:bg-amber-700 text-white font-black text-xs uppercase tracking-widest px-5 py-3 rounded-xl shadow-md active:scale-95 transition-transform">
+                      <RefreshCw size={14} /> Generate Schedule
+                    </button>
+                  </>
+                )}
               </div>
-              <p className="font-black text-slate-900 text-sm lg:text-base mb-1">No fee schedule yet</p>
-              <p className="text-xs lg:text-sm font-bold text-slate-500 mb-4 max-w-md mx-auto">
-                This student doesn't have any installments. Generate one from a saved fee structure for {selected.className.split('-')[0] || 'this class'}.
-              </p>
-              <button onClick={openRegenModal}
-                className="inline-flex items-center gap-2 bg-amber-600 hover:bg-amber-700 text-white font-black text-xs uppercase tracking-widest px-5 py-3 rounded-xl shadow-md active:scale-95 transition-transform">
-                <RefreshCw size={14} /> Generate Schedule
-              </button>
-            </div>
-          )}
+            );
+          })()}
 
           {/* ── FEE SCHEDULE — grouped by academic year ───────────────────── */}
           {detailTab === 'SCHEDULE' && (yearGroups.length > 0
@@ -1631,7 +1664,7 @@ export const FeeLedger: React.FC<Props> = ({ onBack }) => {
                     <span className="text-[11px] font-black text-slate-700">Backdate this payment</span>
                   </label>
                   {useCustomDate && (
-                    <input type="date" value={paymentDate} max={new Date().toISOString().split('T')[0]}
+                    <input type="date" value={paymentDate} max={todayIST()}
                       onChange={e => setPaymentDate(e.target.value)}
                       className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 text-sm font-bold text-slate-900 outline-none" />
                   )}

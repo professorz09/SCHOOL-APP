@@ -185,8 +185,26 @@ export const TransportManager: React.FC<Props> = ({ onBack }) => {
   };
 
   const handleDeleteVehicle = async (id: string) => {
-    await transportService.deleteVehicle(id);
-    await reloadCore();
+    const v = transportService.getVehicleById(id);
+    const label = v ? `${v.vehicleNo}${v.routeName ? ` (${v.routeName})` : ''}` : 'this vehicle';
+    // Earlier this fired the delete on a single click with no
+    // confirmation — accidental tap could remove a bus + cascade
+    // student assignments. Now requires explicit confirm + surfaces
+    // any server error (e.g. RLS, vehicle still has active students).
+    const ok = await useUIStore.getState().askConfirm({
+      title: `Delete ${label}?`,
+      message: 'Vehicle ka record hat jayega. Saare assigned students se transport service hat jayegi. Past trip history audit me bachti hai.',
+      confirmLabel: 'Delete Vehicle',
+      destructive: true,
+    });
+    if (!ok) return;
+    try {
+      await transportService.deleteVehicle(id);
+      await reloadCore();
+      showToast(`${label} deleted`);
+    } catch (e) {
+      showToast(e instanceof Error ? e.message : 'Could not delete vehicle', 'error');
+    }
   };
 
   const openDriverPicker = (vehicleId: string) => {
@@ -198,14 +216,24 @@ export const TransportManager: React.FC<Props> = ({ onBack }) => {
     if (!staffId) return;
     const s = staff.find(x => x.id === staffId);
     if (!s) return;
-    await transportService.assignDriver(vehicleId, staffId, s.name, s.phone);
-    setDriverPickerId(null);
-    await reloadCore();
+    try {
+      await transportService.assignDriver(vehicleId, staffId, s.name, s.phone);
+      setDriverPickerId(null);
+      await reloadCore();
+      showToast(`${s.name} assigned as driver`);
+    } catch (e) {
+      showToast(e instanceof Error ? e.message : 'Driver assign failed', 'error');
+    }
   };
 
   const handleRemoveDriver = async (vehicleId: string) => {
-    await transportService.removeDriver(vehicleId);
-    await reloadCore();
+    try {
+      await transportService.removeDriver(vehicleId);
+      await reloadCore();
+      showToast('Driver removed from vehicle');
+    } catch (e) {
+      showToast(e instanceof Error ? e.message : 'Could not remove driver', 'error');
+    }
   };
 
   const handleSaveRouteName = async () => {
@@ -256,6 +284,11 @@ export const TransportManager: React.FC<Props> = ({ onBack }) => {
       await reloadCore();
       await loadStudents();
       setSelStudentId(null); setSelVehicleId(null); setSelStopId(null);
+      showToast(`${student.name} assigned to ${vehicle.vehicleNo}`);
+    } catch (e) {
+      // Earlier this only had try/finally — assign failed, spinner stopped,
+      // user got no feedback and assumed it worked. Surface the actual error.
+      showToast(e instanceof Error ? e.message : 'Could not assign student to vehicle', 'error');
     } finally { setAssigning(false); }
   };
 
@@ -295,7 +328,7 @@ export const TransportManager: React.FC<Props> = ({ onBack }) => {
       studentsLoadedRef.current = false;
       await reloadCore();
       setBulkFromId(null);
-      alert(`Moved ${moved} student${moved === 1 ? '' : 's'} to new vehicle.`);
+      showToast(`Moved ${moved} student${moved === 1 ? '' : 's'} to new vehicle`);
     } catch (e) {
       setBulkErr(e instanceof Error ? e.message : 'Reassign failed');
     } finally { setBulkBusy(false); }

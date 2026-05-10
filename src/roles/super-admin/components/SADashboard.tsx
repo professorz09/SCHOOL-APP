@@ -147,37 +147,65 @@ export const SADashboard: React.FC<SADashboardProps> = ({ onNavigate }) => {
       <div>
         <div className="flex justify-between items-center mb-3">
           <h3 className="text-[11px] font-black uppercase tracking-widest text-slate-500">Recent Schools</h3>
-          <button onClick={() => onNavigate('schools')} className="text-[10px] font-black text-blue-600 uppercase tracking-widest">
-            View All →
-          </button>
+          {schools.length > 0 && (
+            <button onClick={() => onNavigate('schools')} className="text-[10px] font-black text-blue-600 uppercase tracking-widest">
+              View All →
+            </button>
+          )}
         </div>
         <div className="bg-white rounded-2xl border border-slate-100 shadow-sm overflow-hidden">
-          {schools.slice(0, 4).map((school, i) => (
-            <button
-              key={school.id}
-              onClick={() => onNavigate('schools')}
-              className={`w-full flex items-center justify-between p-4 text-left active:bg-slate-50 transition-colors ${i < 3 ? 'border-b border-slate-50' : ''}`}
-            >
-              <div className="flex items-center gap-3">
-                <div className="w-9 h-9 rounded-xl bg-gradient-to-br from-blue-100 to-indigo-100 text-blue-700 flex items-center justify-center font-black text-xs">
-                  {school.name.split(' ').map(w => w[0]).join('').slice(0, 2)}
-                </div>
-                <div>
-                  <div className="font-extrabold text-slate-900 text-sm">{school.name}</div>
-                  <div className="text-[10px] font-bold text-slate-400 mt-0.5 uppercase tracking-widest">
-                    {school.plan} · {school.studentCount.toLocaleString('en-IN')} students
-                  </div>
-                </div>
+          {schools.length === 0 ? (
+            <div className="flex flex-col items-center py-10 px-4 text-center">
+              <div className="w-12 h-12 rounded-2xl bg-slate-100 text-slate-400 flex items-center justify-center mb-3">
+                <Building2 size={22} />
               </div>
-              <span className={`text-[9px] font-black px-2 py-1 rounded-full uppercase tracking-widest ${
-                school.status === SchoolStatus.ACTIVE ? 'text-emerald-700 bg-emerald-50' :
-                school.status === SchoolStatus.TRIAL ? 'text-violet-700 bg-violet-50' :
-                'text-slate-500 bg-slate-100'
-              }`}>
-                {school.status}
-              </span>
-            </button>
-          ))}
+              <p className="font-black text-slate-700 text-sm">No schools onboarded yet</p>
+              <p className="text-[11px] font-bold text-slate-400 mt-1 leading-relaxed max-w-xs">
+                Tap <span className="text-slate-700">Schools</span> to onboard your first school.
+              </p>
+              <button onClick={() => onNavigate('schools')}
+                className="mt-4 px-4 py-2 bg-emerald-600 hover:bg-emerald-700 text-white font-black text-[10px] uppercase tracking-widest rounded-xl active:scale-95 transition-transform">
+                + Onboard School
+              </button>
+            </div>
+          ) : (
+            schools.slice(0, 4).map((school, i, arr) => {
+              // Safer initials — split + filter empties so "Delhi  Public  School"
+              // (double-spaced) doesn't yield an empty char on join.
+              const initials = school.name
+                .split(/\s+/).filter(Boolean)
+                .map(w => w[0])
+                .join('')
+                .slice(0, 2)
+                .toUpperCase() || '?';
+              return (
+                <button
+                  key={school.id}
+                  onClick={() => onNavigate('schools')}
+                  className={`w-full flex items-center justify-between p-4 text-left active:bg-slate-50 transition-colors ${i < arr.length - 1 ? 'border-b border-slate-50' : ''}`}
+                >
+                  <div className="flex items-center gap-3">
+                    <div className="w-9 h-9 rounded-xl bg-gradient-to-br from-blue-100 to-indigo-100 text-blue-700 flex items-center justify-center font-black text-xs">
+                      {initials}
+                    </div>
+                    <div>
+                      <div className="font-extrabold text-slate-900 text-sm">{school.name}</div>
+                      <div className="text-[10px] font-bold text-slate-400 mt-0.5 uppercase tracking-widest">
+                        {school.plan} · {school.studentCount.toLocaleString('en-IN')} students
+                      </div>
+                    </div>
+                  </div>
+                  <span className={`text-[9px] font-black px-2 py-1 rounded-full uppercase tracking-widest ${
+                    school.status === SchoolStatus.ACTIVE ? 'text-emerald-700 bg-emerald-50' :
+                    school.status === SchoolStatus.TRIAL ? 'text-violet-700 bg-violet-50' :
+                    'text-slate-500 bg-slate-100'
+                  }`}>
+                    {school.status}
+                  </span>
+                </button>
+              );
+            })
+          )}
         </div>
       </div>
 

@@ -39,6 +39,10 @@ export const FirstLoginPasswordChange: React.FC = () => {
     setSubmitting(true);
     try {
       await authService.changePassword(currentPassword, newPassword);
+      // Set the local flag immediately so the UI advances. The
+      // changePassword() call above already issues a getUser() to
+      // poison any in-flight stale refresh, so this update should
+      // stick across subsequent listener events on this same login.
       setSession({ ...session, mustChangePassword: false });
       showToast('Password changed successfully');
     } catch (err) {
@@ -49,21 +53,26 @@ export const FirstLoginPasswordChange: React.FC = () => {
   };
 
   return (
-    <div className="min-h-screen bg-gradient-to-br from-blue-600 to-blue-800 flex items-center justify-center sm:py-8 sm:px-4">
-      <div className="w-full h-screen sm:h-[850px] sm:max-w-[400px] bg-slate-50 relative sm:rounded-[40px] sm:border-[8px] border-slate-800 shadow-2xl flex flex-col overflow-hidden">
-        <div className="bg-gradient-to-r from-blue-600 to-blue-700 px-6 pt-6 pb-8 text-white">
-          <div className="flex items-center gap-3 mb-2">
-            <div className="w-10 h-10 rounded-2xl bg-white/20 flex items-center justify-center">
+    // Earlier this rendered a fake phone shell (rounded-[40px] +
+    // border-[8px]) at all viewports — looked like a screenshot
+    // mock-up rather than a real screen on tablets and desktops, and
+    // pushed the form way off-center. Now it's a normal centered
+    // card that adapts naturally.
+    <div className="min-h-dvh bg-gradient-to-br from-blue-600 to-blue-800 flex items-center justify-center p-4">
+      <div className="w-full max-w-md bg-white rounded-3xl shadow-2xl flex flex-col overflow-hidden">
+        <div className="bg-gradient-to-r from-blue-600 to-blue-700 px-6 pt-6 pb-7 text-white">
+          <div className="flex items-center gap-3">
+            <div className="w-11 h-11 rounded-2xl bg-white/20 flex items-center justify-center shrink-0">
               <ShieldCheck size={22} />
             </div>
-            <div>
-              <div className="text-2xl font-black">Set New Password</div>
-              <div className="text-xs font-bold text-blue-100">First login security check</div>
+            <div className="min-w-0">
+              <div className="text-xl font-black leading-tight">Set New Password</div>
+              <div className="text-[11px] font-bold text-blue-100 mt-0.5">First-login security check</div>
             </div>
           </div>
         </div>
 
-        <div className="flex-1 overflow-y-auto p-6 pb-28">
+        <div className="p-6 pb-7 max-h-[calc(100dvh-200px)] overflow-y-auto">
           <div className="bg-amber-50 border border-amber-200 rounded-xl p-3 mb-6">
             <p className="text-[11px] font-bold text-amber-800">
               For security, change your temporary password before continuing. You won't be asked again.
@@ -136,7 +145,7 @@ export const FirstLoginPasswordChange: React.FC = () => {
 
           <button
             onClick={async () => { await logout(); }}
-            className="w-full mt-3 py-3 text-slate-500 font-bold text-sm">
+            className="w-full mt-3 py-3 text-slate-500 font-bold text-sm hover:text-slate-700 transition-colors">
             Cancel & log out
           </button>
         </div>

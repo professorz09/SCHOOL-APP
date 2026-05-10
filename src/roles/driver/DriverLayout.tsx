@@ -3,12 +3,41 @@ import {
   Power, CheckCircle2, Circle, AlertTriangle, Bus, Navigation, Clock, MapPin,
 } from 'lucide-react';
 import { transportService, TransportVehicle, RouteStop, StudentTransportAssignment } from '@/modules/transport/transport.service';
+import { useAuthStore } from '@/store/authStore';
+import { useUIStore } from '@/store/uiStore';
+import { supabase } from '@/lib/supabase';
 
-const DRIVER_ID = 'staff6';
+// New Delhi as the GPS placeholder — only used until the real driver
+// grants browser geolocation. Without this initial point the route
+// progress tile would render blank co-ordinates.
 const INITIAL_LAT = 28.6139;
 const INITIAL_LNG = 77.2090;
 
+// Resolve the staff row tied to the logged-in driver's user_id. The
+// vehicles table keys by staff.id (driver_id), not auth user_id, so
+// we have to translate. Cached per session — staff row can't change
+// for a logged-in user, so one lookup is enough.
+async function resolveDriverStaffId(userId: string): Promise<string | null> {
+  const { data } = await supabase
+    .from('staff').select('id').eq('user_id', userId).maybeSingle();
+  return (data as { id: string } | null)?.id ?? null;
+}
+
+/** Haversine distance in metres. Used by the auto-arrive geofence
+ *  to detect that the bus has reached the next stop within ~100 m. */
+function haversineMeters(lat1: number, lng1: number, lat2: number, lng2: number): number {
+  const R = 6371000;
+  const toRad = (d: number) => d * Math.PI / 180;
+  const dLat = toRad(lat2 - lat1);
+  const dLng = toRad(lng2 - lng1);
+  const a = Math.sin(dLat / 2) ** 2
+          + Math.cos(toRad(lat1)) * Math.cos(toRad(lat2)) * Math.sin(dLng / 2) ** 2;
+  return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+}
+
 export const DriverLayout: React.FC = () => {
+  const session = useAuthStore(s => s.session);
+  const setAppReady = useUIStore(s => s.setAppReady);
   const [isTracking, setIsTracking] = useState(false);
   const [currentStopIndex, setCurrentStopIndex] = useState(0);
   const [autoArrive, setAutoArrive] = useState(false);
@@ -23,58 +52,272 @@ export const DriverLayout: React.FC = () => {
   const [assignedStudents, setAssignedStudents] = useState<StudentTransportAssignment[]>([]);
 
   useEffect(() => {
-    const vehicles = transportService.getVehicles();
-    const assignedVehicle = vehicles.find(v => v.driverId === DRIVER_ID);
-    if (assignedVehicle) {
-      setVehicle(assignedVehicle);
-      setStops(assignedVehicle.stops);
-      const students = transportService.getAssignmentsByVehicle(assignedVehicle.id);
-      setAssignedStudents(students);
+    let cancelled = false;
+    (async () => {
+      try {
+        // Earlier this used a hardcoded DRIVER_ID = 'staff6' which made
+        // EVERY logged-in driver see whichever vehicle was assigned to
+        // staff6. Now we resolve the actual staff_id from the session.
+        if (!session?.userId) {
+          if (!cancelled) setLoading(false);
+          return;
+        }
+        const staffId = await resolveDriverStaffId(session.userId);
+        if (cancelled) return;
+        if (!staffId) {
+          // Driver login exists but no staff row — the principal hasn't
+          // linked the auth user to a staff record yet. Bail with no
+          // vehicle so the "No Vehicle Assigned" state shows.
+          setLoading(false);
+          return;
+        }
+
+        // Pull fresh vehicle data from the server before deriving "my
+        // vehicle" — the in-memory cache may be empty on cold load.
+        await transportService.refreshAll();
+        if (cancelled) return;
+
+        const vehicles = transportService.getVehicles();
+        const assignedVehicle = vehicles.find(v => v.driverId === staffId);
+        if (assignedVehicle) {
+          setVehicle(assignedVehicle);
+          setStops(assignedVehicle.stops);
+          setAssignedStudents(transportService.getAssignmentsByVehicle(assignedVehicle.id));
+        }
+      } catch (err) {
+        console.error('[driver] resolve failed', err);
+      } finally {
+        if (!cancelled) {
+          setLoading(false);
+          // Lift the app-root splash. Driver dashboard renders even
+          // when no vehicle is assigned (with a friendly empty state),
+          // so we always flip ready once data resolution finishes.
+          setAppReady(true);
+        }
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [session?.userId, setAppReady]);
+
+  // ── Real GPS + ping loop ─────────────────────────────────────────
+  // While `isTracking`, navigator.geolocation.watchPosition streams
+  // device GPS to local state, AND every 15 sec the latest position
+  // is POSTed to /api/transport/ping which UPSERTs vehicle_live.
+  // Principal subscribes to that table via Realtime → live map.
+  //
+  // Earlier this loop simulated GPS with arithmetic — it was a UI
+  // toy that never reached the server, so the principal's "Live
+  // Buses" widget was always empty no matter what the driver did.
+
+  // Persist tripStartedAt across pings so the row reflects the
+  // single "current trip" without inserting a new audit row.
+  const [tripStartedAt, setTripStartedAt] = useState<string | null>(null);
+  const [speedKmh, setSpeedKmh] = useState<number | null>(null);
+  const [gpsError, setGpsError] = useState<string | null>(null);
+  const lastPingRef = React.useRef<{ lat: number; lng: number; isTracking: boolean; idx: number | null } | null>(null);
+
+  // 1. GPS watcher — only active while tracking. Browser pauses
+  //    automatically when tab is hidden (saves battery), and we
+  //    explicitly stop on isTracking=false.
+  useEffect(() => {
+    if (!isTracking) { setSpeedKmh(null); return; }
+    if (typeof navigator === 'undefined' || !('geolocation' in navigator)) {
+      setGpsError('Geolocation not supported on this device');
+      return;
     }
-    setLoading(false);
-  }, []);
+    setGpsError(null);
+    const watchId = navigator.geolocation.watchPosition(
+      pos => {
+        setCurrentLat(pos.coords.latitude);
+        setCurrentLng(pos.coords.longitude);
+        // navigator returns m/s; convert to km/h for display.
+        if (typeof pos.coords.speed === 'number' && !isNaN(pos.coords.speed)) {
+          setSpeedKmh(Math.max(0, pos.coords.speed * 3.6));
+        }
+
+        // Auto-arrive geofence: if within 100m of next stop, advance.
+        // Boundary: trip is complete when we've reached the FINAL stop.
+        // Earlier the comparison `adv >= stops.length - 1` fired
+        // tripComplete at the second-to-last stop AND let the index
+        // walk past stops.length-1 (out of bounds → next render had
+        // `stops[5]` undefined). Fix: trip-complete on reaching last
+        // stop, clamp index so it never exceeds stops.length-1.
+        const next = stops[currentStopIndex];
+        if (next && autoArrive) {
+          const meters = haversineMeters(pos.coords.latitude, pos.coords.longitude, next.lat, next.lng);
+          if (meters < 100) {
+            setCurrentStopIndex(c => {
+              const adv = c + 1;
+              const lastIdx = stops.length - 1;
+              if (adv >= lastIdx) {
+                setTripComplete(true);
+                return lastIdx; // clamp so we never index past end
+              }
+              return adv;
+            });
+          }
+        }
+      },
+      err => {
+        // Surface only durable errors — transient timeouts come and go.
+        if (err.code === err.PERMISSION_DENIED) {
+          setGpsError('Location permission denied — enable in browser settings');
+          setIsTracking(false); // can't track without permission
+        } else if (err.code === err.POSITION_UNAVAILABLE) {
+          // Tunnel / no satellite. Keep last position, don't toast.
+          // Server will mark stale after 30 min.
+        }
+      },
+      { enableHighAccuracy: true, maximumAge: 5_000, timeout: 30_000 },
+    );
+    return () => navigator.geolocation.clearWatch(watchId);
+  }, [isTracking, autoArrive, currentStopIndex, stops]);
+
+  // 2. Ping loop — UPSERT vehicle_live every 15 sec. Coordinates
+  //    update via watchPosition into refs (not state-deps) so the
+  //    timer doesn't tear down + restart + double-ping every time
+  //    the GPS chip emits a new fix (~1 Hz). Earlier this re-ran
+  //    the effect on every lat/lng change → flooded the server's
+  //    rate-limited /ping route with 429s.
+  const stateRef = React.useRef({
+    currentLat, currentLng, speedKmh,
+    isTracking, currentStopIndex, tripStartedAt,
+  });
+  // Keep ref fresh on every render — cheap O(1) sync.
+  stateRef.current = { currentLat, currentLng, speedKmh, isTracking, currentStopIndex, tripStartedAt };
 
   useEffect(() => {
-    let interval: ReturnType<typeof setInterval>;
-    if (isTracking && vehicle) {
-      interval = setInterval(() => {
-        setCurrentLat(prev => {
-          const nextStop = stops[currentStopIndex];
-          if (!nextStop) return prev;
-          const diff = nextStop.lat - prev;
-          const newLat = prev + diff * 0.05;
-          if (vehicle && Math.abs(newLat - nextStop.lat) < 0.001) {
-            if (autoArrive) {
-              setCurrentStopIndex(c => {
-                const next = c + 1;
-                if (next >= stops.length - 1) setTripComplete(true);
-                return next;
-              });
-            }
-            return nextStop.lat;
-          }
-          return newLat;
+    if (!vehicle) return;
+    let cancelled = false;
+
+    const sendPing = async () => {
+      const s = stateRef.current;
+      // Skip if we don't have a real coordinate yet (initial Delhi
+      // placeholder) — misleading on the principal's map.
+      if (s.currentLat === INITIAL_LAT && s.currentLng === INITIAL_LNG) return;
+
+      try {
+        const headers: Record<string, string> = { 'content-type': 'application/json' };
+        const sess = await supabase.auth.getSession();
+        const token = sess.data.session?.access_token;
+        if (token) headers.authorization = `Bearer ${token}`;
+        const res = await fetch('/api/transport/ping', {
+          method: 'POST',
+          headers,
+          body: JSON.stringify({
+            lat: s.currentLat, lng: s.currentLng,
+            speedKmh: s.speedKmh,
+            currentStopIdx: s.isTracking ? s.currentStopIndex : null,
+            isTracking: s.isTracking,
+            tripStartedAt: s.isTracking ? s.tripStartedAt : null,
+          }),
         });
-        setCurrentLng(prev => {
-          const nextStop = stops[currentStopIndex];
-          if (!nextStop) return prev;
-          const diff = nextStop.lng - prev;
-          return prev + diff * 0.05;
-        });
-      }, 3000);
+        if (cancelled) return;
+        if (!res.ok) {
+          console.warn('[driver] ping failed', res.status);
+          return;
+        }
+        lastPingRef.current = {
+          lat: s.currentLat, lng: s.currentLng,
+          isTracking: s.isTracking,
+          idx: s.isTracking ? s.currentStopIndex : null,
+        };
+      } catch (e) {
+        console.warn('[driver] ping threw', e);
+      }
+    };
+
+    // Trip ended: send a final ping then exit (no timer needed).
+    if (!isTracking) {
+      void sendPing();
+      return;
     }
-    return () => clearInterval(interval);
-  }, [isTracking, autoArrive, currentStopIndex, stops, vehicle]);
+
+    // Tracking on: kick off trip, send first ping, then heartbeat
+    // every 15s. Heartbeat advances `last_seen` even when stationary
+    // so principal sees "Live" instead of "Last seen N min ago".
+    if (!tripStartedAt) setTripStartedAt(new Date().toISOString());
+    void sendPing();
+    const interval = setInterval(() => { void sendPing(); }, 15_000);
+    return () => {
+      cancelled = true;
+      clearInterval(interval);
+    };
+    // currentStopIndex intentionally NOT in deps — moving to next stop
+    // is reflected via stateRef on the next heartbeat (max 15s lag).
+    // Adding it here would tear down + recreate the interval on each
+    // stop and risk duplicate pings.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isTracking, vehicle?.id]);
+
+  // Force one immediate ping when the driver advances to a new stop —
+  // 15-second heartbeat lag is too long for "arrived at school" UX
+  // on the principal's screen.
+  useEffect(() => {
+    if (!isTracking || !vehicle) return;
+    const s = stateRef.current;
+    if (s.currentLat === INITIAL_LAT && s.currentLng === INITIAL_LNG) return;
+    (async () => {
+      try {
+        const sess = await supabase.auth.getSession();
+        const token = sess.data.session?.access_token;
+        await fetch('/api/transport/ping', {
+          method: 'POST',
+          headers: { 'content-type': 'application/json', ...(token ? { authorization: `Bearer ${token}` } : {}) },
+          body: JSON.stringify({
+            lat: s.currentLat, lng: s.currentLng,
+            speedKmh: s.speedKmh,
+            currentStopIdx: currentStopIndex,
+            isTracking: true,
+            tripStartedAt: s.tripStartedAt,
+          }),
+        });
+      } catch { /* server rate-limit may bounce; next heartbeat will catch up */ }
+    })();
+  }, [currentStopIndex, isTracking, vehicle?.id]);
 
   const handleManualArrive = () => {
+    // Same boundary semantics as the auto-arrive geofence: clamp so
+    // index never walks past the last stop, and mark tripComplete
+    // when we've reached (not passed) the final stop.
     const next = currentStopIndex + 1;
-    setCurrentStopIndex(next);
-    if (next >= stops.length - 1) setTripComplete(true);
+    const lastIdx = Math.max(0, stops.length - 1);
+    if (next >= lastIdx) {
+      setCurrentStopIndex(lastIdx);
+      setTripComplete(true);
+    } else {
+      setCurrentStopIndex(next);
+    }
   };
 
-  const handleEmergency = () => {
-    setEmergencySent(true);
+  const handleEmergency = async () => {
     setShowEmergencyConfirm(false);
+    try {
+      const sess = await supabase.auth.getSession();
+      const token = sess.data.session?.access_token;
+      const res = await fetch('/api/transport/emergency-alert', {
+        method: 'POST',
+        headers: {
+          'content-type': 'application/json',
+          ...(token ? { authorization: `Bearer ${token}` } : {}),
+        },
+        body: JSON.stringify({
+          lat: currentLat !== INITIAL_LAT ? currentLat : undefined,
+          lng: currentLng !== INITIAL_LNG ? currentLng : undefined,
+        }),
+      });
+      if (!res.ok) {
+        const j = await res.json().catch(() => ({}));
+        throw new Error(j.error ?? 'Could not send emergency alert');
+      }
+      setEmergencySent(true);
+      useUIStore.getState().showToast('Emergency alert sent — principal notified', 'success');
+    } catch (e) {
+      useUIStore.getState().showToast(
+        e instanceof Error ? e.message : 'Could not send alert. Call school directly if real emergency.',
+        'error',
+      );
+    }
   };
 
   if (loading) {

@@ -3,6 +3,7 @@
 
 import { supabase } from '@/lib/supabase';
 import { logAudit } from '@/lib/audit';
+import { todayIST } from '@/shared/utils/date';
 import {
   SchoolBilling,
   BillingYear,
@@ -280,8 +281,10 @@ export const billingService = {
 
   async getCurrentYear(schoolId: string): Promise<BillingYear | null> {
     // The "current" year is the most recent one whose start_date has passed,
-    // or the latest one if none have started yet.
-    const today = new Date().toISOString().split('T')[0];
+    // or the latest one if none have started yet. IST date so a super-admin
+    // checking at 1 AM IST doesn't see "yesterday" cut off the just-started
+    // billing year.
+    const today = todayIST();
     const { data: started } = await supabase
       .from('school_billing_years')
       .select('id, school_id, year_label, start_date, end_date, annual_amount, carried_forward, total_due, total_paid, outstanding, schools!inner(name, is_deleted)')

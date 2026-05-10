@@ -9,9 +9,9 @@ import { studentService } from '@/modules/students/student.service';
 import { Student } from '@/modules/students/student.types';
 import { schoolInfoService, type SchoolInfo } from '@/shared/utils/schoolInfo.service';
 import { AdmissionFormPrint } from '@/shared/components/AdmissionFormPrint';
+import { ExamPaperGeneratorView } from '@/modules/exams/components/ExamPaperGenerator';
 import { teacherService } from '@/roles/teacher/teacher.service';
 import type { GeneratedExamPaper, ExamSection, ExamQuestion } from '@/roles/teacher/teacher.types';
-import { isGeminiConfigured, GeminiUnavailableError, fileToInlineImage } from '@/lib/gemini';
 import { useUIStore } from '@/store/uiStore';
 import { apiExams } from '@/lib/apiClient';
 
@@ -178,8 +178,14 @@ export const ToolsManager: React.FC<Props> = ({ onBack }) => {
         questions: [],
       }])));
 
-    const removeSection = (sIdx: number) => {
-      if (!confirm('Remove this section and all its questions?')) return;
+    const removeSection = async (sIdx: number) => {
+      const ok = await useUIStore.getState().askConfirm({
+        title: 'Remove this section?',
+        message: 'Iss section ke saare questions bhi delete ho jayenge. Save tabhi hoga jab tum upar Save dabaoge.',
+        confirmLabel: 'Remove Section',
+        destructive: true,
+      });
+      if (!ok) return;
       setDraft(prev => renumberAll(recompute(prev.filter((_, i) => i !== sIdx))));
     };
 
@@ -356,325 +362,6 @@ export const ToolsManager: React.FC<Props> = ({ onBack }) => {
               </button>
             </div>
           )}
-        </div>
-      </div>
-    );
-  };
-
-  // ── QUESTION PAPER GENERATOR (AI) ────────────────────────────────────────
-  const QuestionPaperGenerator = () => {
-    const showToast = useUIStore(s => s.showToast);
-    const [config, setConfig] = useState({
-      class: '10', section: 'A', subject: 'Mathematics',
-      totalMarks: 100, numQuestions: 30, difficulty: 'MIXED' as 'EASY' | 'MIXED' | 'HARD',
-      topics: '',
-      // Per-type counts (0 = AI auto-balances). Mirrors the teacher's
-      // ExamPaperGenerator so the principal flow has the same controls.
-      mcqCount: 0, shortCount: 0, longCount: 0,
-    });
-    const [paper, setPaper] = useState<GeneratedExamPaper | null>(null);
-    const [isGenerating, setIsGenerating] = useState(false);
-    const [savedPapers, setSavedPapers] = useState<GeneratedExamPaper[]>([]);
-    const [savedLoading, setSavedLoading] = useState(false);
-    const aiAvailable = isGeminiConfigured();
-
-    // Mode toggle: PROMPT (text-only AI generation) vs SCAN (upload photo
-    // of an existing paper → Gemini Vision OCR → structured paper). Both
-    // paths land on the same GeneratedExamPaper preview/persist flow.
-    const [mode, setMode] = useState<'PROMPT' | 'SCAN'>('PROMPT');
-    const [scanFiles, setScanFiles] = useState<File[]>([]);
-    const [scanPreviews, setScanPreviews] = useState<string[]>([]);
-    const [isScanning, setIsScanning] = useState(false);
-
-    // Object URLs need to be revoked when previews change so the browser
-    // doesn't leak blob memory across upload cycles.
-    React.useEffect(() => {
-      const urls = scanFiles.map(f => URL.createObjectURL(f));
-      setScanPreviews(urls);
-      return () => { urls.forEach(URL.revokeObjectURL); };
-    }, [scanFiles]);
-
-    React.useEffect(() => {
-      setSavedLoading(true);
-      teacherService.getGeneratedPapers()
-        .then(setSavedPapers)
-        .catch(() => { /* table may be empty / RLS — no toast on first load */ })
-        .finally(() => setSavedLoading(false));
-    }, []);
-
-    const handleGenerate = async () => {
-      if (!aiAvailable) { showToast('AI is not configured. Set GEMINI_API_KEY to enable.', 'error'); return; }
-      setIsGenerating(true);
-      try {
-        const result = await teacherService.generateExamPaper({
-          subject: config.subject,
-          className: `Class ${config.class}`,
-          testType: 'UNIT_TEST',
-          totalMarks: config.totalMarks,
-          duration: 180,
-          topics: config.topics.trim(),
-          difficulty: config.difficulty === 'MIXED' ? 'MEDIUM' : config.difficulty,
-          mcqCount:   config.mcqCount,
-          shortCount: config.shortCount,
-          longCount:  config.longCount,
-        });
-        setPaper(result);
-        teacherService.getGeneratedPapers()
-          .then(setSavedPapers)
-          .catch(() => {});
-      } catch (e) {
-        if (e instanceof GeminiUnavailableError) {
-          showToast('AI is not configured. Set GEMINI_API_KEY to enable.', 'error');
-        } else {
-          showToast(e instanceof Error ? e.message : 'Failed to generate paper', 'error');
-        }
-      } finally {
-        setIsGenerating(false);
-      }
-    };
-
-    const handleScanExtract = async () => {
-      if (!aiAvailable) { showToast('AI is not configured. Set GEMINI_API_KEY to enable.', 'error'); return; }
-      if (scanFiles.length === 0) { showToast('Pick or take at least one photo of the paper first', 'error'); return; }
-      setIsScanning(true);
-      try {
-        const inline = await Promise.all(scanFiles.map(fileToInlineImage));
-        const result = await teacherService.extractPaperFromImages(inline, {
-          className: `Class ${config.class}`,
-          subject: config.subject,
-          totalMarks: config.totalMarks,
-          duration: 180,
-          difficulty: config.difficulty === 'MIXED' ? 'MEDIUM' : config.difficulty,
-        });
-        setPaper(result);
-        setScanFiles([]);
-        teacherService.getGeneratedPapers().then(setSavedPapers).catch(() => {});
-      } catch (e) {
-        if (e instanceof GeminiUnavailableError) {
-          showToast('AI is not configured. Set GEMINI_API_KEY to enable.', 'error');
-        } else {
-          showToast(e instanceof Error ? e.message : 'Could not extract questions', 'error');
-        }
-      } finally {
-        setIsScanning(false);
-      }
-    };
-
-    const handlePrint = () => window.print();
-
-    if (paper) {
-      return <PaperPreview paper={paper} onClose={() => setPaper(null)}
-        onSaved={updated => {
-          setPaper(updated);
-          teacherService.getGeneratedPapers().then(setSavedPapers).catch(() => {});
-        }} />;
-    }
-
-    return (
-      <div className="w-full flex flex-col">
-        <ToolHeader title="AI Question Paper" onBackPress={() => setView('DASHBOARD')} />
-        <div className="p-5 space-y-4">
-          {!aiAvailable && (
-            <div className="bg-amber-50 border border-amber-200 rounded-2xl p-4 flex items-start gap-3">
-              <Sparkles size={20} className="text-amber-600 shrink-0 mt-0.5" />
-              <div>
-                <p className="font-black text-amber-900 text-sm">AI Not Configured</p>
-                <p className="text-xs font-bold text-amber-700 mt-0.5">Set GEMINI_API_KEY in environment to enable AI features.</p>
-              </div>
-            </div>
-          )}
-
-          {/* Mode toggle — Generate via prompt OR scan an existing paper. */}
-          <div className="bg-slate-100 rounded-2xl p-1 flex">
-            <button type="button" onClick={() => setMode('PROMPT')}
-              className={`flex-1 py-2.5 rounded-xl text-[11px] font-black uppercase tracking-wider transition-all ${mode === 'PROMPT' ? 'bg-white text-violet-600 shadow-sm' : 'text-slate-500'}`}>
-              ✨ Generate (AI)
-            </button>
-            <button type="button" onClick={() => setMode('SCAN')}
-              className={`flex-1 py-2.5 rounded-xl text-[11px] font-black uppercase tracking-wider transition-all ${mode === 'SCAN' ? 'bg-white text-violet-600 shadow-sm' : 'text-slate-500'}`}>
-              📷 Scan Paper
-            </button>
-          </div>
-
-          <div className="space-y-3">
-            <div>
-              <label className="text-xs font-black uppercase tracking-widest text-slate-400 mb-1.5 block">Class</label>
-              <select value={config.class} onChange={e => setConfig({ ...config, class: e.target.value })}
-                className="w-full border border-slate-200 bg-white rounded-xl px-4 py-3 font-bold text-sm outline-none focus:border-violet-500">
-                {['8', '9', '10', '11', '12'].map(c => <option key={c} value={c}>Class {c}</option>)}
-              </select>
-            </div>
-            <div>
-              <label className="text-xs font-black uppercase tracking-widest text-slate-400 mb-1.5 block">Subject</label>
-              <select value={config.subject} onChange={e => setConfig({ ...config, subject: e.target.value })}
-                className="w-full border border-slate-200 bg-white rounded-xl px-4 py-3 font-bold text-sm outline-none focus:border-violet-500">
-                {['Mathematics', 'Science', 'English', 'History', 'Geography', 'Hindi', 'Physics', 'Chemistry', 'Biology'].map(s => (
-                  <option key={s} value={s}>{s}</option>
-                ))}
-              </select>
-            </div>
-            <div>
-              <label className="text-xs font-black uppercase tracking-widest text-slate-400 mb-1.5 block">Total Marks</label>
-              <input type="number" value={config.totalMarks}
-                onChange={e => setConfig({ ...config, totalMarks: parseInt(e.target.value) || 0 })}
-                className="w-full border border-slate-200 bg-white rounded-xl px-4 py-3 font-bold text-sm outline-none focus:border-violet-500" />
-            </div>
-            {mode === 'PROMPT' && (
-              <>
-                <div>
-                  <label className="text-xs font-black uppercase tracking-widest text-slate-400 mb-1.5 block">Topics (optional)</label>
-                  <textarea value={config.topics} rows={2}
-                    placeholder="e.g. Quadratic equations, Trigonometry, Coordinate geometry"
-                    onChange={e => setConfig({ ...config, topics: e.target.value })}
-                    className="w-full border border-slate-200 bg-white rounded-xl px-4 py-3 font-bold text-sm outline-none focus:border-violet-500 resize-none" />
-                </div>
-                <div>
-                  <label className="text-xs font-black uppercase tracking-widest text-slate-400 mb-2 block">Difficulty</label>
-                  <div className="grid grid-cols-3 gap-2">
-                    {(['EASY', 'MIXED', 'HARD'] as const).map(d => (
-                      <button key={d} onClick={() => setConfig({ ...config, difficulty: d })}
-                        className={`py-2.5 rounded-xl font-black text-xs uppercase tracking-wide transition-all ${
-                          config.difficulty === d ? 'bg-violet-600 text-white' : 'bg-slate-100 text-slate-600 border border-slate-200'
-                        }`}>
-                        {d}
-                      </button>
-                    ))}
-                  </div>
-                </div>
-
-                {/* Question count controls — exact MCQ / short / long
-                    counts. 0 = AI auto-balances. Mirrors teacher's
-                    ExamPaperGenerator. */}
-                <div>
-                  <label className="text-xs font-black uppercase tracking-widest text-slate-400 mb-1.5 block">
-                    Question Counts <span className="text-slate-400">(0 = auto-balance)</span>
-                  </label>
-                  <div className="grid grid-cols-3 gap-2">
-                    {[
-                      { key: 'mcqCount'   as const, label: 'MCQ',   marks: 1, color: 'border-blue-200 focus:border-blue-500',     labelColor: 'text-blue-700' },
-                      { key: 'shortCount' as const, label: 'Short', marks: 2, color: 'border-violet-200 focus:border-violet-500', labelColor: 'text-violet-700' },
-                      { key: 'longCount'  as const, label: 'Long',  marks: 5, color: 'border-rose-200 focus:border-rose-500',     labelColor: 'text-rose-700' },
-                    ].map(({ key, label, marks, color, labelColor }) => (
-                      <div key={key}>
-                        <div className={`text-[9px] font-black uppercase tracking-wider ${labelColor} mb-1 flex items-center justify-between`}>
-                          <span>{label}</span>
-                          <span className="text-slate-400">~{marks}m</span>
-                        </div>
-                        <input
-                          type="number" min={0} max={50}
-                          value={config[key] ?? 0}
-                          onChange={e => setConfig({ ...config, [key]: Math.max(0, +e.target.value || 0) })}
-                          className={`w-full bg-white border rounded-xl px-3 py-2 text-center font-black text-base outline-none ${color}`}
-                        />
-                      </div>
-                    ))}
-                  </div>
-                  {(() => {
-                    const totalQs = (config.mcqCount ?? 0) + (config.shortCount ?? 0) + (config.longCount ?? 0);
-                    const estMarks = (config.mcqCount ?? 0) * 1 + (config.shortCount ?? 0) * 2 + (config.longCount ?? 0) * 5;
-                    if (totalQs === 0) return (
-                      <p className="text-[10px] font-bold text-slate-400 mt-1.5">AI will pick a balanced mix automatically.</p>
-                    );
-                    const overrun = estMarks > config.totalMarks;
-                    return (
-                      <p className={`text-[10px] font-bold mt-1.5 ${overrun ? 'text-rose-600' : 'text-slate-500'}`}>
-                        {totalQs} questions · ≈ {estMarks} marks
-                        {overrun && ` — exceeds total ${config.totalMarks}, AI will rebalance`}
-                      </p>
-                    );
-                  })()}
-                </div>
-              </>
-            )}
-
-            {mode === 'SCAN' && (
-              <div>
-                <label className="text-xs font-black uppercase tracking-widest text-slate-400 mb-1.5 block">
-                  Photo of paper · {scanFiles.length}/4
-                </label>
-                <p className="text-[10px] font-bold text-slate-400 mb-2">
-                  Capture or upload up to 4 clear photos of the printed/handwritten question paper. AI will extract every question into editable form.
-                </p>
-                <input
-                  id="scan-paper-input"
-                  type="file" accept="image/*" multiple
-                  capture="environment"
-                  onChange={e => {
-                    const list = Array.from(e.target.files ?? []).slice(0, 4);
-                    setScanFiles(list);
-                    e.target.value = ''; // allow re-picking same file
-                  }}
-                  className="hidden"
-                />
-                <label htmlFor="scan-paper-input"
-                  className="block w-full border-2 border-dashed border-violet-300 bg-violet-50/30 hover:bg-violet-50 rounded-xl px-4 py-6 text-center cursor-pointer transition-colors">
-                  <div className="text-violet-600 text-2xl mb-1">📷</div>
-                  <p className="text-xs font-black text-violet-700">Tap to take photo or upload</p>
-                  <p className="text-[10px] font-bold text-violet-500 mt-0.5">JPG / PNG / WEBP · max 6 MB each · up to 4</p>
-                </label>
-
-                {scanPreviews.length > 0 && (
-                  <div className="mt-3 grid grid-cols-2 gap-2">
-                    {scanPreviews.map((url, i) => (
-                      <div key={url} className="relative">
-                        <img src={url} alt={`Page ${i + 1}`}
-                          className="w-full h-32 object-cover rounded-lg border border-slate-200" />
-                        <button
-                          onClick={() => setScanFiles(files => files.filter((_, idx) => idx !== i))}
-                          className="absolute top-1 right-1 w-6 h-6 bg-rose-600 text-white rounded-full text-xs font-black shadow-md">
-                          ×
-                        </button>
-                        <span className="absolute bottom-1 left-1 bg-slate-900/80 text-white text-[9px] font-black px-1.5 py-0.5 rounded">
-                          Page {i + 1}
-                        </span>
-                      </div>
-                    ))}
-                  </div>
-                )}
-              </div>
-            )}
-          </div>
-
-          {mode === 'PROMPT' ? (
-            <button type="button" onClick={handleGenerate} disabled={isGenerating || !aiAvailable}
-              className="w-full flex items-center justify-center gap-2 bg-violet-600 hover:bg-violet-700 text-white font-black text-sm uppercase py-4 rounded-2xl active:scale-95 transition-transform disabled:opacity-60 shadow-md">
-              {isGenerating
-                ? <><div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" /> Generating…</>
-                : <><Sparkles size={16} /> Generate Paper</>}
-            </button>
-          ) : (
-            <button type="button" onClick={handleScanExtract} disabled={isScanning || !aiAvailable || scanFiles.length === 0}
-              className="w-full flex items-center justify-center gap-2 bg-violet-600 hover:bg-violet-700 text-white font-black text-sm uppercase py-4 rounded-2xl active:scale-95 transition-transform disabled:opacity-60 shadow-md">
-              {isScanning
-                ? <><div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" /> Reading paper…</>
-                : <><Sparkles size={16} /> Extract Questions</>}
-            </button>
-          )}
-
-          {/* Saved papers — reopen previously generated AI papers */}
-          <div className="pt-2">
-            <p className="text-[10px] font-black uppercase tracking-widest text-slate-400 mb-2">Saved Papers</p>
-            {savedLoading ? (
-              <p className="text-xs font-bold text-slate-400">Loading…</p>
-            ) : savedPapers.length === 0 ? (
-              <p className="text-xs font-bold text-slate-400">No saved papers yet. Generate one to save it.</p>
-            ) : (
-              <div className="space-y-2">
-                {savedPapers.map(p => (
-                  <button key={p.id} onClick={() => setPaper(p)}
-                    className="w-full bg-white border border-slate-200 rounded-xl p-3 text-left flex items-center justify-between active:scale-[0.98] transition-transform">
-                    <div className="min-w-0">
-                      <div className="font-extrabold text-slate-900 text-sm truncate">{p.request.subject} · {p.request.className}</div>
-                      <div className="text-[10px] font-bold text-slate-400 mt-0.5">
-                        {p.request.totalMarks} marks · {new Date(p.generatedAt).toLocaleDateString()} {new Date(p.generatedAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
-                      </div>
-                    </div>
-                    <ChevronRight size={16} className="text-slate-300 shrink-0" />
-                  </button>
-                ))}
-              </div>
-            )}
-          </div>
         </div>
       </div>
     );
@@ -1058,6 +745,25 @@ export const ToolsManager: React.FC<Props> = ({ onBack }) => {
 
   // ── MARKSHEET TOOL (multi-subject) ───────────────────────────────────────
   const MarksheetTool = () => {
+    // Two source modes for the marksheet:
+    //   • SYSTEM — pick student + completed exam, pull subject-wise
+    //     results from the DB. Branded with school logo + signature.
+    //   • MANUAL — principal types name / class / roll / exam +
+    //     subject-wise marks directly. Use case: re-printing an old
+    //     marksheet for a transferred student, ad-hoc certificate
+    //     for a competition, or schools that haven't yet uploaded
+    //     results into the system.
+    // Tools-side Marksheet is manual-only by design — looking up an
+    // existing student's exam results is now done from the student's
+    // profile → Documents tab, where the principal already has the
+    // student's full context. Keeping a single-student picker here too
+    // gave principals two ways to do the same thing and the Tools UI
+    // drifted out of sync with the profile flow. SourceMode type is
+    // retained for the print branch but is fixed to 'MANUAL' inside
+    // Tools.
+    type SourceMode = 'SYSTEM' | 'MANUAL';
+    const [sourceMode] = useState<SourceMode>('MANUAL');
+
     const [picked,       setPicked]       = useState('');
     const [examTitle,    setExamTitle]    = useState('');
     const [allExams,     setAllExams]     = useState<any[]>([]);
@@ -1069,6 +775,24 @@ export const ToolsManager: React.FC<Props> = ({ onBack }) => {
     const printRef = useRef<HTMLDivElement>(null);
     const { showToast: msToast } = useUIStore();
 
+    // Manual-mode state. Kept separate from SYSTEM so toggling between
+    // modes preserves work-in-progress on either side.
+    const [manual, setManual] = useState<{
+      name: string; admissionNo: string; className: string; section: string;
+      rollNo: string; fatherName: string; motherName: string; dob: string; examTitle: string;
+      rows: Array<{ subject: string; max: number | ''; obtained: number | '' }>;
+    }>({
+      name: '', admissionNo: '', className: '', section: '',
+      rollNo: '', fatherName: '', motherName: '', dob: '', examTitle: '',
+      rows: [
+        { subject: 'English',     max: 100, obtained: '' },
+        { subject: 'Hindi',       max: 100, obtained: '' },
+        { subject: 'Mathematics', max: 100, obtained: '' },
+        { subject: 'Science',     max: 100, obtained: '' },
+        { subject: 'Soc. Studies',max: 100, obtained: '' },
+      ],
+    });
+
     const student = students.find(s => s.id === picked) ?? null;
 
     // Branding — logo + signature embedded into the printed marksheet,
@@ -1079,8 +803,16 @@ export const ToolsManager: React.FC<Props> = ({ onBack }) => {
     const signatureUrl = schoolInfo?.principalSignaturePath ? schoolInfoService.getAssetUrl(schoolInfo.principalSignaturePath) : null;
 
     const handleDownload = async () => {
-      if (!printRef.current || !student) return;
-      try { await downloadNodeAsPdf(printRef.current, `marksheet-${student.admissionNo}.pdf`); }
+      if (!printRef.current) return;
+      // Use the manual admission no if typed, fall back to the student's
+      // admission no, finally a slugified name so the file isn't called
+      // "marksheet-undefined.pdf" when the manual form skips IDs.
+      const slug = (
+        sourceMode === 'MANUAL'
+          ? (manual.admissionNo.trim() || manual.name.trim() || 'manual')
+          : (student?.admissionNo ?? 'student')
+      ).replace(/[^a-zA-Z0-9_-]+/g, '_');
+      try { await downloadNodeAsPdf(printRef.current, `marksheet-${slug}.pdf`); }
       catch (e) { msToast(e instanceof Error ? e.message : 'PDF export failed', 'error'); }
     };
 
@@ -1119,7 +851,7 @@ export const ToolsManager: React.FC<Props> = ({ onBack }) => {
         .finally(() => setLoadingRes(false));
     }, [examTitle, picked]);
 
-    // Aggregate totals (only rows where result exists)
+    // Aggregate totals (only rows where result exists) — SYSTEM mode.
     const filledRows  = subjectRows.filter(r => r.result !== null);
     const totalMax    = subjectRows.reduce((s, r) => s + (r.exam.max_marks ?? 0), 0);
     const totalObtained = filledRows.reduce((s, r) => s + (r.result?.obtained_marks ?? 0), 0);
@@ -1131,7 +863,62 @@ export const ToolsManager: React.FC<Props> = ({ onBack }) => {
       return p >= 90 ? 'A+' : p >= 75 ? 'A' : p >= 60 ? 'B+' : p >= 45 ? 'B' : p >= 33 ? 'C' : 'F';
     };
 
-    if (showPrint && student && examTitle && subjectRows.length > 0) {
+    // ── Mode-agnostic display data ──────────────────────────────────────
+    // The print template references `student.name`, `subjectRows[i].exam.subject`
+    // etc — these display* values normalise both SYSTEM (DB-backed) and
+    // MANUAL (typed) flows into the same shape so the renderer below
+    // doesn't need a single `if (mode === ...)` branch.
+    const isManual = sourceMode === 'MANUAL';
+
+    // Skip incomplete rows (no subject name OR no max set) so a half-
+    // filled manual form doesn't render with "Subject:" empty cells.
+    const manualRowsComplete = manual.rows.filter(
+      r => r.subject.trim() && r.max !== '' && Number(r.max) > 0,
+    );
+
+    const displayStudent = isManual
+      ? {
+          name:        manual.name.trim() || '—',
+          admissionNo: manual.admissionNo.trim() || '—',
+          className:   manual.className.trim() || '—',
+          section:     manual.section.trim() || '',
+          rollNo:      manual.rollNo.trim() || '',
+          fatherName:  manual.fatherName.trim() || '—',
+        }
+      : student;
+
+    const displayExamTitle = isManual ? (manual.examTitle.trim() || 'Exam') : examTitle;
+
+    const displaySubjectRows = isManual
+      ? manualRowsComplete.map(r => ({
+          exam: { subject: r.subject.trim(), max_marks: Number(r.max) || 0 },
+          result: r.obtained === '' ? null : {
+            obtained_marks: Number(r.obtained),
+            grade: undefined as string | undefined,
+          },
+        }))
+      : subjectRows;
+
+    const displayTotalMax = isManual
+      ? displaySubjectRows.reduce((s, r) => s + (r.exam.max_marks ?? 0), 0)
+      : totalMax;
+    const displayTotalObtained = isManual
+      ? displaySubjectRows
+          .filter(r => r.result !== null)
+          .reduce((s, r) => s + (r.result?.obtained_marks ?? 0), 0)
+      : totalObtained;
+    const displayPct = displayTotalMax > 0
+      ? Math.round((displayTotalObtained / displayTotalMax) * 100)
+      : 0;
+    const displayPassed = displayPct >= 33;
+
+    // Print is reachable when EITHER mode has enough data. Manual flow
+    // requires at least name + 1 complete subject row.
+    const canPrint = isManual
+      ? !!manual.name.trim() && manualRowsComplete.length > 0
+      : !!(student && examTitle && subjectRows.length > 0);
+
+    if (showPrint && canPrint && displayStudent) {
       return (
         <div className="w-full flex flex-col">
           <div className="sticky top-0 bg-white px-4 py-3 border-b border-slate-100 flex gap-2 z-10 print:hidden">
@@ -1171,12 +958,12 @@ export const ToolsManager: React.FC<Props> = ({ onBack }) => {
 
             {/* Student details grid */}
             <div className="grid grid-cols-2 gap-1.5 text-xs font-bold text-slate-700 mb-4 border border-slate-200 rounded-xl p-3">
-              <div><span className="text-slate-400">Name: </span>{student.name}</div>
-              <div><span className="text-slate-400">Adm. No: </span>{student.admissionNo}</div>
-              <div><span className="text-slate-400">Class: </span>{student.className}-{student.section}</div>
-              <div><span className="text-slate-400">Roll No: </span>{student.rollNo || '—'}</div>
-              <div><span className="text-slate-400">Father: </span>{student.fatherName || '—'}</div>
-              <div><span className="text-slate-400">Exam: </span>{examTitle}</div>
+              <div><span className="text-slate-400">Name: </span>{displayStudent.name}</div>
+              <div><span className="text-slate-400">Adm. No: </span>{displayStudent.admissionNo}</div>
+              <div><span className="text-slate-400">Class: </span>{displayStudent.className}{displayStudent.section ? `-${displayStudent.section}` : ''}</div>
+              <div><span className="text-slate-400">Roll No: </span>{displayStudent.rollNo || '—'}</div>
+              <div><span className="text-slate-400">Father: </span>{displayStudent.fatherName || '—'}</div>
+              <div><span className="text-slate-400">Exam: </span>{displayExamTitle}</div>
             </div>
 
             {/* Subject-wise results table */}
@@ -1191,7 +978,7 @@ export const ToolsManager: React.FC<Props> = ({ onBack }) => {
                 </tr>
               </thead>
               <tbody>
-                {subjectRows.map((row, i) => {
+                {displaySubjectRows.map((row, i) => {
                   const obt = row.result?.obtained_marks ?? null;
                   const max = row.exam.max_marks ?? 0;
                   const grade = obt !== null ? (row.result?.grade ?? gradeLabel(obt, max)) : '—';
@@ -1216,11 +1003,11 @@ export const ToolsManager: React.FC<Props> = ({ onBack }) => {
               <tfoot>
                 <tr className="bg-slate-100 font-black">
                   <td className="px-3 py-2">Total</td>
-                  <td className="px-3 py-2 text-center">{totalMax}</td>
-                  <td className="px-3 py-2 text-center">{totalObtained}</td>
-                  <td className="px-3 py-2 text-center">{gradeLabel(totalObtained, totalMax)}</td>
-                  <td className={`px-3 py-2 text-center ${passed ? 'text-emerald-600' : 'text-rose-600'}`}>
-                    {passed ? 'PASS' : 'FAIL'}
+                  <td className="px-3 py-2 text-center">{displayTotalMax}</td>
+                  <td className="px-3 py-2 text-center">{displayTotalObtained}</td>
+                  <td className="px-3 py-2 text-center">{gradeLabel(displayTotalObtained, displayTotalMax)}</td>
+                  <td className={`px-3 py-2 text-center ${displayPassed ? 'text-emerald-600' : 'text-rose-600'}`}>
+                    {displayPassed ? 'PASS' : 'FAIL'}
                   </td>
                 </tr>
               </tfoot>
@@ -1228,9 +1015,9 @@ export const ToolsManager: React.FC<Props> = ({ onBack }) => {
 
             {/* Percentage badge */}
             <div className={`text-center py-3 rounded-xl font-black text-base uppercase tracking-widest border-2 ${
-              passed ? 'bg-emerald-50 border-emerald-300 text-emerald-700' : 'bg-rose-50 border-rose-300 text-rose-700'
+              displayPassed ? 'bg-emerald-50 border-emerald-300 text-emerald-700' : 'bg-rose-50 border-rose-300 text-rose-700'
             }`}>
-              {passed ? '✓ PASS' : '✗ FAIL'} — {pct}% ({totalObtained}/{totalMax})
+              {displayPassed ? '✓ PASS' : '✗ FAIL'} — {displayPct}% ({displayTotalObtained}/{displayTotalMax})
             </div>
 
             {/* Signature strip — Principal slot embeds the uploaded
@@ -1261,14 +1048,15 @@ export const ToolsManager: React.FC<Props> = ({ onBack }) => {
             <div>
               <p className="font-black text-amber-900 text-sm">Academic Marksheet Generator</p>
               <p className="text-xs font-bold text-amber-700 mt-0.5">
-                Student → Exam series → Subject-wise marksheet with grades
+                System se ya manually marks dalkar — dono mode same template par print honge
               </p>
             </div>
           </div>
 
-          <StudentPicker value={picked} onChange={v => { setPicked(v); setExamTitle(''); setSubjectRows([]); }} />
+          {/* Manual-only inside Tools. Single-student lookups (pull
+              existing exam results) live on the student's profile. */}
 
-          {student && (
+          {sourceMode === 'SYSTEM' && student && (
             <>
               <SelectedCard student={student} />
 
@@ -1294,8 +1082,120 @@ export const ToolsManager: React.FC<Props> = ({ onBack }) => {
             </>
           )}
 
-          {/* Preview rows */}
-          {examTitle && !loadingRes && subjectRows.length > 0 && (
+          {/* ── MANUAL FORM ──────────────────────────────────────────
+              Free-typed student bio + dynamic subject-wise marks.
+              Same render path / template as SYSTEM mode — just a
+              different data source. Adding / removing subject rows
+              is local; nothing persists. */}
+          {sourceMode === 'MANUAL' && (
+            <div className="bg-white rounded-2xl border border-slate-100 shadow-sm p-4 space-y-3">
+              <p className="text-[10px] font-black uppercase tracking-widest text-slate-500">Student Details</p>
+              <div className="grid grid-cols-2 gap-2">
+                <input value={manual.name} onChange={e => setManual(m => ({ ...m, name: e.target.value }))}
+                  placeholder="Student name *"
+                  className="col-span-2 border border-slate-200 bg-slate-50 rounded-xl px-3 py-2.5 text-sm font-bold outline-none focus:border-amber-500" />
+                <input value={manual.fatherName} onChange={e => setManual(m => ({ ...m, fatherName: e.target.value }))}
+                  placeholder="Father's name"
+                  className="border border-slate-200 bg-slate-50 rounded-xl px-3 py-2.5 text-sm font-bold outline-none focus:border-amber-500" />
+                <input value={manual.motherName} onChange={e => setManual(m => ({ ...m, motherName: e.target.value }))}
+                  placeholder="Mother's name"
+                  className="border border-slate-200 bg-slate-50 rounded-xl px-3 py-2.5 text-sm font-bold outline-none focus:border-amber-500" />
+                <input value={manual.className} onChange={e => setManual(m => ({ ...m, className: e.target.value }))}
+                  placeholder="Class (e.g. 10)"
+                  className="border border-slate-200 bg-slate-50 rounded-xl px-3 py-2.5 text-sm font-bold outline-none focus:border-amber-500" />
+                <input value={manual.section} onChange={e => setManual(m => ({ ...m, section: e.target.value }))}
+                  placeholder="Section (A)"
+                  className="border border-slate-200 bg-slate-50 rounded-xl px-3 py-2.5 text-sm font-bold outline-none focus:border-amber-500" />
+                <input value={manual.rollNo} onChange={e => setManual(m => ({ ...m, rollNo: e.target.value }))}
+                  placeholder="Roll No."
+                  className="border border-slate-200 bg-slate-50 rounded-xl px-3 py-2.5 text-sm font-bold outline-none focus:border-amber-500" />
+                <input value={manual.admissionNo} onChange={e => setManual(m => ({ ...m, admissionNo: e.target.value }))}
+                  placeholder="Admission No."
+                  className="border border-slate-200 bg-slate-50 rounded-xl px-3 py-2.5 text-sm font-bold outline-none focus:border-amber-500" />
+                <input value={manual.examTitle} onChange={e => setManual(m => ({ ...m, examTitle: e.target.value }))}
+                  placeholder="Exam title (e.g. Half Yearly 2024-25) *"
+                  className="col-span-2 border border-slate-200 bg-slate-50 rounded-xl px-3 py-2.5 text-sm font-bold outline-none focus:border-amber-500" />
+              </div>
+
+              <div className="pt-2 border-t border-slate-100">
+                <div className="flex items-center justify-between mb-2">
+                  <p className="text-[10px] font-black uppercase tracking-widest text-slate-500">Subjects & Marks</p>
+                  <button type="button"
+                    onClick={() => setManual(m => ({
+                      ...m,
+                      rows: [...m.rows, { subject: '', max: 100, obtained: '' }],
+                    }))}
+                    className="text-[10px] font-black text-amber-700 bg-amber-50 px-2.5 py-1 rounded-full uppercase tracking-widest hover:bg-amber-100">
+                    + Add subject
+                  </button>
+                </div>
+                <div className="space-y-2">
+                  {/* Header row — mobile-friendly column hints. */}
+                  <div className="grid grid-cols-12 gap-2 text-[9px] font-black uppercase tracking-widest text-slate-400 px-1">
+                    <div className="col-span-6">Subject</div>
+                    <div className="col-span-2 text-center">Max</div>
+                    <div className="col-span-3 text-center">Obtained</div>
+                    <div className="col-span-1" />
+                  </div>
+                  {manual.rows.map((r, idx) => (
+                    <div key={idx} className="grid grid-cols-12 gap-2 items-center">
+                      <input
+                        value={r.subject}
+                        onChange={e => setManual(m => ({
+                          ...m,
+                          rows: m.rows.map((x, i) => i === idx ? { ...x, subject: e.target.value } : x),
+                        }))}
+                        placeholder="e.g. English"
+                        className="col-span-6 border border-slate-200 bg-slate-50 rounded-xl px-3 py-2 text-xs font-bold outline-none focus:border-amber-500"
+                      />
+                      <input
+                        type="number" inputMode="numeric"
+                        value={r.max}
+                        onChange={e => setManual(m => ({
+                          ...m,
+                          rows: m.rows.map((x, i) => i === idx ? { ...x, max: e.target.value === '' ? '' : Math.max(1, +e.target.value) } : x),
+                        }))}
+                        className="col-span-2 border border-slate-200 bg-slate-50 rounded-xl px-2 py-2 text-xs font-black text-center outline-none focus:border-amber-500"
+                      />
+                      <input
+                        type="number" inputMode="numeric"
+                        value={r.obtained}
+                        onChange={e => setManual(m => ({
+                          ...m,
+                          rows: m.rows.map((x, i) => i === idx ? { ...x, obtained: e.target.value === '' ? '' : Math.max(0, +e.target.value) } : x),
+                        }))}
+                        placeholder="—"
+                        className="col-span-3 border border-slate-200 bg-slate-50 rounded-xl px-2 py-2 text-xs font-black text-center outline-none focus:border-amber-500"
+                      />
+                      <button type="button"
+                        onClick={() => setManual(m => ({
+                          ...m,
+                          rows: m.rows.filter((_, i) => i !== idx),
+                        }))}
+                        disabled={manual.rows.length <= 1}
+                        title="Remove row"
+                        className="col-span-1 text-slate-400 hover:text-rose-500 disabled:opacity-30 disabled:cursor-not-allowed text-lg font-black">
+                        ×
+                      </button>
+                    </div>
+                  ))}
+                </div>
+                {manualRowsComplete.length > 0 && (
+                  <p className="text-[10px] font-bold text-slate-400 mt-3">
+                    {manualRowsComplete.length} subject{manualRowsComplete.length === 1 ? '' : 's'} ·
+                    {' '}{displayTotalObtained}/{displayTotalMax} ·
+                    {' '}<span className={displayPassed ? 'text-emerald-600' : 'text-rose-600'}>
+                      {displayPct}% {displayPassed ? 'PASS' : 'FAIL'}
+                    </span>
+                  </p>
+                )}
+              </div>
+            </div>
+          )}
+
+          {/* Preview rows — system mode only. Manual mode shows its
+              live total inline below the subject grid above. */}
+          {sourceMode === 'SYSTEM' && examTitle && !loadingRes && subjectRows.length > 0 && (
             <div className="bg-white rounded-2xl border border-slate-100 shadow-sm overflow-hidden">
               <div className="px-4 py-2 border-b border-slate-50 flex items-center justify-between">
                 <p className="text-[9px] font-black uppercase tracking-widest text-slate-400">Preview</p>
@@ -1324,22 +1224,22 @@ export const ToolsManager: React.FC<Props> = ({ onBack }) => {
             </div>
           )}
 
-          {examTitle && loadingRes && (
+          {sourceMode === 'SYSTEM' && examTitle && loadingRes && (
             <div className="text-center text-xs font-bold text-slate-400 py-4">Results load ho rahe hain…</div>
           )}
 
-          {examTitle && !loadingRes && subjectRows.length === 0 && (
+          {sourceMode === 'SYSTEM' && examTitle && !loadingRes && subjectRows.length === 0 && (
             <p className="text-[10px] font-bold text-amber-600 text-center">
               Is exam series ke results nahi mile is student ke liye
             </p>
           )}
 
-          {student && examTitle && subjectRows.length > 0 && (
+          {canPrint && (
             <button
               onClick={() => setShowPrint(true)}
               disabled={loadingRes}
               className="w-full flex items-center justify-center gap-2 bg-amber-600 text-white font-black text-sm uppercase py-4 rounded-2xl active:scale-95 transition-transform shadow-md disabled:opacity-50">
-              <FileText size={16} /> Generate Marksheet ({subjectRows.length} subjects)
+              <FileText size={16} /> Generate Marksheet ({displaySubjectRows.length} subjects)
             </button>
           )}
         </div>
@@ -1809,7 +1709,11 @@ export const ToolsManager: React.FC<Props> = ({ onBack }) => {
     const [draft, setDraft] = useState<SchoolInfo | null>(schoolInfo);
     const [busy, setBusy] = useState<'logo' | 'sig' | 'save' | null>(null);
 
-    React.useEffect(() => { setDraft(schoolInfo); }, []);
+    // Re-sync draft from prop on every change. Earlier the dep was []
+    // so when schoolInfo loaded async (parent fetches it after this
+    // component mounts), the draft stayed null and the form showed
+    // "Loading…" forever even though the parent had the data.
+    React.useEffect(() => { if (schoolInfo) setDraft(schoolInfo); }, [schoolInfo]);
     if (!draft) {
       return (
         <div className="w-full flex flex-col">
@@ -2022,7 +1926,12 @@ export const ToolsManager: React.FC<Props> = ({ onBack }) => {
   };
 
   if (view === 'ADMISSION') return <AdmissionFormTool />;
-  if (view === 'PAPERS')    return <QuestionPaperGenerator />;
+  // Single source of truth: the same generator the teacher sees from
+  // their dashboard. Earlier the principal had ~300 lines of duplicated
+  // PROMPT/SCAN/preview/save UI that drifted out of sync with the
+  // teacher version (different prompt fields, different saved-papers
+  // shape). One component → one bug list, one UX upgrade path.
+  if (view === 'PAPERS')    return <ExamPaperGeneratorView onBack={() => setView('DASHBOARD')} />;
   if (view === 'TC')        return <TCGenerator />;
   if (view === 'IDCARD')    return <IDCardGenerator />;
   if (view === 'BONAFIDE')  return <BonafideGenerator />;
@@ -2039,24 +1948,20 @@ export const ToolsManager: React.FC<Props> = ({ onBack }) => {
   // white so the dashboard feels designed, not chaotic.
   type ToolDef = { icon: typeof Sparkles; label: string; desc: string; view: ToolView };
   const TOOL_GROUPS: Array<{ label: string; iconBg: string; rail: string; tools: ToolDef[] }> = [
+    // Tools dashboard now shows ONLY class-wise / bulk / manual flows.
+    // Single-student docs (TC, Bonafide, Admission Form, individual
+    // marksheets) live inside each student's profile → Documents tab —
+    // see StudentDocumentsPanel + Issue-TC button. Earlier this
+    // dashboard also exposed single-student variants and principals
+    // had two paths to the same output, which kept drifting visually.
     {
-      label: 'Identity & Records',
+      label: 'Bulk Documents',
       iconBg: 'bg-blue-50 text-blue-600',
       rail:   'bg-blue-500',
       tools: [
-        { icon: ClipboardList, label: 'Admission Form', desc: 'New admission form', view: 'ADMISSION' },
-        { icon: IdCard,        label: 'ID Cards',       desc: 'Student ID cards',   view: 'IDCARD' },
-        { icon: FileCheck,     label: 'Transfer Cert',  desc: 'TC for a student',   view: 'TC' },
-        { icon: BadgeCheck,    label: 'Bonafide',       desc: 'Bonafide cert',      view: 'BONAFIDE' },
-      ],
-    },
-    {
-      label: 'Academic',
-      iconBg: 'bg-emerald-50 text-emerald-600',
-      rail:   'bg-emerald-500',
-      tools: [
-        { icon: Award,  label: 'Marksheets',  desc: 'Subject-wise marksheet',  view: 'MARKSHEET' },
-        { icon: Ticket, label: 'Admit Cards', desc: 'Class-wise admit cards', view: 'ADMIT' },
+        { icon: IdCard, label: 'ID Cards',    desc: 'Whole-class bulk PDF',    view: 'IDCARD' },
+        { icon: Ticket, label: 'Admit Cards', desc: 'Whole-class bulk PDF',    view: 'ADMIT' },
+        { icon: Award,  label: 'Marksheet',   desc: 'Manual entry / one-off',  view: 'MARKSHEET' },
       ],
     },
     {
@@ -2106,6 +2011,17 @@ export const ToolsManager: React.FC<Props> = ({ onBack }) => {
           </p>
         </div>
       )}
+
+      {/* Where to find single-student docs — TC / Bonafide / Admission
+          Form / per-student Marksheet etc. live inside the student's
+          own profile (Students → student card → Documents tab). Tools
+          stays focused on bulk + manual outputs. */}
+      <div className="mx-4 lg:mx-6 mt-4 bg-slate-50 border border-slate-200 rounded-2xl p-3 flex items-start gap-2">
+        <span className="text-slate-500 font-black shrink-0">i</span>
+        <p className="text-[11px] font-bold text-slate-600 leading-relaxed">
+          <span className="text-slate-900">Single student ke documents</span> (Transfer Certificate, Bonafide, Admission Form, etc.) us student ke profile me <span className="text-indigo-600">Documents</span> tab par milenge. Ye Tools sirf bulk-class aur manual ke liye hai.
+        </p>
+      </div>
 
       {/* Grouped tool sections */}
       <div className="p-4 lg:p-6 space-y-6 lg:space-y-7">

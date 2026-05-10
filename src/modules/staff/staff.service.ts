@@ -6,6 +6,7 @@ import { supabase } from '@/lib/supabase';
 import { useAuthStore } from '@/store/authStore';
 import { adminApi } from '@/lib/adminApi';
 import { logAudit } from '@/lib/audit';
+import { todayIST } from '@/shared/utils/date';
 import { staffStorageService } from '@/modules/staff/staffStorage.service';
 import { apiStaff } from '@/lib/apiClient';
 import type {
@@ -20,7 +21,11 @@ function getSchoolId(): string {
   return id;
 }
 
-const todayIso = (): string => new Date().toISOString().split('T')[0];
+// IST today — the UTC version produced wrong dates between
+// 12:00 and 05:30 AM IST (still yesterday in UTC). For salary
+// records this would mean a "today's salary" entry actually
+// dated yesterday → broken month-aggregations and audit drift.
+const todayIso = (): string => todayIST();
 
 /** Resolve a staff salary effective on a given month (first-of-month date)
  *  from a sorted history slice. Falls back to `currentSalary`. */
@@ -136,7 +141,13 @@ export const staffService = {
     const { data, error } = await supabase
       .from('staff').select(STAFF_FIELDS)
       .eq('school_id', schoolId)
-      .order('created_at', { ascending: false });
+      .order('created_at', { ascending: false })
+      // Safety cap. A normal school has 20-200 staff. The cap exists
+      // to bound the client-side payload if the table is ever
+      // accidentally bloated (bad import, missing soft-delete) so
+      // the principal's app doesn't lock up trying to render 10k
+      // rows. Mirrors studentService.getAll's 5000 cap.
+      .limit(2000);
     if (error) throw new Error(error.message);
     const rows = ((data ?? []) as StaffRow[]).filter(r => r.is_active);
     const classesMap = await fetchAssignedClasses(schoolId, rows.map(r => r.id));

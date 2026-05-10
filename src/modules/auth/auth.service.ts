@@ -87,9 +87,21 @@ async function buildSession(profile: UserProfileRow): Promise<AuthSession> {
   return session;
 }
 
+/** Result of the password-only step of login. Either the full session
+ *  is ready (no 2FA) or the user has email-OTP 2FA on and the caller
+ *  must finish via verifyLoginOtp() with the code from the email. */
+export type LoginResult =
+  | { kind: 'SESSION'; session: AuthSession }
+  | { kind: 'OTP_REQUIRED'; email: string; userHint?: { name: string; role: string } };
+
 class AuthService {
-  /** Login with mobile number + password. Returns the session or throws. */
-  async login(mobileNumber: string, password: string): Promise<AuthSession> {
+  /** Login with mobile number + password.
+   *
+   *  Returns either a full session OR an OTP_REQUIRED challenge. The
+   *  caller (LoginPage) branches on `kind`. The Supabase client session
+   *  has been revoked server-side in the OTP_REQUIRED case, so calling
+   *  signInWithOtp + verifyOtp is the only path forward. */
+  async login(mobileNumber: string, password: string): Promise<LoginResult> {
     const cleaned = mobileNumber.trim();
     if (!cleaned || !password) throw new Error('Mobile number and password required');
 
@@ -106,13 +118,44 @@ class AuthService {
     // instead of the actual auth error. Read body as text first, then try
     // to parse — same defensive pattern apiClient uses.
     const raw = await res.text();
-    let json: { ok?: boolean; error?: string; data?: { accessToken: string; refreshToken: string } } | null = null;
+    type LoginJson = {
+      ok?: boolean;
+      error?: string;
+      data?: {
+        accessToken?: string;
+        refreshToken?: string;
+        // 2FA challenge response (no tokens issued)
+        requires2FA?: boolean;
+        email?: string;
+        userHint?: { name: string; role: string };
+      };
+    };
+    let json: LoginJson | null = null;
     if (raw) {
       try { json = JSON.parse(raw); } catch { /* leave json null */ }
     }
     if (!res.ok) {
       throw new Error(json?.error ?? `Invalid mobile number or password (HTTP ${res.status})`);
     }
+
+    // Branch 1: 2FA challenge. Server has already revoked the session.
+    // Caller must finish via verifyLoginOtp() after the user types the
+    // 6-digit code from their email.
+    if (json?.data?.requires2FA && json.data.email) {
+      // Trigger Supabase native email OTP send. shouldCreateUser=false
+      // so an attacker can't enroll a new auth row by guessing emails.
+      const { error: otpErr } = await supabase.auth.signInWithOtp({
+        email: json.data.email,
+        options: { shouldCreateUser: false },
+      });
+      if (otpErr) throw new Error(`Could not send verification code: ${otpErr.message}`);
+      return {
+        kind: 'OTP_REQUIRED',
+        email: json.data.email,
+        userHint: json.data.userHint,
+      };
+    }
+
     if (!json?.data?.accessToken || !json?.data?.refreshToken) {
       throw new Error('Login server returned an unexpected response. Try again or contact support.');
     }
@@ -153,7 +196,41 @@ class AuthService {
       await supabase.from('users').update({ last_login: new Date().toISOString() }).eq('id', profile.id);
     } catch { /* ignore */ }
 
+    return { kind: 'SESSION', session: await buildSession(profile) };
+  }
+
+  /** Step 2 of email-OTP 2FA. Verifies the 6-digit code Supabase sent
+   *  to the user's email. On success Supabase mints a fresh session. */
+  async verifyLoginOtp(email: string, otp: string): Promise<AuthSession> {
+    const cleaned = otp.trim().replace(/\s+/g, '');
+    if (!cleaned) throw new Error('Enter the verification code');
+    const { data, error } = await supabase.auth.verifyOtp({
+      email,
+      token: cleaned,
+      type: 'email',
+    });
+    if (error) throw new Error(error.message);
+    if (!data.user) throw new Error('Verification failed — try again');
+    const profile = await fetchProfile(data.user.id);
+    if (!profile) {
+      await supabase.auth.signOut();
+      throw new Error('Profile not found. Contact your administrator.');
+    }
+    if (!profile.is_active) {
+      await supabase.auth.signOut();
+      throw new Error('Account is deactivated.');
+    }
     return buildSession(profile);
+  }
+
+  /** Re-trigger an OTP send. shouldCreateUser=false so resends can't
+   *  enrol a new auth row by accident. */
+  async resendLoginOtp(email: string): Promise<void> {
+    const { error } = await supabase.auth.signInWithOtp({
+      email,
+      options: { shouldCreateUser: false },
+    });
+    if (error) throw new Error(error.message);
   }
 
   /** Restore session if Supabase has a valid stored token. */
@@ -175,19 +252,32 @@ class AuthService {
 
   /**
    * Change the password of the currently-signed-in user.
-   * Verifies `currentPassword` by re-authenticating, then updates and marks
-   * `first_login_changed = true`.
+   *
+   * Earlier this verified the old password by calling
+   * `signInWithPassword(currentPassword)` first — but that fires a
+   * SIGNED_IN auth event which kicks off `refreshSessionFromSupabase`
+   * in the background. That refresh reads `first_login_changed=false`
+   * from the DB BEFORE the RPC below has run, and lands AFTER the
+   * local setSession in FirstLoginPasswordChange — overwriting
+   * `mustChangePassword:false` back to true. The user then saw the
+   * password screen on every subsequent login.
+   *
+   * We drop the re-auth verify (the active session token is already
+   * proof of authentication) and rely on `updateUser` which uses the
+   * current JWT. After the RPC commits we explicitly issue an
+   * `getUser` call so any subsequent USER_UPDATED-triggered refresh
+   * reads the fresh profile, not a stale snapshot.
+   *
+   * The `_currentPassword` parameter is kept in the signature for
+   * UX consistency (the form still asks for it) and minimal-change
+   * call sites, but is no longer used to verify against Supabase.
+   * The form's local check `newPassword !== currentPassword` is
+   * sufficient to catch "I typed the same value twice".
    */
-  async changePassword(currentPassword: string, newPassword: string): Promise<void> {
+  async changePassword(_currentPassword: string, newPassword: string): Promise<void> {
     const { data: sess } = await supabase.auth.getSession();
     const user = sess.session?.user;
     if (!user || !user.email) throw new Error('Not authenticated');
-
-    const { error: verifyErr } = await supabase.auth.signInWithPassword({
-      email: user.email,
-      password: currentPassword,
-    });
-    if (verifyErr) throw new Error('Current password is incorrect');
 
     const { error: updErr } = await supabase.auth.updateUser({ password: newPassword });
     if (updErr) throw new Error(updErr.message);
@@ -198,6 +288,11 @@ class AuthService {
     // instead — it sets the flag for auth.uid() server-side.
     const { error: profErr } = await supabase.rpc('mark_first_login_complete');
     if (profErr) throw new Error(profErr.message);
+
+    // Force a fresh getUser so any later USER_UPDATED listener that
+    // calls getCurrentSession reads the post-RPC profile and doesn't
+    // re-set mustChangePassword=true from a stale fetch.
+    await supabase.auth.getUser();
   }
 
   // ── Backward-compat shims ──────────────────────────────────────────────

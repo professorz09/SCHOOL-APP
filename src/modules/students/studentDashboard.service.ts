@@ -15,6 +15,7 @@
 import { supabase } from '@/lib/supabase';
 import { useAuthStore } from '@/store/authStore';
 import { logAudit } from '@/lib/audit';
+import { todayIST } from '@/shared/utils/date';
 import {
   TimetableDay, TimetablePeriod, PeriodType,
   StudentExamResult, FeePaymentUpload, TransportStop,
@@ -392,7 +393,9 @@ export const studentDashboardService = {
   async getScheduledExams(): Promise<UpcomingExam[]> {
     const ctx = await getStudentContext();
     if (!ctx.sectionId || !ctx.yearId) return [];
-    const today = new Date().toISOString().split('T')[0];
+    // IST today — UTC version made the "next exam on Monday" widget
+    // jump to "Tuesday" in the small hours of Monday morning IST.
+    const today = todayIST();
 
     const { data, error } = await supabase
       .from('test_schedules')
@@ -607,9 +610,15 @@ export const studentDashboardService = {
 
   async getComplaints(): Promise<StudentComplaint[]> {
     const userId = getUserId();
+    // We DO want hidden rows in the response so the client can count
+    // them toward the rolling-30-day anonymous cap. Earlier we filtered
+    // them out at the DB layer; that made hide() act like a "free another
+    // slot" button — student could file → hide → file again, bypassing
+    // the cap because UI cap math used the visible list. Now hide is
+    // purely cosmetic on the UI side; cap math is honest.
     const { data, error } = await supabase
       .from('complaints')
-      .select('id, subject, description, status, created_at, response, is_anonymous')
+      .select('id, subject, description, status, created_at, response, is_anonymous, hidden_from_submitter')
       .eq('from_user_id', userId)
       .order('created_at', { ascending: false });
     if (error) throw new Error(error.message);
@@ -618,6 +627,7 @@ export const studentDashboardService = {
       id: string; subject: string; description: string | null;
       status: string; created_at: string; response: string | null;
       is_anonymous: boolean | null;
+      hidden_from_submitter: boolean | null;
     }>).map(c => ({
       id: c.id,
       subject: c.subject,
@@ -626,7 +636,24 @@ export const studentDashboardService = {
       createdAt: c.created_at.slice(0, 10),
       response: c.response,
       isAnonymous: c.is_anonymous === true,
+      hiddenFromSubmitter: c.hidden_from_submitter === true,
     }));
+  },
+
+  /** Hides a complaint from the submitter's own dashboard. The row stays
+   *  in DB; principal + super-admin still see it. Used so a student who
+   *  filed a sensitive anonymous complaint can keep a parent on the same
+   *  device from spotting it. The user's RLS update policy on `complaints`
+   *  is scoped to from_user_id, so they can only hide their own rows. */
+  async hideMyComplaint(complaintId: string): Promise<void> {
+    const userId = getUserId();
+    const { error } = await supabase
+      .from('complaints')
+      .update({ hidden_from_submitter: true })
+      .eq('id', complaintId)
+      .eq('from_user_id', userId);
+    if (error) throw new Error(error.message);
+    await logAudit('complaint_hidden_by_submitter', 'complaint', complaintId, {});
   },
 
   async submitComplaint(subject: string, description: string, isAnonymous = false): Promise<StudentComplaint> {

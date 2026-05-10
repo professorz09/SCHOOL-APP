@@ -198,7 +198,12 @@ function rowToApproval(r: ApprovalRow): Approval {
   const rejectionReason = (nv['rejectionReason'] as string) ?? null;
 
   let type: Approval['type'] = 'LEAVE';
-  if (r.request_type === 'FEE_PAYMENT' || r.request_type === 'ATTENDANCE_CORRECTION' || r.request_type === 'LEAVE') {
+  if (
+    r.request_type === 'FEE_PAYMENT' ||
+    r.request_type === 'ATTENDANCE_CORRECTION' ||
+    r.request_type === 'LEAVE' ||
+    r.request_type === 'ADMISSION'
+  ) {
     type = r.request_type;
   }
 
@@ -217,6 +222,10 @@ function rowToApproval(r: ApprovalRow): Approval {
     attachmentUrl: r.proof_url,
     studentId: r.entity_type === 'student' && r.entity_id ? r.entity_id : undefined,
     rejectionReason,
+    // Full admission-form payload — only set for ADMISSION rows. The
+    // principal review panel uses this to prefill an editable form before
+    // approving (which then re-runs the regular /students/create flow).
+    draftPayload: (nv['draftPayload'] as Record<string, unknown>) ?? null,
   };
 }
 
@@ -413,6 +422,61 @@ export const principalService = {
     });
     await logAudit('leave_submitted', 'approval', raw.id, { studentId, fromDate, toDate });
     return rowToApproval(raw as ApprovalRow);
+  },
+
+  // ─── Admission drafts (TEACHER → PRINCIPAL flow) ────────────────────────
+  async submitAdmissionDraft(
+    payload: Record<string, unknown>,
+    studentName: string,
+    admissionNo: string,
+  ): Promise<Approval> {
+    const raw = await apiPrincipal.admissionDraftSubmit({ payload, studentName, admissionNo });
+    await logAudit('admission_draft_submitted', 'approval', raw.id, { admissionNo, studentName });
+    return rowToApproval(raw as ApprovalRow);
+  },
+
+  async getMyAdmissionDrafts(): Promise<Approval[]> {
+    const data = await apiPrincipal.admissionMyDrafts();
+    return ((data ?? []) as ApprovalRow[]).map(rowToApproval);
+  },
+
+  async approveAdmissionDraft(approvalId: string, createdStudentId?: string): Promise<Approval> {
+    const raw = await apiPrincipal.admissionDraftApprove(approvalId, createdStudentId);
+    await logAudit('admission_draft_approved', 'approval', approvalId, { createdStudentId: createdStudentId ?? null });
+    return rowToApproval(raw as ApprovalRow);
+  },
+
+  /** Hard-deletes the draft. No audit row is written either — per
+   *  product call, a rejected draft should leave zero trace anywhere
+   *  ("wo bs ek draft hi to hai"). If a dispute ever arises the
+   *  teacher can simply resubmit. */
+  async rejectAdmissionDraft(approvalId: string, reason: string): Promise<void> {
+    await apiPrincipal.admissionDraftReject(approvalId, reason);
+  },
+
+  async updateAdmissionDraft(
+    approvalId: string,
+    payload: Record<string, unknown>,
+    studentName: string,
+    admissionNo: string,
+  ): Promise<Approval> {
+    const raw = await apiPrincipal.admissionDraftUpdate({ approvalId, payload, studentName, admissionNo });
+    await logAudit('admission_draft_edited', 'approval', approvalId, { admissionNo });
+    return rowToApproval(raw as ApprovalRow);
+  },
+
+  // ─── School-wide staff permissions ──────────────────────────────────────
+  async getStaffSchoolWidePermissions(staffId: string): Promise<string[]> {
+    return await apiPrincipal.staffPermissionsSchoolWide(staffId);
+  },
+
+  async setStaffSchoolWidePermission(staffId: string, permission: string, enabled: boolean): Promise<void> {
+    await apiPrincipal.staffPermissionsSchoolWideSet({ staffId, permission, enabled });
+    await logAudit('staff_school_permission_set', 'staff_permissions', staffId, { permission, enabled });
+  },
+
+  async getMySchoolWidePermissions(): Promise<string[]> {
+    return await apiPrincipal.staffPermissionsMine();
   },
 
   async getStudentLeaves(studentId: string): Promise<Approval[]> {

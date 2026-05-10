@@ -41,6 +41,10 @@ export const FeePaymentSubmissionsQueue: React.FC<QueueProps> = ({
   const [loading, setLoading] = useState(true);
   const [busyId, setBusyId] = useState<string | null>(null);
   const [expanded, setExpanded] = useState(defaultExpanded);
+  // Reject-reason modal — replaces a window.prompt() that surfaced the
+  // codespaces dev hostname as the dialog title on mobile chromium.
+  const [rejectTarget, setRejectTarget] = useState<FeePaymentUploadRecord | null>(null);
+  const [rejectReason, setRejectReason] = useState('');
   const showToast = useUIStore(s => s.showToast);
 
   const reload = async () => {
@@ -57,37 +61,58 @@ export const FeePaymentSubmissionsQueue: React.FC<QueueProps> = ({
 
   useEffect(() => { reload(); }, []);
 
+  // Approve runs immediately; reject opens a modal to collect the
+  // optional reason (and ships the school's contact line back to the
+  // parent automatically — old behaviour preserved).
   const review = async (id: string, decision: 'APPROVED' | 'REJECTED') => {
+    if (decision === 'REJECTED') {
+      const item = items.find(i => i.id === id) ?? null;
+      if (!item) return;
+      setRejectReason('');
+      setRejectTarget(item);
+      return;
+    }
     setBusyId(id);
     try {
-      let note: string | undefined;
-      if (decision === 'REJECTED') {
-        const reason = window.prompt('Reason for rejection (optional):') ?? '';
-        // Append school contact so the parent has a direct call/email
-        // path right inside the rejection note. Using a one-shot fetch
-        // here keeps the component simple — schools rarely change
-        // contact info mid-session.
-        try {
-          const info = await schoolInfoService.get();
-          const contactBits = [
-            info.phone ? `Call ${info.phone}` : '',
-            info.email ? `Email ${info.email}` : '',
-          ].filter(Boolean).join(' · ');
-          note = [
-            reason.trim(),
-            contactBits
-              ? `For clarification, contact the school: ${contactBits}`
-              : '',
-          ].filter(Boolean).join('\n\n') || undefined;
-        } catch {
-          note = reason.trim() || undefined;
-        }
-      }
-      await feeService.reviewFeePaymentUpload(id, decision, note);
+      await feeService.reviewFeePaymentUpload(id, decision);
       showToast(`Submission ${decision.toLowerCase()}`, 'success');
       await reload();
     } catch (err) {
       console.error('[fee-uploads] review failed', err);
+      showToast(err instanceof Error ? err.message : 'Action failed', 'error');
+    } finally {
+      setBusyId(null);
+    }
+  };
+
+  const submitReject = async () => {
+    if (!rejectTarget) return;
+    setBusyId(rejectTarget.id);
+    try {
+      // Append school contact so the parent has a direct call/email
+      // path right inside the rejection note. One-shot fetch — schools
+      // rarely change contact info mid-session.
+      let note: string | undefined;
+      try {
+        const info = await schoolInfoService.get();
+        const contactBits = [
+          info.phone ? `Call ${info.phone}` : '',
+          info.email ? `Email ${info.email}` : '',
+        ].filter(Boolean).join(' · ');
+        note = [
+          rejectReason.trim(),
+          contactBits ? `For clarification, contact the school: ${contactBits}` : '',
+        ].filter(Boolean).join('\n\n') || undefined;
+      } catch {
+        note = rejectReason.trim() || undefined;
+      }
+      await feeService.reviewFeePaymentUpload(rejectTarget.id, 'REJECTED', note);
+      showToast('Submission rejected', 'success');
+      setRejectTarget(null);
+      setRejectReason('');
+      await reload();
+    } catch (err) {
+      console.error('[fee-uploads] reject failed', err);
       showToast(err instanceof Error ? err.message : 'Action failed', 'error');
     } finally {
       setBusyId(null);
@@ -243,6 +268,46 @@ export const FeePaymentSubmissionsQueue: React.FC<QueueProps> = ({
           </li>
         ))}
       </ul>
+
+      {rejectTarget && (
+        <div className="fixed inset-0 z-50 bg-black/50 flex items-end lg:items-center justify-center p-4 animate-in fade-in duration-150"
+          onClick={() => busyId !== rejectTarget.id && setRejectTarget(null)}>
+          <div onClick={e => e.stopPropagation()}
+            className="bg-white rounded-3xl w-full lg:max-w-md p-5 lg:p-6 shadow-2xl animate-in slide-in-from-bottom-4 lg:zoom-in-95 duration-200">
+            <p className="text-base font-black text-slate-900 mb-1">Reject submission?</p>
+            <p className="text-[11px] font-bold text-slate-400 mb-4">
+              ₹{rejectTarget.amount.toLocaleString('en-IN')} · Txn {rejectTarget.transactionId || '—'}
+            </p>
+            <label className="block">
+              <span className="text-[10px] font-black uppercase tracking-widest text-slate-500">Reason (optional)</span>
+              <textarea
+                value={rejectReason}
+                onChange={e => setRejectReason(e.target.value)}
+                rows={3}
+                placeholder="Wrong amount / unclear screenshot / mismatched txn id…"
+                className="mt-1 w-full border border-slate-200 bg-slate-50 rounded-xl px-3 py-2.5 font-bold text-sm outline-none focus:border-rose-500 resize-none"
+              />
+            </label>
+            <p className="text-[10px] font-bold text-slate-400 mt-2">
+              School ka phone/email auto-attach hoga taki parent contact kar sake.
+            </p>
+            <div className="flex gap-3 mt-4">
+              <button
+                onClick={() => setRejectTarget(null)}
+                disabled={busyId === rejectTarget.id}
+                className="flex-1 py-3 bg-slate-100 text-slate-700 font-black rounded-2xl text-sm uppercase tracking-widest active:scale-95 transition-transform disabled:opacity-50">
+                Cancel
+              </button>
+              <button
+                onClick={submitReject}
+                disabled={busyId === rejectTarget.id}
+                className="flex-1 py-3 bg-rose-600 hover:bg-rose-700 text-white font-black rounded-2xl text-sm uppercase tracking-widest active:scale-95 transition-transform disabled:opacity-60">
+                {busyId === rejectTarget.id ? 'Rejecting…' : 'Reject'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 };

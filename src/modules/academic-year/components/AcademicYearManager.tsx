@@ -4,6 +4,7 @@ import {
   Sparkles, Plus, Power, Edit3, FileWarning, History, GraduationCap,
 } from 'lucide-react';
 import { useAcademicYear } from '@/shared/context/AcademicYearContext';
+import { useAuthStore } from '@/store/authStore';
 import { useUIStore } from '@/store/uiStore';
 import { yearClosingService } from '@/modules/academic-year/yearClosing.service';
 import { useCorrectionStore } from '@/store/correctionStore';
@@ -20,6 +21,7 @@ export const AcademicYearManager: React.FC<Props> = ({ onBack, onNavigateToStaff
     newYearCreationEnabled,
   } = useAcademicYear();
   const { showToast } = useUIStore();
+  const session = useAuthStore(s => s.session);
 
   // ─── Wizard state ───────────────────────────────────────────────────────
   const [showWizard, setShowWizard] = useState(false);
@@ -109,15 +111,31 @@ export const AcademicYearManager: React.FC<Props> = ({ onBack, onNavigateToStaff
   // turns OFF correction for any other year, and binds editing surfaces
   // (attendance, tests, timetable, staff attendance) to year X via
   // setCurrentEditingYear. Turning correction OFF clears the binding.
-  const handleToggleCorrection = useCallback((yearId: string) => {
+  const handleToggleCorrection = useCallback(async (yearId: string) => {
     const wasOn = !!useCorrectionStore.getState().enabledByYear[yearId];
     if (wasOn) {
+      // Turning OFF doesn't need a gate — only turning ON does.
       disableCorrection(yearId);
       if (useEditingYearStore.getState().getEditingYearId() === yearId) {
         setCurrentEditingYear(null);
       }
       return;
     }
+    // Type-to-confirm gate. Closed-year correction unlocks ALL writes
+    // for that year — backdate fees, edit attendance, etc. Each write
+    // is audited but the principal must consciously enable. Mobile last-4
+    // is something only they know from memory.
+    const last4 = (session?.mobileNumber ?? '').replace(/\D/g, '').slice(-4);
+    if (last4.length !== 4) {
+      showToast('Mobile number missing on profile — set it first', 'error');
+      return;
+    }
+    const ok = await useUIStore.getState().askMobileConfirm({
+      title: 'Enable Correction Mode?',
+      message: 'Closed year ki entries change ho sakti hain. Har edit audit log me record hota hai. Aap accountable rahenge.',
+      expectedLast4: last4,
+    });
+    if (!ok) return;
     // Turn off any other correction year first (exclusive selection).
     const others = Object.entries(useCorrectionStore.getState().enabledByYear)
       .filter(([id, on]) => on && id !== yearId)
@@ -125,7 +143,7 @@ export const AcademicYearManager: React.FC<Props> = ({ onBack, onNavigateToStaff
     others.forEach(id => disableCorrection(id));
     enableCorrection(yearId);
     setCurrentEditingYear(yearId);
-  }, [disableCorrection, enableCorrection, setCurrentEditingYear]);
+  }, [disableCorrection, enableCorrection, setCurrentEditingYear, session?.mobileNumber, showToast]);
 
   // Hydrate audit counts for every closed year. Re-runs whenever the set
   // of closed-year ids changes (e.g. a year is closed, deleted, reopened),
@@ -203,6 +221,21 @@ export const AcademicYearManager: React.FC<Props> = ({ onBack, onNavigateToStaff
       showToast('Salary pending hai — acknowledge karein ya pehle clear karein', 'error');
       return;
     }
+    // Type-to-confirm gate. Closing a year is irreversible without
+    // re-opening via Correction Mode; an accidental click here used
+    // to lock down all writes for an entire year. Requiring the
+    // principal to type their mobile last-4 makes this deliberate.
+    const last4 = (session?.mobileNumber ?? '').replace(/\D/g, '').slice(-4);
+    if (last4.length !== 4) {
+      showToast('Mobile number missing on profile — set it first', 'error');
+      return;
+    }
+    const ok = await useUIStore.getState().askMobileConfirm({
+      title: `Lock ${yearToClose.name}?`,
+      message: `Year close hone ke baad attendance / fees / results pe writes lock ho jayenge. Re-open karne ke liye Correction Mode chahiye hoga (jo audit ho jayega).`,
+      expectedLast4: last4,
+    });
+    if (!ok) return;
     setClosing(true);
     try {
       await yearClosingService.closeAcademicYear(yearToClose.id);

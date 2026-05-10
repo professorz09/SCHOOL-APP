@@ -1,20 +1,35 @@
 import React, { useState, useEffect } from 'react';
 import { Users, MapPin, Bus } from 'lucide-react';
 import { transportService, StudentTransportAssignment, TransportVehicle } from '@/modules/transport/transport.service';
-
-const DRIVER_ID = 'staff6';
+import { useAuthStore } from '@/store/authStore';
+import { supabase } from '@/lib/supabase';
 
 export const DriverStudentsView: React.FC = () => {
+  const session = useAuthStore(s => s.session);
   const [vehicle, setVehicle] = useState<TransportVehicle | null>(null);
   const [students, setStudents] = useState<StudentTransportAssignment[]>([]);
 
   useEffect(() => {
-    const v = transportService.getVehicles().find(v => v.driverId === DRIVER_ID);
-    if (v) {
-      setVehicle(v);
-      setStudents(transportService.getAssignmentsByVehicle(v.id));
-    }
-  }, []);
+    let cancelled = false;
+    (async () => {
+      // Same hardcoded-staff6 bug pattern as DriverLayout / DriverRouteView.
+      // Resolve real staff_id from session so each driver only sees
+      // their own students.
+      if (!session?.userId) return;
+      const { data } = await supabase
+        .from('staff').select('id').eq('user_id', session.userId).maybeSingle();
+      const staffId = (data as { id: string } | null)?.id;
+      if (!staffId || cancelled) return;
+      await transportService.refreshAll();
+      if (cancelled) return;
+      const v = transportService.getVehicles().find(x => x.driverId === staffId);
+      if (v) {
+        setVehicle(v);
+        setStudents(transportService.getAssignmentsByVehicle(v.id));
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [session?.userId]);
 
   if (!vehicle) return (
     <div className="flex flex-col items-center justify-center p-10 text-center">

@@ -42,6 +42,10 @@ export const ExpensesManager: React.FC<Props> = ({ onBack }) => {
   });
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [deletingId, setDeletingId] = useState<string | null>(null);
+  // Custom delete-confirmation modal. Replaces window.confirm() which
+  // exposed the codespaces dev hostname as the dialog title — looked
+  // alarming to a principal mid-day-end-close.
+  const [deleteTarget, setDeleteTarget] = useState<Expense | null>(null);
   // Void modal — older expenses cannot be hard-deleted, they're cancelled.
   // Reason is mandatory and the row stays in the list with a VOIDED badge.
   const [voidTarget, setVoidTarget] = useState<Expense | null>(null);
@@ -188,17 +192,22 @@ export const ExpensesManager: React.FC<Props> = ({ onBack }) => {
   // Same-day hard delete. The server has the same check anchored to
   // IST midnight, so we surface a friendly error if the user crossed
   // the day boundary mid-session.
-  const handleDelete = async (exp: Expense) => {
+  const handleDelete = (exp: Expense) => {
     if (!isSameDayIst(exp.createdAt)) {
       showToast('Same-day delete only — purane expenses ko Void karein', 'error');
       return;
     }
-    if (!window.confirm('Aaj ka expense delete karna hai? Yeh undo nahi hoga.')) return;
-    setDeletingId(exp.id);
+    setDeleteTarget(exp);
+  };
+
+  const confirmDelete = async () => {
+    if (!deleteTarget) return;
+    setDeletingId(deleteTarget.id);
     try {
-      await principalService.deleteExpense(exp.id);
-      setExpenses(prev => prev.filter(e => e.id !== exp.id));
+      await principalService.deleteExpense(deleteTarget.id);
+      setExpenses(prev => prev.filter(e => e.id !== deleteTarget.id));
       showToast('Expense deleted');
+      setDeleteTarget(null);
     } catch (e) {
       showToast(e instanceof Error ? e.message : 'Failed to delete expense', 'error');
     } finally { setDeletingId(null); }
@@ -447,6 +456,45 @@ export const ExpensesManager: React.FC<Props> = ({ onBack }) => {
       {/* Void modal — older expenses can't be deleted, only cancelled.
           Reason is mandatory; the row stays visible with a strikethrough
           and a VOIDED badge so the audit trail is preserved. */}
+      {deleteTarget && (
+        <div className="fixed inset-0 z-50 bg-black/50 flex items-end lg:items-center justify-center p-4 animate-in fade-in duration-150"
+          onClick={() => deletingId !== deleteTarget.id && setDeleteTarget(null)}>
+          <div onClick={e => e.stopPropagation()}
+            className="bg-white rounded-3xl w-full lg:max-w-md p-5 lg:p-6 shadow-2xl animate-in slide-in-from-bottom-4 lg:zoom-in-95 duration-200">
+            <div className="flex items-center gap-3 mb-3">
+              <div className="w-11 h-11 rounded-2xl bg-rose-50 text-rose-600 flex items-center justify-center shrink-0">
+                <Trash2 size={20}/>
+              </div>
+              <div className="min-w-0">
+                <p className="text-base font-black text-slate-900">Delete this expense?</p>
+                <p className="text-[11px] font-bold text-slate-400 mt-0.5 truncate">
+                  ₹{deleteTarget.amount.toLocaleString('en-IN')} · {deleteTarget.description}
+                </p>
+              </div>
+            </div>
+            <div className="bg-rose-50 border border-rose-100 rounded-2xl p-3 mb-4">
+              <p className="text-[12px] font-bold text-rose-700 leading-relaxed">
+                Yeh undo nahi hoga. Sirf aaj ke entries delete ho sakti hain — purane expenses ko Void karein.
+              </p>
+            </div>
+            <div className="flex gap-3">
+              <button
+                onClick={() => setDeleteTarget(null)}
+                disabled={deletingId === deleteTarget.id}
+                className="flex-1 py-3 bg-slate-100 text-slate-700 font-black rounded-2xl text-sm uppercase tracking-widest active:scale-95 transition-transform disabled:opacity-50">
+                Cancel
+              </button>
+              <button
+                onClick={confirmDelete}
+                disabled={deletingId === deleteTarget.id}
+                className="flex-1 flex items-center justify-center gap-1.5 py-3 bg-rose-600 hover:bg-rose-700 text-white font-black rounded-2xl text-sm uppercase tracking-widest active:scale-95 transition-transform disabled:opacity-60">
+                {deletingId === deleteTarget.id ? 'Deleting…' : <><Trash2 size={14}/> Delete</>}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {voidTarget && (
         <div className="absolute inset-0 z-50 bg-slate-900/60 flex items-end justify-center animate-in fade-in">
           <div className="bg-white w-full rounded-t-3xl p-6 pb-10 animate-in slide-in-from-bottom-4 space-y-4">

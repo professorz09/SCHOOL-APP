@@ -1,15 +1,27 @@
 import React, { useState } from 'react';
-import { Phone, Lock, Eye, EyeOff, AlertCircle, Loader, GraduationCap, ArrowRight } from 'lucide-react';
+import { Phone, Lock, Eye, EyeOff, AlertCircle, Loader, GraduationCap, ArrowRight, Mail, RefreshCw } from 'lucide-react';
 import { authService } from '@/modules/auth/auth.service';
 import { useAuthStore } from '@/store/authStore';
 
+// 99% of users see the password screen and never the OTP screen.
+// Default off — only flips when a principal/super-admin enabled
+// email-OTP 2FA from Settings → Security on their account.
+type Step = 'PASSWORD' | 'OTP';
+
 export const LoginPage: React.FC = () => {
   const setSession = useAuthStore((s) => s.setSession);
+  const [step, setStep] = useState<Step>('PASSWORD');
   const [mobileNumber, setMobileNumber] = useState('');
   const [password, setPassword] = useState('');
   const [showPassword, setShowPassword] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [error, setError] = useState('');
+
+  // 2FA challenge state — populated when /login returns OTP_REQUIRED.
+  const [otpEmail, setOtpEmail] = useState('');
+  const [otpHint, setOtpHint] = useState<{ name: string; role: string } | null>(null);
+  const [otpCode, setOtpCode] = useState('');
+  const [resending, setResending] = useState(false);
 
   const handleLogin = async () => {
     setError('');
@@ -19,8 +31,17 @@ export const LoginPage: React.FC = () => {
     }
     setIsSubmitting(true);
     try {
-      const session = await authService.login(mobileNumber, password);
-      setSession(session);
+      const result = await authService.login(mobileNumber, password);
+      if (result.kind === 'OTP_REQUIRED') {
+        // Branch into the OTP step — server has already revoked the
+        // password-only session and queued the email send via Supabase.
+        setOtpEmail(result.email);
+        setOtpHint(result.userHint ?? null);
+        setOtpCode('');
+        setStep('OTP');
+      } else {
+        setSession(result.session);
+      }
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Login failed');
     } finally {
@@ -28,19 +49,148 @@ export const LoginPage: React.FC = () => {
     }
   };
 
-  const handleKeyPress = (e: React.KeyboardEvent) => {
-    if (e.key === 'Enter') handleLogin();
+  const handleVerifyOtp = async () => {
+    setError('');
+    if (!otpCode.trim()) {
+      setError('Enter the 6-digit code from your email');
+      return;
+    }
+    setIsSubmitting(true);
+    try {
+      const session = await authService.verifyLoginOtp(otpEmail, otpCode);
+      setSession(session);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Verification failed');
+    } finally {
+      setIsSubmitting(false);
+    }
   };
 
-  // ── Form fields (rendered the same on mobile + desktop) ────────────────────
-  const formFields = (
+  const handleResend = async () => {
+    if (resending) return;
+    setError('');
+    setResending(true);
+    try {
+      await authService.resendLoginOtp(otpEmail);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Could not resend');
+    } finally {
+      setResending(false);
+    }
+  };
+
+  const cancelOtp = () => {
+    setStep('PASSWORD');
+    setOtpCode('');
+    setOtpEmail('');
+    setOtpHint(null);
+    setError('');
+    setPassword('');
+  };
+
+  // Mask email so the screen doesn't leak the full address to a
+  // shoulder-surfer: foo.bar@school.com → f**.b**@school.com
+  const maskEmail = (e: string): string => {
+    const [local, domain] = e.split('@');
+    if (!domain) return e;
+    const masked = local
+      .split('.')
+      .map(part => part.length <= 1 ? part : part[0] + '*'.repeat(Math.min(part.length - 1, 3)))
+      .join('.');
+    return `${masked}@${domain}`;
+  };
+
+  const handleKeyPress = (e: React.KeyboardEvent) => {
+    if (e.key === 'Enter') {
+      if (step === 'OTP') handleVerifyOtp();
+      else handleLogin();
+    }
+  };
+
+  const errorBanner = error && (
+    <div className="bg-rose-50 border border-rose-200 rounded-xl p-3 mb-5 flex gap-2 items-start">
+      <AlertCircle size={18} className="text-rose-600 shrink-0 mt-0.5" />
+      <div className="text-sm font-bold text-rose-700">{error}</div>
+    </div>
+  );
+
+  // ── OTP STEP — only reached when the user has email_otp_2fa = true.
+  // 99% of logins skip this entire branch. ─────────────────────────────
+  const otpFields = (
     <>
-      {error && (
-        <div className="bg-rose-50 border border-rose-200 rounded-xl p-3 mb-5 flex gap-2 items-start">
-          <AlertCircle size={18} className="text-rose-600 shrink-0 mt-0.5" />
-          <div className="text-sm font-bold text-rose-700">{error}</div>
+      {errorBanner}
+      <div className="mb-4 bg-blue-50 border border-blue-100 rounded-xl p-3 flex gap-2.5 items-start">
+        <Mail size={18} className="text-blue-600 shrink-0 mt-0.5" />
+        <div className="min-w-0">
+          <p className="text-[12px] font-black text-blue-900">
+            Verification code bheji {otpHint?.name ? `, ${otpHint.name.split(' ')[0]}` : ''}
+          </p>
+          <p className="text-[11px] font-bold text-blue-700 break-all">
+            {maskEmail(otpEmail)} par 6-digit code aaya hoga.
+          </p>
+          <p className="text-[10px] font-bold text-blue-500 mt-1">
+            Tip: spam folder bhi check karein agar 30 sec me na aaye.
+          </p>
         </div>
-      )}
+      </div>
+
+      <div className="mb-5">
+        <label className="block text-[10px] font-black uppercase tracking-widest text-slate-500 mb-2">
+          6-Digit Code
+        </label>
+        <input
+          type="text"
+          inputMode="numeric"
+          pattern="[0-9]*"
+          maxLength={6}
+          autoComplete="one-time-code"
+          autoFocus
+          value={otpCode}
+          onChange={(e) => setOtpCode(e.target.value.replace(/\D/g, '').slice(0, 6))}
+          onKeyPress={handleKeyPress}
+          placeholder="••••••"
+          className="w-full px-4 py-3.5 bg-slate-50 border border-slate-200 rounded-xl font-black text-2xl text-center tracking-[0.5em] text-slate-900 outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-100 focus:bg-white transition-all"
+        />
+      </div>
+
+      <button
+        onClick={handleVerifyOtp}
+        disabled={isSubmitting || otpCode.length < 6}
+        className="w-full py-4 bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-700 hover:to-indigo-700 text-white font-black text-base rounded-xl shadow-lg shadow-blue-200 active:scale-[0.98] transition-all disabled:opacity-60 flex items-center justify-center gap-2"
+      >
+        {isSubmitting ? (
+          <><Loader size={18} className="animate-spin" /> Verifying…</>
+        ) : (
+          <>Verify & Sign In <ArrowRight size={18} /></>
+        )}
+      </button>
+
+      <div className="flex items-center justify-between mt-4">
+        <button
+          type="button"
+          onClick={cancelOtp}
+          disabled={isSubmitting}
+          className="text-[12px] font-bold text-slate-500 hover:text-slate-700 transition-colors disabled:opacity-50"
+        >
+          ← Back to login
+        </button>
+        <button
+          type="button"
+          onClick={handleResend}
+          disabled={resending || isSubmitting}
+          className="flex items-center gap-1.5 text-[12px] font-black text-blue-600 hover:text-blue-700 transition-colors disabled:opacity-50"
+        >
+          <RefreshCw size={12} className={resending ? 'animate-spin' : ''} />
+          {resending ? 'Sending…' : 'Resend code'}
+        </button>
+      </div>
+    </>
+  );
+
+  // ── PASSWORD STEP — default for every user. ─────────────────────────
+  const formFields = step === 'OTP' ? otpFields : (
+    <>
+      {errorBanner}
 
       <div className="mb-4">
         <label className="block text-[10px] font-black uppercase tracking-widest text-slate-500 mb-2">

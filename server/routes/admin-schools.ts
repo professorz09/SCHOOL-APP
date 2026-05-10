@@ -264,3 +264,101 @@ adminSchoolsRouter.post('/:id/reset-principal-password', requireAuth, SA, async 
     });
   } catch (err) { fail(res, err); }
 });
+
+
+// ─── POST /api/admin/schools/:id/update-principal-mobile ────────────────────
+// Super-admin only. Atomically updates BOTH:
+//   1. auth.users.email (the synthetic <mobile>@edugrow.local that
+//      auth.signInWithPassword keys on)
+//   2. public.users.mobile_number (display + lookups elsewhere)
+//   3. schools.principal_phone (school-card metadata)
+//
+// Without this, super-admin editing schools.principal_phone alone
+// would leave auth.users.email stale → the principal could no
+// longer log in with the new number (and could STILL log in with
+// the old one because that's what auth resolves against). See the
+// /students/update-login-phone route for the parent equivalent.
+//
+// Rejects if the new mobile collides with another user (any role)
+// in the system — the email-domain trick means two users sharing
+// a mobile silently lock each other out at login.
+const MOBILE_EMAIL_DOMAIN = '@edugrow.local';
+adminSchoolsRouter.post('/:id/update-principal-mobile', requireAuth, SA, async (req, res) => {
+  try {
+    const schoolId = req.params.id;
+    const body = requireBody<{ newPhone: string }>(req, ['newPhone']);
+    const newPhone = body.newPhone.replace(/\D/g, '').slice(-10);
+    if (newPhone.length !== 10) {
+      throw new ApiError(400, 'Mobile number 10-digit hona chahiye');
+    }
+
+    // 1. Resolve the active principal of this school
+    const { data: target, error: te } = await adminDb
+      .from('users')
+      .select('id, name, mobile_number, email')
+      .eq('school_id', schoolId)
+      .eq('role', 'PRINCIPAL')
+      .eq('is_active', true)
+      .maybeSingle();
+    if (te) throw new ApiError(500, te.message);
+    const t = target as { id: string; name: string; mobile_number: string; email: string | null } | null;
+    if (!t) throw new ApiError(404, 'No active principal found for this school');
+
+    // No-op short-circuit so an accidental re-submit doesn't churn audit logs
+    if (t.mobile_number === newPhone) {
+      ok(res, { ok: true, unchanged: true, mobile: newPhone });
+      return;
+    }
+
+    // 2. Reject if the new number is already used by a DIFFERENT user
+    const { data: clash } = await adminDb.from('users')
+      .select('id, role').eq('mobile_number', newPhone).maybeSingle();
+    if (clash && (clash as { id: string }).id !== t.id) {
+      throw new ApiError(409,
+        `Mobile ${newPhone} pehle se kisi aur user (${(clash as { role: string }).role}) ke saath linked hai. Pehle wahan se hatao.`);
+    }
+
+    // 3. Update auth.users.email FIRST. If this fails we haven't
+    //    touched anything else, so no desync risk.
+    const newEmail = `${newPhone}${MOBILE_EMAIL_DOMAIN}`;
+    const { error: authErr } = await adminDb.auth.admin.updateUserById(t.id, {
+      email: newEmail,
+      user_metadata: { mobile_number: newPhone },
+    });
+    if (authErr) throw new ApiError(500, `Auth update failed: ${authErr.message}`);
+
+    // 4. Update public.users.mobile_number (login-side identity)
+    const { error: usrErr } = await adminDb.from('users')
+      .update({ mobile_number: newPhone, updated_at: new Date().toISOString() })
+      .eq('id', t.id);
+    if (usrErr) throw new ApiError(500, `User row update failed: ${usrErr.message}`);
+
+    // 5. Mirror to schools.principal_phone (display only). Best-effort —
+    //    if this fails the auth + users update is the source of truth.
+    const { error: schoolErr } = await adminDb.from('schools')
+      .update({ principal_phone: newPhone, updated_at: new Date().toISOString() })
+      .eq('id', schoolId);
+    if (schoolErr) console.warn('[update-principal-mobile] schools row update failed', schoolErr.message);
+
+    // 6. Force sign-out everywhere so the principal must re-login
+    //    on the new number, ensuring no stale cached session lets
+    //    them stay in with the (now-invalid) old credentials.
+    try { await adminDb.auth.admin.signOut(t.id); }
+    catch (e) { console.warn('[update-principal-mobile] signOut failed', e); }
+
+    await adminDb.from('audit_logs').insert({
+      user_id:     req.user.id,
+      school_id:   schoolId,
+      action:      'admin_update_principal_mobile',
+      entity_type: 'user',
+      entity_id:   t.id,
+      details:     {
+        targetName: t.name,
+        oldMobile:  t.mobile_number,
+        newMobile:  newPhone,
+      },
+    });
+
+    ok(res, { ok: true, mobile: newPhone, principalName: t.name });
+  } catch (err) { fail(res, err); }
+});

@@ -43,24 +43,54 @@ function srgbify(clonedDoc: Document): void {
   const ctx = probe.getContext('2d');
   if (!ctx) return;
 
+  // Color-bearing single-value properties. Each becomes one rgb()/rgba()
+  // inline declaration.
   const colorProps = [
     'color', 'backgroundColor', 'borderTopColor', 'borderRightColor',
     'borderBottomColor', 'borderLeftColor', 'outlineColor', 'fill', 'stroke',
     'textDecorationColor', 'caretColor', 'columnRuleColor',
   ] as const;
 
+  // Composite properties whose value is a string that may contain ONE OR MORE
+  // colour functions (gradients in backgrounds, multiple shadows, etc).
+  // We regex-replace each modern colour function in place instead of
+  // nuking the whole declaration like we used to — that was eating real
+  // shadows and making exported pages look flat.
+  const compositeProps = ['backgroundImage', 'boxShadow', 'textShadow', 'borderImageSource'] as const;
+
+  const MODERN_COLOR_RE = /(oklch|oklab|lab|lch|hwb|color-mix|color)\(/i;
+  // Match a balanced colour-function call. Greedy enough for common cases
+  // but not nested function args (oklab(from var(--x) 50% 0 0) is rare).
+  const COLOR_FN_GLOBAL = /(?:oklch|oklab|lab|lch|hwb|color-mix|color)\([^()]*\)/gi;
+
+  const resolveSingleColor = (val: string): string => {
+    try {
+      ctx.fillStyle = '#000';
+      ctx.fillStyle = val;
+      const out = ctx.fillStyle as string;
+      return typeof out === 'string' ? out : val;
+    } catch { return val; }
+  };
+
   const toRgb = (val: string): string | null => {
     if (!val) return null;
     if (val === 'transparent' || val === 'none' || val === 'currentcolor') return val;
-    if (val.startsWith('rgb(') || val.startsWith('rgba(') || val.startsWith('#')) {
-      return val; // already legacy
-    }
-    try {
-      ctx.fillStyle = '#000';
-      ctx.fillStyle = val; // browser parses oklch/lab/color-mix/etc
-      const out = ctx.fillStyle as string;
-      return typeof out === 'string' ? out : null;
-    } catch { return null; }
+    // ALWAYS run the value through canvas parsing — even values that
+    // look legacy ("rgb(...)") were silently kept earlier, but Tailwind
+    // v4 sometimes returns "rgb(...) ; --foo: oklch(...)"-style strings
+    // from getComputedStyle on certain shorthand binds. Round-tripping
+    // through canvas normalises to a clean rgb()/rgba() unconditionally.
+    return resolveSingleColor(val);
+  };
+
+  const rewriteComposite = (val: string): string => {
+    if (!val || !MODERN_COLOR_RE.test(val)) return val;
+    return val.replace(COLOR_FN_GLOBAL, fn => {
+      const resolved = resolveSingleColor(fn);
+      // If canvas couldn't parse (rare — nested var() etc), drop to a
+      // safe black so html2canvas doesn't blow up the whole capture.
+      return MODERN_COLOR_RE.test(resolved) ? 'rgb(0,0,0)' : resolved;
+    });
   };
 
   const walker = clonedDoc.createTreeWalker(clonedDoc.body, NodeFilter.SHOW_ELEMENT);
@@ -76,17 +106,16 @@ function srgbify(clonedDoc: Document): void {
             (node.style as unknown as Record<string, string>)[p] = replacement;
           }
         }
-        // Also flatten gradients / shadows that reference modern color
-        // functions — html2canvas chokes the same way on these. We can't
-        // parse them piece-wise, so blank them when they contain a modern
-        // colour function. Cards still render correctly without shadows.
-        const bgImage = style.getPropertyValue('backgroundImage');
-        if (bgImage && /oklch|oklab|color-mix|lab\(|lch\(|hwb\(|color\(/i.test(bgImage)) {
-          node.style.backgroundImage = 'none';
-        }
-        const boxShadow = style.getPropertyValue('boxShadow');
-        if (boxShadow && /oklch|oklab|color-mix|lab\(|lch\(|hwb\(|color\(/i.test(boxShadow)) {
-          node.style.boxShadow = 'none';
+        for (const p of compositeProps) {
+          const v = style.getPropertyValue(p === 'backgroundImage' ? 'background-image'
+                  : p === 'boxShadow' ? 'box-shadow'
+                  : p === 'textShadow' ? 'text-shadow'
+                  : 'border-image-source');
+          if (!v) continue;
+          const rewritten = rewriteComposite(v);
+          if (rewritten !== v) {
+            (node.style as unknown as Record<string, string>)[p] = rewritten;
+          }
         }
       }
     }

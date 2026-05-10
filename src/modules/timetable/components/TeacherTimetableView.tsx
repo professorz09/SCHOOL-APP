@@ -2,6 +2,7 @@ import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { ArrowLeft, Clock, MapPin, BookOpen, Coffee, Sparkles } from 'lucide-react';
 import { teacherService } from '@/roles/teacher/teacher.service';
 import { useAuthStore } from '@/store/authStore';
+import { useUIStore } from '@/store/uiStore';
 
 interface Props { onBack: () => void; }
 
@@ -52,6 +53,7 @@ const todayDayName = (): TDay => {
 
 export const TeacherTimetableView: React.FC<Props> = ({ onBack }) => {
   const session = useAuthStore(s => s.session);
+  const showToast = useUIStore(s => s.showToast);
   const todayDay = todayDayName();
   const [activeDay, setActiveDay] = useState<TDay>(todayDay);
   const [entries, setEntries] = useState<RawEntry[]>([]);
@@ -74,6 +76,13 @@ export const TeacherTimetableView: React.FC<Props> = ({ onBack }) => {
           startTime: p.startTime, endTime: p.endTime,
           type: p.type, sortOrder: p.sortOrder,
         })));
+      } catch (e) {
+        // Surface — earlier this had try/finally only. A teacher
+        // with bad network saw the spinner stop with no error and
+        // an empty timetable, assuming they have no classes today.
+        if (!cancelled) {
+          showToast(e instanceof Error ? e.message : 'Could not load timetable', 'error');
+        }
       } finally {
         if (!cancelled) setIsLoading(false);
       }

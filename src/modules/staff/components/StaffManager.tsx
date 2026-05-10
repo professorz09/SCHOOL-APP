@@ -13,8 +13,88 @@ import {
 } from '@/modules/staff/staff.types';
 import { useUIStore } from '@/store/uiStore';
 import { useEditorModeStore } from '@/store/editorModeStore';
+import { todayIST } from '@/shared/utils/date';
 import { apiPrincipal, apiStaff } from '@/lib/apiClient';
 import { ErrorBoundary } from '@/shared/components/ErrorBoundary';
+import { principalService } from '@/roles/principal/principal.service';
+
+// School-wide permissions for one teacher. Currently only one toggle
+// (CREATE_ADMISSION); built as a self-fetching card so the parent
+// StaffManager doesn't need to pre-load the permission list for every
+// teacher in the directory. Loads on mount when the principal opens
+// the teacher's profile.
+const SchoolPermissionsCard: React.FC<{ staffId: string }> = ({ staffId }) => {
+  const { showToast } = useUIStore();
+  const [perms, setPerms] = useState<Set<string>>(new Set());
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState<string | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    setLoading(true);
+    principalService.getStaffSchoolWidePermissions(staffId)
+      .then(list => { if (!cancelled) setPerms(new Set(list)); })
+      .catch(e => { if (!cancelled) showToast(e instanceof Error ? e.message : 'Failed to load permissions', 'error'); })
+      .finally(() => { if (!cancelled) setLoading(false); });
+    return () => { cancelled = true; };
+  }, [staffId, showToast]);
+
+  const toggle = async (key: string, enabled: boolean) => {
+    setSaving(key);
+    try {
+      await principalService.setStaffSchoolWidePermission(staffId, key, enabled);
+      setPerms(prev => {
+        const next = new Set(prev);
+        if (enabled) next.add(key); else next.delete(key);
+        return next;
+      });
+      showToast(enabled ? 'Permission granted' : 'Permission revoked');
+    } catch (e) {
+      showToast(e instanceof Error ? e.message : 'Save failed', 'error');
+    } finally {
+      setSaving(null);
+    }
+  };
+
+  const ITEMS: { key: string; label: string; help: string }[] = [
+    {
+      key:   'CREATE_ADMISSION',
+      label: 'Admission Form bhar sakta hai',
+      help:  'Teacher draft submit karega; principal review/edit karke approve karega.',
+    },
+  ];
+
+  return (
+    <div className="bg-white rounded-2xl border border-slate-100 shadow-sm p-4 space-y-3">
+      <p className="text-[10px] font-black uppercase tracking-widest text-slate-400">Permissions (school-wide)</p>
+      {loading ? (
+        <p className="text-xs font-bold text-slate-400">Loading…</p>
+      ) : ITEMS.map(item => {
+        const on = perms.has(item.key);
+        const busy = saving === item.key;
+        return (
+          <div key={item.key} className="flex items-start justify-between gap-3 py-1">
+            <div className="flex-1 min-w-0">
+              <p className="text-sm font-black text-slate-800">{item.label}</p>
+              <p className="text-[10px] font-bold text-slate-400 mt-0.5">{item.help}</p>
+            </div>
+            <button
+              type="button"
+              disabled={busy}
+              onClick={() => toggle(item.key, !on)}
+              className={`shrink-0 relative inline-flex h-6 w-11 items-center rounded-full transition-colors disabled:opacity-50 ${
+                on ? 'bg-indigo-600' : 'bg-slate-200'
+              }`}>
+              <span className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${
+                on ? 'translate-x-6' : 'translate-x-1'
+              }`} />
+            </button>
+          </div>
+        );
+      })}
+    </div>
+  );
+};
 
 type View = 'LIST' | 'CREATE' | 'PROFILE' | 'EDIT';
 type Tab = 'INFO' | 'SALARY' | 'ATTENDANCE' | 'CLASSES' | 'DOCS' | 'LOG';
@@ -43,7 +123,10 @@ const statusColor = (s: StaffStatus) =>
   s === 'RELIEVED' ? 'bg-slate-200 text-slate-700' :
   'bg-rose-50 text-rose-700';
 
-const todayIso = () => new Date().toISOString().split('T')[0];
+// IST today — UTC version backdated salary-pay default by 1 day in
+// the small hours of the morning. Single source of truth in
+// shared/utils/date.ts.
+const todayIso = () => todayIST();
 
 const monthLabel = (d: Date) =>
   d.toLocaleString('en-IN', { month: 'long', year: 'numeric' });
@@ -457,6 +540,14 @@ export const StaffManager: React.FC<Props> = ({ onBack }) => {
   const [relieveReason, setRelieveReason] = useState('');
   const [relieveBusy, setRelieveBusy] = useState(false);
 
+  // Reverse-payment modal state. Replaces a window.prompt() that exposed
+  // the codespaces dev hostname as the dialog title — an alarming look
+  // for a school principal who sees "v6jqvww-5000.app.github.dev says…"
+  // in the middle of a salary reversal.
+  const [reverseTarget, setReverseTarget] = useState<SalaryPayment | null>(null);
+  const [reverseReason, setReverseReason] = useState('');
+  const [reverseBusy, setReverseBusy] = useState(false);
+
   const [docType, setDocType] = useState<string>('PAN');
   // Documents queued during the CREATE flow — uploaded after the staff row is
   // inserted (we need the staffId before we can attach files).
@@ -672,22 +763,33 @@ export const StaffManager: React.FC<Props> = ({ onBack }) => {
     }
   };
 
-  // Reverse a payment within the 24-hour window. Editor mode + reason are
-  // both required (server enforces; client mirrors so the user sees the
-  // gate before clicking).
-  const handleReversePayment = async (payment: SalaryPayment) => {
-    if (!selected) return;
+  // Reverse a payment within the 24-hour window. Editor mode is gated
+  // up front, then a modal collects the reason (server enforces both;
+  // the modal just keeps the UX consistent with other in-app prompts
+  // instead of falling back to window.prompt).
+  const openReversePayment = (payment: SalaryPayment) => {
     if (!editorModeActive) {
       showToast('Enable Editor Mode (Settings → Security) first', 'error'); return;
     }
-    const reason = window.prompt('Reason for reversing this payment:')?.trim();
-    if (!reason) return;
+    setReverseTarget(payment);
+    setReverseReason('');
+  };
+
+  const submitReversePayment = async () => {
+    if (!selected || !reverseTarget) return;
+    const reason = reverseReason.trim();
+    if (!reason) { showToast('Reason required', 'error'); return; }
+    setReverseBusy(true);
     try {
-      await staffService.reverseSalaryPayment(payment.id, reason);
+      await staffService.reverseSalaryPayment(reverseTarget.id, reason);
       await loadProfileTabs(selected.id);
-      showToast(`Reversed ${fmtIN(payment.amount)} for ${payment.month}`);
+      showToast(`Reversed ${fmtIN(reverseTarget.amount)} for ${reverseTarget.month}`);
+      setReverseTarget(null);
+      setReverseReason('');
     } catch (e) {
       showToast(e instanceof Error ? e.message : 'Reversal failed', 'error');
+    } finally {
+      setReverseBusy(false);
     }
   };
 
@@ -764,10 +866,16 @@ export const StaffManager: React.FC<Props> = ({ onBack }) => {
       const a = document.createElement('a');
       a.href = objUrl;
       a.download = filename || 'document';
+      a.style.display = 'none';
       document.body.appendChild(a);
       a.click();
-      a.remove();
-      URL.revokeObjectURL(objUrl);
+      // Deferred cleanup — synchronous revoke races the download
+      // fetch on Safari / older WebKit. See csv.ts:downloadCsv for
+      // the same pattern.
+      setTimeout(() => {
+        a.remove();
+        URL.revokeObjectURL(objUrl);
+      }, 1000);
     } catch (e) {
       showToast(e instanceof Error ? e.message : 'Download failed', 'error');
     }
@@ -1353,6 +1461,10 @@ export const StaffManager: React.FC<Props> = ({ onBack }) => {
                   </>
                 )}
               </div>
+
+              {selected.role === 'TEACHER' && (
+                <SchoolPermissionsCard staffId={selected.id} />
+              )}
             </>
           )}
 
@@ -1369,7 +1481,7 @@ export const StaffManager: React.FC<Props> = ({ onBack }) => {
               salaryHistory={salaryHistory}
               paymentHistory={paymentHistory}
               canEdit={editorModeActive}
-              onReversePayment={handleReversePayment}
+              onReversePayment={openReversePayment}
               onEditSalary={() => { setEditSalaryAmt(String(selected.salary)); setEditSalaryFrom(todayIso()); setEditSalaryReason(''); setEditSalaryOpen(true); }}
               onOpenPayModal={(month, expected) => {
                 setPayMonth(month);
@@ -1696,6 +1808,59 @@ export const StaffManager: React.FC<Props> = ({ onBack }) => {
                 {relieveBusy ? <Loader2 size={14} className="animate-spin" /> : <Save size={14} />}
                 {relieveBusy ? 'Saving…' : 'Confirm Relieving'}
               </button>
+            </div>
+          </div>
+        )}
+
+        {/* Reverse-payment confirmation. Replaces a window.prompt() that
+            showed the dev hostname as the dialog title on Codespaces. */}
+        {reverseTarget && (
+          <div className="fixed inset-0 z-50 bg-slate-900/60 flex items-end justify-center sm:items-center p-4"
+            onClick={() => !reverseBusy && setReverseTarget(null)}>
+            <div onClick={e => e.stopPropagation()}
+              className="w-full sm:max-w-md bg-white rounded-3xl p-5 pb-6 animate-in slide-in-from-bottom-4 sm:zoom-in-95">
+              <div className="flex items-center gap-3 mb-3">
+                <div className="w-11 h-11 rounded-2xl bg-rose-50 text-rose-600 flex items-center justify-center shrink-0">
+                  <AlertTriangle size={20}/>
+                </div>
+                <div className="min-w-0">
+                  <p className="text-base font-black text-slate-900">Reverse this payment?</p>
+                  <p className="text-[11px] font-bold text-slate-400 mt-0.5 truncate">
+                    {fmtIN(reverseTarget.amount)} · {reverseTarget.month}
+                  </p>
+                </div>
+              </div>
+              <div className="bg-amber-50 border border-amber-200 rounded-xl p-3 mb-3 flex gap-2">
+                <AlertTriangle size={13} className="text-amber-600 mt-0.5 shrink-0"/>
+                <p className="text-[11px] font-bold text-amber-700 leading-relaxed">
+                  Reversal works only within 24 hours of the original payment.
+                  A negative entry will be added; the original row stays for audit.
+                </p>
+              </div>
+              <label className="block">
+                <span className="text-[10px] font-black uppercase tracking-widest text-slate-500">Reason *</span>
+                <textarea
+                  value={reverseReason}
+                  onChange={e => setReverseReason(e.target.value)}
+                  rows={3}
+                  placeholder="Wrong amount / wrong staff / cash bounced…"
+                  className="mt-1 w-full border border-slate-200 bg-slate-50 rounded-xl px-3 py-2.5 font-bold text-sm outline-none focus:border-rose-500 resize-none"
+                />
+              </label>
+              <div className="flex gap-3 mt-4">
+                <button
+                  onClick={() => setReverseTarget(null)}
+                  disabled={reverseBusy}
+                  className="flex-1 py-3 bg-slate-100 text-slate-700 font-black rounded-2xl text-sm uppercase tracking-widest active:scale-95 transition-transform disabled:opacity-50">
+                  Cancel
+                </button>
+                <button
+                  onClick={submitReversePayment}
+                  disabled={reverseBusy || !reverseReason.trim()}
+                  className="flex-1 flex items-center justify-center gap-1.5 py-3 bg-rose-600 hover:bg-rose-700 text-white font-black rounded-2xl text-sm uppercase tracking-widest active:scale-95 transition-transform disabled:opacity-60">
+                  {reverseBusy ? 'Reversing…' : <><AlertTriangle size={14}/> Reverse</>}
+                </button>
+              </div>
             </div>
           </div>
         )}

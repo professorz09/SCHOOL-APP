@@ -21,6 +21,23 @@ const issueTcLimiter = rateLimit({
   message: { ok: false, error: 'TC issuance limit reached (30/day). Contact support if more are needed.' },
 });
 
+// Each /create call provisions a real Supabase auth.users row + a
+// public.users parent row + a students row. Without a cap, a
+// compromised principal account could exhaust the project's auth
+// quota or pollute the school directory. 100/hour comfortably
+// covers a busy admission day (typical max ~30/day) but blocks
+// any automated abuse. Cap is per-principal, not per-IP, since
+// admins typically work from a single device.
+const studentCreateLimiter = rateLimit({
+  windowMs: 60 * 60_000,
+  limit: 100,
+  keyGenerator: (req: any) => `stu-create:${req.user?.id ?? req.ip}`,
+  validate: { keyGeneratorIpFallback: false },
+  standardHeaders: 'draft-7',
+  legacyHeaders: false,
+  message: { ok: false, error: 'Admission rate limit reached (100/hour). If genuinely admitting many students, contact support.' },
+});
+
 // GET /api/students?yearId=&search=&status=
 studentsRouter.get('/', requireAuth, requireRole('PRINCIPAL', 'TEACHER'), async (req, res) => {
   try {
@@ -38,7 +55,12 @@ studentsRouter.get('/', requireAuth, requireRole('PRINCIPAL', 'TEACHER'), async 
     if (yearId) q = q.eq('academic_year_id', yearId);
     if (status) q = q.eq('status', status);
 
-    const { data, error } = await q.order('class_name').order('roll_no');
+    // Server-side payload cap. Mirrors studentService.getAll's 5000
+    // client-side cap as defence in depth — without this, a runaway
+    // import or missing soft-delete could dump 50k rows in a single
+    // response. Real schools fit comfortably; consumers needing
+    // larger sets should use the paginated /list shape.
+    const { data, error } = await q.order('class_name').order('roll_no').limit(5000);
     if (error) throw new ApiError(500, error.message);
 
     let result = (data ?? []) as any[];
@@ -65,7 +87,10 @@ studentsRouter.get('/:id/timeline', requireAuth, requireRole('PRINCIPAL', 'TEACH
         .select('id, name, admission_date, created_at, status, updated_at, tc_number')
         .eq('id', studentId).eq('school_id', schoolId).maybeSingle(),
       adminDb.from('student_academic_records')
-        .select('id, class_name, section, roll_no, total_fee, status, created_at, academic_year_id, academic_years!inner(name, start_date, school_id)')
+        // academic_years.name doesn't exist — the column is `label`. Aliasing
+        // it to `name` keeps the downstream rec.academic_years.name access
+        // working without rewriting the loop below.
+        .select('id, class_name, section, roll_no, total_fee, status, created_at, academic_year_id, academic_years!inner(name:label, start_date, school_id)')
         .eq('student_id', studentId)
         .eq('academic_years.school_id', schoolId)
         .order('created_at', { ascending: true }),
@@ -161,7 +186,7 @@ studentsRouter.get('/:id/academic-history', requireAuth, requireRole('PRINCIPAL'
       .select(`
         id, class_name, section, roll_no, status, fee_status,
         total_fee, paid_fee, academic_year_id,
-        academic_years!inner(id, name, start_date, end_date, school_id)
+        academic_years!inner(id, name:label, start_date, end_date, school_id)
       `)
       .eq('student_id', req.params.id)
       .eq('academic_years.school_id', req.user.school_id!);
@@ -601,7 +626,7 @@ studentsRouter.post('/document/add', requireAuth, requireRole('PRINCIPAL'), asyn
 // POST /api/students/create — full admission flow
 // Replicates upsertSchoolUser + linkParentStudent logic (from vite-plugins/admin-api.ts)
 // entirely server-side so no business logic stays in the browser.
-studentsRouter.post('/create', requireAuth, requireRole('PRINCIPAL'), async (req, res) => {
+studentsRouter.post('/create', requireAuth, requireRole('PRINCIPAL'), studentCreateLimiter, async (req, res) => {
   try {
     const body = requireBody<{
       name: string;

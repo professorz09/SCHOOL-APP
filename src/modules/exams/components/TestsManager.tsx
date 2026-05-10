@@ -273,15 +273,23 @@ export const TestsManager: React.FC<Props> = ({ onBack }) => {
           return { ...r, marks: String(ex.obtainedMarks ?? ''), subjectMarks, note };
         });
       } catch (e) {
+        // Earlier this only console.error'd. The teacher would see
+        // a blank form when re-opening a previously-published test
+        // and might re-enter all marks (overwriting the saved ones)
+        // not realising the prefill silently failed. Toast so they
+        // know the values they see may be incomplete.
         console.error('[openUpload] failed to fetch existing results:', e);
+        showToast('Could not load saved marks — values may be missing. Refresh to retry.', 'error');
       }
     }
 
     setStuRows(rows);
-    // result_status comes from the DB row but isn't typed on TestSchedule yet;
-    // peek at it via index access so we don't churn the type.
-    const status = (exam as unknown as { result_status?: string }).result_status;
-    setViewLocked(status === 'LOCKED');
+    // Read the camelCase field exposed by rowToTest. The earlier code used
+    // `exam.result_status` (snake_case) which is the DB column name, NOT
+    // the mapped TestSchedule field — so it was always undefined and
+    // viewLocked never flipped to true. Result: even after the principal
+    // approved/locked the result, teacher could still edit & resubmit.
+    setViewLocked(exam.resultStatus === 'LOCKED');
     setExpandedStu(rows[0]?.studentId ?? null);
     setView('UPLOAD');
   };
@@ -395,9 +403,106 @@ export const TestsManager: React.FC<Props> = ({ onBack }) => {
       ? stuRows.every(r => subjectList.every(s => r.subjectMarks[s] !== ''))
       : stuRows.every(r => r.marks !== '');
 
+    // Progress + bulk helpers — saves a teacher entering 30+ rows of
+    // marks the pain of tapping every card. "Filled" = every required
+    // marks input on that row is non-empty (subject-wise OR single).
+    const filledCount = stuRows.filter(r =>
+      hasSubjects
+        ? subjectList.every(s => (r.subjectMarks[s] ?? '') !== '')
+        : r.marks !== ''
+    ).length;
+    const totalRows = stuRows.length;
+    const pctDone = totalRows > 0 ? Math.round((filledCount / totalRows) * 100) : 0;
+
+    // Jump to the first row that's still missing a mark and expand it.
+    // Used by the "Next pending" button on the sticky progress bar.
+    const jumpToNextPending = () => {
+      const next = stuRows.find(r =>
+        hasSubjects
+          ? subjectList.some(s => (r.subjectMarks[s] ?? '') === '')
+          : r.marks === ''
+      );
+      if (!next) return;
+      setExpandedStu(next.studentId);
+      // Defer scroll so the row has rendered in expanded form.
+      requestAnimationFrame(() => {
+        document.getElementById(`stu-row-${next.studentId}`)?.scrollIntoView({
+          behavior: 'smooth', block: 'center',
+        });
+      });
+    };
+
+    // Bulk "All Full Marks" / "All Zero" — common after a class quiz
+    // where the teacher only deviates for a handful of students. They
+    // hit the bulk fill, then tap the few outliers individually.
+    const bulkFill = (kind: 'FULL' | 'ZERO') => {
+      if (viewLocked) return;
+      const subjMaxBySubject: Record<string, number> = {};
+      for (const s of uploadSubjects) subjMaxBySubject[s.subject] = s.maxMarks;
+      setStuRows(prev => prev.map(r => {
+        if (hasSubjects) {
+          const next: Record<string, string> = { ...r.subjectMarks };
+          for (const subj of subjectList) {
+            next[subj] = kind === 'FULL'
+              ? String(subjMaxBySubject[subj] ?? Math.round(uploadExam.maxMarks / subjectList.length))
+              : '0';
+          }
+          return { ...r, subjectMarks: next };
+        }
+        return { ...r, marks: kind === 'FULL' ? String(uploadExam.maxMarks) : '0' };
+      }));
+    };
+
     return (
       <div className="w-full lg:max-w-5xl lg:mx-auto bg-slate-50 flex flex-col animate-in slide-in-from-right-8 duration-300">
         {header(viewLocked ? 'View Results' : (uploadExam.resultsUploaded ? 'Edit Results' : 'Upload Results'), () => setView('LIST'))}
+
+        {/* Sticky progress bar — visible while the teacher scrolls
+            through long class lists. Tap "Next pending" to jump
+            straight to the next un-marked student instead of scrolling
+            manually through completed rows. */}
+        {!viewLocked && (
+          <div className="sticky top-[57px] z-10 bg-white border-b border-slate-100 px-4 py-2.5 shadow-sm">
+            <div className="flex items-center gap-3">
+              <div className="flex-1 min-w-0">
+                <div className="flex items-baseline gap-1.5 mb-1">
+                  <span className="text-sm font-black text-slate-900 tabular-nums">{filledCount}</span>
+                  <span className="text-[10px] font-bold text-slate-400">/ {totalRows} done</span>
+                  <span className={`ml-auto text-[10px] font-black tabular-nums ${pctDone === 100 ? 'text-emerald-600' : 'text-slate-500'}`}>
+                    {pctDone}%
+                  </span>
+                </div>
+                <div className="bg-slate-100 rounded-full h-1.5 overflow-hidden">
+                  <div className={`h-1.5 rounded-full transition-all ${pctDone === 100 ? 'bg-emerald-500' : 'bg-indigo-500'}`}
+                    style={{ width: `${pctDone}%` }} />
+                </div>
+              </div>
+              {filledCount < totalRows && (
+                <button onClick={jumpToNextPending}
+                  className="shrink-0 flex items-center gap-1 px-3 py-2 bg-indigo-600 text-white text-[10px] font-black uppercase tracking-widest rounded-xl active:scale-95 transition-transform">
+                  Next pending →
+                </button>
+              )}
+            </div>
+            {/* Bulk fill — only when nothing is filled yet OR teacher
+                explicitly wants to overwrite. Hidden once partially
+                filled to avoid the principal accidentally nuking
+                30 rows of typed marks. */}
+            {filledCount === 0 && (
+              <div className="flex gap-2 mt-2">
+                <button onClick={() => bulkFill('FULL')}
+                  className="flex-1 py-1.5 bg-emerald-50 text-emerald-700 border border-emerald-200 text-[10px] font-black uppercase tracking-widest rounded-lg active:scale-95">
+                  Sab full marks
+                </button>
+                <button onClick={() => bulkFill('ZERO')}
+                  className="flex-1 py-1.5 bg-slate-50 text-slate-600 border border-slate-200 text-[10px] font-black uppercase tracking-widest rounded-lg active:scale-95">
+                  Sab zero
+                </button>
+              </div>
+            )}
+          </div>
+        )}
+
         <div className="flex-1 overflow-y-auto p-4  space-y-4">
           {/* Exam info */}
           <div className={`rounded-2xl p-4 text-white ${uploadExam.testType === 'FINAL' ? 'bg-[#0d1b3e]' : 'bg-indigo-600'}`}>
@@ -439,7 +544,7 @@ export const TestsManager: React.FC<Props> = ({ onBack }) => {
                 : row.marks !== '';
 
               return (
-                <div key={row.studentId} className="bg-white rounded-2xl border border-slate-100 shadow-sm overflow-hidden">
+                <div key={row.studentId} id={`stu-row-${row.studentId}`} className="bg-white rounded-2xl border border-slate-100 shadow-sm overflow-hidden scroll-mt-32">
                   <button onClick={() => setExpandedStu(isOpen ? null : row.studentId)}
                     className="w-full flex items-center gap-3 px-4 py-3 active:bg-slate-50">
                     <div className="w-7 h-7 bg-slate-100 rounded-full flex items-center justify-center shrink-0 text-[10px] font-black text-slate-500">{row.rollNo}</div>
@@ -460,8 +565,8 @@ export const TestsManager: React.FC<Props> = ({ onBack }) => {
                             <div key={subj} className="flex items-center gap-3">
                               <div className="flex-1 text-xs font-bold text-slate-700">{subj}</div>
                               <div className="flex items-center gap-1.5 shrink-0">
-                                <input type="number" min={0} max={subjMax} value={m} disabled={viewLocked} onChange={e => updateSubjectMark(row.studentId, subj, e.target.value)} placeholder="—"
-                                  className="w-14 border border-slate-200 bg-slate-50 rounded-xl px-2 py-1.5 text-center font-black text-sm outline-none focus:border-indigo-400 disabled:bg-slate-100 disabled:text-slate-500"/>
+                                <input type="number" inputMode="numeric" min={0} max={subjMax} value={m} disabled={viewLocked} onChange={e => updateSubjectMark(row.studentId, subj, e.target.value)} placeholder="—"
+                                  className="w-16 border border-slate-200 bg-slate-50 rounded-xl px-2 py-2.5 text-center font-black text-base outline-none focus:border-indigo-400 disabled:bg-slate-100 disabled:text-slate-500"/>
                                 <span className="text-[10px] font-bold text-slate-400 w-8">/{subjMax}</span>
                                 {sp !== null && <span className={`text-[10px] font-black w-8 text-right ${sp >= 75 ? 'text-emerald-600' : sp >= 50 ? 'text-amber-600' : 'text-rose-500'}`}>{sp}%</span>}
                               </div>
@@ -471,8 +576,8 @@ export const TestsManager: React.FC<Props> = ({ onBack }) => {
                       ) : (
                         <div className="flex items-center gap-3">
                           <div className="flex-1 text-xs font-bold text-slate-700">Marks</div>
-                          <input type="number" min={0} max={uploadExam.maxMarks} value={row.marks} disabled={viewLocked} onChange={e => updateStuRow(stuRows.findIndex(r => r.studentId === row.studentId), 'marks', e.target.value)} placeholder="—"
-                            className="w-14 border border-slate-200 bg-slate-50 rounded-xl px-2 py-1.5 text-center font-black text-sm outline-none focus:border-indigo-400 disabled:bg-slate-100 disabled:text-slate-500"/>
+                          <input type="number" inputMode="numeric" min={0} max={uploadExam.maxMarks} value={row.marks} disabled={viewLocked} onChange={e => updateStuRow(stuRows.findIndex(r => r.studentId === row.studentId), 'marks', e.target.value)} placeholder="—"
+                            className="w-16 border border-slate-200 bg-slate-50 rounded-xl px-2 py-2.5 text-center font-black text-base outline-none focus:border-indigo-400 disabled:bg-slate-100 disabled:text-slate-500"/>
                           <span className="text-[10px] font-bold text-slate-400">/{uploadExam.maxMarks}</span>
                         </div>
                       )}

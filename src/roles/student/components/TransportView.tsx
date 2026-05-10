@@ -2,6 +2,7 @@ import React, { useEffect, useState } from 'react';
 import { ArrowLeft, Bus, CheckCircle2, Circle, Navigation, Phone } from 'lucide-react';
 import { transportService } from '@/modules/transport/transport.service';
 import { studentDashboardService } from '@/modules/students/studentDashboard.service';
+import { useUIStore } from '@/store/uiStore';
 
 interface Props { onBack: () => void; }
 
@@ -39,7 +40,16 @@ export const TransportView: React.FC<Props> = ({ onBack }) => {
           }
         }, 15000);
       } catch (err) {
+        // Initial load failed — silent crash earlier left the loading
+        // spinner up forever and the user couldn't tell what happened.
+        // Surface a toast so they know to retry / contact school.
         console.error('[transport] resolve failed', err);
+        if (!cancelled) {
+          useUIStore.getState().showToast(
+            err instanceof Error ? err.message : 'Could not load transport info',
+            'error',
+          );
+        }
       } finally {
         if (!cancelled) setLoading(false);
       }

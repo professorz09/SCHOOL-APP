@@ -43,6 +43,13 @@ export const StudentLayout: React.FC = () => {
   // Hero-card stats: overall attendance % + next upcoming exam.
   const [attendancePct, setAttendancePct] = useState<number | null>(null);
   const [nextExam, setNextExam] = useState<UpcomingExam | null>(null);
+  // Newest notice that landed *today* (IST). Cleared on the next IST
+  // calendar day so the dashboard doesn't keep yesterday's announcement
+  // pinned forever — student wants a "what's new today" badge, not a
+  // permanent feed (the Notices tab is already that).
+  const [todayNotice, setTodayNotice] = useState<{
+    id: string; title: string; body: string; sentAt: string; pinned: boolean;
+  } | null>(null);
   const { isSubView, setSubView } = useUIStore();
   const goTo = (v: StudentView) => { setView(v); setSubView(true); };
   const goBack = () => { setView('DASHBOARD'); setSubView(false); };
@@ -52,8 +59,22 @@ export const StudentLayout: React.FC = () => {
   useEffect(() => {
     let cancelled = false;
     studentDashboardService.getActiveContext()
-      .then(c => { if (!cancelled) setCtx(c); })
-      .catch(err => { if (!cancelled) console.error('[student] context resolve failed', err); });
+      .then(c => {
+        if (cancelled) return;
+        setCtx(c);
+        // Lift the app-root splash once we have a real ctx — otherwise
+        // the dashboard would render with "—" attendance / blank
+        // schedule for a beat and read as a second loading pass.
+        useUIStore.getState().setAppReady(true);
+      })
+      .catch(err => {
+        if (cancelled) return;
+        console.error('[student] context resolve failed', err);
+        // Still hide the splash so the user isn't stuck on a blank
+        // white screen if the network call fails — they'll see the
+        // best-effort dashboard with empty stats and can retry.
+        useUIStore.getState().setAppReady(true);
+      });
     return () => { cancelled = true; };
   }, [session?.userId, selectedStudentId]);
 
@@ -93,6 +114,18 @@ export const StudentLayout: React.FC = () => {
     studentDashboardService.getScheduledExams()
       .then(list => { if (!cancelled) setNextExam(list[0] ?? null); })
       .catch(() => { if (!cancelled) setNextExam(null); });
+    // Latest notice for the dashboard hero — only the freshest one,
+    // and only on the IST day it was sent. Tomorrow this widget
+    // disappears even if the notice is still active in the Notices
+    // tab. en-CA gives YYYY-MM-DD which lines up with sentAt's slice(0,10).
+    const istToday = new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Kolkata' });
+    studentDashboardService.getNotices()
+      .then(list => {
+        if (cancelled) return;
+        const latestToday = list.find(n => (n.sentAt ?? '').slice(0, 10) === istToday);
+        setTodayNotice(latestToday ?? null);
+      })
+      .catch(() => { if (!cancelled) setTodayNotice(null); });
     return () => { cancelled = true; };
   }, [ctx?.studentId]);
 
@@ -286,6 +319,45 @@ export const StudentLayout: React.FC = () => {
             </div>
             <span className="text-[9px] font-black text-amber-700 bg-amber-50 border border-amber-200 px-2.5 py-1 rounded-full shrink-0 uppercase tracking-widest">
               {nextExam.testType}
+            </span>
+          </button>
+        </section>
+      )}
+
+      {/* ── Today's notice — only renders on the IST day it was sent.
+            Older notices live in the Notices tab; the hero card is
+            "what's new today", not a feed. */}
+      {todayNotice && (
+        <section>
+          <div className="flex items-center justify-between mb-3">
+            <h3 className="text-lg lg:text-xl font-black text-slate-900 uppercase tracking-tight">
+              Today's Notice
+            </h3>
+            <button onClick={() => goTo('NOTICES')}
+              className="text-[10px] lg:text-xs font-black text-blue-600 uppercase tracking-widest hover:text-blue-700 transition-colors">
+              View All →
+            </button>
+          </div>
+          <button onClick={() => goTo('NOTICES')}
+            className="w-full bg-white rounded-2xl border border-slate-100 shadow-sm p-4 flex items-start gap-3 lg:gap-4 hover:shadow-md transition-all text-left">
+            <div className="w-12 h-12 rounded-xl bg-indigo-50 text-indigo-600 border border-indigo-200 flex items-center justify-center shrink-0">
+              <Bell size={20} />
+            </div>
+            <div className="flex-1 min-w-0">
+              <div className="flex items-center gap-2 mb-0.5">
+                <div className="font-black text-sm lg:text-base text-slate-900 truncate flex-1">
+                  {todayNotice.title}
+                </div>
+                {todayNotice.pinned && (
+                  <span className="text-[8px] font-black text-amber-700 bg-amber-50 border border-amber-200 px-1.5 py-0.5 rounded-full shrink-0 uppercase tracking-widest">Pinned</span>
+                )}
+              </div>
+              <p className="text-[11px] lg:text-xs font-bold text-slate-500 line-clamp-2">
+                {todayNotice.body}
+              </p>
+            </div>
+            <span className="text-[9px] font-black text-indigo-700 bg-indigo-50 border border-indigo-200 px-2.5 py-1 rounded-full shrink-0 uppercase tracking-widest">
+              New
             </span>
           </button>
         </section>

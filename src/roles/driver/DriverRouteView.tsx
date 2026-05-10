@@ -1,10 +1,13 @@
 import React, { useState, useEffect } from 'react';
 import { Plus, Edit2, Check, X, MapPin } from 'lucide-react';
 import { transportService, TransportVehicle, RouteStop } from '@/modules/transport/transport.service';
-
-const DRIVER_ID = 'staff6';
+import { useAuthStore } from '@/store/authStore';
+import { useUIStore } from '@/store/uiStore';
+import { supabase } from '@/lib/supabase';
 
 export const DriverRouteView: React.FC = () => {
+  const session = useAuthStore(s => s.session);
+  const { showToast } = useUIStore();
   const [vehicle, setVehicle] = useState<TransportVehicle | null>(null);
   const [stops, setStops] = useState<RouteStop[]>([]);
   const [editingStopId, setEditingStopId] = useState<string | null>(null);
@@ -22,9 +25,23 @@ export const DriverRouteView: React.FC = () => {
   const [routeNameInput, setRouteNameInput] = useState('');
 
   useEffect(() => {
-    const v = transportService.getVehicles().find(v => v.driverId === DRIVER_ID);
-    if (v) { setVehicle(v); setStops(v.stops); setRouteNameInput(v.routeName); }
-  }, []);
+    let cancelled = false;
+    (async () => {
+      // Earlier this used a hardcoded DRIVER_ID = 'staff6' — every
+      // driver who opened this view edited staff6's vehicle stops,
+      // not their own. Same bug pattern as DriverLayout had; same fix.
+      if (!session?.userId) return;
+      const { data } = await supabase
+        .from('staff').select('id').eq('user_id', session.userId).maybeSingle();
+      const staffId = (data as { id: string } | null)?.id;
+      if (!staffId || cancelled) return;
+      await transportService.refreshAll();
+      if (cancelled) return;
+      const v = transportService.getVehicles().find(x => x.driverId === staffId);
+      if (v) { setVehicle(v); setStops(v.stops); setRouteNameInput(v.routeName); }
+    })();
+    return () => { cancelled = true; };
+  }, [session?.userId]);
 
   const reload = () => {
     const v = transportService.getVehicleById(vehicle!.id);
@@ -49,7 +66,10 @@ export const DriverRouteView: React.FC = () => {
   };
 
   const handleUseCurrentLocation = () => {
-    if (!navigator.geolocation) return;
+    if (!navigator.geolocation) {
+      showToast('GPS not supported on this device', 'error');
+      return;
+    }
     setLocating(true);
     navigator.geolocation.getCurrentPosition(
       (pos) => {
@@ -57,7 +77,15 @@ export const DriverRouteView: React.FC = () => {
         setNewLng(pos.coords.longitude.toFixed(6));
         setLocating(false);
       },
-      () => setLocating(false),
+      (err) => {
+        setLocating(false);
+        showToast(
+          err.code === err.PERMISSION_DENIED
+            ? 'Location permission denied — enable in browser settings'
+            : 'Could not get location. Try again or type co-ordinates manually.',
+          'error',
+        );
+      },
       { enableHighAccuracy: true, timeout: 8000 },
     );
   };
@@ -67,7 +95,11 @@ export const DriverRouteView: React.FC = () => {
   // current time as ETA, and writes the stop directly. Driver can
   // rename later from the stops list. No form, no friction.
   const handleQuickAddHere = () => {
-    if (!vehicle || !navigator.geolocation) return;
+    if (!vehicle) return;
+    if (!navigator.geolocation) {
+      showToast('GPS not supported on this device', 'error');
+      return;
+    }
     setLocating(true);
     navigator.geolocation.getCurrentPosition(
       (pos) => {
@@ -83,8 +115,17 @@ export const DriverRouteView: React.FC = () => {
         });
         reload();
         setLocating(false);
+        showToast(`Stop ${idx} added at current location`);
       },
-      () => setLocating(false),
+      (err) => {
+        setLocating(false);
+        showToast(
+          err.code === err.PERMISSION_DENIED
+            ? 'Location permission denied — can\'t add stop here'
+            : 'Could not get location. Try the manual form instead.',
+          'error',
+        );
+      },
       { enableHighAccuracy: true, timeout: 8000 },
     );
   };

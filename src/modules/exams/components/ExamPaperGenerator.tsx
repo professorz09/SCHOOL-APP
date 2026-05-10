@@ -2,12 +2,11 @@ import React, { useEffect, useRef, useState } from 'react';
 import { ArrowLeft, Sparkles, Download, Loader2, ScrollText, ChevronRight, Printer, FileText } from 'lucide-react';
 import { downloadNodeAsPdf, printCurrentPage } from '@/shared/utils/pdfPrint';
 import { teacherService } from '@/roles/teacher/teacher.service';
-import { ExamPaperRequest, GeneratedExamPaper, TestType } from '@/roles/teacher/teacher.types';
+import { ExamPaperRequest, GeneratedExamPaper } from '@/roles/teacher/teacher.types';
 import { useUIStore } from '@/store/uiStore';
 
 type View = 'FORM' | 'PREVIEW' | 'SAVED';
 
-const TEST_TYPES: TestType[] = ['UNIT_TEST', 'MID_TERM', 'FINAL', 'QUIZ', 'PRACTICAL'];
 const DIFFICULTIES = ['EASY', 'MEDIUM', 'HARD'] as const;
 
 const typeColor = (t: string) => {
@@ -39,6 +38,7 @@ export const ExamPaperGeneratorView: React.FC<Props> = ({ onBack }) => {
     subject: '',
     className: '',
     testType: 'UNIT_TEST',
+    testHeading: '',
     totalMarks: 25,
     duration: 60,
     topics: '',
@@ -120,7 +120,7 @@ export const ExamPaperGeneratorView: React.FC<Props> = ({ onBack }) => {
     content += `Subject: ${paper.request.subject}\n`;
     content += `Class: ${paper.request.className}\n`;
     if (paper.request.board) content += `Board: ${paper.request.board}\n`;
-    content += `Type: ${paper.request.testType.replace('_', ' ')}\n`;
+    content += `Heading: ${paper.request.testHeading?.trim() || paper.request.testType.replace('_', ' ')}\n`;
     content += `Total Marks: ${paper.request.totalMarks}\n`;
     content += `Duration: ${paper.request.duration} minutes\n`;
     content += `Difficulty: ${paper.request.difficulty}\n`;
@@ -129,7 +129,13 @@ export const ExamPaperGeneratorView: React.FC<Props> = ({ onBack }) => {
       content += `\n${sec.title.toUpperCase()} [${sec.marks} marks]\n`;
       content += `${sec.instructions}\n${'-'.repeat(40)}\n`;
       sec.questions.forEach(q => {
-        content += `Q${q.no}. ${q.text} [${q.marks} mark${q.marks > 1 ? 's' : ''}]\n\n`;
+        content += `Q${q.no}. ${q.text} [${q.marks} mark${q.marks > 1 ? 's' : ''}]\n`;
+        if (q.type === 'MCQ' && q.options && q.options.length > 0) {
+          q.options.forEach((opt, oi) => {
+            content += `   (${String.fromCharCode(97 + oi)}) ${opt}\n`;
+          });
+        }
+        content += '\n';
       });
     });
     const blob = new Blob(['﻿' + content], { type: 'text/plain;charset=utf-8' });
@@ -137,8 +143,15 @@ export const ExamPaperGeneratorView: React.FC<Props> = ({ onBack }) => {
     const a = document.createElement('a');
     a.href = url;
     a.download = `exam_paper_${paper.request.subject.replace(/\s+/g, '_')}_${paper.request.className.replace(/\s+/g, '_')}.txt`;
+    a.style.display = 'none';
+    document.body.appendChild(a);
     a.click();
-    URL.revokeObjectURL(url);
+    // Deferred cleanup — Safari + older WebKit need the URL alive
+    // until they actually start the file fetch.
+    setTimeout(() => {
+      a.remove();
+      URL.revokeObjectURL(url);
+    }, 1000);
     showToast('Text downloaded');
   };
 
@@ -181,7 +194,9 @@ export const ExamPaperGeneratorView: React.FC<Props> = ({ onBack }) => {
           <div className="font-black text-xl">{paper.request.subject}</div>
           <div className="flex gap-2 mt-2 flex-wrap">
             <span className="text-[9px] font-black bg-white/10 px-2 py-0.5 rounded-full uppercase">{paper.request.className}</span>
-            <span className={`text-[9px] font-black px-2 py-0.5 rounded-full uppercase ${typeColor(paper.request.testType)}`}>{paper.request.testType.replace('_', ' ')}</span>
+            <span className="text-[9px] font-black bg-amber-400/20 text-amber-200 px-2 py-0.5 rounded-full uppercase">
+              {paper.request.testHeading?.trim() || paper.request.testType.replace('_', ' ')}
+            </span>
             <span className="text-[9px] font-black bg-white/10 px-2 py-0.5 rounded-full uppercase">{paper.request.totalMarks} marks</span>
             <span className="text-[9px] font-black bg-white/10 px-2 py-0.5 rounded-full uppercase">{paper.request.duration} min</span>
           </div>
@@ -202,9 +217,16 @@ export const ExamPaperGeneratorView: React.FC<Props> = ({ onBack }) => {
               {paper.request.subject} · Class {paper.request.className}
               {paper.request.board ? ` · ${paper.request.board}` : ''}
             </div>
+            {/* Use the teacher's free-text heading when present;
+                fall back to the legacy testType label so older saved
+                papers don't render with an empty header. */}
+            {(paper.request.testHeading?.trim() || paper.request.testType) && (
+              <div className="text-base lg:text-lg font-black text-slate-900 mt-1 uppercase tracking-wide">
+                {paper.request.testHeading?.trim() || paper.request.testType.replace('_', ' ')}
+              </div>
+            )}
             <div className="text-[11px] font-bold text-slate-500 mt-1">
-              {paper.request.testType.replace('_', ' ')} ·
-              {' '}Total: {paper.request.totalMarks} marks ·
+              Total: {paper.request.totalMarks} marks ·
               {' '}Duration: {paper.request.duration} min
             </div>
           </div>
@@ -224,6 +246,19 @@ export const ExamPaperGeneratorView: React.FC<Props> = ({ onBack }) => {
                   <span className="text-xs font-black text-slate-900 shrink-0 w-7">Q{q.no}.</span>
                   <div className="flex-1">
                     <p className="text-xs font-bold text-slate-700 leading-relaxed">{q.text}</p>
+                    {/* MCQ choices — labelled (a)-(d). Renders only
+                        when the AI returned a non-empty options array.
+                        Older saved papers without options stay clean. */}
+                    {q.type === 'MCQ' && q.options && q.options.length > 0 && (
+                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-1.5 mt-2">
+                        {q.options.map((opt, oi) => (
+                          <div key={oi} className="flex gap-1.5 text-[11px] font-bold text-slate-600 leading-snug">
+                            <span className="font-black text-slate-500">({String.fromCharCode(97 + oi)})</span>
+                            <span className="flex-1">{opt}</span>
+                          </div>
+                        ))}
+                      </div>
+                    )}
                     <div className="flex items-center gap-2 mt-1">
                       <span className={`text-[9px] font-black px-1.5 py-0.5 rounded uppercase ${typeColor(q.type)}`}>{q.type}</span>
                       <span className="text-[9px] font-bold text-slate-400">[{q.marks} mark{q.marks > 1 ? 's' : ''}]</span>
@@ -313,15 +348,22 @@ export const ExamPaperGeneratorView: React.FC<Props> = ({ onBack }) => {
               className="w-full border border-slate-200 bg-slate-50 rounded-xl px-4 py-3 font-bold text-sm outline-none focus:border-amber-500" />
           </div>
           <div>
-            <label className="block text-[10px] font-black uppercase tracking-widest text-slate-500 mb-1.5">Test Type</label>
-            <div className="flex flex-wrap gap-2">
-              {TEST_TYPES.map(t => (
-                <button key={t} onClick={() => setForm(f => ({ ...f, testType: t }))}
-                  className={`px-3 py-1.5 rounded-xl text-[10px] font-black uppercase transition-colors ${form.testType === t ? 'bg-slate-900 text-white' : 'bg-slate-50 border border-slate-200 text-slate-400'}`}>
-                  {t.replace('_', ' ')}
-                </button>
-              ))}
-            </div>
+            {/* Free-text heading — replaces the old TEST_TYPES chip
+                row. Teachers wanted to type whatever fit their school's
+                schedule ("Pre-Board Mock-2", "Chapter 5 Recap", etc.)
+                instead of forcing it into UNIT_TEST / MID_TERM / FINAL
+                / QUIZ / PRACTICAL. testType stays as a backend hint
+                (defaults to UNIT_TEST) but is hidden from the form. */}
+            <label className="block text-[10px] font-black uppercase tracking-widest text-slate-500 mb-1.5">Test Heading</label>
+            <input
+              value={form.testHeading ?? ''}
+              onChange={e => setForm(f => ({ ...f, testHeading: e.target.value }))}
+              placeholder="e.g. First Periodic Test · Chapter 5 Quiz"
+              className="w-full border border-slate-200 bg-slate-50 rounded-xl px-4 py-3 font-bold text-sm outline-none focus:border-amber-500"
+            />
+            <p className="text-[10px] font-bold text-slate-400 mt-1.5">
+              Yeh heading paper ke top par chhapegi. Khali chod do to "Exam Paper" likha jayega.
+            </p>
           </div>
           <div>
             <label className="block text-[10px] font-black uppercase tracking-widest text-slate-500 mb-1.5">Topics / Syllabus *</label>

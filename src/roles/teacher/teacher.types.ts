@@ -132,6 +132,15 @@ export interface ExamPaperRequest {
    *  prompt so Gemini can pick board-appropriate question patterns
    *  and language. Defaults to whatever is set on the school row. */
   board?: string;
+  /** Free-text heading printed on top of the paper, e.g. "First
+   *  Periodic Test", "Pre-Board Examination", "Chapter 5 Quick Quiz".
+   *  Replaces the old fixed Test Type dropdown — teachers wanted to
+   *  write whatever fit their school's calendar instead of picking
+   *  from UNIT_TEST / MID_TERM / FINAL / QUIZ / PRACTICAL. testType
+   *  stays for back-compat (saved papers, analytics) and defaults to
+   *  UNIT_TEST when the heading is set; the heading wins on the
+   *  printed/rendered paper. */
+  testHeading?: string;
 }
 
 export interface GeneratedExamPaper {
@@ -153,6 +162,9 @@ export interface ExamQuestion {
   text: string;
   marks: number;
   type: 'MCQ' | 'SHORT' | 'LONG' | 'DIAGRAM';
+  /** Multiple-choice options. Set only when type === 'MCQ'.
+   *  Up to 5 options (A–E). Empty for non-MCQ questions. */
+  options?: string[];
 }
 
 export interface PublishResultsInput {

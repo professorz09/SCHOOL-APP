@@ -85,7 +85,10 @@ export const PrincipalExamsManager: React.FC<Props> = ({ onBack }) => {
     setLockingExam(examId);
     try {
       await examService.lockResults(examId);
-      setExams(exams.map(e => e.id === examId ? { ...e, result_status: 'LOCKED' } : e));
+      // Functional update — earlier this read the closure-captured
+      // `exams` array, which could be stale if anything refetched
+      // between render and tap (realtime, parallel save, etc).
+      setExams(prev => prev.map(e => e.id === examId ? { ...e, result_status: 'LOCKED' } : e));
       if (picked?.id === examId) setPicked({ ...picked, result_status: 'LOCKED' });
       showToast('Exam results locked');
     } catch (e) {
@@ -155,7 +158,7 @@ export const PrincipalExamsManager: React.FC<Props> = ({ onBack }) => {
     setLockingExam(examId);
     try {
       await examService.unlockResults(examId);
-      setExams(exams.map(e => e.id === examId ? { ...e, result_status: 'SUBMITTED' } : e));
+      setExams(prev => prev.map(e => e.id === examId ? { ...e, result_status: 'SUBMITTED' } : e));
       if (picked?.id === examId) setPicked({ ...picked, result_status: 'SUBMITTED' });
       showToast('Exam results unlocked');
     } catch (e) {

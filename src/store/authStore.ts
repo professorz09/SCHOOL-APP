@@ -91,10 +91,34 @@ async function refreshSessionFromSupabase() {
 
 // Wire Supabase auth events so token refresh, sign-out from another tab, or
 // password / metadata updates keep our local store in sync with Supabase.
-supabase.auth.onAuthStateChange((event) => {
+supabase.auth.onAuthStateChange(async (event) => {
   switch (event) {
     case 'SIGNED_OUT':
       useAuthStore.setState({ session: null, selectedStudentId: null });
+      // Wipe every session-scoped store so a different user logging
+      // in on the same device doesn't inherit the previous user's
+      // privileged state. Earlier these lived on:
+      //   • correctionStore — which closed years had write access
+      //   • editorModeStore — 30-min Editor Mode window
+      //   • editingYearStore — which closed year is currently being
+      //     edited
+      //   • uiStore.appReady — kept true → no splash on next login
+      try {
+        const [{ useCorrectionStore }, { useEditorModeStore }, { useEditingYearStore }, { useUIStore }] = await Promise.all([
+          import('@/store/correctionStore'),
+          import('@/store/editorModeStore'),
+          import('@/store/editingYearStore'),
+          import('@/store/uiStore'),
+        ]);
+        useCorrectionStore.getState().resetAll?.();
+        useEditorModeStore.getState().hydrate(null);
+        useEditingYearStore.getState().reset?.();
+        useUIStore.getState().setAppReady(false);
+      } catch (e) {
+        // Non-fatal — main session reset above already protects auth.
+        // eslint-disable-next-line no-console
+        console.warn('[auth] post-signout store reset failed', e);
+      }
       break;
     case 'SIGNED_IN':
     case 'TOKEN_REFRESHED':

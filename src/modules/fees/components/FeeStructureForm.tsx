@@ -1,5 +1,6 @@
 import React, { useState, useMemo } from 'react';
 import { ArrowLeft, Plus, Trash2, Save, ChevronDown, AlertCircle, RotateCcw, Zap, Calendar } from 'lucide-react';
+import { useUIStore } from '@/store/uiStore';
 
 // ─── Data Types ────────────────────────────────────────────────────────────────
 
@@ -238,10 +239,11 @@ export const FeeStructureForm: React.FC<Props> = ({
   };
 
   const handleSave = () => {
-    if (!name.trim()) { alert('Fee structure name is required'); return; }
-    if (structureType === 'CLASS' && !allClasses && !className) { alert('Class is required'); return; }
+    const { showToast } = useUIStore.getState();
+    if (!name.trim()) { showToast('Fee structure name is required', 'error'); return; }
+    if (structureType === 'CLASS' && !allClasses && !className) { showToast('Class is required', 'error'); return; }
     if (hasMonthly && dueDates.length === 0) {
-      alert('Select at least one billing month for monthly fee heads');
+      showToast('Select at least one billing month for monthly fee heads', 'error');
       return;
     }
     onSave({

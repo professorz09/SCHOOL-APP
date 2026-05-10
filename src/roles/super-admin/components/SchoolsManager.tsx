@@ -220,12 +220,42 @@ export const SchoolsManager: React.FC<Props> = ({ onBack }) => {
     setIsSubmitting(true);
     try {
       const planChanged = form.plan && form.plan !== selected.plan;
-      await updateSchool(selected.id, form as any);
-      setSelected(s => s ? { ...s, ...form } : null);
+
+      // Detect principal-mobile change. The plain updateSchool path
+      // would only update schools.principal_phone (display) and leave
+      // auth.users.email + public.users.mobile_number stale → next
+      // login on the new number fails. Route this via a dedicated
+      // server endpoint that updates all three atomically + force
+      // signs-out the principal.
+      const cleanedNew = (form.principalPhone ?? '').replace(/\D/g, '').slice(-10);
+      const cleanedOld = (selected.principalPhone ?? '').replace(/\D/g, '').slice(-10);
+      const principalMobileChanged = cleanedNew && cleanedNew !== cleanedOld;
+      if (principalMobileChanged && cleanedNew.length !== 10) {
+        showToast('Login mobile 10-digit hona chahiye', 'error');
+        setIsSubmitting(false);
+        return;
+      }
+
+      // Strip principalPhone from the regular update payload so the
+      // mirror update below is the single source of truth for that
+      // field. Otherwise schools.principal_phone could land before
+      // the auth update + we'd re-introduce the desync risk.
+      const updatePayload: typeof form = principalMobileChanged
+        ? { ...form, principalPhone: cleanedOld } // keep old until atomic update succeeds
+        : form;
+      await updateSchool(selected.id, updatePayload as any);
+
+      if (principalMobileChanged) {
+        await apiAdminSchools.updatePrincipalMobile(selected.id, cleanedNew);
+      }
+
+      setSelected(s => s ? { ...s, ...form, principalPhone: cleanedNew || s.principalPhone } : null);
       if (planChanged) {
         await billingService.updatePlan(selected.id, form.plan!);
         await fetchBilling();
         showToast(`Plan updated to ${form.plan}`);
+      } else if (principalMobileChanged) {
+        showToast(`Principal login mobile updated → ${cleanedNew}. Principal ko dobara login karna hoga.`);
       } else {
         showToast(`${form.name} updated`);
       }
@@ -461,7 +491,10 @@ export const SchoolsManager: React.FC<Props> = ({ onBack }) => {
               <Field form={form} setForm={setForm} label="City *" k="location" placeholder="New Delhi" />
             </div>
             <Field form={form} setForm={setForm} label="Full Address" k="address" placeholder="Street, Area, City, PIN" />
-            <Field form={form} setForm={setForm} label="Phone" k="phone" placeholder="+91 XXXXX XXXXX" />
+            <Field form={form} setForm={setForm} label="School Office Phone" k="phone" placeholder="School ka contact number (e.g. landline)" />
+            <p className="text-[10px] font-bold text-slate-400 -mt-1.5 leading-relaxed">
+              Ye school ka <span className="font-black text-slate-600">office contact</span> hai (landline / general number). Yahan se <span className="font-black text-slate-600">login</span> nahi hota — login mobile alag hai (Principal Account section me).
+            </p>
           </div>
 
           {/* Plan & Date */}
@@ -484,11 +517,21 @@ export const SchoolsManager: React.FC<Props> = ({ onBack }) => {
           </div>
 
           {/* Principal */}
-          <div className="bg-white rounded-2xl p-4 border border-slate-100 shadow-sm space-y-4">
-            <p className="text-[10px] font-black uppercase tracking-widest text-slate-400">Principal Account</p>
+          <div className="bg-white rounded-2xl p-4 border border-blue-100 shadow-sm space-y-4">
+            <div className="flex items-start gap-2">
+              <div className="w-7 h-7 rounded-lg bg-blue-50 text-blue-600 flex items-center justify-center shrink-0 mt-0.5">
+                <Phone size={13} />
+              </div>
+              <div className="min-w-0">
+                <p className="text-[10px] font-black uppercase tracking-widest text-blue-600">Principal Login Account</p>
+                <p className="text-[10px] font-bold text-slate-500 leading-relaxed mt-0.5">
+                  Ye principal ka <span className="text-slate-900 font-black">personal login</span> hai. Niche diya gaya mobile + password se woh app me sign-in karenge. <span className="text-slate-900 font-black">School office phone se alag</span> hai.
+                </p>
+              </div>
+            </div>
             <Field form={form} setForm={setForm} label="Principal Name" k="principalName" placeholder="Dr. / Mr. / Ms." />
             <Field form={form} setForm={setForm} label="Email *" k="principalEmail" placeholder="principal@school.edu.in" />
-            <Field form={form} setForm={setForm} label="Phone (Login ID) *" k="principalPhone" placeholder="10-digit mobile" />
+            <Field form={form} setForm={setForm} label="Login Mobile *" k="principalPhone" placeholder="10-digit mobile (login ID)" />
             <Field form={form} setForm={setForm} label="Login Password *" k="password" placeholder="Min 8 characters" type="password" />
           </div>
 
@@ -1200,8 +1243,11 @@ export const SchoolsManager: React.FC<Props> = ({ onBack }) => {
             <Field form={form} setForm={setForm} label="School Name *" k="name" placeholder="e.g. Delhi Public School" />
             <div className="grid grid-cols-2 gap-3">
               <Field form={form} setForm={setForm} label="City *" k="location" placeholder="New Delhi" />
-              <Field form={form} setForm={setForm} label="Phone" k="phone" placeholder="+91 XXXXX XXXXX" />
+              <Field form={form} setForm={setForm} label="School Office Phone" k="phone" placeholder="School ka contact number" />
             </div>
+            <p className="text-[10px] font-bold text-slate-400 -mt-1.5 leading-relaxed">
+              Ye school ka <span className="font-black text-slate-600">office number</span> hai (display only). Login mobile niche Principal section me alag hai.
+            </p>
             <Field form={form} setForm={setForm} label="Full Address" k="address" placeholder="Street, Area, City, PIN" />
             <div className="grid grid-cols-2 gap-3">
               <div>
@@ -1222,11 +1268,21 @@ export const SchoolsManager: React.FC<Props> = ({ onBack }) => {
               </div>
             </div>
           </div>
-          <div className="bg-white rounded-2xl p-4 border border-slate-100 shadow-sm space-y-4">
-            <p className="text-[10px] font-black uppercase tracking-widest text-slate-400">Principal</p>
+          <div className="bg-white rounded-2xl p-4 border border-blue-100 shadow-sm space-y-4">
+            <div className="flex items-start gap-2">
+              <div className="w-7 h-7 rounded-lg bg-blue-50 text-blue-600 flex items-center justify-center shrink-0 mt-0.5">
+                <Phone size={13} />
+              </div>
+              <div className="min-w-0">
+                <p className="text-[10px] font-black uppercase tracking-widest text-blue-600">Principal Login Account</p>
+                <p className="text-[10px] font-bold text-slate-500 leading-relaxed mt-0.5">
+                  Login mobile change karne par auth + users + schools — sab ek saath update honge. Principal ko sabhi devices se sign-out kar diya jayega — naye number par dobara login karna hoga (password same rahega).
+                </p>
+              </div>
+            </div>
             <Field form={form} setForm={setForm} label="Name" k="principalName" placeholder="Dr. / Mr. / Ms." />
             <Field form={form} setForm={setForm} label="Email *" k="principalEmail" placeholder="principal@school.edu.in" />
-            <Field form={form} setForm={setForm} label="Phone" k="principalPhone" placeholder="+91 XXXXX XXXXX" />
+            <Field form={form} setForm={setForm} label="Login Mobile *" k="principalPhone" placeholder="10-digit mobile (login ID)" />
           </div>
           <button onClick={handleUpdate} disabled={isSubmitting}
             className="w-full flex items-center justify-center gap-2 bg-blue-600 text-white font-black text-xs uppercase tracking-widest py-4 rounded-2xl active:scale-95 transition-transform shadow-lg disabled:opacity-60">
@@ -1295,8 +1351,15 @@ const SchoolLimitsCard: React.FC<{
   const [staffLimit, setStaffLimit] = useState<string>(
     school.maxStaff !== null && school.maxStaff !== undefined ? String(school.maxStaff) : '',
   );
+  // Vehicle cap. Distinct from students/staff because 0 carries
+  // special meaning ("transport service disabled") — handled
+  // explicitly in the save / hint text below.
+  const [vehiclesLimit, setVehiclesLimit] = useState<string>(
+    school.maxVehicles !== null && school.maxVehicles !== undefined ? String(school.maxVehicles) : '',
+  );
   const [activeStudents, setActiveStudents] = useState<number | null>(null);
   const [activeStaff, setActiveStaff]       = useState<number | null>(null);
+  const [activeVehicles, setActiveVehicles] = useState<number | null>(null);
   const [saving, setSaving] = useState(false);
 
   // Pull live counts on mount so the input help-text can show how low the
@@ -1304,15 +1367,18 @@ const SchoolLimitsCard: React.FC<{
   useEffect(() => {
     let cancelled = false;
     (async () => {
-      const [stuRes, staffRes] = await Promise.all([
+      const [stuRes, staffRes, vehRes] = await Promise.all([
         supabase.from('students').select('id', { count: 'exact', head: true })
           .eq('school_id', school.id).eq('is_active', true),
         supabase.from('staff').select('id', { count: 'exact', head: true })
+          .eq('school_id', school.id).eq('is_active', true),
+        supabase.from('transport_vehicles').select('id', { count: 'exact', head: true })
           .eq('school_id', school.id).eq('is_active', true),
       ]);
       if (cancelled) return;
       setActiveStudents(stuRes.count ?? 0);
       setActiveStaff(staffRes.count ?? 0);
+      setActiveVehicles(vehRes.count ?? 0);
     })();
     return () => { cancelled = true; };
   }, [school.id]);
@@ -1328,14 +1394,22 @@ const SchoolLimitsCard: React.FC<{
   const handleSave = async () => {
     const stu = parseLimit(studentsLimit);
     const stf = parseLimit(staffLimit);
-    if (Number.isNaN(stu) || Number.isNaN(stf)) {
+    const veh = parseLimit(vehiclesLimit);
+    if (Number.isNaN(stu) || Number.isNaN(stf) || Number.isNaN(veh)) {
       showToast('Limits must be whole numbers (or blank for unlimited)', 'error');
+      return;
+    }
+    // Don't let the principal lower vehicle cap below the live count —
+    // the trigger would just refuse the next reactivation, but a
+    // friendlier upfront block is better UX.
+    if (veh !== null && activeVehicles !== null && veh < activeVehicles && veh > 0) {
+      showToast(`Cannot set max vehicles below current active count (${activeVehicles}). Deactivate vehicles first.`, 'error');
       return;
     }
     setSaving(true);
     try {
-      await schoolService.update(school.id, { maxStudents: stu, maxStaff: stf });
-      onSaved({ maxStudents: stu, maxStaff: stf });
+      await schoolService.update(school.id, { maxStudents: stu, maxStaff: stf, maxVehicles: veh });
+      onSaved({ maxStudents: stu, maxStaff: stf, maxVehicles: veh });
       showToast('Limits saved');
     } catch (e) {
       showToast(e instanceof Error ? e.message : 'Save failed', 'error');
@@ -1345,7 +1419,8 @@ const SchoolLimitsCard: React.FC<{
   };
 
   const dirty = studentsLimit !== (school.maxStudents != null ? String(school.maxStudents) : '')
-              || staffLimit    !== (school.maxStaff    != null ? String(school.maxStaff)    : '');
+              || staffLimit    !== (school.maxStaff    != null ? String(school.maxStaff)    : '')
+              || vehiclesLimit !== (school.maxVehicles != null ? String(school.maxVehicles) : '');
 
   return (
     <div className="bg-white rounded-2xl border border-slate-100 shadow-sm p-4">
@@ -1368,6 +1443,31 @@ const SchoolLimitsCard: React.FC<{
           activeCount={activeStaff}
           accent="emerald"
         />
+        <div className="col-span-2">
+          <LimitInput
+            label="Max Vehicles"
+            value={vehiclesLimit}
+            onChange={setVehiclesLimit}
+            activeCount={activeVehicles}
+            accent="amber"
+          />
+          {/* Special meaning of 0 — make it impossible to miss. */}
+          {vehiclesLimit === '0' && (
+            <p className="text-[11px] font-black text-rose-600 mt-1.5 leading-relaxed">
+              ⚠ <span className="uppercase tracking-widest">Transport service disabled</span> for this school. Principal won't see the Transport tile or any vehicle UI until you raise this above 0.
+            </p>
+          )}
+          {vehiclesLimit !== '0' && vehiclesLimit !== '' && (
+            <p className="text-[10px] font-bold text-slate-400 mt-1">
+              School can run up to {vehiclesLimit} active vehicle{vehiclesLimit === '1' ? '' : 's'}.
+            </p>
+          )}
+          {vehiclesLimit === '' && (
+            <p className="text-[10px] font-bold text-slate-400 mt-1">
+              Blank = unlimited vehicles. Set 0 to disable transport entirely.
+            </p>
+          )}
+        </div>
       </div>
       {dirty && (
         <button
@@ -1386,9 +1486,12 @@ const LimitInput: React.FC<{
   value: string;
   onChange: (v: string) => void;
   activeCount: number | null;
-  accent: 'indigo' | 'emerald';
+  accent: 'indigo' | 'emerald' | 'amber';
 }> = ({ label, value, onChange, activeCount, accent }) => {
-  const accentClass = accent === 'indigo' ? 'focus:border-indigo-500' : 'focus:border-emerald-500';
+  const accentClass =
+    accent === 'indigo'  ? 'focus:border-indigo-500'  :
+    accent === 'emerald' ? 'focus:border-emerald-500' :
+                            'focus:border-amber-500';
   return (
     <div>
       <label className="text-[10px] font-black uppercase tracking-widest text-slate-500 mb-1.5 block">{label}</label>

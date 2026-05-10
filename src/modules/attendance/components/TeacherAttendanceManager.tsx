@@ -9,6 +9,7 @@ import { useUIStore } from '@/store/uiStore';
 import type { DateAttendanceStatus, AttendanceCellStatus, GridDateRecord, GridStudentDetails } from '@/modules/attendance/attendance.service';
 import { useAcademicYear } from '@/shared/context/AcademicYearContext';
 import { stripClassPrefix } from '@/shared/utils/className';
+import { todayIST } from '@/shared/utils/date';
 
 type View = 'CLASSES' | 'GRID';
 
@@ -35,10 +36,13 @@ const CELL_BG: Record<AttendanceCellStatus, string> = {
   half:    'bg-amber-400 text-white',
 };
 
-const todayStr = () => new Date().toISOString().split('T')[0];
-const currentYearMonth = () => {
-  const d = new Date(); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
-};
+// Shared util — earlier this file inlined `toISOString().split('T')[0]`
+// which returns UTC. For India between 00:00 and 05:30 IST, UTC is
+// still the previous day, so a teacher opening "Mark Attendance" at
+// 4 AM would land on yesterday's record. todayIST handles the
+// timezone correctly via toLocaleDateString('en-CA', {timeZone:'Asia/Kolkata'}).
+const todayStr = () => todayIST();
+const currentYearMonth = () => todayStr().slice(0, 7);
 const buildMonthDates = (ym: string, yearStart?: string, yearEnd?: string): string[] => {
   const [y, m] = ym.split('-').map(Number);
   const today = todayStr();
@@ -54,13 +58,22 @@ const buildMonthDates = (ym: string, yearStart?: string, yearEnd?: string): stri
   return out;
 };
 
-// Build last N days strip (newest last = rightmost = today)
+// Build last N days strip (newest last = rightmost = today). IST-based
+// so the "today" tile lines up with `todayStr()`. Earlier the loop used
+// `.toISOString()` for each day which would shift everything by one
+// for early-morning IST opens.
 const buildDateStrip = (count = 14): string[] => {
   const out: string[] = [];
+  // Anchor at IST today, then walk back N-1 calendar days. We do the
+  // walk on a Date constructed from IST today's YYYY-MM-DD so the
+  // browser's local timezone never enters the math.
+  const todayIst = todayStr();
+  const [y, m, d] = todayIst.split('-').map(Number);
+  const anchor = new Date(Date.UTC(y, m - 1, d, 12, 0, 0)); // noon UTC = stable across TZs
   for (let i = count - 1; i >= 0; i--) {
-    const d = new Date();
-    d.setDate(d.getDate() - i);
-    out.push(d.toISOString().split('T')[0]);
+    const dt = new Date(anchor);
+    dt.setUTCDate(anchor.getUTCDate() - i);
+    out.push(`${dt.getUTCFullYear()}-${String(dt.getUTCMonth() + 1).padStart(2, '0')}-${String(dt.getUTCDate()).padStart(2, '0')}`);
   }
   return out;
 };
@@ -208,10 +221,18 @@ export const AttendanceManager: React.FC<Props> = ({ onBack }) => {
       await teacherService.submitAttendance(selectedClass.id, todayDateStr, students);
       showToast('Attendance saved & locked');
       setEditBuffer(prev => { const n = { ...prev }; delete n[todayDateStr]; return n; });
-      await loadGrid(selectedClass, gridYM);
-      // Refresh today status badge
+      // Refresh today's status badge BEFORE navigating away so the
+      // class card's pill flips to "Marked" without the user having
+      // to open the class again.
       const map = await teacherService.getStatusForClass(selectedClass.id, [todayDateStr]);
       setTodayStatuses(t => ({ ...t, [selectedClass.id]: map[todayDateStr] ?? 'APPROVED' }));
+      // Bounce back to the class list — earlier we re-loaded the
+      // grid here, which left the teacher staring at a month-grid
+      // they had no business editing (it's auto-locked the moment
+      // they saved). Class list shows "Marked" on the card so they
+      // know the save landed; grid was just visual noise post-save.
+      setView('CLASSES');
+      setSelectedClass(null);
     } catch (e) {
       showToast((e as Error).message || 'Submit failed', 'error');
     } finally { setIsSubmitting(false); }
@@ -453,6 +474,19 @@ export const AttendanceManager: React.FC<Props> = ({ onBack }) => {
           </div>
         </div>
 
+        {/* Read-only banner — sits above the grid so the teacher knows
+            past columns are view-only at a glance. The cell-level
+            toggleCell already returns early for non-today dates, but
+            without this banner the grid looked like a fully editable
+            calendar and teachers would tap past cells expecting them
+            to flip. */}
+        <div className="bg-slate-50 border-b border-slate-100 px-4 py-2 flex items-center gap-2">
+          <Lock size={11} className="text-slate-400 shrink-0"/>
+          <p className="text-[10px] font-bold text-slate-500 leading-relaxed">
+            Past dates are view-only. Sirf <span className="text-blue-700 font-black">aaj ki column</span> mark kar sakte hain. Correction ke liye principal se baat karein.
+          </p>
+        </div>
+
         {/* Grid */}
         <div className="flex-1 overflow-hidden">
           {gridLoading ? (
@@ -519,9 +553,15 @@ export const AttendanceManager: React.FC<Props> = ({ onBack }) => {
                           const bg = st ? CELL_BG[st] : (isToday && !rec ? 'bg-blue-100 text-blue-400' : 'bg-slate-100 text-slate-300');
                           return (
                             <td key={d}
-                              className={`border-b border-r border-slate-100 text-center px-0.5 py-1 ${editable ? 'cursor-pointer active:scale-90' : ''}`}
+                              // Locked columns get cursor-default + a faint
+                              // striped tint so the teacher reads the column
+                              // as "view only" before they ever try to tap.
+                              className={`border-b border-r border-slate-100 text-center px-0.5 py-1 ${
+                                editable ? 'cursor-pointer active:scale-90' : 'cursor-default bg-slate-50/40'
+                              }`}
+                              title={locked ? 'View only — past attendance' : ''}
                               onClick={() => toggleCell(d, stu.id)}>
-                              <span className={`inline-flex items-center justify-center w-7 h-7 rounded-lg text-[9px] font-black transition-colors ${bg} ${locked && st ? 'opacity-80' : ''}`}>
+                              <span className={`inline-flex items-center justify-center w-7 h-7 rounded-lg text-[9px] font-black transition-colors ${bg} ${locked && st ? 'opacity-70 grayscale-[0.15]' : ''}`}>
                                 {st ? CELL_LABEL[st] : (isToday && !rec ? '?' : '—')}
                               </span>
                             </td>

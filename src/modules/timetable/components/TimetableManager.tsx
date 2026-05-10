@@ -43,9 +43,11 @@ export const TimetableManager: React.FC<Props> = ({ onBack }) => {
   const session = useAuthStore(s => s.session);
   // Inline detour to the Holidays panel — opens / closes without
   // unmounting TimetableManager so state (selected class, edits)
-  // is preserved on return.
+  // is preserved on return. Early return moved to AFTER all the hook
+  // calls below; otherwise toggling showHolidays changes the hook
+  // count between renders and React throws "Rendered fewer/more hooks
+  // than during the previous render" → app crash.
   const [showHolidays, setShowHolidays] = useState(false);
-  if (showHolidays) return <HolidaysManager onBack={() => setShowHolidays(false)} />;
   const isYearClosed = !!currentYear && currentYear.status === 'LOCKED';
   const editGuard = useEditGuard(currentYear?.id, isYearClosed);
   // Real class list — fetched from `sections` for the active year. We keep
@@ -76,6 +78,17 @@ export const TimetableManager: React.FC<Props> = ({ onBack }) => {
   useEffect(() => {
     apiPrincipal.subjectSuggestions().then(setSubjectSuggestions).catch(() => setSubjectSuggestions([]));
   }, []);
+
+  // Weekly-off days (0=Sun…6=Sat) from the school's holiday config. Pulled
+  // once on mount + whenever the user comes back from the Holidays panel
+  // (so toggling Sunday on/off there reflects here without a hard refresh).
+  // Used to grey-out / block period assignment on those days.
+  const [weeklyOff, setWeeklyOff] = useState<number[]>([0]);
+  useEffect(() => {
+    apiPrincipal.weeklyOffGet()
+      .then(r => setWeeklyOff(r.days ?? [0]))
+      .catch(() => setWeeklyOff([0]));
+  }, [showHolidays]);
 
   const reload = useCallback((cls: ClassRow) => {
     // Service indexes entries by classId which is the "label" (e.g. "8-A")
@@ -126,7 +139,22 @@ export const TimetableManager: React.FC<Props> = ({ onBack }) => {
     setEditModal(null);
   };
 
+  // Day-name → 0-6 index used by the weekly_off config (Sun=0 … Sat=6).
+  const DAY_TO_IDX: Record<string, number> = {
+    Sunday: 0, Monday: 1, Tuesday: 2, Wednesday: 3,
+    Thursday: 4, Friday: 5, Saturday: 6,
+  };
+  const isOffDay = (d: string) => weeklyOff.includes(DAY_TO_IDX[d] ?? -1);
+
   const openEdit = (slotId: string) => {
+    // Block the entire assignment flow on a weekly-off day. Even time-only
+    // edits on assembly / break / lunch shouldn't happen — there's no
+    // school that day. Toast tells the user to flip Sunday off in Holidays
+    // first if they actually want to schedule on it.
+    if (isOffDay(activeDay)) {
+      showToast(`${activeDay} school holiday hai — Holidays se off hatao agar class lagani hai`, 'info');
+      return;
+    }
     const slot = PERIOD_SLOTS.find(s => s.slotId === slotId)!;
     // Fixed slots (assembly, break, lunch) open time-edit modal
     if (slot.isFixed) {
@@ -197,6 +225,12 @@ export const TimetableManager: React.FC<Props> = ({ onBack }) => {
       setEditModal(null);
       setSuccessMsg('Saved!');
       setTimeout(() => setSuccessMsg(''), 2000);
+    } catch (e) {
+      // Earlier this had try/finally but no catch — a network or RLS
+      // failure threw silently into the click promise sink. Spinner
+      // stopped, no error, principal assumed the save landed when it
+      // didn't.
+      showToast(e instanceof Error ? e.message : 'Could not save period', 'error');
     } finally {
       setIsSaving(false);
     }
@@ -251,6 +285,11 @@ export const TimetableManager: React.FC<Props> = ({ onBack }) => {
   const dayEntries = entries.filter(e => e.day === activeDay);
   const getEntry = (slotId: string) => dayEntries.find(e => e.slotId === slotId);
 
+  // Holidays panel detour — render now that every hook above has run
+  // for this render pass, so flipping back-and-forth doesn't change
+  // the hook order on subsequent renders.
+  if (showHolidays) return <HolidaysManager onBack={() => setShowHolidays(false)} />;
+
   return (
     <div className="w-full bg-slate-50 flex flex-col animate-in slide-in-from-right-8 duration-300">
       {/* Header */}
@@ -301,18 +340,43 @@ export const TimetableManager: React.FC<Props> = ({ onBack }) => {
           </div>
         )}
 
-        {/* Day tabs */}
+        {/* Day pills — same visual language as the filter chips on
+            the Students screen: rounded, scrollable, clearly active.
+            Off-days carry a faint rose tint + "OFF" badge so a
+            principal can see at a glance which days the school is
+            closed. Earlier this was a flat underline-tabs row that
+            blended in with the header. */}
         {classes.length > 0 && (
-          <div className="flex border-t border-slate-100 overflow-x-auto hide-scrollbar">
-            {DAYS.map(day => (
-              <button key={day} onClick={() => setActiveDay(day)}
-                className={`shrink-0 px-3 lg:px-5 py-3 lg:py-3.5 text-[10px] lg:text-xs font-black uppercase tracking-widest border-b-2 transition-colors ${
-                  activeDay === day ? 'border-blue-600 text-blue-600' : 'border-transparent text-slate-400 hover:text-slate-600'
-                }`}>
-                <span className="lg:hidden">{day.slice(0, 3)}</span>
-                <span className="hidden lg:inline">{day}</span>
-              </button>
-            ))}
+          <div className="flex gap-2 px-3 pb-3 pt-1 border-t border-slate-100 overflow-x-auto hide-scrollbar">
+            {DAYS.map(day => {
+              const off = isOffDay(day);
+              const active = activeDay === day;
+              return (
+                <button
+                  key={day}
+                  onClick={() => setActiveDay(day)}
+                  className={`shrink-0 flex items-center gap-1.5 px-3.5 lg:px-4 py-2 rounded-full text-[10px] lg:text-xs font-black uppercase tracking-widest transition-colors border ${
+                    active
+                      ? off
+                        ? 'bg-rose-600 text-white border-rose-600 shadow-sm shadow-rose-200'
+                        : 'bg-blue-600 text-white border-blue-600 shadow-sm shadow-blue-200'
+                      : off
+                        ? 'bg-rose-50 text-rose-600 border-rose-100 hover:bg-rose-100'
+                        : 'bg-white text-slate-500 border-slate-200 hover:bg-slate-50'
+                  }`}
+                >
+                  <span className="lg:hidden">{day.slice(0, 3)}</span>
+                  <span className="hidden lg:inline">{day}</span>
+                  {off && (
+                    <span className={`text-[7.5px] lg:text-[8.5px] font-black px-1.5 py-px rounded-full ${
+                      active ? 'bg-white/25 text-white' : 'bg-rose-100 text-rose-600'
+                    }`}>
+                      OFF
+                    </span>
+                  )}
+                </button>
+              );
+            })}
           </div>
         )}
       </div>
@@ -324,6 +388,24 @@ export const TimetableManager: React.FC<Props> = ({ onBack }) => {
             <BookOpen size={40} className="mb-3 opacity-40"/>
             <p className="text-sm font-bold text-center">No classes available.</p>
             <p className="text-[11px] font-bold text-slate-300 mt-1 text-center">Set up classes for the active year first.</p>
+          </div>
+        ) : isOffDay(activeDay) ? (
+          /* Weekly-off day — show a clear "school closed" panel instead
+             of a period grid the principal can't actually use. The
+             open-edit handler also blocks taps as a defence in depth. */
+          <div className="flex flex-col items-center justify-center py-20 text-slate-500">
+            <div className="w-16 h-16 rounded-2xl bg-rose-50 text-rose-500 flex items-center justify-center mb-4">
+              <Calendar size={28} />
+            </div>
+            <p className="text-base font-black text-slate-700">{activeDay} — School Holiday</p>
+            <p className="text-xs font-bold text-slate-400 mt-1 max-w-xs text-center">
+              Is din school band hai. Class assign nahi kar sakte. Holidays se {activeDay} ka weekly-off hatao agar lagani hai.
+            </p>
+            <button
+              onClick={() => setShowHolidays(true)}
+              className="mt-5 inline-flex items-center gap-1.5 px-4 py-2 bg-rose-500 hover:bg-rose-600 text-white text-[11px] font-black uppercase tracking-widest rounded-xl active:scale-95 transition-transform">
+              <Calendar size={13}/> Manage Holidays
+            </button>
           </div>
         ) : (
           <>

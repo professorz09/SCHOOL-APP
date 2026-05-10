@@ -18,7 +18,7 @@ const SCHOOL_FIELDS = [
   'status', 'plan', 'student_count', 'teacher_count',
   'payment_status', 'payment_start_date', 'created_at',
   'new_year_creation_enabled',
-  'max_students', 'max_staff',
+  'max_students', 'max_staff', 'max_vehicles',
 ].join(', ');
 
 interface SchoolRow {
@@ -32,6 +32,7 @@ interface SchoolRow {
   new_year_creation_enabled: boolean | null;
   max_students: number | null;
   max_staff:    number | null;
+  max_vehicles: number | null;
 }
 
 function rowToSchool(r: SchoolRow): School {
@@ -56,6 +57,7 @@ function rowToSchool(r: SchoolRow): School {
     newYearCreationEnabled: !!r.new_year_creation_enabled,
     maxStudents: r.max_students,
     maxStaff:    r.max_staff,
+    maxVehicles: r.max_vehicles,
   };
 }
 
@@ -92,10 +94,16 @@ export const schoolService = {
       .eq('is_deleted', false);
     if (opts.status) q = q.eq('status', opts.status);
     if (opts.search?.trim()) {
-      const s = opts.search.trim().replace(/[%_]/g, ch => `\\${ch}`);
-      // Match against the most-search-friendly columns. PostgREST `or`
-      // handles each clause as ILIKE-against-pattern.
-      q = q.or(`name.ilike.%${s}%,code.ilike.%${s}%,location.ilike.%${s}%,principal_name.ilike.%${s}%`);
+      // Escape ILIKE wildcards + drop PostgREST or-filter delimiters
+      // so a literal comma/paren/dot in the search can't extend the
+      // OR clause with attacker-supplied conditions.
+      const s = opts.search.trim()
+        .replace(/[%_]/g, ch => `\\${ch}`)
+        .replace(/[,()."]/g, '')
+        .slice(0, 60);
+      if (s) {
+        q = q.or(`name.ilike.%${s}%,code.ilike.%${s}%,location.ilike.%${s}%,principal_name.ilike.%${s}%`);
+      }
     }
     const { data, count, error } = await q
       .order('created_at', { ascending: false })
@@ -171,6 +179,7 @@ export const schoolService = {
     if (input.newYearCreationEnabled !== undefined) updates.new_year_creation_enabled = input.newYearCreationEnabled;
     if (input.maxStudents !== undefined) updates.max_students = input.maxStudents;
     if (input.maxStaff    !== undefined) updates.max_staff    = input.maxStaff;
+    if (input.maxVehicles !== undefined) updates.max_vehicles = input.maxVehicles;
 
     const { data, error } = await supabase
       .from('schools')

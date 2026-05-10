@@ -109,8 +109,12 @@ export const ResultsView: React.FC<Props> = ({ onBack }) => {
   const toggle = (key: string) =>
     setExpanded(prev => { const s = new Set(prev); s.has(key) ? s.delete(key) : s.add(key); return s; });
 
-  const avgPercent = results.length > 0
-    ? Math.round(results.reduce((a, r) => a + (r.obtainedMarks / r.maxMarks) * 100, 0) / results.length)
+  // Guard against maxMarks=0 corrupt rows (would otherwise inject Infinity/NaN
+  // into the average and surface as "NaN%" in the perf badge). Filter them
+  // out of both the sum and the divisor so a bad row doesn't poison the rest.
+  const scoredResults = results.filter(r => (r.maxMarks ?? 0) > 0);
+  const avgPercent = scoredResults.length > 0
+    ? Math.round(scoredResults.reduce((a, r) => a + (r.obtainedMarks / r.maxMarks) * 100, 0) / scoredResults.length)
     : 0;
 
   const performanceLabel =

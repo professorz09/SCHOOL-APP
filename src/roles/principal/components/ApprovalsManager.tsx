@@ -1,8 +1,10 @@
 import React, { useEffect, useState } from 'react';
-import { ArrowLeft, CheckSquare, CheckCircle2, XCircle, FileText } from 'lucide-react';
+import { ArrowLeft, CheckSquare, CheckCircle2, XCircle, FileText, UserPlus } from 'lucide-react';
 import { principalService } from '@/roles/principal/principal.service';
 import { Approval, ApprovalStatus } from '@/roles/principal/principal.types';
 import { useUIStore } from '@/store/uiStore';
+import { StudentsManager } from '@/modules/students/components/StudentsManager';
+import type { CreateStudentInput } from '@/modules/students/student.types';
 
 type Filter = 'ALL' | ApprovalStatus;
 
@@ -14,7 +16,9 @@ const statusColor = (s: ApprovalStatus) =>
 
 const typeColor = (t: string) =>
   t === 'LEAVE' ? 'bg-blue-50 text-blue-700' :
-  t === 'FEE_PAYMENT' ? 'bg-emerald-50 text-emerald-700' : 'bg-violet-50 text-violet-700';
+  t === 'FEE_PAYMENT' ? 'bg-emerald-50 text-emerald-700' :
+  t === 'ADMISSION' ? 'bg-indigo-50 text-indigo-700' :
+  'bg-violet-50 text-violet-700';
 
 export const ApprovalsManager: React.FC<Props> = ({ onBack }) => {
   const { showToast } = useUIStore();
@@ -24,6 +28,10 @@ export const ApprovalsManager: React.FC<Props> = ({ onBack }) => {
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [rejectReason, setRejectReason] = useState('');
   const [showRejectForm, setShowRejectForm] = useState(false);
+  // ADMISSION reviews open the StudentsManager admission form prefilled
+  // from the saved draft. Tracked separately from `selected` so the
+  // queue stays at "review mode" while the form is being edited.
+  const [reviewing, setReviewing] = useState<Approval | null>(null);
 
   useEffect(() => {
     principalService.getApprovals()
@@ -55,9 +63,19 @@ export const ApprovalsManager: React.FC<Props> = ({ onBack }) => {
     if (!rejectReason.trim()) { setShowRejectForm(true); return; }
     setIsSubmitting(true);
     try {
-      const updated = await principalService.rejectRequest(id, rejectReason.trim());
-      setApprovals(prev => prev.map(a => a.id === updated.id ? updated : a));
-      setSelected(updated);
+      const ap = selected;
+      if (ap?.type === 'ADMISSION') {
+        // ADMISSION drafts are hard-deleted on reject — there's no row
+        // to update afterwards. Drop it from the queue locally and
+        // bounce back to the list.
+        await principalService.rejectAdmissionDraft(id, rejectReason.trim());
+        setApprovals(prev => prev.filter(a => a.id !== id));
+        setSelected(null);
+      } else {
+        const updated = await principalService.rejectRequest(id, rejectReason.trim());
+        setApprovals(prev => prev.map(a => a.id === updated.id ? updated : a));
+        setSelected(updated);
+      }
       setRejectReason('');
       setShowRejectForm(false);
       showToast('Request rejected', 'info');
@@ -65,6 +83,31 @@ export const ApprovalsManager: React.FC<Props> = ({ onBack }) => {
       showToast(e instanceof Error ? e.message : 'Rejection failed', 'error');
     } finally { setIsSubmitting(false); }
   };
+
+  // PRINCIPAL_REVIEW finished — refresh the queue (the row is now
+  // APPROVED) and bounce back to the list.
+  const handleReviewDone = async () => {
+    try {
+      const list = await principalService.getApprovals();
+      setApprovals(list);
+    } catch { /* swallow — outer toast already covered the create path */ }
+    setReviewing(null);
+    setSelected(null);
+  };
+
+  // Open the admission form prefilled from a draft for editing/approve.
+  if (reviewing && reviewing.type === 'ADMISSION') {
+    const prefill = (reviewing.draftPayload ?? {}) as Partial<CreateStudentInput>;
+    return (
+      <StudentsManager
+        mode="PRINCIPAL_REVIEW"
+        draftId={reviewing.id}
+        draftPrefill={prefill}
+        onBack={() => setReviewing(null)}
+        onDraftDone={handleReviewDone}
+      />
+    );
+  }
 
   if (selected) return (
     <div className="w-full bg-slate-50 flex flex-col animate-in slide-in-from-right-8 duration-300">
@@ -135,10 +178,21 @@ export const ApprovalsManager: React.FC<Props> = ({ onBack }) => {
                   className="flex-1 flex items-center justify-center gap-2 py-3.5 bg-rose-50 text-rose-700 border border-rose-200 font-black rounded-2xl active:scale-95 transition-transform disabled:opacity-60">
                   <XCircle size={16} /> Reject
                 </button>
-                <button onClick={() => handleApprove(selected.id)} disabled={isSubmitting}
-                  className="flex-1 flex items-center justify-center gap-2 py-3.5 bg-emerald-600 text-white font-black rounded-2xl active:scale-95 transition-transform disabled:opacity-60">
-                  <CheckCircle2 size={16} /> Approve
-                </button>
+                {/* ADMISSION uses a different "Approve" path: open the
+                    admission form pre-filled from the draft so the
+                    principal can edit any field, then submit runs the
+                    real /students/create flow + closes the approval. */}
+                {selected.type === 'ADMISSION' ? (
+                  <button onClick={() => setReviewing(selected)} disabled={isSubmitting}
+                    className="flex-1 flex items-center justify-center gap-2 py-3.5 bg-indigo-600 text-white font-black rounded-2xl active:scale-95 transition-transform disabled:opacity-60">
+                    <UserPlus size={16} /> Review & Admit
+                  </button>
+                ) : (
+                  <button onClick={() => handleApprove(selected.id)} disabled={isSubmitting}
+                    className="flex-1 flex items-center justify-center gap-2 py-3.5 bg-emerald-600 text-white font-black rounded-2xl active:scale-95 transition-transform disabled:opacity-60">
+                    <CheckCircle2 size={16} /> Approve
+                  </button>
+                )}
               </div>
             )}
           </div>

@@ -2,6 +2,7 @@ import React, { useRef, useState } from 'react';
 import { ArrowLeft, Printer, Download } from 'lucide-react';
 import { Student, STREAM_CLASSES } from '@/modules/students/student.types';
 import { SchoolInfo } from '@/shared/utils/schoolInfo.service';
+import { useUIStore } from '@/store/uiStore';
 
 interface Props {
   student: Student;
@@ -116,7 +117,7 @@ export const AdmissionFormPrint: React.FC<Props> = ({ student, schoolInfo, onClo
     } catch (e) {
       // eslint-disable-next-line no-console
       console.error('[AdmissionForm] PDF download failed', e);
-      alert('PDF generation failed — please try Print instead.');
+      useUIStore.getState().showToast('PDF generation failed — try Print instead', 'error');
     } finally {
       setDownloading(false);
     }

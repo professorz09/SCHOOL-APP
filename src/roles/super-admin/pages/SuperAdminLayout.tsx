@@ -16,11 +16,22 @@ type ActiveView = 'dashboard' | 'schools' | 'billing' | 'admins' | 'broadcast' |
 export const SuperAdminLayout: React.FC = () => {
   const [view, setView] = useState<ActiveView>('dashboard');
   const setSubView = useUIStore(s => s.setSubView);
+  const setAppReady = useUIStore(s => s.setAppReady);
 
   const onNavigate = (v: string) => { setView(v as ActiveView); setSubView(true); };
   const onBack = () => { setView('dashboard'); setSubView(false); };
 
   useEffect(() => { setSubView(false); }, []);
+
+  // Lift the app-root splash overlay as soon as this layout mounts.
+  // Super-admin's "essential data" (schools list, billing) is fetched
+  // by the SADashboard child via its own stores — those have their
+  // own loading/empty states. Without this flip, the recent appReady
+  // refactor (StudentLayout / TeacherLayout / PrincipalLayout each
+  // call setAppReady on data-load) would leave super-admin stuck on
+  // the white splash forever because no one was flipping the flag
+  // for this role.
+  useEffect(() => { setAppReady(true); }, [setAppReady]);
 
   if (view === 'schools')   return <SchoolsManager  onBack={onBack} />;
   if (view === 'billing')   return <BillingManager  onBack={onBack} />;

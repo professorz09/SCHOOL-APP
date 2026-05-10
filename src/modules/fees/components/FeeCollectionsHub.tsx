@@ -42,6 +42,10 @@ export const FeeCollectionsHub: React.FC<Props> = ({ onBack }) => {
   const [loading, setLoading] = useState(true);
   const [aggregate, setAggregate] = useState<Awaited<ReturnType<typeof feeService.getSchoolAggregate>> | null>(null);
   const [todayInflow, setTodayInflow] = useState(0);
+  // showToast was previously only available inside the DuesPanel
+  // sub-component. The useEffect below references it directly, so
+  // pull it from the store at this scope too.
+  const showToast = useUIStore(s => s.showToast);
 
   // Initial load: aggregate (one RPC) + light payment history (cached) so we
   // can derive today's inflow without a separate round-trip.
@@ -57,7 +61,14 @@ export const FeeCollectionsHub: React.FC<Props> = ({ onBack }) => {
           .reduce((s, p) => s + Math.max(0, p.amount), 0);
         setTodayInflow(inflow);
       } catch (e) {
+        // Surface — earlier this only console.error'd. Same silent
+        // empty-data pattern as FeeLedger had: principal saw zero
+        // collections + no error and assumed "no payments today".
         console.error('[FeeCollectionsHub] load failed', e);
+        showToast(
+          e instanceof Error ? e.message : 'Failed to load fee summary',
+          'error',
+        );
       } finally {
         setLoading(false);
       }

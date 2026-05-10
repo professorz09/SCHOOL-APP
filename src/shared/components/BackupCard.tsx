@@ -53,10 +53,17 @@ export const BackupCard: React.FC<Props> = ({ apiPath }) => {
       const a = document.createElement('a');
       a.href = url;
       a.download = filename;
+      a.style.display = 'none';
       document.body.appendChild(a);
       a.click();
-      a.remove();
-      URL.revokeObjectURL(url);
+      // Backup ZIPs can be 50+ MB — Safari + older WebKit need the
+      // blob URL alive while they fetch + write the file. Synchronous
+      // revoke after click() races the download and the user gets a
+      // truncated / 0-byte zip silently.
+      setTimeout(() => {
+        a.remove();
+        URL.revokeObjectURL(url);
+      }, 1000);
 
       showToast(`${kind === 'QUICK' ? 'Quick' : 'Full'} backup downloaded · ${(blob.size / 1024 / 1024).toFixed(1)} MB`);
     } catch (e) {

@@ -26,10 +26,16 @@ export function downloadCsv(filename: string, content: string): void {
   const a    = document.createElement('a');
   a.href     = url;
   a.download = filename.endsWith('.csv') ? filename : `${filename}.csv`;
+  a.style.display = 'none';
   document.body.appendChild(a);
   a.click();
-  a.remove();
-  URL.revokeObjectURL(url);
+  // Defer cleanup so the browser can start the download fetch before
+  // the blob URL is revoked. Synchronous revoke races the fetch in
+  // Safari / older WebKit and the file ends up empty / "Failed".
+  setTimeout(() => {
+    a.remove();
+    URL.revokeObjectURL(url);
+  }, 1000);
 }
 
 /** One-shot helper: build CSV from rows and download it. */

@@ -1,7 +1,7 @@
 import React, { useState, useMemo, useEffect, useRef } from 'react';
 import {
   ArrowLeft, CheckCircle2, Lock, Save, Search, ChevronLeft, ChevronRight,
-  Unlock, AlertTriangle, Pencil, LayoutGrid, Download, RefreshCw,
+  Unlock, AlertTriangle, Pencil, LayoutGrid, Download, RefreshCw, AlertCircle,
 } from 'lucide-react';
 import { staffAttendanceService, StaffAttendanceRow, StaffAttendanceStatus }
   from '@/modules/attendance/attendance.service';
@@ -111,6 +111,10 @@ export const StaffAttendanceManager: React.FC<Props> = ({ onBack, startTab = 'OV
   const [tab, setTab] = useState<TabType>(startTab);
   const [selectedDate, setSelectedDate] = useState<string>(today());
   const [record, setRecord] = useState<DayRecord | null>(null);
+  // Captures the message of the last loadDate failure so the
+  // no-record screen can show a retry button instead of an
+  // infinite spinner. Cleared on successful re-load.
+  const [loadError, setLoadError] = useState<string | null>(null);
   const [isSaving, setIsSaving] = useState(false);
   const [snapshot, setSnapshot] = useState<Map<string, AttendanceStatus>>(new Map());
   const [activeStatus, setActiveStatus] = useState<string | null>(null);
@@ -121,6 +125,9 @@ export const StaffAttendanceManager: React.FC<Props> = ({ onBack, startTab = 'OV
   // This is how we keep "Clear" semantically distinct from "All Present".
   const [clearedIds, setClearedIds] = useState<Set<string>>(new Set());
   const [historyMonth, setHistoryMonth] = useState<string>(getCurrentMonthYM());
+  // Bulk-overwrite confirmation. Replaces a window.confirm() that
+  // exposed the codespaces dev hostname as the dialog title.
+  const [bulkConfirm, setBulkConfirm] = useState<{ status: AttendanceStatus; count: number } | null>(null);
   const [historyData, setHistoryData] = useState<HistoryData[] | null>(null);
   const [historyLoading, setHistoryLoading] = useState(false);
   // Role filter for the history grid — 'ALL' shows everyone, otherwise narrow
@@ -138,12 +145,19 @@ export const StaffAttendanceManager: React.FC<Props> = ({ onBack, startTab = 'OV
     setSnapshot(new Map());
     setActiveStatus(null);
     setClearedIds(new Set());
+    setLoadError(null);
     try {
       const data = await staffAttendanceService.getForDate(date);
       setRecord({ date, rows: data.rows, isLocked: data.isLocked, savedAt: data.savedAt, modifiedAt: data.modifiedAt });
       setSnapshot(new Map(data.rows.map(r => [r.staffId, r.status])));
     } catch (e) {
-      showToast((e as Error).message || 'Failed to load staff attendance', 'error');
+      const msg = (e as Error).message || 'Failed to load staff attendance';
+      showToast(msg, 'error');
+      // Track the failure so the no-record screen shows a retry
+      // affordance instead of an infinite spinner. Earlier the
+      // user was stuck staring at a loading wheel after a one-off
+      // network blip.
+      setLoadError(msg);
     }
   };
 
@@ -203,24 +217,29 @@ export const StaffAttendanceManager: React.FC<Props> = ({ onBack, startTab = 'OV
   const softLocked = savedOnce && !editorModeActive;
   const isLocked   = hardLocked || softLocked;
 
+  // Apply a bulk status to every row. Wraps the actual mutation so
+  // both the direct path (no overrides) and the modal-confirmed path
+  // (overrides exist) share one implementation.
+  const applyBulk = (status: AttendanceStatus) => {
+    setRecord(r => r ? ({ ...r, rows: r.rows.map(row => ({ ...row, status })) }) : r);
+    setClearedIds(new Set());
+  };
+
   const bulkSet = (status: AttendanceStatus) => {
     if (isLocked) return;
     // Warn before clobbering already-marked LEAVE / LATE / HALF_DAY
-    // rows. "All Present" / "All Holiday" should not silently flip
-    // a manually-set LEAVE to PRESENT — that loses real data the
-    // marker entered.
+    // rows. "All Present" / "All Holiday" should not silently flip a
+    // manually-set LEAVE to PRESENT — that loses real data the marker
+    // entered. Now goes through a custom modal because window.confirm
+    // exposed the codespaces dev hostname mid-day.
     const distinctOverride = (record?.rows ?? []).filter(r =>
       r.status !== 'PRESENT' && r.status !== status,
     );
     if (distinctOverride.length > 0) {
-      const ok = window.confirm(
-        `${distinctOverride.length} staff already have a different status set ` +
-        `(LEAVE / LATE / HALF_DAY etc). Overwriting all to ${status}?`,
-      );
-      if (!ok) return;
+      setBulkConfirm({ status, count: distinctOverride.length });
+      return;
     }
-    setRecord(r => r ? ({ ...r, rows: r.rows.map(row => ({ ...row, status })) }) : r);
-    setClearedIds(new Set());
+    applyBulk(status);
   };
 
   const clearAll = () => {
@@ -322,8 +341,23 @@ export const StaffAttendanceManager: React.FC<Props> = ({ onBack, startTab = 'OV
           </button>
           <h2 className="text-xl font-black text-slate-900 uppercase tracking-tight">Staff Attendance</h2>
         </div>
-        <div className="flex-1 flex items-center justify-center">
-          <div className="w-8 h-8 border-2 border-slate-200 border-t-slate-600 rounded-full animate-spin" />
+        <div className="flex-1 flex flex-col items-center justify-center gap-3 p-6 text-center">
+          {loadError ? (
+            <>
+              <div className="w-12 h-12 rounded-2xl bg-rose-50 text-rose-500 flex items-center justify-center">
+                <AlertCircle size={22}/>
+              </div>
+              <p className="font-black text-slate-700 text-sm">Could not load attendance</p>
+              <p className="text-[11px] font-bold text-slate-400 max-w-xs">{loadError}</p>
+              <button
+                onClick={() => loadDate(selectedDate)}
+                className="mt-2 px-4 py-2 bg-slate-900 text-white font-black text-[10px] uppercase tracking-widest rounded-xl active:scale-95 transition-transform">
+                Retry
+              </button>
+            </>
+          ) : (
+            <div className="w-8 h-8 border-2 border-slate-200 border-t-slate-600 rounded-full animate-spin" />
+          )}
         </div>
       </div>
     );
@@ -812,6 +846,32 @@ export const StaffAttendanceManager: React.FC<Props> = ({ onBack, startTab = 'OV
               {STATUS_CONFIG[s].label}
             </span>
           ))}
+        </div>
+      )}
+
+      {bulkConfirm && (
+        <div className="fixed inset-0 z-50 bg-black/50 flex items-end lg:items-center justify-center p-4 animate-in fade-in duration-150"
+          onClick={() => setBulkConfirm(null)}>
+          <div onClick={e => e.stopPropagation()}
+            className="bg-white rounded-3xl w-full lg:max-w-md p-5 lg:p-6 shadow-2xl animate-in slide-in-from-bottom-4 lg:zoom-in-95 duration-200">
+            <p className="text-base font-black text-slate-900 mb-1">Overwrite existing entries?</p>
+            <p className="text-[11px] font-bold text-slate-500 mt-2 leading-relaxed">
+              {bulkConfirm.count} staff already have a non-default status set
+              (LEAVE / LATE / HALF_DAY etc). Apply <span className="text-slate-900 font-black">{bulkConfirm.status}</span> to everyone? Manually-marked rows will be replaced.
+            </p>
+            <div className="flex gap-3 mt-5">
+              <button
+                onClick={() => setBulkConfirm(null)}
+                className="flex-1 py-3 bg-slate-100 text-slate-700 font-black rounded-2xl text-sm uppercase tracking-widest active:scale-95 transition-transform">
+                Cancel
+              </button>
+              <button
+                onClick={() => { applyBulk(bulkConfirm.status); setBulkConfirm(null); }}
+                className="flex-1 py-3 bg-amber-600 hover:bg-amber-700 text-white font-black rounded-2xl text-sm uppercase tracking-widest active:scale-95 transition-transform">
+                Overwrite
+              </button>
+            </div>
+          </div>
         </div>
       )}
     </div>

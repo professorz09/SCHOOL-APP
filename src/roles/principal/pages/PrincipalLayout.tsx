@@ -58,6 +58,14 @@ export const PrincipalLayout: React.FC = () => {
   const [view, setView] = useState<PrincipalView>('DASHBOARD');
   const { isSubView, setSubView } = useUIStore();
   const { academicYears, isLoading } = useAcademicYear();
+  // Lift the app-root splash once academic years have resolved (or
+  // we've confirmed there are none, which routes to the lock screen).
+  // Earlier the splash hid on first DOM commit and the principal
+  // briefly saw the empty Year-Setup card before the real data
+  // arrived — read as a second loading pass.
+  useEffect(() => {
+    if (!isLoading) useUIStore.getState().setAppReady(true);
+  }, [isLoading]);
 
   const goTo = (v: PrincipalView) => { setView(v); setSubView(true); };
   const goBack = () => { setView('DASHBOARD'); setSubView(false); };

@@ -118,6 +118,16 @@ feesRouter.post('/pay', requireAuth, requireRole('PRINCIPAL'), async (req, res) 
     if (amount === 0 && discount === 0) {
       throw new ApiError(400, 'Amount and discount cannot both be zero');
     }
+    // Defense-in-depth upper bound. The client form caps at 10M
+    // (₹1 crore) but a malicious caller bypassing the UI could
+    // POST a 12-digit value — DB has a sign check but no max
+    // value. 10 crore (100M) is well above any legitimate single
+    // school payment; a real "I made 50 lakh adjustment" would be
+    // split into multiple receipts anyway.
+    const MAX_AMOUNT = 100_000_000;
+    if (amount > MAX_AMOUNT || discount > MAX_AMOUNT) {
+      throw new ApiError(400, 'Amount exceeds the per-transaction cap. Split into multiple receipts.');
+    }
     const discountNote = discount > 0 ? ` (with ₹${discount} discount)` : '';
 
     const db = userDb(req.jwt);
@@ -155,6 +165,11 @@ feesRouter.post('/pay-installment', requireAuth, requireRole('PRINCIPAL'), async
 
     const amount   = Math.max(0, Math.round(body.amount));
     const discount = Math.max(0, Math.round(body.discount ?? 0));
+    // Same upper-bound guard as /api/fees/pay above.
+    const MAX_AMOUNT = 100_000_000;
+    if (amount > MAX_AMOUNT || discount > MAX_AMOUNT) {
+      throw new ApiError(400, 'Amount exceeds the per-transaction cap. Split into multiple receipts.');
+    }
     if (amount === 0 && discount === 0) {
       throw new ApiError(400, 'Amount and discount cannot both be zero');
     }

@@ -11,6 +11,9 @@ import { Student } from '@/modules/students/student.types';
 import { Bell, Loader, LogOut, ChevronRight } from 'lucide-react';
 import { ErrorBoundary }       from '@/shared/components/ErrorBoundary';
 import { ToastContainer }      from '@/shared/components/ui/Toast';
+import { ReasonPromptModal }   from '@/shared/components/ui/ReasonPrompt';
+import { ConfirmModal }        from '@/shared/components/ui/ConfirmModal';
+import { MobileConfirmModal }  from '@/shared/components/ui/MobileConfirmModal';
 
 // Code-split each role's dashboard + the heavy per-role tab views. Only the
 // chunk for the currently-logged-in role is downloaded — a parent never
@@ -39,15 +42,27 @@ const TeacherNoticesView = lazy(() => import('@/modules/notices/components/Teach
 import { AppLoader } from '@/shared/components/AppLoader';
 const ChunkLoading: React.FC = () => <AppLoader variant="centered" />;
 
-// Fires its onMount once when the wrapped tree finally commits — i.e.
-// when Suspense stops suspending. Used to flip a "first chunk loaded"
-// flag so the full splash overlay can disappear and the bottom nav
-// can fade in. While Suspense is still showing the fallback, this
-// component isn't mounted, so the effect never fires.
-const FirstMountSignal: React.FC<{ children: React.ReactNode; onMount: () => void }> = ({ children, onMount }) => {
-  React.useEffect(() => { onMount(); }, []); // eslint-disable-line react-hooks/exhaustive-deps
-  return <>{children}</>;
-};
+// Placeholder shown when a logged-in user has a role that doesn't
+// have a dashboard built yet (e.g. a future non-teaching STAFF /
+// PEON / ACCOUNTANT account). Without this the app rendered nothing
+// and the screen looked broken.
+const ComingSoonView: React.FC<{ role: string; onLogout: () => void }> = ({ role, onLogout }) => (
+  <div className="min-h-dvh w-full flex flex-col items-center justify-center p-6 bg-gradient-to-b from-slate-50 to-white">
+    <div className="w-20 h-20 rounded-3xl bg-indigo-100 flex items-center justify-center mb-5">
+      <Loader className="text-indigo-500 animate-pulse" size={36} />
+    </div>
+    <h2 className="text-2xl font-black text-slate-900 uppercase tracking-tight">Coming Soon</h2>
+    <p className="text-sm font-bold text-slate-500 mt-2 text-center max-w-xs">
+      Your <span className="text-indigo-600">{role}</span> dashboard is not built yet.<br/>
+      We'll let your school know once it's ready.
+    </p>
+    <button
+      onClick={onLogout}
+      className="mt-8 flex items-center gap-2 px-5 py-2.5 bg-slate-900 text-white text-xs font-black uppercase tracking-widest rounded-xl active:scale-95 transition-transform">
+      <LogOut size={14} /> Log out
+    </button>
+  </div>
+);
 
 const useIsDesktop = () => {
   const [isDesktop, setIsDesktop] = useState(() => window.innerWidth >= 1024);
@@ -78,7 +93,20 @@ export default function App() {
   // bottom nav / sidebar / page chrome don't appear AROUND a
   // half-loaded tab body — that's what made the boot feel like 2-3
   // separate loading screens stacked.
-  const [firstChunkLoaded, setFirstChunkLoaded] = useState(false);
+  // Replaced an earlier mount-on-commit signal that flipped this flag
+  // as soon as the role chunk's first DOM commit happened — but the
+  // dashboard then sat on "—" placeholders until ctx / classes / years
+  // resolved, which read as a second "loading" pass to the user.
+  // appReady (from uiStore) is now flipped by each role's Layout once
+  // its essential data has actually loaded, so the splash holds until
+  // the populated dashboard is ready to paint.
+  const appReady = useUIStore(s => s.appReady);
+  const setAppReady = useUIStore(s => s.setAppReady);
+  // Reset on session change so a logout → re-login replay shows the
+  // splash again instead of unmasking the previous user's data.
+  useEffect(() => {
+    if (!session) setAppReady(false);
+  }, [session?.userId, setAppReady]); // eslint-disable-line react-hooks/exhaustive-deps
   const isDesktop = useIsDesktop();
   const mainScrollRef = useRef<HTMLElement | null>(null);
 
@@ -275,7 +303,11 @@ export default function App() {
       // (FeesView, NoticesView, etc.) reloads for the newly selected child.
       case 'STUDENT':     return <StudentLayout key={selectedStudentId ?? 'none'} />;
       case 'DRIVER':      return <DriverLayout />;
-      default:            return null;
+      // Any role outside the 5 supported logins (e.g., a future
+      // non-teaching STAFF / PEON / ACCOUNTANT account) lands on a
+      // Coming Soon placeholder instead of a blank screen so the user
+      // knows the login worked but their dashboard isn't built yet.
+      default:            return <ComingSoonView role={session.role} onLogout={() => logout()} />;
     }
   };
 
@@ -310,7 +342,7 @@ export default function App() {
   // Without this, the user sees the bottom nav + a centred mini
   // loader floating in an empty page body for ~1s after auth-init
   // ends, which reads as multiple stacked loading states.
-  const splashOverlay = !firstChunkLoaded
+  const splashOverlay = !appReady
     ? <div className="fixed inset-0 z-[60] bg-white"><AppLoader variant="full" /></div>
     : null;
 
@@ -329,13 +361,14 @@ export default function App() {
             className="flex-1 overflow-y-auto hide-scrollbar focus:outline-none"
           >
             <Suspense fallback={<ChunkLoading />}>
-              <FirstMountSignal onMount={() => setFirstChunkLoaded(true)}>
-                {renderTabContent()}
-              </FirstMountSignal>
+              {renderTabContent()}
             </Suspense>
           </main>
         </div>
         <ToastContainer />
+        <ReasonPromptModal />
+        <ConfirmModal />
+        <MobileConfirmModal />
       </>
     );
   }
@@ -351,17 +384,18 @@ export default function App() {
               generic Header so the two don't stack. */}
           {tab === 'HOME' && !isSubView && role !== 'STUDENT' && role !== 'PRINCIPAL' && role !== 'TEACHER' && <Header role={role} />}
 
-          <main className="flex-1 overflow-y-auto pb-32 hide-scrollbar">
+          <main className="flex-1 overflow-y-auto hide-scrollbar">
             <Suspense fallback={<ChunkLoading />}>
-              <FirstMountSignal onMount={() => setFirstChunkLoaded(true)}>
-                {renderTabContent()}
-              </FirstMountSignal>
+              {renderTabContent()}
             </Suspense>
           </main>
 
-          <div className="fixed bottom-0 left-0 right-0 z-20">
-            <BottomNav role={role} currentTab={tab} setTab={(t) => { setTab(t); setSubView(t !== 'HOME' && t !== 'PROFILE'); }} />
-          </div>
+          {/* In the flex flow (not `fixed`) so <main> doesn't extend
+              behind the nav. Sticky footers inside views (e.g. the
+              admission form Cancel/Next bar) can now pin at bottom-0
+              and naturally sit just above this row, with no manual
+              bottom-nav-height offset and no empty band below. */}
+          <BottomNav role={role} currentTab={tab} setTab={(t) => { setTab(t); setSubView(t !== 'HOME' && t !== 'PROFILE'); }} />
         </div>
       </div>
       <ToastContainer />
