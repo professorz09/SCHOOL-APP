@@ -14,6 +14,7 @@ import { ToastContainer }      from '@/shared/components/ui/Toast';
 import { ReasonPromptModal }   from '@/shared/components/ui/ReasonPrompt';
 import { ConfirmModal }        from '@/shared/components/ui/ConfirmModal';
 import { MobileConfirmModal }  from '@/shared/components/ui/MobileConfirmModal';
+import { InstallPrompt }       from '@/shared/components/InstallPrompt';
 
 // Code-split each role's dashboard + the heavy per-role tab views. Only the
 // chunk for the currently-logged-in role is downloaded — a parent never
@@ -375,6 +376,7 @@ export default function App() {
         <ReasonPromptModal />
         <ConfirmModal />
         <MobileConfirmModal />
+        <InstallPrompt />
       </>
     );
   }
@@ -412,6 +414,7 @@ export default function App() {
       <ReasonPromptModal />
       <ConfirmModal />
       <MobileConfirmModal />
+      <InstallPrompt />
     </>
   );
 }

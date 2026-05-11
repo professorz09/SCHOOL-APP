@@ -38,6 +38,22 @@ body {
    from the viewport flow with `position: absolute` so the rest of the app
    doesn't reserve empty pages around it.
 */
+/* Offscreen staging used by `stageForCapture` in pdfPrint.ts. Printable
+   components (admit cards, marksheets, bonafides) are designed with
+   mobile-card constraints (`max-w-md`, `mx-auto`) — those would render
+   as a thin centred strip on the 794px A4-width canvas. While inside
+   the staging wrapper we neutralise the width constraints so the
+   captured canvas fills the page properly. Live UI is unaffected
+   because the wrapper is offscreen and only exists during export. */
+.pdf-staging,
+.pdf-staging * {
+  max-width: none !important;
+}
+.pdf-staging .mx-auto {
+  margin-left: 0 !important;
+  margin-right: 0 !important;
+}
+
 @media print {
   @page { margin: 12mm; }
 

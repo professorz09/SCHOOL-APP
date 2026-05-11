@@ -1,6 +1,6 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { ArrowLeft, Sparkles, Download, Loader2, ScrollText, ChevronRight, Printer, FileText } from 'lucide-react';
-import { downloadNodeAsPdf, printCurrentPage } from '@/shared/utils/pdfPrint';
+import { downloadNodeAsPdf, printNodeInNewWindow } from '@/shared/utils/pdfPrint';
 import { teacherService } from '@/roles/teacher/teacher.service';
 import { ExamPaperRequest, GeneratedExamPaper } from '@/roles/teacher/teacher.types';
 import { useUIStore } from '@/store/uiStore';
@@ -175,7 +175,7 @@ export const ExamPaperGeneratorView: React.FC<Props> = ({ onBack }) => {
               ? <><Loader2 size={13} className="animate-spin" /> PDF…</>
               : <><Download size={13} /> PDF</>}
           </button>
-          <button onClick={printCurrentPage}
+          <button onClick={() => printableRef.current && printNodeInNewWindow(printableRef.current, `Paper — ${paper?.request.subject ?? 'Exam'}`)}
             className="flex items-center gap-1.5 bg-blue-600 text-white text-[11px] font-black px-3 py-2 rounded-xl active:scale-95 transition-transform">
             <Printer size={13} /> Print
           </button>
@@ -206,7 +206,7 @@ export const ExamPaperGeneratorView: React.FC<Props> = ({ onBack }) => {
             this div, so the dark hero card above + app chrome stay
             out of the export. School name + class line render at the
             top of every PDF. */}
-        <div ref={printableRef} className="bg-white rounded-2xl border border-slate-200 p-5 lg:p-7">
+        <div ref={printableRef} className="printable bg-white rounded-2xl border border-slate-200 p-5 lg:p-7">
           <div className="text-center pb-4 mb-4 border-b-2 border-slate-200">
             {paper.request.schoolName && (
               <div className="text-lg lg:text-xl font-black text-slate-900 uppercase tracking-wide">
@@ -394,6 +394,29 @@ export const ExamPaperGeneratorView: React.FC<Props> = ({ onBack }) => {
                       : 'bg-slate-50 border border-slate-200 text-slate-400'
                   }`}>
                   {d}
+                </button>
+              ))}
+            </div>
+          </div>
+
+          {/* Output language — drives the AI prompt directive. BILINGUAL
+              prints English first then a Hindi (Devanagari) translation
+              underneath each question, useful for mixed-medium boards. */}
+          <div>
+            <label className="block text-[10px] font-black uppercase tracking-widest text-slate-500 mb-1.5">Language</label>
+            <div className="flex gap-2">
+              {([
+                { key: 'ENGLISH',  label: 'English' },
+                { key: 'HINDI',    label: 'हिंदी' },
+                { key: 'BILINGUAL', label: 'Both' },
+              ] as const).map(l => (
+                <button key={l.key} onClick={() => setForm(f => ({ ...f, language: l.key }))}
+                  className={`flex-1 py-2 rounded-xl text-[10px] font-black uppercase tracking-widest transition-colors ${
+                    form.language === l.key
+                      ? 'bg-indigo-600 text-white'
+                      : 'bg-slate-50 border border-slate-200 text-slate-500'
+                  }`}>
+                  {l.label}
                 </button>
               ))}
             </div>

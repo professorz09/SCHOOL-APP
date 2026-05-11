@@ -36,7 +36,7 @@ export const AdmitCardPrint = forwardRef<HTMLDivElement, AdmitCardPrintProps>(({
     ? schoolInfoService.getAssetUrl(schoolInfo.principalSignaturePath) : null;
   return (
     <div ref={ref}
-      className="border-4 border-double rounded-2xl p-5 max-w-md mx-auto space-y-4 bg-white"
+      className="printable border-4 border-double rounded-2xl p-5 max-w-md mx-auto space-y-4 bg-white"
       style={{ borderColor: accent }}>
       <PrintHeader schoolInfo={schoolInfo} title="Admit Card / प्रवेश पत्र" accent={accent} compact />
 

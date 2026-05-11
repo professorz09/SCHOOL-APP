@@ -12,12 +12,12 @@
 
 import React, { useEffect, useRef, useState } from 'react';
 import {
-  ArrowLeft, Award, BadgeCheck, Download, Eye, Printer, Ticket, X, Loader2,
+  ArrowLeft, Award, BadgeCheck, Download, Eye, Printer, Ticket, Loader2,
 } from 'lucide-react';
 import { supabase } from '@/lib/supabase';
 import { apiExams } from '@/lib/apiClient';
 import { schoolInfoService, type SchoolInfo } from '@/shared/utils/schoolInfo.service';
-import { downloadNodeAsPdf, printCurrentPage } from '@/shared/utils/pdfPrint';
+import { downloadNodeAsPdf, printNodeInNewWindow } from '@/shared/utils/pdfPrint';
 import { useUIStore } from '@/store/uiStore';
 import type { Student } from '@/modules/students/student.types';
 import { BonafidePrint } from '@/shared/components/documents/BonafidePrint';
@@ -66,29 +66,33 @@ export const StudentDocumentsPanel: React.FC<Props> = ({ student }) => {
       </div>
 
       {modal && schoolInfo && (
-        <div className="fixed inset-0 z-50 bg-slate-900/60 flex items-stretch justify-center animate-in fade-in"
-          onClick={close}>
-          <div className="bg-slate-50 w-full max-w-2xl overflow-y-auto animate-in slide-in-from-right-8"
-            onClick={e => e.stopPropagation()}>
-            <div className="bg-white border-b border-slate-100 px-4 py-3 sticky top-0 z-10 flex items-center gap-3">
-              <button onClick={close} className="p-2 -ml-2 bg-slate-100 rounded-full text-slate-600">
-                <ArrowLeft size={18} />
-              </button>
-              <h3 className="text-base font-black text-slate-900 uppercase tracking-tight flex-1">
+        /* Full-page route-style view (matches admission-form + exam-paper
+           navigation pattern). Earlier this was a centred max-w-2xl modal
+           with dark backdrop, which felt cramped against the rest of the
+           app and never matched the admission-form UX. Now it slides in
+           as a true full-screen page (slide-from-right on mobile, lg
+           constraint on desktop) with no backdrop. */
+        <div className="fixed inset-0 z-50 bg-slate-50 overflow-y-auto animate-in slide-in-from-right-8 duration-300">
+          <div className="bg-white border-b border-slate-100 px-4 py-3 sticky top-0 z-10 flex items-center gap-3 shadow-sm">
+            <button onClick={close} className="p-2 -ml-2 bg-slate-100 rounded-full text-slate-600 active:scale-95">
+              <ArrowLeft size={18} />
+            </button>
+            <div className="flex-1 min-w-0">
+              <h3 className="text-base font-black text-slate-900 uppercase tracking-tight truncate">
                 {modal === 'BONAFIDE'  && 'Bonafide Certificate'}
                 {modal === 'MARKSHEET' && 'Academic Marksheet'}
                 {modal === 'ADMIT'     && 'Admit Card'}
               </h3>
-              <button onClick={close} className="p-2 bg-slate-100 rounded-full text-slate-500">
-                <X size={16} />
-              </button>
+              <p className="text-[10px] font-bold text-slate-400 truncate">
+                {student.name} · {student.admissionNo}
+              </p>
             </div>
+          </div>
 
-            <div className="p-4">
-              {modal === 'BONAFIDE'  && <BonafideFlow  student={student} schoolInfo={schoolInfo} onError={m => showToast(m, 'error')} />}
-              {modal === 'MARKSHEET' && <MarksheetFlow student={student} schoolInfo={schoolInfo} onError={m => showToast(m, 'error')} />}
-              {modal === 'ADMIT'     && <AdmitFlow     student={student} schoolInfo={schoolInfo} onError={m => showToast(m, 'error')} />}
-            </div>
+          <div className="p-4 lg:max-w-3xl lg:mx-auto">
+            {modal === 'BONAFIDE'  && <BonafideFlow  student={student} schoolInfo={schoolInfo} onError={m => showToast(m, 'error')} />}
+            {modal === 'MARKSHEET' && <MarksheetFlow student={student} schoolInfo={schoolInfo} onError={m => showToast(m, 'error')} />}
+            {modal === 'ADMIT'     && <AdmitFlow     student={student} schoolInfo={schoolInfo} onError={m => showToast(m, 'error')} />}
           </div>
         </div>
       )}
@@ -126,9 +130,9 @@ const BonafideFlow: React.FC<{ student: Student; schoolInfo: SchoolInfo; onError
           purpose={purpose.trim() || undefined}
         />
         <div className="grid grid-cols-2 gap-3 mt-4">
-          <button onClick={printCurrentPage}
+          <button onClick={() => ref.current && printNodeInNewWindow(ref.current, `Bonafide — ${student.name}`)}
             className="flex items-center justify-center gap-2 bg-indigo-600 hover:bg-indigo-700 text-white font-black text-sm uppercase py-3 rounded-2xl">
-            <Printer size={16} /> Print
+            <Printer size={16} /> Print / Save as PDF
           </button>
           <button onClick={download}
             className="flex items-center justify-center gap-2 bg-slate-100 hover:bg-slate-200 text-slate-700 font-black text-sm uppercase py-3 rounded-2xl">
@@ -281,9 +285,9 @@ const MarksheetFlow: React.FC<{ student: Student; schoolInfo: SchoolInfo; onErro
           rows={rows}
         />
         <div className="grid grid-cols-2 gap-3 mt-4">
-          <button onClick={printCurrentPage}
+          <button onClick={() => ref.current && printNodeInNewWindow(ref.current, `Marksheet — ${student.name}`)}
             className="flex items-center justify-center gap-2 bg-amber-600 hover:bg-amber-700 text-white font-black text-sm uppercase py-3 rounded-2xl">
-            <Printer size={16} /> Print
+            <Printer size={16} /> Print / Save as PDF
           </button>
           <button onClick={download}
             className="flex items-center justify-center gap-2 bg-slate-100 hover:bg-slate-200 text-slate-700 font-black text-sm uppercase py-3 rounded-2xl">
@@ -431,9 +435,9 @@ const AdmitFlow: React.FC<{ student: Student; schoolInfo: SchoolInfo; onError: (
           instructions={DEFAULT_ADMIT_INSTRUCTIONS}
         />
         <div className="grid grid-cols-2 gap-3 mt-4">
-          <button onClick={printCurrentPage}
+          <button onClick={() => ref.current && printNodeInNewWindow(ref.current, `Admit Card — ${student.name}`)}
             className="flex items-center justify-center gap-2 bg-rose-600 hover:bg-rose-700 text-white font-black text-sm uppercase py-3 rounded-2xl">
-            <Printer size={16} /> Print
+            <Printer size={16} /> Print / Save as PDF
           </button>
           <button onClick={download}
             className="flex items-center justify-center gap-2 bg-slate-100 hover:bg-slate-200 text-slate-700 font-black text-sm uppercase py-3 rounded-2xl">

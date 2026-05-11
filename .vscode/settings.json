@@ -1,0 +1,10 @@
+{
+  "remote.portsAttributes": {
+    "5000": {
+      "label": "EduGrow Dev (Vite)",
+      "onAutoForward": "openPreview"
+    }
+  },
+  "remote.autoForwardPorts": true,
+  "remote.autoForwardPortsSource": "process"
+}

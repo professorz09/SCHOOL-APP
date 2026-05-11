@@ -1,5 +1,5 @@
 import React, { useEffect, useState, useRef } from 'react';
-import { downloadNodeAsPdf, downloadNodesAsPdf, printCurrentPage } from '@/shared/utils/pdfPrint';
+import { downloadNodeAsPdf, downloadNodesAsPdf, printCurrentPage, printNodeInNewWindow } from '@/shared/utils/pdfPrint';
 import {
   ArrowLeft, Sparkles, FileText, IdCard, Award, Ticket,
   FileCheck, Download, Printer, Eye, ChevronRight,
@@ -444,7 +444,7 @@ export const ToolsManager: React.FC<Props> = ({ onBack }) => {
               </div>
             </div>
             <div className="grid grid-cols-2 gap-3 mt-4">
-              <button type="button" onClick={printCurrentPage} className="flex items-center justify-center gap-2 bg-blue-600 hover:bg-blue-700 text-white font-black text-sm uppercase py-3 rounded-2xl active:scale-95 transition-all">
+              <button type="button" onClick={() => printRef.current && printNodeInNewWindow(printRef.current, `TC — ${student?.name ?? 'Student'}`)} className="flex items-center justify-center gap-2 bg-blue-600 hover:bg-blue-700 text-white font-black text-sm uppercase py-3 rounded-2xl active:scale-95 transition-all">
                 <Printer size={16} /> Print
               </button>
               <button type="button" onClick={handleDownload} className="flex items-center justify-center gap-2 bg-slate-100 hover:bg-slate-200 text-slate-700 font-black text-sm uppercase py-3 rounded-2xl active:scale-95 transition-all">
@@ -559,7 +559,11 @@ export const ToolsManager: React.FC<Props> = ({ onBack }) => {
                 className="flex-1 py-2.5 bg-emerald-600 hover:bg-emerald-700 text-white font-black text-xs uppercase rounded-xl flex items-center justify-center gap-1.5 disabled:opacity-60 active:scale-[0.98] transition-transform">
                 <Download size={13} /> {downloadingPdf ? 'Saving PDF…' : 'Download PDF'}
               </button>
-              <button type="button" onClick={() => window.print()}
+              <button type="button" onClick={() => {
+                const nodes = cardRefs.current.filter((n): n is HTMLDivElement => !!n);
+                if (nodes.length === 0) return;
+                printNodeInNewWindow(nodes, `ID Cards — ${targetClassName ?? 'Class'}`);
+              }}
                 className="flex-1 py-2.5 bg-rose-600 hover:bg-rose-700 text-white font-black text-xs uppercase rounded-xl flex items-center justify-center gap-1.5 active:scale-[0.98] transition-transform">
                 <Printer size={13} /> Print
               </button>
@@ -701,7 +705,7 @@ export const ToolsManager: React.FC<Props> = ({ onBack }) => {
               </div>
             </div>
             <div className="grid grid-cols-2 gap-3 mt-4">
-              <button type="button" onClick={printCurrentPage} className="flex items-center justify-center gap-2 bg-indigo-600 hover:bg-indigo-700 text-white font-black text-sm uppercase py-3 rounded-2xl active:scale-95 transition-all">
+              <button type="button" onClick={() => printRef.current && printNodeInNewWindow(printRef.current, `Bonafide — ${student?.name ?? 'Student'}`)} className="flex items-center justify-center gap-2 bg-indigo-600 hover:bg-indigo-700 text-white font-black text-sm uppercase py-3 rounded-2xl active:scale-95 transition-all">
                 <Printer size={16} /> Print
               </button>
               <button type="button" onClick={handleDownload} className="flex items-center justify-center gap-2 bg-slate-100 hover:bg-slate-200 text-slate-700 font-black text-sm uppercase py-3 rounded-2xl active:scale-95 transition-all">
@@ -926,7 +930,7 @@ export const ToolsManager: React.FC<Props> = ({ onBack }) => {
               className="flex-1 py-2.5 bg-slate-100 text-slate-700 font-black text-xs uppercase rounded-xl">
               ← Back
             </button>
-            <button type="button" onClick={() => window.print()}
+            <button type="button" onClick={() => printRef.current && printNodeInNewWindow(printRef.current, `Marksheet — ${displayStudent?.name ?? 'Student'}`)}
               className="flex-1 py-2.5 bg-slate-900 text-white font-black text-xs uppercase rounded-xl flex items-center justify-center gap-1.5">
               <Printer size={13} /> Print
             </button>
@@ -1394,7 +1398,11 @@ export const ToolsManager: React.FC<Props> = ({ onBack }) => {
                 className="flex-1 py-2.5 bg-emerald-600 hover:bg-emerald-700 text-white font-black text-xs uppercase rounded-xl flex items-center justify-center gap-1.5 disabled:opacity-60 active:scale-[0.98] transition-transform">
                 <Download size={13} /> {downloadingPdf ? 'Saving PDF…' : 'Download PDF'}
               </button>
-              <button type="button" onClick={() => window.print()}
+              <button type="button" onClick={() => {
+                const nodes = cardRefs.current.filter((n): n is HTMLDivElement => !!n);
+                if (nodes.length === 0) return;
+                printNodeInNewWindow(nodes, `Admit Cards — ${targetClassName ?? 'Class'}`);
+              }}
                 className="flex-1 py-2.5 bg-rose-600 hover:bg-rose-700 text-white font-black text-xs uppercase rounded-xl flex items-center justify-center gap-1.5 active:scale-[0.98] transition-transform">
                 <Printer size={13} /> Print
               </button>

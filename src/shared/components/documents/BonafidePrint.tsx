@@ -31,7 +31,7 @@ export const BonafidePrint = forwardRef<HTMLDivElement, BonafidePrintProps>(({
   const ay = academicYearLabel
     ?? `${new Date().getFullYear()}-${new Date().getFullYear() + 1}`;
   return (
-    <div ref={ref} className="bg-white border-2 rounded-2xl p-6 shadow-sm" style={{ borderColor: accent }}>
+    <div ref={ref} className="printable bg-white border-2 rounded-2xl p-6 shadow-sm" style={{ borderColor: accent }}>
       <PrintHeader schoolInfo={schoolInfo} title="Bonafide Certificate" accent={accent} />
       <p className="text-sm font-bold text-slate-700 leading-relaxed text-justify">
         This is to certify that <strong>{studentName}</strong>, son/daughter of <strong>{fatherName || '___'}</strong>,

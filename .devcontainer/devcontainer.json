@@ -1,0 +1,23 @@
+{
+  "name": "EduGrow School",
+  "image": "mcr.microsoft.com/devcontainers/javascript-node:20",
+  "forwardPorts": [5000],
+  "portsAttributes": {
+    "5000": {
+      "label": "EduGrow Dev (Vite)",
+      "onAutoForward": "openPreview",
+      "visibility": "public",
+      "protocol": "https"
+    }
+  },
+  "postCreateCommand": "npm install",
+  "customizations": {
+    "vscode": {
+      "extensions": [
+        "dbaeumer.vscode-eslint",
+        "esbenp.prettier-vscode",
+        "bradlc.vscode-tailwindcss"
+      ]
+    }
+  }
+}

@@ -43,7 +43,7 @@ export const MarksheetPrint = forwardRef<HTMLDivElement, MarksheetPrintProps>(({
   const pct = totalMax > 0 ? Math.round((totalObtained / totalMax) * 100) : 0;
   const passed = pct >= 33;
   return (
-    <div ref={ref} className="p-6 bg-white font-sans">
+    <div ref={ref} className="printable p-6 bg-white font-sans">
       <PrintHeader schoolInfo={schoolInfo} title="Academic Marksheet" accent={accent} compact />
       <div className="grid grid-cols-2 gap-1.5 text-xs font-bold text-slate-700 mb-4 border border-slate-200 rounded-xl p-3">
         <div><span className="text-slate-400">Name: </span>{studentName}</div>
