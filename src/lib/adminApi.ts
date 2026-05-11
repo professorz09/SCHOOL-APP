@@ -113,10 +113,78 @@ export const adminApi = {
   /** Generate a one-time temp password for the active principal of a
    *  given school. The temp password is returned in the response and
    *  never stored anywhere — surface it to the super-admin once and
-   *  hand it over personally. Subject to a 24-hour cooldown per school. */
-  resetPrincipalPassword(schoolId: string) {
-    return authedPost<{
-      ok: true; name: string; mobile: string; tempPassword: string;
+   *  hand it over personally. Subject to a 24-hour cooldown per school.
+   *
+   *  This endpoint goes through the Express server (server/routes/
+   *  admin-schools.ts), which wraps responses as { ok, data } via the
+   *  shared `ok()` helper. The other adminApi calls hit the legacy Vite
+   *  plugin (vite-plugins/admin-api.ts) which returns flat shapes — so
+   *  we unwrap `.data` here instead of changing the server contract. */
+  async resetPrincipalPassword(schoolId: string) {
+    const wrapped = await authedPost<{
+      ok: true;
+      data: { ok: true; name: string; mobile: string; tempPassword: string };
     }>(`/api/admin/schools/${schoolId}/reset-principal-password`, {});
+    return wrapped.data;
+  },
+
+  // ─── New simple billing (per-AY installments) ────────────────────────────
+  async listBillingInstallments(schoolId: string) {
+    const { data: { session } } = await supabase.auth.getSession();
+    const token = session?.access_token;
+    if (!token) throw new Error('Not authenticated');
+    const res = await fetch(`/api/admin/schools/${schoolId}/billing-installments`, {
+      headers: { 'authorization': `Bearer ${token}` },
+    });
+    if (!res.ok) {
+      let msg: string;
+      try { msg = (await res.json()).error ?? res.statusText; }
+      catch { msg = res.statusText; }
+      throw new Error(msg);
+    }
+    const wrapped = await res.json() as {
+      ok: true;
+      data: {
+        academicYears: { id: string; label: string; start_date: string; end_date: string; is_active: boolean; is_closed: boolean }[];
+        installments:  { id: string; academic_year_id: string; name: string; description: string | null; amount: number; due_date: string; paid_amount: number; paid_at: string | null; paid_method: string | null; paid_note: string | null; created_at: string }[];
+      };
+    };
+    return wrapped.data;
+  },
+
+  async createBillingInstallment(
+    schoolId: string,
+    body: { academicYearId: string; name: string; amount: number; dueDate: string; description?: string },
+  ) {
+    const wrapped = await authedPost<{ ok: true; data: { id: string; academic_year_id: string; name: string; description: string | null; amount: number; due_date: string; paid_amount: number; paid_at: string | null; paid_method: string | null; paid_note: string | null; created_at: string } }>(
+      `/api/admin/schools/${schoolId}/billing-installments`, body,
+    );
+    return wrapped.data;
+  },
+
+  async payBillingInstallment(
+    schoolId: string, installmentId: string,
+    body: { amount: number; method?: string; note?: string },
+  ) {
+    const wrapped = await authedPost<{ ok: true; data: { id: string; academic_year_id: string; name: string; description: string | null; amount: number; due_date: string; paid_amount: number; paid_at: string | null; paid_method: string | null; paid_note: string | null; created_at: string } }>(
+      `/api/admin/schools/${schoolId}/billing-installments/${installmentId}/pay`, body,
+    );
+    return wrapped.data;
+  },
+
+  async deleteBillingInstallment(schoolId: string, installmentId: string) {
+    const { data: { session } } = await supabase.auth.getSession();
+    const token = session?.access_token;
+    if (!token) throw new Error('Not authenticated');
+    const res = await fetch(`/api/admin/schools/${schoolId}/billing-installments/${installmentId}`, {
+      method: 'DELETE',
+      headers: { 'authorization': `Bearer ${token}` },
+    });
+    if (!res.ok) {
+      let msg: string;
+      try { msg = (await res.json()).error ?? res.statusText; }
+      catch { msg = res.statusText; }
+      throw new Error(msg);
+    }
   },
 };

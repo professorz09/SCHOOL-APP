@@ -16,12 +16,11 @@ import { useAcademicYear } from '@/shared/context/AcademicYearContext';
 import { todayIST } from '@/shared/utils/date';
 import { AppLoader } from '@/shared/components/AppLoader';
 import { FeePaymentSubmissionsQueue } from '@/modules/fees/components/FeePaymentSubmissionsQueue';
-import { PreviousYearDues } from '@/modules/fees/components/PreviousYearDues';
 
 type YearGroup = { academicYearId: string; yearLabel: string; isActive: boolean; installments: FeeInstallment[] };
 
 type PaymentMethod = 'CASH' | 'UPI' | 'NET_BANKING' | 'CHEQUE' | 'ONLINE';
-type ListTab = 'ALL' | 'DUE' | 'CLEARED' | 'PENDING' | 'HISTORY';
+type ListTab = 'ALL' | 'DUE' | 'UPCOMING' | 'CLEARED' | 'PENDING' | 'HISTORY';
 
 const METHOD_LABEL: Record<PaymentMethod, string> = {
   CASH: 'Cash', UPI: 'UPI', NET_BANKING: 'Net Banking', CHEQUE: 'Cheque', ONLINE: 'Online',
@@ -125,7 +124,7 @@ export const FeeLedger: React.FC<Props> = ({ onBack }) => {
   const [students, setStudents]       = useState<StudentFeeProfile[]>([]);
   const [loading, setLoading]         = useState(true);
   const [selected, setSelected]       = useState<StudentFeeProfile | null>(null);
-  const [listTab, setListTab]         = useState<ListTab>('ALL');
+  const [listTab, setListTab]         = useState<ListTab>('DUE');
   const [search, setSearch]           = useState('');
   const [detailTab, setDetailTab]     = useState<'SCHEDULE' | 'HISTORY'>('SCHEDULE');
   const [showCount, setShowCount]     = useState(PAGE_SIZE);
@@ -259,9 +258,25 @@ export const FeeLedger: React.FC<Props> = ({ onBack }) => {
   // every unopened student showed "No schedule / Pending" even when they
   // had installments + payments — confusing for a quick triage view.
   const slimFeeMap = React.useMemo(() => {
-    const m = new Map<string, { totalFee: number; paidFee: number; feeStatus: string }>();
+    const m = new Map<string, {
+      totalFee: number; paidFee: number; feeStatus: string;
+      currentDue: number; upcomingTotal: number; nextDueDate: string | null;
+    }>();
     for (const s of stuList.items) {
-      m.set(s.id, { totalFee: s.totalFee, paidFee: s.paidFee, feeStatus: s.feeStatus });
+      m.set(s.id, {
+        totalFee: s.totalFee, paidFee: s.paidFee, feeStatus: s.feeStatus,
+        // currentDue from server = only installments past due-date.
+        // Use this for the card so it matches the "TOTAL DUE" hub KPI
+        // (which is also overdue-only). totalFee - paidFee counted the
+        // full year and made every fresh student look like a defaulter.
+        currentDue:    s.currentDue ?? 0,
+        // upcomingTotal + nextDueDate power the Upcoming filter tab:
+        // students sorted by nearest-due-date ascending with a "due in
+        // N days" label. Same single fee_installments query that
+        // produced currentDue — no extra round-trip.
+        upcomingTotal: s.upcomingTotal ?? 0,
+        nextDueDate:   s.nextDueDate ?? null,
+      });
     }
     return m;
   }, [stuList.items]);
@@ -812,7 +827,19 @@ export const FeeLedger: React.FC<Props> = ({ onBack }) => {
     if (s.installments.length > 0) return getParentDue(s.studentId).total > 0;
     const slim = slimFeeMap.get(s.studentId);
     if (!slim) return false;
-    return Math.max(0, slim.totalFee - slim.paidFee) > 0;
+    // overdue-only — see slimFeeMap comment above.
+    return slim.currentDue > 0;
+  };
+
+  // Whether a student has any UNPAID installments in the future. Cache
+  // wins; slim aggregate is the fallback so the Upcoming tab works
+  // before per-student installments load.
+  const hasUpcoming = (s: StudentFeeProfile): boolean => {
+    if (s.installments.length > 0) {
+      const today = new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Kolkata' });
+      return s.installments.some(i => i.dueDate > today && i.status !== 'PAID');
+    }
+    return (slimFeeMap.get(s.studentId)?.upcomingTotal ?? 0) > 0;
   };
   const hasSchedule = (s: StudentFeeProfile): boolean => {
     if (s.installments.length > 0) return true;
@@ -828,8 +855,9 @@ export const FeeLedger: React.FC<Props> = ({ onBack }) => {
   // Pending = no schedule at all (students without any installments).
   // Due / Cleared = have a schedule, with/without outstanding amount.
   const pendingStudents = students.filter(s => !hasSchedule(s));
-  const dueStudents     = students.filter(s =>  hasSchedule(s) &&  hasDue(s));
-  const clearedStudents = students.filter(s =>  hasSchedule(s) && !hasDue(s));
+  const dueStudents      = students.filter(s =>  hasSchedule(s) &&  hasDue(s));
+  const upcomingStudents = students.filter(s =>  hasSchedule(s) &&  hasUpcoming(s));
+  const clearedStudents  = students.filter(s =>  hasSchedule(s) && !hasDue(s) && !hasUpcoming(s));
   // Prefer the server aggregate when it has loaded — accurate even if
   // the in-memory cache is mid-refresh. Falls back to the client walk
   // for the brief window before the first aggregate fetch returns and
@@ -841,12 +869,30 @@ export const FeeLedger: React.FC<Props> = ({ onBack }) => {
 
   const visibleStudents = students.filter(s => {
     if (!searchMatch(s)) return false;
-    // PENDING tab removed in this iteration — guard kept so any old
-    // saved state lands on ALL safely.
-    if (listTab === 'DUE')     return  hasSchedule(s) &&  hasDue(s);
-    if (listTab === 'CLEARED') return  hasSchedule(s) && !hasDue(s);
+    if (listTab === 'DUE')      return hasSchedule(s) &&  hasDue(s);
+    if (listTab === 'UPCOMING') return hasSchedule(s) &&  hasUpcoming(s);
+    if (listTab === 'CLEARED')  return hasSchedule(s) && !hasDue(s) && !hasUpcoming(s);
     return true;
   });
+
+  // UPCOMING tab: sort by nearest due_date ascending so the student
+  // whose next installment is closest sits at the top. Cache-primed
+  // students compute MIN(dueDate) inline; everyone else uses the
+  // slim aggregate's nextDueDate.
+  if (listTab === 'UPCOMING') {
+    const today = new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Kolkata' });
+    const nextDateFor = (s: StudentFeeProfile): string => {
+      if (s.installments.length > 0) {
+        const future = s.installments
+          .filter(i => i.dueDate > today && i.status !== 'PAID')
+          .map(i => i.dueDate)
+          .sort();
+        if (future.length > 0) return future[0];
+      }
+      return slimFeeMap.get(s.studentId)?.nextDueDate ?? '9999-12-31';
+    };
+    visibleStudents.sort((a, b) => nextDateFor(a).localeCompare(nextDateFor(b)));
+  }
 
   const pagedStudents = visibleStudents.slice(0, showCount);
   const hasMore = showCount < visibleStudents.length;
@@ -1033,17 +1079,9 @@ export const FeeLedger: React.FC<Props> = ({ onBack }) => {
             </button>
           )}
 
-          {/* ── PREVIOUS YEAR DUES ────────────────────────────────────────── */}
-          {detailTab === 'SCHEDULE' && selected && (
-            <PreviousYearDues
-              studentId={selected.studentId}
-              currentAcademicYearId={yearGroups.find(g => g.isActive)?.academicYearId ?? ''}
-              onPayClick={inst => {
-                setPayModal(true);
-                setPayAmount(String(Math.max(0, inst.amount - inst.paidAmount - inst.writeOffAmount)));
-              }}
-            />
-          )}
+          {/* "Previous Year Outstanding" banner removed — duplicated the
+              per-year cards below it and could mislabel current-year dues
+              as "previous" when the active-year detection fell through. */}
 
           {/* Skeleton placeholder while year-groups are still loading.
               Prevents the "No fee schedule yet" empty state from flashing
@@ -1195,45 +1233,64 @@ export const FeeLedger: React.FC<Props> = ({ onBack }) => {
                 {!collapsed && (() => {
                   const sorted = group.installments.slice()
                     .sort((a, b) => new Date(a.dueDate).getTime() - new Date(b.dueDate).getTime());
-                  // RTE/govt split removed in 0083 — every installment is
-                  // now treated equally. ₹0 GOVERNMENT placeholders aren't
-                  // generated anymore by the schedule generator.
-                  const realInsts = sorted;
-                  return (
-                  <div className="space-y-4">
-                  {realInsts.length > 0 && (
-                  <div>
-                    {/* Installments are visually attached to their year
-                        card via a small left indent (pl-3) and a
-                        no-top-margin gap. The earlier "PAYABLE" header
-                        and the timeline rail/dots have been dropped —
-                        the year card immediately above already carries
-                        the count + label, so the rail was redundant. */}
-                    <div className="pl-3 mt-1.5 space-y-1.5">
-                      {realInsts.map(inst => {
+                  // Split the list into two visually-separate sections:
+                  //   • Monthly schedule  — recurring per-month rows,
+                  //                         month name like "April".
+                  //   • One-Time Fees     — admission/annual-day/exam
+                  //                         (month === 'OneTime' or 'Annual').
+                  // Earlier they were mixed together with "Annual" ₹X and
+                  // "OneTime" ₹Y rows interleaved between Apr / May / Jun,
+                  // which made it impossible to see the actual monthly cycle.
+                  const oneTimeInsts = sorted.filter(i => i.month === 'OneTime' || i.month === 'Annual');
+                  const realInsts = sorted.filter(i => i.month !== 'OneTime' && i.month !== 'Annual');
+                  const renderInst = (inst: typeof sorted[0]) => {
                           const due = inst.amount - inst.paidAmount - inst.writeOffAmount;
                           const receipt = feeService.getPaymentRecordByInstallmentId(inst.id);
                           const stripe = STATUS_BAR[inst.status] ?? STATUS_BAR_FALLBACK;
                           const stripeBorder = STATUS_BORDER[inst.status] ?? STATUS_BORDER_FALLBACK;
                           void stripe; // eslint: kept for potential future inline use
+                          void receipt;
                           const isActionable = due > 0
                             && inst.status !== 'PAID' && inst.status !== 'WAIVED'
                             && inst.status !== 'WRITTEN_OFF' && inst.status !== 'CANCELLED';
 
                           // Status pill content + colour, derived once.
+                          // Important: distinguish UPCOMING (due_date in
+                          // future) from OVERDUE (due_date in past) —
+                          // earlier the UI labelled everything with
+                          // due > 0 as "Due" regardless of date, so
+                          // future months looked just as urgent as
+                          // overdue ones. Now:
+                          //   • PAID / WAIVED / etc.    → emerald "Paid"
+                          //   • PARTIAL (not yet due)   → amber "Partial"
+                          //   • PARTIAL (past due)      → rose  "Overdue"
+                          //   • UNPAID, future due date → slate "Upcoming"
+                          //   • UNPAID, past due date   → rose  "Overdue"
                           const isPaid = (inst.amount > 0 || inst.paidAmount > 0 || inst.writeOffAmount > 0)
                                           && due === 0;
                           const isUpcoming = inst.amount === 0 && inst.paidAmount === 0 && inst.writeOffAmount === 0;
+                          // todayIso is local-day, not UTC — same convention
+                          // as everywhere else in the app (see shared/utils/date.ts).
+                          // We compare ISO date strings directly because they
+                          // sort lexicographically.
+                          const todayIso = new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Kolkata' });
+                          const isPastDue = !!inst.dueDate && inst.dueDate < todayIso;
+                          const hasPartial = inst.paidAmount + inst.writeOffAmount > 0;
                           const statusLabel = isPaid
                             ? (inst.status === 'WAIVED' ? 'Waived'
                               : inst.status === 'WRITTEN_OFF' ? 'Written off'
                               : inst.status === 'CANCELLED' ? 'Cancelled' : 'Paid')
-                            : due > 0 ? 'Due'
-                            : 'Upcoming';
+                            : due > 0
+                              ? (isPastDue
+                                  ? (hasPartial ? 'Overdue' : 'Overdue')
+                                  : (hasPartial ? 'Partial' : 'Upcoming'))
+                              : 'Upcoming';
                           const statusPill = isPaid
                             ? 'bg-emerald-100 text-emerald-700'
                             : due > 0
-                              ? (inst.paidAmount + inst.writeOffAmount > 0 ? 'bg-amber-100 text-amber-700' : 'bg-rose-100 text-rose-700')
+                              ? (isPastDue
+                                  ? 'bg-rose-100 text-rose-700'
+                                  : (hasPartial ? 'bg-amber-100 text-amber-700' : 'bg-slate-100 text-slate-500'))
                               : 'bg-slate-100 text-slate-500';
                           return (
                             <div key={inst.id} className="relative">
@@ -1268,7 +1325,7 @@ export const FeeLedger: React.FC<Props> = ({ onBack }) => {
                                     / discount / due. Quiet by design;
                                     headline carries the meaning. */}
                                 <div className="mt-1 text-[10px] font-bold tabular-nums text-slate-400">
-                                  <span>{FEE_TYPE_LABEL[inst.feeType] ?? inst.feeType}</span>
+                                  <span>{inst.headName?.trim() || FEE_TYPE_LABEL[inst.feeType] || inst.feeType}</span>
                                   {due > 0 && (
                                     <>
                                       {' · '}
@@ -1290,8 +1347,13 @@ export const FeeLedger: React.FC<Props> = ({ onBack }) => {
                                     {isActionable && (
                                       <button
                                         onClick={() => openRowPay(inst)}
-                                        className="flex-1 flex items-center justify-center gap-1 text-[11px] font-black text-white bg-emerald-600 hover:bg-emerald-700 active:scale-[0.98] py-1.5 rounded-md transition-all">
-                                        <IndianRupee size={11} /> Pay ₹{due.toLocaleString('en-IN')}
+                                        className={`flex-1 flex items-center justify-center gap-1 text-[11px] font-black active:scale-[0.98] py-1.5 rounded-md transition-all ${
+                                          isPastDue
+                                            ? 'text-white bg-emerald-600 hover:bg-emerald-700'
+                                            : 'text-emerald-700 bg-emerald-50 border border-emerald-200 hover:bg-emerald-100'
+                                        }`}>
+                                        <IndianRupee size={11} />
+                                        {isPastDue ? `Pay ₹${due.toLocaleString('en-IN')}` : `Pay early ₹${due.toLocaleString('en-IN')}`}
                                       </button>
                                     )}
                                     {(inst.paidAmount > 0 || inst.writeOffAmount > 0) && (() => {
@@ -1379,10 +1441,31 @@ export const FeeLedger: React.FC<Props> = ({ onBack }) => {
                               </div>
                             </div>
                           );
-                        })}
-                    </div>
-                  </div>
-                  )}
+                        };
+                  return (
+                  <div className="space-y-4">
+                    {realInsts.length > 0 && (
+                      <div>
+                        <div className="px-3 mb-1 flex items-center gap-2">
+                          <span className="text-[10px] font-black uppercase tracking-widest text-indigo-700">Monthly Schedule</span>
+                          <span className="text-[10px] font-bold text-slate-400">· {realInsts.length} months</span>
+                        </div>
+                        <div className="pl-3 space-y-1.5">
+                          {realInsts.map(renderInst)}
+                        </div>
+                      </div>
+                    )}
+                    {oneTimeInsts.length > 0 && (
+                      <div>
+                        <div className="px-3 mb-1 flex items-center gap-2">
+                          <span className="text-[10px] font-black uppercase tracking-widest text-amber-700">One-Time Fees</span>
+                          <span className="text-[10px] font-bold text-slate-400">· {oneTimeInsts.length}</span>
+                        </div>
+                        <div className="pl-3 space-y-1.5">
+                          {oneTimeInsts.map(renderInst)}
+                        </div>
+                      </div>
+                    )}
                   </div>
                   );
                 })()}
@@ -2167,19 +2250,24 @@ export const FeeLedger: React.FC<Props> = ({ onBack }) => {
           </div>
           {/* Filter tabs — All / Due / Cleared narrow the student list
               below. History opens the Parent Submissions log inline. */}
+          {/* Order intentional: Due (act now) → Upcoming (forecast) →
+              Cleared (done) → History (audit). ALL tab dropped — Due +
+              Upcoming + Cleared partition the cohort and ALL was
+              redundant for triage. Pending stays implicit (no schedule
+              students are flagged separately on each card). */}
           <div className="flex gap-2 shrink-0 overflow-x-auto">
-            {(['ALL', 'DUE', 'CLEARED', 'HISTORY'] as Exclude<ListTab, 'PENDING'>[]).map(t => (
+            {(['DUE', 'UPCOMING', 'CLEARED', 'HISTORY'] as const).map(t => (
               <button key={t} onClick={() => setListTab(t)}
                 className={`shrink-0 px-3 lg:px-5 py-1.5 lg:py-2.5 rounded-xl text-[10px] lg:text-xs font-black uppercase tracking-widest transition-colors ${listTab === t
-                  ? t === 'DUE' ? 'bg-rose-600 text-white'
-                    : t === 'CLEARED' ? 'bg-emerald-600 text-white'
-                    : t === 'HISTORY' ? 'bg-blue-600 text-white'
-                    : 'bg-slate-900 text-white'
+                  ? t === 'DUE'      ? 'bg-rose-600 text-white'
+                    : t === 'UPCOMING' ? 'bg-amber-500 text-white'
+                    : t === 'CLEARED'  ? 'bg-emerald-600 text-white'
+                    :                    'bg-blue-600 text-white'
                   : 'bg-slate-100 text-slate-500 hover:bg-slate-200'}`}>
-                {t === 'ALL' ? `All (${students.length})`
-                  : t === 'DUE' ? `Due (${dueStudents.length})`
-                  : t === 'CLEARED' ? `Cleared (${clearedStudents.length})`
-                  : 'History'}
+                {t === 'DUE'      ? `Due (${dueStudents.length})`
+                  : t === 'UPCOMING' ? `Upcoming (${upcomingStudents.length})`
+                  : t === 'CLEARED'  ? `Cleared (${clearedStudents.length})`
+                  :                    'History'}
               </button>
             ))}
           </div>
@@ -2242,10 +2330,13 @@ export const FeeLedger: React.FC<Props> = ({ onBack }) => {
             const pct = totalD > 0 ? Math.min(100, Math.round((totalC / totalD) * 100)) : 0;
 
             // Outstanding: cache wins (it's the only source that knows
-            // discount); slim falls back to totalFee - paidFee.
+            // discount); slim falls back to `currentDue` from the server
+            // (already filtered to due_date <= today). Earlier this used
+            // totalFee - paidFee which included the entire schedule and
+            // contradicted the hub's overdue-only TOTAL DUE.
             const dueAmount = hasCachedInstallments
               ? pd.total
-              : Math.max(0, slimTotal - (slim?.paidFee ?? 0));
+              : (slim?.currentDue ?? 0);
             const isDue = dueAmount > 0;
 
             return (
@@ -2280,30 +2371,71 @@ export const FeeLedger: React.FC<Props> = ({ onBack }) => {
                     </div>
                   </div>
 
-                  {/* Right: due amount or cleared badge */}
+                  {/* Right: due amount, "due in N days" forecast, or cleared
+                      badge depending on the active tab. */}
                   <div className="shrink-0 text-right">
-                    {noSchedule ? (
-                      <span className="flex items-center gap-0.5 text-[9px] lg:text-[10px] font-black text-amber-700 bg-amber-50 border border-amber-200 px-2 py-1 rounded-full">
-                        <AlertCircle size={10} /> Pending
-                      </span>
-                    ) : isDue ? (
-                      <>
-                        <div className="font-black text-rose-600 text-sm lg:text-base">₹{dueAmount.toLocaleString('en-IN')}</div>
-                        {/* Tuition / Transport sub-chips need the cache —
-                            shown only when installments primed. Otherwise
-                            just the rupee figure from the slim aggregate. */}
-                        {hasCachedInstallments && (
-                          <div className="flex gap-1 mt-1 justify-end flex-wrap">
-                            {pd.tuition > 0 && <span className="text-[8px] lg:text-[9px] font-black bg-indigo-50 text-indigo-700 px-1.5 py-0.5 rounded-full">Tuition</span>}
-                            {pd.transport > 0 && <span className="text-[8px] lg:text-[9px] font-black bg-orange-50 text-orange-700 px-1.5 py-0.5 rounded-full">Transport</span>}
-                          </div>
-                        )}
-                      </>
-                    ) : (
-                      <span className="flex items-center gap-0.5 text-[9px] lg:text-[10px] font-black text-emerald-600 bg-emerald-50 px-2 py-1 rounded-full">
-                        <CheckCircle2 size={10} /> Cleared
-                      </span>
-                    )}
+                    {(() => {
+                      if (noSchedule) {
+                        return (
+                          <span className="flex items-center gap-0.5 text-[9px] lg:text-[10px] font-black text-amber-700 bg-amber-50 border border-amber-200 px-2 py-1 rounded-full">
+                            <AlertCircle size={10} /> Pending
+                          </span>
+                        );
+                      }
+                      // UPCOMING tab: surface next-due forecast instead of
+                      // overdue amount. "Due in N days" + the upcoming
+                      // installment's amount so the principal can see
+                      // who's about to need a nudge.
+                      if (listTab === 'UPCOMING') {
+                        const today = new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Kolkata' });
+                        const nextDate = hasCachedInstallments
+                          ? (student.installments
+                              .filter(i => i.dueDate > today && i.status !== 'PAID')
+                              .map(i => i.dueDate)
+                              .sort()[0] ?? null)
+                          : (slim?.nextDueDate ?? null);
+                        const daysLeft = nextDate
+                          ? Math.max(0, Math.round((new Date(nextDate).getTime() - new Date(today).getTime()) / 86_400_000))
+                          : null;
+                        const upcomingAmount = hasCachedInstallments
+                          ? student.installments
+                              .filter(i => i.dueDate > today && i.status !== 'PAID')
+                              .reduce((a, i) => a + Math.max(0, i.amount - i.paidAmount - i.writeOffAmount), 0)
+                          : (slim?.upcomingTotal ?? 0);
+                        return (
+                          <>
+                            <div className="font-black text-amber-600 text-sm lg:text-base">₹{upcomingAmount.toLocaleString('en-IN')}</div>
+                            {daysLeft !== null && (
+                              <div className="text-[9px] lg:text-[10px] font-black text-slate-500 mt-0.5">
+                                {daysLeft === 0 ? 'Due today' :
+                                 daysLeft === 1 ? 'Due tomorrow' :
+                                 `Due in ${daysLeft} days`}
+                              </div>
+                            )}
+                          </>
+                        );
+                      }
+                      if (isDue) {
+                        return (
+                          <>
+                            <div className="font-black text-rose-600 text-sm lg:text-base">₹{dueAmount.toLocaleString('en-IN')}</div>
+                            {/* Tuition / Transport sub-chips need the cache —
+                                shown only when installments primed. */}
+                            {hasCachedInstallments && (
+                              <div className="flex gap-1 mt-1 justify-end flex-wrap">
+                                {pd.tuition > 0 && <span className="text-[8px] lg:text-[9px] font-black bg-indigo-50 text-indigo-700 px-1.5 py-0.5 rounded-full">Tuition</span>}
+                                {pd.transport > 0 && <span className="text-[8px] lg:text-[9px] font-black bg-orange-50 text-orange-700 px-1.5 py-0.5 rounded-full">Transport</span>}
+                              </div>
+                            )}
+                          </>
+                        );
+                      }
+                      return (
+                        <span className="flex items-center gap-0.5 text-[9px] lg:text-[10px] font-black text-emerald-600 bg-emerald-50 px-2 py-1 rounded-full">
+                          <CheckCircle2 size={10} /> Cleared
+                        </span>
+                      );
+                    })()}
                   </div>
                   <ChevronRight size={15} className="text-slate-300 shrink-0" />
                 </div>

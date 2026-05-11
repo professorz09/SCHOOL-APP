@@ -73,6 +73,10 @@ export interface FeeInstallment {
   month: string;
   dueDate: string;
   feeType: FeeType;
+  /** Original fee-head name from the fee_structures.fee_heads JSON
+   *  (e.g. "Library Fees", "Smart Class Fee"). NULL on legacy rows
+   *  generated before migration 0106; UI falls back to feeType then. */
+  headName: string | null;
   amount: number;
   paidAmount: number;
   writeOffAmount: number;
@@ -122,12 +126,13 @@ function getSchoolId(): string {
 interface InstallmentRow {
   id: string; student_id: string; academic_year_id: string;
   month: string; due_date: string; fee_type: string;
+  head_name: string | null;
   amount: number; paid_amount: number; write_off_amount: number;
   write_off_reason: string | null; status: string;
   payer_type: string; related_id: string | null;
 }
 
-const INST_FIELDS = 'id, student_id, academic_year_id, month, due_date, fee_type, amount, paid_amount, write_off_amount, write_off_reason, status, payer_type, related_id';
+const INST_FIELDS = 'id, student_id, academic_year_id, month, due_date, fee_type, head_name, amount, paid_amount, write_off_amount, write_off_reason, status, payer_type, related_id';
 
 /** Today's date in IST (Asia/Kolkata), YYYY-MM-DD. We never use the raw UTC
  *  date here because school operations are IST: a parent opening the app at
@@ -178,6 +183,7 @@ function rowToInstallment(r: InstallmentRow): FeeInstallment {
     month: r.month,
     dueDate: r.due_date,
     feeType: (r.fee_type as FeeType) ?? 'OTHER',
+    headName: r.head_name ?? null,
     amount,
     paidAmount: paid,
     writeOffAmount: writeOff,
@@ -450,8 +456,10 @@ export const feeService = {
     dueCount: number;
     clearedCount: number;
     totalCollected: number;
-    totalParentDue: number;
+    totalParentDue: number;          // overdue + partial (due_date <= today)
     totalGovtDue: number;
+    totalParentUpcoming: number;     // future (due_date > today, unpaid)
+    totalGovtUpcoming: number;
   }> {
     const { data, error } = await supabase.rpc('get_school_fee_aggregate');
     if (error) throw new Error(error.message);
@@ -459,15 +467,18 @@ export const feeService = {
       total_students: number; pending_count: number; due_count: number;
       cleared_count: number; total_collected: number;
       total_parent_due: number; total_govt_due: number;
+      total_parent_upcoming: number; total_govt_upcoming: number;
     } | null;
     return {
-      totalStudents:   Number(row?.total_students   ?? 0),
-      pendingCount:    Number(row?.pending_count    ?? 0),
-      dueCount:        Number(row?.due_count        ?? 0),
-      clearedCount:    Number(row?.cleared_count    ?? 0),
-      totalCollected:  Number(row?.total_collected  ?? 0),
-      totalParentDue:  Number(row?.total_parent_due ?? 0),
-      totalGovtDue:    Number(row?.total_govt_due   ?? 0),
+      totalStudents:       Number(row?.total_students       ?? 0),
+      pendingCount:        Number(row?.pending_count        ?? 0),
+      dueCount:            Number(row?.due_count            ?? 0),
+      clearedCount:        Number(row?.cleared_count        ?? 0),
+      totalCollected:      Number(row?.total_collected      ?? 0),
+      totalParentDue:      Number(row?.total_parent_due     ?? 0),
+      totalGovtDue:        Number(row?.total_govt_due       ?? 0),
+      totalParentUpcoming: Number(row?.total_parent_upcoming ?? 0),
+      totalGovtUpcoming:   Number(row?.total_govt_upcoming   ?? 0),
     };
   },
 
@@ -613,18 +624,38 @@ export const feeService = {
   // every installment is now treated as parent-payable; if a school
   // receives a government grant, the principal records it as a regular
   // payment with a note.
+  /** Outstanding amount per fee_type bucket for a student, restricted
+   *  to installments whose due_date is on or before today (i.e. OVERDUE
+   *  + PARTIAL). Upcoming months are deliberately excluded so the
+   *  principal's "₹X due" pill matches the global TOTAL DUE KPI in the
+   *  hub — earlier this summed the entire year's schedule which was
+   *  alarming and inconsistent. */
   getParentDueSummary(studentId: string): {
     tuition: number; transport: number; exam: number; other: number; total: number;
   } {
     const insts = this.getStudentInstallments(studentId);
+    const today = todayIST();
+    const isOverdueNow = (i: FeeInstallment) => i.dueDate <= today;
     const sumOf = (t: FeeType) => insts
-      .filter(i => i.feeType === t)
+      .filter(i => i.feeType === t && isOverdueNow(i))
       .reduce((s, i) => s + Math.max(0, i.amount - i.paidAmount - i.writeOffAmount), 0);
     const tuition   = sumOf('TUITION');
     const transport = sumOf('TRANSPORT');
     const exam      = sumOf('EXAM');
     const other     = sumOf('OTHER');
     return { tuition, transport, exam, other, total: tuition + transport + exam + other };
+  },
+
+  /** Future schedule still owed — installments with due_date strictly
+   *  in the future. Use for the "Upcoming" subtitle so the principal
+   *  can still see lifetime exposure without it inflating the panic
+   *  number. */
+  getParentUpcomingTotal(studentId: string): number {
+    const insts = this.getStudentInstallments(studentId);
+    const today = todayIST();
+    return insts
+      .filter(i => i.dueDate > today)
+      .reduce((s, i) => s + Math.max(0, i.amount - i.paidAmount - i.writeOffAmount), 0);
   },
 
   getFeeTypeSummary(studentId: string): { tuition: number; transport: number; total: number } {

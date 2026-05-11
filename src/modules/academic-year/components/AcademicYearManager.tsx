@@ -12,9 +12,9 @@ import { useEditingYearStore } from '@/store/editingYearStore';
 import type { PreClosingChecklist } from '@/modules/academic-year/yearClosing.types';
 import { AcademicYearWizard } from '@/modules/academic-year/components/AcademicYearWizard';
 
-interface Props { onBack: () => void; onNavigateToStaff?: () => void; onNavigateToPromotion?: () => void; }
+interface Props { onBack: () => void; onNavigateToPromotion?: () => void; }
 
-export const AcademicYearManager: React.FC<Props> = ({ onBack, onNavigateToStaff, onNavigateToPromotion }) => {
+export const AcademicYearManager: React.FC<Props> = ({ onBack, onNavigateToPromotion }) => {
   const {
     academicYears, activeYear, isYearLocked, refresh: refreshAY, setActiveYear,
     setCurrentEditingYear,
@@ -223,17 +223,41 @@ export const AcademicYearManager: React.FC<Props> = ({ onBack, onNavigateToStaff
     }
     // Type-to-confirm gate. Closing a year is irreversible without
     // re-opening via Correction Mode; an accidental click here used
-    // to lock down all writes for an entire year. Requiring the
-    // principal to type their mobile last-4 makes this deliberate.
+    // to lock down all writes for an entire year. Mobile-last-4 is
+    // baseline. For a MID-YEAR close (today < end_date - 30 days),
+    // we additionally require a typed phrase embedding the school +
+    // year name — muscle-memory cannot satisfy this gate.
     const last4 = (session?.mobileNumber ?? '').replace(/\D/g, '').slice(-4);
     if (last4.length !== 4) {
       showToast('Mobile number missing on profile — set it first', 'error');
       return;
     }
+    // Mid-year detection. `end_date` lives on the AY row; the IST
+    // "today" is computed inline to avoid TZ drift on midnight close
+    // attempts. Threshold is 30 days before end — anything earlier
+    // gets the loud red gate.
+    const todayISO = new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Kolkata' });
+    const endISO = yearToClose.endDate;
+    const daysToEnd = endISO
+      ? Math.floor((new Date(endISO).getTime() - new Date(todayISO).getTime()) / (1000 * 60 * 60 * 24))
+      : 0;
+    const isMidYear = daysToEnd > 30;
+    // Phrase pinned to the year name + a 15+ word commitment string so
+    // muscle-memory can't satisfy the gate. End_date and days-remaining
+    // numbers are also baked in — copy-paste from a saved note would
+    // mismatch as soon as principal tries again on a different day.
+    const requiredPhrase = isMidYear
+      ? `I confirm closing academic year ${yearToClose.name} mid-year today with ${daysToEnd} days still remaining and I take responsibility`
+      : undefined;
+    const warningText = isMidYear
+      ? `MID-YEAR CLOSE — ${yearToClose.name} abhi ${daysToEnd} din baad (${endISO}) end hogi. Aaj close karne se sab students naye year me chale jayenge. Sirf emergency me karein.`
+      : undefined;
     const ok = await useUIStore.getState().askMobileConfirm({
-      title: `Lock ${yearToClose.name}?`,
+      title: isMidYear ? `⚠ MID-YEAR CLOSE — ${yearToClose.name}` : `Lock ${yearToClose.name}?`,
       message: `Year close hone ke baad attendance / fees / results pe writes lock ho jayenge. Re-open karne ke liye Correction Mode chahiye hoga (jo audit ho jayega).`,
       expectedLast4: last4,
+      requiredPhrase,
+      warningText,
     });
     if (!ok) return;
     setClosing(true);
@@ -618,7 +642,6 @@ export const AcademicYearManager: React.FC<Props> = ({ onBack, onNavigateToStaff
           defaultEnd={wizardDefaults.end}
           defaultBoard={wizardDefaults.board}
           previousYearId={previousYearIdForWizard}
-          onNavigateToStaff={onNavigateToStaff ? () => { closeWizard(); onNavigateToStaff(); } : undefined}
         />
       )}
 

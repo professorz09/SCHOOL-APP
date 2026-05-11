@@ -1,25 +1,28 @@
-import React, { useEffect, useState, useCallback } from 'react';
+import React, { useEffect, useState } from 'react';
 import {
   ArrowLeft, Plus, Search, Building2, MapPin, Phone, Users,
   Edit2, CheckCircle2, Save, UserCheck,
-  IndianRupee, Copy, ChevronRight, BookOpen, TrendingUp, AlertCircle,
-  Wallet, CreditCard, RefreshCw, Key, X,
+  Copy, ChevronRight, BookOpen, TrendingUp, AlertCircle,
+  RefreshCw, Key, X,
 } from 'lucide-react';
 import { adminApi } from '@/lib/adminApi';
+import { apiAdminSchools } from '@/lib/apiClient';
 import { supabase } from '@/lib/supabase';
+import { Pagination } from '@/roles/super-admin/components/LogsViewer';
 import { useSchoolStore } from '@/roles/super-admin/schoolStore';
-import { useBillingStore } from '@/roles/super-admin/billingStore';
 import { useUIStore } from '@/store/uiStore';
 import { School, CreateSchoolInput } from '@/roles/super-admin/school.types';
-import { SchoolStatus, BillingPlan, STATUS_COLORS, PLAN_COLORS } from '@/shared/config/constants';
+import { SchoolStatus, BillingPlan, STATUS_COLORS } from '@/shared/config/constants';
 import { schoolService } from '@/shared/utils/school.service';
 import { BackupCard } from '@/shared/components/BackupCard';
-import { billingService, ANNUAL_PLAN_PRICES } from '@/roles/super-admin/billing.service';
-import { platformSettings, DEFAULT_PLAN_PRICING, PlanPricing } from '@/roles/super-admin/platformSettings.service';
-import { BillingYear } from '@/roles/super-admin/billing.types';
-import { apiAdminSchools, SchoolBillingInfo, SchoolFeePayment } from '@/lib/apiClient';
 
-type View = 'LIST' | 'CREATE' | 'DETAIL' | 'EDIT' | 'SECTIONS' | 'STUDENTS' | 'STAFF' | 'BILLING';
+// Plans / billing-years / per-school payments — all part of the legacy
+// billing system that's been replaced by school_billing_installments
+// (managed from the dedicated Billing tab in the super-admin sidebar).
+// Kept BillingPlan import only because school.types.ts still types it
+// as required; we silently default it to BASIC on new schools.
+
+type View = 'LIST' | 'CREATE' | 'DETAIL' | 'EDIT' | 'SECTIONS' | 'STUDENTS' | 'STAFF';
 
 interface Props { onBack: () => void; }
 
@@ -64,7 +67,6 @@ type SchoolOverview = Awaited<ReturnType<typeof schoolService.getSchoolOverview>
 
 export const SchoolsManager: React.FC<Props> = ({ onBack }) => {
   const { schools, fetchSchools, addSchool, updateSchool } = useSchoolStore();
-  const { billingYears, fetchAll: fetchBilling } = useBillingStore();
   const { showToast } = useUIStore();
 
   const [view, setView]         = useState<View>('LIST');
@@ -80,23 +82,13 @@ export const SchoolsManager: React.FC<Props> = ({ onBack }) => {
   const [studentsLoading, setStudentsLoading] = useState(false);
   const [staffSearch, setStaffSearch]       = useState('');
   const [studentsSearch, setStudentsSearch] = useState('');
-  const [stuShown, setStuShown]             = useState(50);
-  const [staffShown, setStaffShown]         = useState(50);
-  const [paymentsShown, setPaymentsShown]   = useState(50);
-  useEffect(() => { setStuShown(50); }, [studentsSearch]);
-  useEffect(() => { setStaffShown(50); }, [staffSearch]);
+  const PAGE_SIZE = 25;
+  const [stuPage, setStuPage] = useState(1);
+  const [staffPage, setStaffPage] = useState(1);
+  useEffect(() => { setStuPage(1); }, [studentsSearch]);
+  useEffect(() => { setStaffPage(1); }, [staffSearch]);
   const [overview, setOverview]             = useState<SchoolOverview | null>(null);
   const [overviewLoading, setOverviewLoading] = useState(false);
-
-  // ── Billing state ─────────────────────────────────────────────────────────
-  const [billingInfo, setBillingInfo]       = useState<SchoolBillingInfo | null>(null);
-  const [billingLoading, setBillingLoading] = useState(false);
-  const [fixedAmtInput, setFixedAmtInput]   = useState('');
-  const [savingAmt, setSavingAmt]           = useState(false);
-  const [payAmt, setPayAmt]                 = useState('');
-  const [payDate, setPayDate]               = useState(() => new Date().toISOString().split('T')[0]);
-  const [payNote, setPayNote]               = useState('');
-  const [addingPay, setAddingPay]           = useState(false);
 
   // Principal password reset — two-stage flow with explicit confirmation.
   //   1. Confirm dialog ("you sure?") — explains what will happen and why
@@ -110,21 +102,115 @@ export const SchoolsManager: React.FC<Props> = ({ onBack }) => {
   const [resetSchoolId, setResetSchoolId]   = useState<string | null>(null);
   const [resetSubmitting, setResetSubmitting] = useState(false);
   const [resetDone, setResetDone]   = useState<{ password: string; principalName: string; mobile: string } | null>(null);
+  // Two-stage flow: pendingResetSchoolId opens the confirm prompt;
+  // resetSchoolId opens the result modal once the API call fires.
+  const [pendingResetSchoolId, setPendingResetSchoolId] = useState<string | null>(null);
+  // AY-creation toggle confirm — same inline pattern as the password
+  // reset (the global ConfirmModal store route silently drops prompts
+  // in this EDIT view).
+  const [pendingAyToggle, setPendingAyToggle] = useState<boolean | null>(null);
+  const [ayToggleSaving, setAyToggleSaving] = useState(false);
+  // School active/inactive toggle confirm
+  const [pendingStatusToggle, setPendingStatusToggle] = useState<SchoolStatus | null>(null);
+  const [statusToggleSaving, setStatusToggleSaving] = useState(false);
+  // Profile drawer (super-admin can inspect any student / staff in full).
+  const [profileTarget, setProfileTarget] = useState<{ type: 'student' | 'staff'; id: string; name: string } | null>(null);
+  const [profileData, setProfileData] = useState<Record<string, unknown> | null>(null);
+  const [profileExtra, setProfileExtra] = useState<Record<string, unknown> | null>(null);
+  const [profileLoading, setProfileLoading] = useState(false);
 
-  const openResetModal = (schoolId: string) => {
-    setResetSchoolId(schoolId);
-    setResetDone(null);
+  const openStudentProfile = async (id: string, name: string) => {
+    setProfileTarget({ type: 'student', id, name });
+    setProfileData(null); setProfileExtra(null); setProfileLoading(true);
+    try {
+      const { student, academicRecord } = await schoolService.getStudentFullProfile(id);
+      setProfileData(student);
+      setProfileExtra(academicRecord);
+    } catch (e) {
+      showToast(e instanceof Error ? e.message : 'Profile load failed', 'error');
+    } finally { setProfileLoading(false); }
   };
 
-  const submitReset = async () => {
-    if (!resetSchoolId) return;
+  const openStaffProfile = async (id: string, name: string) => {
+    setProfileTarget({ type: 'staff', id, name });
+    setProfileData(null); setProfileExtra(null); setProfileLoading(true);
+    try {
+      const { staff } = await schoolService.getStaffFullProfile(id);
+      setProfileData(staff);
+    } catch (e) {
+      showToast(e instanceof Error ? e.message : 'Profile load failed', 'error');
+    } finally { setProfileLoading(false); }
+  };
+
+  const closeProfile = () => {
+    setProfileTarget(null); setProfileData(null); setProfileExtra(null);
+  };
+
+  // Single-step reset: type the principal's last-4-of-mobile, then we
+  // immediately fire the server call. The earlier two-modal flow (mobile
+  // confirm → "Confirm Reset" review modal) felt broken — users would
+  // type the digits and think nothing happened because the second modal
+  // was easy to miss. Now: type-last-4 IS the confirmation; on success
+  // we hop straight to the temp-password display modal.
+  // Single-step reset with a styled inline confirm modal. We render the
+  // confirm dialog right inside the EDIT view (next to the temp-password
+  // modal) instead of routing through the global ConfirmModal store —
+  // that route was mysteriously dropping prompts in this view earlier
+  // (modal mounted at App.tsx but state set from here never reflected).
+  // Inline render is dumber and reliably works.
+  const openResetModal = (schoolId: string) => {
+    setPendingResetSchoolId(schoolId);
+  };
+
+  const cancelResetConfirm = () => setPendingResetSchoolId(null);
+
+  const confirmStatusToggle = async () => {
+    if (pendingStatusToggle === null || !selected) return;
+    const next = pendingStatusToggle;
+    setStatusToggleSaving(true);
+    try {
+      await updateSchool(selected.id, { status: next });
+      setSelected(prev => prev ? { ...prev, status: next } : null);
+      setForm(f => ({ ...f, status: next }));
+      showToast(next === SchoolStatus.ACTIVE ? 'School active' : 'School inactive');
+      setPendingStatusToggle(null);
+    } catch (e) {
+      showToast(e instanceof Error ? e.message : 'Status update failed', 'error');
+    } finally {
+      setStatusToggleSaving(false);
+    }
+  };
+
+  const confirmAyToggle = async () => {
+    if (pendingAyToggle === null || !selected) return;
+    const next = pendingAyToggle;
+    setAyToggleSaving(true);
+    try {
+      await updateSchool(selected.id, { newYearCreationEnabled: next });
+      setSelected(prev => prev ? { ...prev, newYearCreationEnabled: next } : null);
+      showToast(next ? 'New AY creation enabled' : 'New AY creation disabled');
+      setPendingAyToggle(null);
+    } catch (e) {
+      showToast(e instanceof Error ? e.message : 'Toggle failed', 'error');
+    } finally {
+      setAyToggleSaving(false);
+    }
+  };
+
+  const confirmAndReset = async () => {
+    const schoolId = pendingResetSchoolId;
+    if (!schoolId) return;
+    setPendingResetSchoolId(null);
+    setResetSchoolId(schoolId);
+    setResetDone(null);
     setResetSubmitting(true);
     try {
-      const res = await adminApi.resetPrincipalPassword(resetSchoolId);
-      setResetDone({ password: res.tempPassword, principalName: res.name, mobile: res.mobile });
+      const r = await adminApi.resetPrincipalPassword(schoolId);
+      setResetDone({ password: r.tempPassword, principalName: r.name, mobile: r.mobile });
       showToast('Password reset · share with principal');
     } catch (e) {
       showToast(e instanceof Error ? e.message : 'Reset failed', 'error');
+      setResetSchoolId(null);
     } finally {
       setResetSubmitting(false);
     }
@@ -142,16 +228,10 @@ export const SchoolsManager: React.FC<Props> = ({ onBack }) => {
     paymentStartDate: new Date().toISOString().split('T')[0], password: '',
   };
   const [form, setForm] = useState<Partial<CreateSchoolInput>>(blankForm);
-  // Live plan prices from platform_settings (Settings page) — falls back to
-  // the static defaults if the platform_settings row hasn't been seeded yet.
-  const [livePricing, setLivePricing] = useState<PlanPricing>(DEFAULT_PLAN_PRICING);
 
   useEffect(() => {
     fetchSchools().catch(e => showToast(e instanceof Error ? e.message : 'Failed to load schools', 'error'));
-    fetchBilling().catch(e => showToast(e instanceof Error ? e.message : 'Failed to load billing data', 'error'));
-    platformSettings.getAll()
-      .then(s => setLivePricing(s.pricing))
-      .catch(() => { /* keep defaults */ });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   const filtered = schools.filter(s =>
@@ -160,28 +240,8 @@ export const SchoolsManager: React.FC<Props> = ({ onBack }) => {
     s.code.toLowerCase().includes(search.toLowerCase()),
   );
 
-  // Latest billing year per school
-  const latestBillingMap: Record<string, BillingYear> = {};
-  billingYears.forEach(y => {
-    const prev = latestBillingMap[y.schoolId];
-    if (!prev || y.startDate > prev.startDate) latestBillingMap[y.schoolId] = y;
-  });
-
-  const loadBillingInfo = useCallback(async (schoolId: string) => {
-    setBillingLoading(true);
-    try {
-      const info = await apiAdminSchools.getPayments(schoolId);
-      setBillingInfo(info);
-      setFixedAmtInput(info.fixedAmount > 0 ? String(info.fixedAmount) : '');
-    } catch (e) {
-      showToast(e instanceof Error ? e.message : 'Failed to load billing info', 'error');
-    } finally {
-      setBillingLoading(false);
-    }
-  }, []);
-
   const handleCreate = async () => {
-    if (!form.name || !form.code || !form.principalEmail || !form.paymentStartDate) {
+    if (!form.name || !form.code || !form.principalEmail) {
       showToast('Please fill all required fields', 'error'); return;
     }
     if (!form.principalPhone || !form.password) {
@@ -195,8 +255,6 @@ export const SchoolsManager: React.FC<Props> = ({ onBack }) => {
     try {
       const school = await schoolService.create(form as CreateSchoolInput);
       addSchool(school);
-      await billingService.setupSchoolBilling(school.id, school.name, school.plan, school.paymentStartDate);
-      await fetchBilling();
       setCreatedCredentials({ schoolName: school.name, mobile: cleanPhone, password: form.password as string });
       setForm(blankForm);
       setView('LIST');
@@ -219,8 +277,6 @@ export const SchoolsManager: React.FC<Props> = ({ onBack }) => {
     if (!selected || !form.name || !form.code) { showToast('Name and code required', 'error'); return; }
     setIsSubmitting(true);
     try {
-      const planChanged = form.plan && form.plan !== selected.plan;
-
       // Detect principal-mobile change. The plain updateSchool path
       // would only update schools.principal_phone (display) and leave
       // auth.users.email + public.users.mobile_number stale → next
@@ -250,11 +306,7 @@ export const SchoolsManager: React.FC<Props> = ({ onBack }) => {
       }
 
       setSelected(s => s ? { ...s, ...form, principalPhone: cleanedNew || s.principalPhone } : null);
-      if (planChanged) {
-        await billingService.updatePlan(selected.id, form.plan!);
-        await fetchBilling();
-        showToast(`Plan updated to ${form.plan}`);
-      } else if (principalMobileChanged) {
+      if (principalMobileChanged) {
         showToast(`Principal login mobile updated → ${cleanedNew}. Principal ko dobara login karna hoga.`);
       } else {
         showToast(`${form.name} updated`);
@@ -290,42 +342,6 @@ export const SchoolsManager: React.FC<Props> = ({ onBack }) => {
   };
 
 
-  const handleSaveFixedAmount = async () => {
-    if (!selected) return;
-    const amt = parseFloat(fixedAmtInput);
-    if (!Number.isFinite(amt) || amt < 0) {
-      showToast('Valid amount required', 'error'); return;
-    }
-    setSavingAmt(true);
-    try {
-      await apiAdminSchools.setBillingAmount(selected.id, Math.round(amt));
-      showToast('Monthly fee updated');
-      await loadBillingInfo(selected.id);
-    } catch (e) {
-      showToast(e instanceof Error ? e.message : 'Failed to save', 'error');
-    } finally { setSavingAmt(false); }
-  };
-
-  const handleAddPayment = async () => {
-    if (!selected) return;
-    const amt = parseFloat(payAmt);
-    if (!Number.isFinite(amt) || amt <= 0) {
-      showToast('Valid payment amount required', 'error'); return;
-    }
-    if (!payDate) { showToast('Payment date required', 'error'); return; }
-    setAddingPay(true);
-    try {
-      await apiAdminSchools.addPayment(selected.id, { amount: Math.round(amt), paidOn: payDate, note: payNote || undefined });
-      showToast('Payment recorded');
-      setPayAmt('');
-      setPayNote('');
-      setPayDate(new Date().toISOString().split('T')[0]);
-      await loadBillingInfo(selected.id);
-    } catch (e) {
-      showToast(e instanceof Error ? e.message : 'Failed to add payment', 'error');
-    } finally { setAddingPay(false); }
-  };
-
   // ── Reusable header ───────────────────────────────────────────────────────────
   const renderHeader = (title: string, back: () => void, actions?: React.ReactNode) => (
     <div className="bg-white border-b border-slate-100 px-4 pt-4 pb-4 flex items-center justify-between sticky top-0 z-10 shadow-sm">
@@ -341,9 +357,8 @@ export const SchoolsManager: React.FC<Props> = ({ onBack }) => {
 
   // ── LIST ─────────────────────────────────────────────────────────────────────
   if (view === 'LIST') {
-    const activeCount    = schools.filter(s => s.status === SchoolStatus.ACTIVE).length;
-    const trialCount     = schools.filter(s => s.status === SchoolStatus.TRIAL).length;
-    const overdueCount   = Object.values(latestBillingMap).filter(y => y.outstanding > 0).length;
+    const activeCount = schools.filter(s => s.status === SchoolStatus.ACTIVE).length;
+    const inactiveCount = schools.length - activeCount;
 
     return (
       <div className="w-full bg-slate-50 flex flex-col animate-in slide-in-from-right-8 duration-300">
@@ -367,13 +382,8 @@ export const SchoolsManager: React.FC<Props> = ({ onBack }) => {
             </div>
             <div className="w-px bg-slate-100" />
             <div className="flex-1 text-center">
-              <div className="text-2xl font-black text-violet-600">{trialCount}</div>
-              <div className="text-[9px] font-black uppercase tracking-widest text-slate-400">Trial</div>
-            </div>
-            <div className="w-px bg-slate-100" />
-            <div className="flex-1 text-center">
-              <div className="text-2xl font-black text-rose-600">{overdueCount}</div>
-              <div className="text-[9px] font-black uppercase tracking-widest text-slate-400">Dues</div>
+              <div className="text-2xl font-black text-slate-500">{inactiveCount}</div>
+              <div className="text-[9px] font-black uppercase tracking-widest text-slate-400">Inactive</div>
             </div>
           </div>
 
@@ -393,82 +403,47 @@ export const SchoolsManager: React.FC<Props> = ({ onBack }) => {
               </div>
             )}
 
-            {filtered.map(school => {
-              const billing = latestBillingMap[school.id];
-              const pct = billing ? Math.round((billing.totalPaid / billing.totalDue) * 100) : 0;
-              const hasOutstanding = billing && billing.outstanding > 0;
-              return (
-                <button key={school.id}
-                  className="w-full bg-white rounded-2xl border border-slate-100 shadow-sm text-left active:scale-[0.99] transition-transform overflow-hidden"
-                  onClick={() => {
-                    setSelected(school); setActiveAYIdx(0); setView('DETAIL');
-                    setOverview(null); setOverviewLoading(true);
-                    schoolService.getSchoolOverview(school.id)
-                      .then(setOverview)
-                      .catch(e => showToast(e instanceof Error ? e.message : 'Failed to load overview', 'error'))
-                      .finally(() => setOverviewLoading(false));
-                  }}>
-                  <div className="p-4">
-                    <div className="flex items-start gap-3">
-                      {/* Avatar */}
-                      <div className="w-11 h-11 rounded-xl bg-gradient-to-br from-blue-500 to-indigo-600 text-white flex items-center justify-center font-black text-sm shrink-0">
-                        {school.name.split(' ').map(w => w[0]).join('').slice(0, 2)}
-                      </div>
-                      <div className="flex-1 min-w-0">
-                        <div className="flex items-center gap-2">
-                          <span className="font-extrabold text-slate-900 text-sm truncate">{school.name}</span>
-                          <span className={`shrink-0 text-[9px] font-black px-1.5 py-0.5 rounded-full uppercase tracking-widest ${STATUS_COLORS[school.status]}`}>{school.status}</span>
-                        </div>
-                        <div className="flex items-center gap-3 mt-1">
-                          <div className="flex items-center gap-1 text-slate-400">
-                            <MapPin size={10} />
-                            <span className="text-[10px] font-bold">{school.location}</span>
-                          </div>
-                          <span className={`text-[9px] font-black px-1.5 py-0.5 rounded-full uppercase tracking-widest ${PLAN_COLORS[school.plan]}`}>{school.plan}</span>
-                        </div>
-                        <div className="flex items-center gap-3 mt-1.5 text-slate-400">
-                          <div className="flex items-center gap-1">
-                            <Users size={10} />
-                            <span className="text-[10px] font-bold">{school.studentCount.toLocaleString('en-IN')} students</span>
-                          </div>
-                          <div className="flex items-center gap-1">
-                            <UserCheck size={10} />
-                            <span className="text-[10px] font-bold">{school.teacherCount} teachers</span>
-                          </div>
-                        </div>
-                      </div>
-                      <ChevronRight size={16} className="text-slate-300 mt-1 shrink-0" />
-                    </div>
-
-                    {/* Billing progress */}
-                    {billing && (
-                      <div className="mt-3">
-                        <div className="flex justify-between items-center mb-1">
-                          <span className="text-[10px] font-black text-slate-400 uppercase tracking-widest">
-                            {billing.yearLabel} · {pct}% paid
-                          </span>
-                          {hasOutstanding && (
-                            <span className="flex items-center gap-0.5 text-[10px] font-black text-rose-500">
-                              <AlertCircle size={10} />
-                              ₹{billing.outstanding.toLocaleString('en-IN')} due
-                            </span>
-                          )}
-                          {!hasOutstanding && (
-                            <span className="flex items-center gap-0.5 text-[10px] font-black text-emerald-600">
-                              <CheckCircle2 size={10} /> Settled
-                            </span>
-                          )}
-                        </div>
-                        <div className="h-1.5 bg-slate-100 rounded-full overflow-hidden">
-                          <div className={`h-full rounded-full transition-all ${pct === 100 ? 'bg-emerald-500' : hasOutstanding ? 'bg-amber-400' : 'bg-blue-500'}`}
-                            style={{ width: `${pct}%` }} />
-                        </div>
-                      </div>
-                    )}
+            {filtered.map(school => (
+              <button key={school.id}
+                className="w-full bg-white rounded-2xl border border-slate-100 shadow-sm text-left active:scale-[0.99] transition-transform overflow-hidden"
+                onClick={() => {
+                  setSelected(school); setActiveAYIdx(0); setView('DETAIL');
+                  setOverview(null); setOverviewLoading(true);
+                  schoolService.getSchoolOverview(school.id)
+                    .then(setOverview)
+                    .catch(e => showToast(e instanceof Error ? e.message : 'Failed to load overview', 'error'))
+                    .finally(() => setOverviewLoading(false));
+                }}>
+                <div className="p-4 flex items-start gap-3">
+                  <div className="w-11 h-11 rounded-xl bg-gradient-to-br from-blue-500 to-indigo-600 text-white flex items-center justify-center font-black text-sm shrink-0">
+                    {school.name.split(' ').map(w => w[0]).join('').slice(0, 2)}
                   </div>
-                </button>
-              );
-            })}
+                  <div className="flex-1 min-w-0">
+                    <div className="flex items-center gap-2">
+                      <span className="font-extrabold text-slate-900 text-sm truncate">{school.name}</span>
+                      <span className={`shrink-0 text-[9px] font-black px-1.5 py-0.5 rounded-full uppercase tracking-widest ${STATUS_COLORS[school.status]}`}>{school.status}</span>
+                    </div>
+                    <div className="flex items-center gap-3 mt-1 text-slate-400">
+                      <div className="flex items-center gap-1">
+                        <MapPin size={10} />
+                        <span className="text-[10px] font-bold">{school.location}</span>
+                      </div>
+                    </div>
+                    <div className="flex items-center gap-3 mt-1.5 text-slate-400">
+                      <div className="flex items-center gap-1">
+                        <Users size={10} />
+                        <span className="text-[10px] font-bold">{school.studentCount.toLocaleString('en-IN')} students</span>
+                      </div>
+                      <div className="flex items-center gap-1">
+                        <UserCheck size={10} />
+                        <span className="text-[10px] font-bold">{school.teacherCount} teachers</span>
+                      </div>
+                    </div>
+                  </div>
+                  <ChevronRight size={16} className="text-slate-300 mt-1 shrink-0" />
+                </div>
+              </button>
+            ))}
           </div>
         </div>
       </div>
@@ -495,25 +470,6 @@ export const SchoolsManager: React.FC<Props> = ({ onBack }) => {
             <p className="text-[10px] font-bold text-slate-400 -mt-1.5 leading-relaxed">
               Ye school ka <span className="font-black text-slate-600">office contact</span> hai (landline / general number). Yahan se <span className="font-black text-slate-600">login</span> nahi hota — login mobile alag hai (Principal Account section me).
             </p>
-          </div>
-
-          {/* Plan & Date */}
-          <div className="bg-white rounded-2xl p-4 border border-slate-100 shadow-sm space-y-4">
-            <p className="text-[10px] font-black uppercase tracking-widest text-slate-400">Billing Setup</p>
-            <div>
-              <label className="block text-[10px] font-black uppercase tracking-widest text-slate-500 mb-1.5">Plan</label>
-              <select value={form.plan} onChange={e => setForm(f => ({ ...f, plan: e.target.value as BillingPlan }))}
-                className="w-full border border-slate-200 bg-slate-50 rounded-xl px-3 py-3 font-bold text-sm outline-none focus:border-blue-500 focus:bg-white transition-colors">
-                {Object.values(BillingPlan).map(p => (
-                  <option key={p} value={p}>₹{livePricing[p].toLocaleString('en-IN')}/yr — {p}</option>
-                ))}
-              </select>
-            </div>
-            <div>
-              <label className="block text-[10px] font-black uppercase tracking-widest text-slate-500 mb-1.5">Billing Start Date *</label>
-              <input type="date" value={form.paymentStartDate ?? ''} onChange={e => setForm(f => ({ ...f, paymentStartDate: e.target.value }))}
-                className="w-full border border-slate-200 bg-slate-50 rounded-xl px-4 py-3 font-bold text-sm outline-none focus:border-blue-500 focus:bg-white transition-colors" />
-            </div>
           </div>
 
           {/* Principal */}
@@ -547,8 +503,6 @@ export const SchoolsManager: React.FC<Props> = ({ onBack }) => {
   // ── DETAIL ────────────────────────────────────────────────────────────────────
   if (view === 'DETAIL' && selected) {
     const ay = selected.academicYears[activeAYIdx];
-    const billing = latestBillingMap[selected.id];
-    const pct = billing ? Math.round((billing.totalPaid / billing.totalDue) * 100) : 0;
     return (
       <div className="w-full bg-slate-50 flex flex-col animate-in slide-in-from-right-8 duration-300">
         {/* Edit-only action set. Deactivation/deletion was intentionally
@@ -571,7 +525,6 @@ export const SchoolsManager: React.FC<Props> = ({ onBack }) => {
                 <h3 className="font-black text-white text-base leading-tight">{selected.name}</h3>
                 <div className="flex gap-2 mt-1.5">
                   <span className={`text-[9px] font-black px-2 py-0.5 rounded-full uppercase tracking-widest ${STATUS_COLORS[selected.status]}`}>{selected.status}</span>
-                  <span className={`text-[9px] font-black px-2 py-0.5 rounded-full uppercase tracking-widest ${PLAN_COLORS[selected.plan]}`}>{selected.plan}</span>
                 </div>
               </div>
             </div>
@@ -605,15 +558,12 @@ export const SchoolsManager: React.FC<Props> = ({ onBack }) => {
             ) : null)}
           </div>
 
-          {/* Principal */}
+          {/* Principal — read-only here. Destructive actions (password
+              reset, capacity limits) live in the Edit form so a stray
+              tap from the detail view can't fire them. */}
           <div className="bg-white rounded-2xl border border-slate-100 shadow-sm p-4">
             <div className="flex items-center justify-between mb-3">
               <p className="text-[10px] font-black uppercase tracking-widest text-slate-400">Principal</p>
-              <button
-                onClick={() => openResetModal(selected.id)}
-                className="flex items-center gap-1.5 text-[10px] font-black text-rose-600 bg-rose-50 hover:bg-rose-100 border border-rose-200 px-2.5 py-1 rounded-lg uppercase tracking-wider transition-colors">
-                <Key size={10} /> Reset Password
-              </button>
             </div>
             <div className="flex items-center gap-3">
               <div className="w-10 h-10 rounded-xl bg-rose-50 text-rose-600 flex items-center justify-center font-black text-sm">
@@ -627,89 +577,28 @@ export const SchoolsManager: React.FC<Props> = ({ onBack }) => {
             </div>
           </div>
 
-          {/* New Academic Year creation toggle — SUPER_ADMIN-only.
-              When ON, the school's principal sees an active "Add Year"
-              wizard. When OFF, the wizard's CTA is disabled and the
-              server-side guard rejects any direct RPC. Default OFF
-              so schools opt-in for year-end planning windows only. */}
+          {/* New Academic Year creation toggle moved into Edit so a stray
+              tap on the detail screen can't flip it on/off accidentally
+              (it controls whether the principal can roll the school into
+              a new year — a year-end-only operation). Read-only state
+              shown here. */}
           <div className="bg-white rounded-2xl border border-slate-100 shadow-sm p-4">
-            <div className="flex items-start justify-between gap-3">
-              <div className="min-w-0">
-                <p className="text-[10px] font-black uppercase tracking-widest text-slate-400">New Academic Year</p>
-                <div className="text-sm font-black text-slate-900 mt-1">
-                  {selected.newYearCreationEnabled ? 'Creation enabled' : 'Creation disabled'}
-                </div>
-                <p className="text-[11px] font-bold text-slate-500 mt-1 leading-relaxed">
-                  {selected.newYearCreationEnabled
-                    ? 'Principal can create a new academic year from Settings.'
-                    : 'Principal cannot create a new academic year. Turn this on a few days before the school plans year-end rollover.'}
-                </p>
-              </div>
-              <button
-                type="button"
-                onClick={async () => {
-                  const next = !selected.newYearCreationEnabled;
-                  try {
-                    await updateSchool(selected.id, { newYearCreationEnabled: next });
-                    showToast(next ? 'New AY creation enabled' : 'New AY creation disabled');
-                  } catch (e) {
-                    showToast(e instanceof Error ? e.message : 'Toggle failed', 'error');
-                  }
-                }}
-                className={`shrink-0 w-12 h-7 rounded-full relative transition-colors ${selected.newYearCreationEnabled ? 'bg-emerald-500' : 'bg-slate-300'}`}
-                aria-label="Toggle new academic year creation">
-                <span className={`absolute top-0.5 w-6 h-6 bg-white rounded-full shadow transition-all ${selected.newYearCreationEnabled ? 'left-[22px]' : 'left-0.5'}`} />
-              </button>
+            <p className="text-[10px] font-black uppercase tracking-widest text-slate-400 mb-1">New Academic Year</p>
+            <div className="text-sm font-black text-slate-900">
+              {selected.newYearCreationEnabled ? 'Creation enabled' : 'Creation disabled'}
             </div>
+            <p className="text-[11px] font-bold text-slate-500 mt-1 leading-relaxed">
+              {selected.newYearCreationEnabled
+                ? 'Principal can create a new academic year from Settings.'
+                : 'Principal cannot create a new academic year. Edit form me jaake on/off karein.'}
+            </p>
           </div>
-
-          {/* Capacity limits — hard caps on active students + active staff.
-              NULL = unlimited. The DB blocks lowering these below the
-              school's current active count, so the input rejects bad
-              values before they reach the server. */}
-          <SchoolLimitsCard
-            school={selected}
-            onSaved={(patch) => setSelected(prev => prev ? { ...prev, ...patch } : null)}
-          />
 
           {/* Backup — Quick (daily) + Full (weekly). Streams a ZIP
               directly to the SUPER_ADMIN's browser, nothing is stored
               on Supabase. Rate limits are enforced server-side via
               audit_logs so a refresh-spam can't bypass them. */}
           <BackupCard schoolId={selected.id} apiPath={`/api/admin/schools/${selected.id}/backup`} />
-
-          {/* Billing snapshot */}
-          {billing && (
-            <div className="bg-white rounded-2xl border border-slate-100 shadow-sm p-4">
-              <div className="flex items-center justify-between mb-3">
-                <p className="text-[10px] font-black uppercase tracking-widest text-slate-400">Billing · {billing.yearLabel}</p>
-                {billing.outstanding === 0
-                  ? <span className="flex items-center gap-1 text-[10px] font-black text-emerald-600"><CheckCircle2 size={11} /> Settled</span>
-                  : <span className="flex items-center gap-1 text-[10px] font-black text-rose-500"><AlertCircle size={11} /> ₹{billing.outstanding.toLocaleString('en-IN')} due</span>
-                }
-              </div>
-              <div className="flex gap-4 mb-3">
-                <div>
-                  <div className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Annual</div>
-                  <div className="text-base font-black text-slate-900">₹{billing.annualAmount.toLocaleString('en-IN')}</div>
-                </div>
-                <div>
-                  <div className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Paid</div>
-                  <div className="text-base font-black text-emerald-600">₹{billing.totalPaid.toLocaleString('en-IN')}</div>
-                </div>
-                {billing.carriedForward > 0 && (
-                  <div>
-                    <div className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Carried</div>
-                    <div className="text-base font-black text-amber-600">₹{billing.carriedForward.toLocaleString('en-IN')}</div>
-                  </div>
-                )}
-              </div>
-              <div className="h-2 bg-slate-100 rounded-full overflow-hidden">
-                <div className={`h-full rounded-full transition-all ${pct === 100 ? 'bg-emerald-500' : 'bg-blue-500'}`} style={{ width: `${pct}%` }} />
-              </div>
-              <div className="text-right text-[10px] font-black text-slate-400 mt-1">{pct}%</div>
-            </div>
-          )}
 
           {/* Live Operations — real numbers pulled from each domain table.
               Replaces the placeholder AY stats which read from a static
@@ -783,20 +672,19 @@ export const SchoolsManager: React.FC<Props> = ({ onBack }) => {
             </div>
           )}
 
-          {/* Quick-nav tiles */}
+          {/* Quick-nav tiles — Sections tile removed (super-admin doesn't
+              need section-level breakdown here; it lives inside the
+              principal's own UI). Students + Staff are the only useful
+              cross-school drill-downs from this view. */}
           <div className="grid grid-cols-2 gap-3">
             {[
-              { icon: BookOpen,    label: 'Sections',    view: 'SECTIONS' as View, color: 'text-indigo-600 bg-indigo-50', count: overview?.classBreakdown.length ?? 0 },
-              { icon: Users,       label: 'Students',    view: 'STUDENTS' as View, color: 'text-blue-600 bg-blue-50',    count: overview?.totalStudents ?? 0 },
-              { icon: UserCheck,   label: 'Staff',       view: 'STAFF' as View,    color: 'text-emerald-600 bg-emerald-50', count: overview?.totalStaff ?? 0 },
-              { icon: Wallet,      label: 'Billing',     view: 'BILLING' as View,  color: 'text-violet-600 bg-violet-50', count: 0 },
+              { icon: Users,     label: 'Students', view: 'STUDENTS' as View, color: 'text-blue-600 bg-blue-50',       count: overview?.totalStudents ?? 0 },
+              { icon: UserCheck, label: 'Staff',    view: 'STAFF' as View,    color: 'text-emerald-600 bg-emerald-50', count: overview?.totalStaff ?? 0 },
             ].map(({ icon: Icon, label, view: v, color, count }) => (
               <button key={label}
                 onClick={() => {
                   if (v === 'STAFF') { setStaffSearch(''); loadStaff(selected.id); setView(v); }
                   else if (v === 'STUDENTS') { setStudentsSearch(''); setSelectedSection(null); loadStudents(selected.id); setView(v); }
-                  else if (v === 'BILLING') { setBillingInfo(null); loadBillingInfo(selected.id); setView(v); }
-                  else if (v !== 'DETAIL') setView(v);
                 }}
                 className="flex items-center gap-3 bg-white rounded-2xl border border-slate-100 shadow-sm p-4 text-left active:scale-95 transition-transform">
                 <div className={`w-9 h-9 rounded-xl flex items-center justify-center ${color}`}><Icon size={18} /></div>
@@ -808,241 +696,6 @@ export const SchoolsManager: React.FC<Props> = ({ onBack }) => {
             ))}
           </div>
         </div>
-      </div>
-    );
-  }
-
-  // ── BILLING ───────────────────────────────────────────────────────────────────
-  if (view === 'BILLING' && selected) {
-    const outstanding = billingInfo?.outstanding ?? 0;
-    return (
-      <div className="w-full bg-slate-50 flex flex-col animate-in slide-in-from-right-8 duration-300">
-        {renderHeader(`Billing · ${selected.name}`, () => setView('DETAIL'),
-          <button onClick={() => loadBillingInfo(selected.id)} disabled={billingLoading}
-            className="p-2 bg-slate-100 rounded-full text-slate-600 hover:bg-slate-200 transition-colors disabled:opacity-50">
-            <RefreshCw size={16} className={billingLoading ? 'animate-spin' : ''} />
-          </button>
-        )}
-
-        <div className="flex-1 overflow-y-auto p-4 space-y-4">
-
-          {billingLoading && !billingInfo ? (
-            <div className="flex items-center justify-center py-16">
-              <div className="w-8 h-8 border-2 border-slate-200 border-t-violet-600 rounded-full animate-spin" />
-            </div>
-          ) : (
-            <>
-              {/* Outstanding balance card */}
-              <div className={`rounded-2xl p-5 ${outstanding > 0 ? 'bg-rose-600' : 'bg-emerald-600'}`}>
-                <p className="text-[10px] font-black uppercase tracking-widest text-white/70 mb-1">Outstanding Balance</p>
-                <div className="flex items-end gap-2">
-                  <span className="text-3xl font-black text-white">
-                    ₹{outstanding.toLocaleString('en-IN')}
-                  </span>
-                  {outstanding === 0 && <CheckCircle2 size={20} className="text-white mb-1" />}
-                </div>
-                {billingInfo && billingInfo.fixedAmount > 0 && (
-                  <div className="mt-3 flex gap-4 text-white/80 text-[10px] font-bold">
-                    <span>₹{billingInfo.fixedAmount.toLocaleString('en-IN')}/mo × {billingInfo.monthsElapsed} months</span>
-                    <span className="text-white/50">|</span>
-                    <span>Paid ₹{billingInfo.totalPaid.toLocaleString('en-IN')}</span>
-                  </div>
-                )}
-                {billingInfo && billingInfo.fixedAmount === 0 && (
-                  <p className="mt-2 text-white/70 text-xs font-bold">Set a monthly fee below to track balance</p>
-                )}
-              </div>
-
-              {/* Set fixed monthly fee */}
-              <div className="bg-white rounded-2xl border border-slate-100 shadow-sm p-4">
-                <p className="text-[10px] font-black uppercase tracking-widest text-slate-400 mb-3">Monthly Fee</p>
-                <div className="flex gap-2">
-                  <div className="relative flex-1">
-                    <span className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400 font-bold text-sm">₹</span>
-                    <input
-                      type="number"
-                      min="0"
-                      value={fixedAmtInput}
-                      onChange={e => setFixedAmtInput(e.target.value)}
-                      placeholder="e.g. 5000"
-                      className="w-full border border-slate-200 bg-slate-50 rounded-xl pl-7 pr-4 py-3 font-bold text-sm outline-none focus:border-violet-500 focus:bg-white transition-colors"
-                    />
-                  </div>
-                  <button onClick={handleSaveFixedAmount} disabled={savingAmt}
-                    className="flex items-center gap-1.5 bg-violet-600 text-white font-black text-xs uppercase tracking-widest px-4 py-3 rounded-xl disabled:opacity-60 active:scale-95 transition-transform">
-                    {savingAmt ? <RefreshCw size={14} className="animate-spin" /> : <Save size={14} />}
-                    Save
-                  </button>
-                </div>
-                <p className="text-[10px] font-bold text-slate-400 mt-2">
-                  Fixed amount charged to this school every month
-                </p>
-              </div>
-
-              {/* Add Payment */}
-              <div className="bg-white rounded-2xl border border-slate-100 shadow-sm p-4">
-                <p className="text-[10px] font-black uppercase tracking-widest text-slate-400 mb-3">Add Payment</p>
-                <div className="space-y-3">
-                  <div className="grid grid-cols-2 gap-3">
-                    <div className="relative">
-                      <span className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400 font-bold text-sm">₹</span>
-                      <input
-                        type="number"
-                        min="1"
-                        value={payAmt}
-                        onChange={e => setPayAmt(e.target.value)}
-                        placeholder="Amount"
-                        className="w-full border border-slate-200 bg-slate-50 rounded-xl pl-7 pr-3 py-3 font-bold text-sm outline-none focus:border-emerald-500 focus:bg-white transition-colors"
-                      />
-                    </div>
-                    <input
-                      type="date"
-                      value={payDate}
-                      onChange={e => setPayDate(e.target.value)}
-                      className="w-full border border-slate-200 bg-slate-50 rounded-xl px-3 py-3 font-bold text-sm outline-none focus:border-emerald-500 focus:bg-white transition-colors"
-                    />
-                  </div>
-                  <input
-                    type="text"
-                    value={payNote}
-                    onChange={e => setPayNote(e.target.value)}
-                    placeholder="Note (optional) — e.g. NEFT / cheque no."
-                    className="w-full border border-slate-200 bg-slate-50 rounded-xl px-4 py-3 font-bold text-sm outline-none focus:border-emerald-500 focus:bg-white transition-colors"
-                  />
-                  <button onClick={handleAddPayment} disabled={addingPay}
-                    className="w-full flex items-center justify-center gap-2 bg-emerald-600 text-white font-black text-xs uppercase tracking-widest py-3.5 rounded-xl active:scale-95 transition-transform disabled:opacity-60 shadow-sm">
-                    {addingPay ? <RefreshCw size={14} className="animate-spin" /> : <CreditCard size={14} />}
-                    Record Payment
-                  </button>
-                </div>
-              </div>
-
-              {/* Payment History */}
-              <div className="bg-white rounded-2xl border border-slate-100 shadow-sm overflow-hidden">
-                <div className="px-4 py-3 border-b border-slate-50">
-                  <p className="text-[10px] font-black uppercase tracking-widest text-slate-400">Payment History</p>
-                </div>
-                {!billingInfo || billingInfo.payments.length === 0 ? (
-                  <div className="flex flex-col items-center py-10 text-slate-400">
-                    <IndianRupee size={28} className="mb-2 opacity-30" />
-                    <p className="font-bold text-sm">No payments recorded yet</p>
-                  </div>
-                ) : (
-                  <div>
-                    {billingInfo.payments.slice(0, paymentsShown).map((p, idx) => (
-                      <div key={p.id}
-                        className={`flex items-center gap-3 px-4 py-3 ${idx < Math.min(billingInfo.payments.length, paymentsShown) - 1 ? 'border-b border-slate-50' : ''}`}>
-                        <div className="w-9 h-9 rounded-xl bg-emerald-50 text-emerald-600 flex items-center justify-center shrink-0">
-                          <IndianRupee size={15} />
-                        </div>
-                        <div className="flex-1 min-w-0">
-                          <div className="font-extrabold text-slate-900 text-sm">
-                            ₹{Number(p.amount).toLocaleString('en-IN')}
-                          </div>
-                          {p.note && (
-                            <div className="text-[10px] font-bold text-slate-400 truncate mt-0.5">{p.note}</div>
-                          )}
-                        </div>
-                        <div className="text-right shrink-0">
-                          <div className="text-[11px] font-black text-slate-500">{fmtDate(p.paid_on)}</div>
-                        </div>
-                      </div>
-                    ))}
-                    {billingInfo.payments.length > paymentsShown && (
-                      <button onClick={() => setPaymentsShown(s => s + 50)}
-                        className="w-full py-3 border-t border-slate-100 font-black text-xs text-emerald-700 hover:bg-emerald-50 transition-colors">
-                        Load More ({billingInfo.payments.length - paymentsShown} remaining)
-                      </button>
-                    )}
-                  </div>
-                )}
-              </div>
-            </>
-          )}
-        </div>
-
-        {/* ── PRINCIPAL PASSWORD RESET MODAL ──────────────────────────────── */}
-        {/* Two-stage flow: confirm first ("are you sure"), then show the
-            server-generated temp password once. Server enforces a 24h
-            cooldown per school + force-logout on the principal so the
-            old session can't keep working. */}
-        {resetSchoolId && (
-          <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-50 flex items-end sm:items-center justify-center p-0 sm:p-4">
-            <div className="w-full sm:max-w-md bg-white rounded-t-3xl sm:rounded-3xl p-6 pb-8 animate-in slide-in-from-bottom-8">
-              <div className="flex justify-between items-center mb-4">
-                <div className="flex items-start gap-3">
-                  <div className="w-10 h-10 rounded-xl bg-rose-100 text-rose-600 flex items-center justify-center shrink-0">
-                    <AlertCircle size={20} />
-                  </div>
-                  <div>
-                    <h3 className="text-lg font-black text-slate-900">
-                      {resetDone ? 'Password Reset' : 'Reset Principal Password?'}
-                    </h3>
-                    <p className="text-[11px] font-bold text-slate-400 mt-0.5">{selected.name}</p>
-                  </div>
-                </div>
-                <button onClick={closeResetModal} className="w-8 h-8 bg-slate-100 rounded-full flex items-center justify-center shrink-0">
-                  <X size={16} className="text-slate-500" />
-                </button>
-              </div>
-
-              {!resetDone ? (
-                <>
-                  <p className="text-[12px] font-bold text-slate-700 leading-relaxed mb-3">
-                    The principal of <span className="font-black text-slate-900">{selected.name}</span> ({selected.principalName || 'principal'}) will:
-                  </p>
-                  <ul className="space-y-2 text-[12px] font-bold text-slate-600 mb-4 list-none">
-                    <li className="flex gap-2"><span className="text-rose-600">•</span> Be logged out of all active sessions immediately.</li>
-                    <li className="flex gap-2"><span className="text-rose-600">•</span> Receive a one-time temporary password (shown to you once).</li>
-                    <li className="flex gap-2"><span className="text-rose-600">•</span> Be forced to set a new password on next login.</li>
-                  </ul>
-                  <div className="bg-amber-50 border border-amber-200 rounded-xl p-3 mb-5 flex gap-2">
-                    <AlertCircle size={14} className="text-amber-600 shrink-0 mt-0.5" />
-                    <p className="text-[11px] font-bold text-amber-800 leading-relaxed">
-                      A principal can be reset only once every 24 hours. Make sure the principal is reachable
-                      to receive the temp password.
-                    </p>
-                  </div>
-
-                  <div className="flex gap-2">
-                    <button onClick={closeResetModal}
-                      className="flex-1 py-3 bg-slate-100 hover:bg-slate-200 text-slate-700 font-black rounded-xl text-sm transition-colors">
-                      Cancel
-                    </button>
-                    <button onClick={submitReset} disabled={resetSubmitting}
-                      className="flex-1 py-3 bg-rose-600 hover:bg-rose-700 text-white font-black rounded-xl text-sm disabled:opacity-50 active:scale-[0.98] transition-all">
-                      {resetSubmitting ? 'Resetting…' : 'Confirm Reset'}
-                    </button>
-                  </div>
-                </>
-              ) : (
-                <>
-                  <div className="bg-emerald-50 border border-emerald-200 rounded-xl p-3 mb-4 flex gap-2">
-                    <CheckCircle2 size={14} className="text-emerald-600 shrink-0 mt-0.5" />
-                    <p className="text-[11px] font-bold text-emerald-800 leading-relaxed">
-                      Password reset for <span className="font-black">{resetDone.principalName}</span> (mobile {resetDone.mobile}).
-                      Share this immediately — it will not be shown again.
-                    </p>
-                  </div>
-                  <label className="text-[10px] font-black text-slate-500 uppercase tracking-wider">Temporary Password</label>
-                  <div className="mt-1 flex gap-2">
-                    <div className="flex-1 bg-slate-50 border border-slate-200 rounded-xl px-3 py-3 font-black text-slate-900 text-sm tabular-nums break-all">
-                      {resetDone.password}
-                    </div>
-                    <button onClick={() => { navigator.clipboard.writeText(resetDone.password); showToast('Copied!'); }}
-                      className="px-3 py-3 bg-slate-100 hover:bg-slate-200 rounded-xl">
-                      <Copy size={14} className="text-slate-600" />
-                    </button>
-                  </div>
-                  <button onClick={closeResetModal}
-                    className="w-full mt-5 py-3 bg-emerald-600 hover:bg-emerald-700 text-white font-black rounded-xl text-sm">
-                    Done
-                  </button>
-                </>
-              )}
-            </div>
-          </div>
-        )}
       </div>
     );
   }
@@ -1119,9 +772,10 @@ export const SchoolsManager: React.FC<Props> = ({ onBack }) => {
             </div>
           ) : (
             <div className="bg-white rounded-2xl border border-slate-100 shadow-sm overflow-hidden">
-              {filtered_stu.slice(0, stuShown).map((s, idx) => (
-                <div key={s.id}
-                  className={`flex items-center gap-3 px-4 py-3 ${idx < Math.min(filtered_stu.length, stuShown) - 1 ? 'border-b border-slate-50' : ''}`}>
+              {filtered_stu.slice((stuPage - 1) * PAGE_SIZE, stuPage * PAGE_SIZE).map((s, idx, page) => (
+                <button key={s.id}
+                  onClick={() => void openStudentProfile(s.id, s.name)}
+                  className={`w-full flex items-center gap-3 px-4 py-3 text-left active:bg-slate-50 transition-colors ${idx < page.length - 1 ? 'border-b border-slate-50' : ''}`}>
                   <div className="w-9 h-9 rounded-xl bg-indigo-50 text-indigo-700 flex items-center justify-center font-black text-xs shrink-0">
                     {s.name.split(' ').map(w => w[0]).join('').slice(0, 2).toUpperCase()}
                   </div>
@@ -1139,17 +793,24 @@ export const SchoolsManager: React.FC<Props> = ({ onBack }) => {
                   {s.is_rte && (
                     <span className="text-[9px] font-black px-2 py-0.5 rounded-full bg-violet-50 text-violet-700 shrink-0">RTE</span>
                   )}
-                </div>
+                  <ChevronRight size={14} className="text-slate-300 shrink-0" />
+                </button>
               ))}
             </div>
           )}
-          {filtered_stu.length > stuShown && (
-            <button onClick={() => setStuShown(s => s + 50)}
-              className="w-full mt-3 py-3 bg-white border border-slate-200 rounded-2xl font-black text-xs text-indigo-700 hover:bg-indigo-50 transition-colors">
-              Load More ({filtered_stu.length - stuShown} remaining)
-            </button>
+          {filtered_stu.length > PAGE_SIZE && (
+            <Pagination page={stuPage} pageSize={PAGE_SIZE} total={filtered_stu.length} onChange={setStuPage} />
           )}
         </div>
+        {profileTarget && (
+          <ProfileSheet
+            target={profileTarget}
+            data={profileData}
+            extra={profileExtra}
+            loading={profileLoading}
+            onClose={closeProfile}
+          />
+        )}
       </div>
     );
   }
@@ -1189,9 +850,10 @@ export const SchoolsManager: React.FC<Props> = ({ onBack }) => {
             </div>
           ) : (
             <div className="bg-white rounded-2xl border border-slate-100 shadow-sm overflow-hidden">
-              {filtered_staff.slice(0, staffShown).map((s, idx) => (
-                <div key={s.id}
-                  className={`flex items-center gap-3 px-4 py-3 ${idx < Math.min(filtered_staff.length, staffShown) - 1 ? 'border-b border-slate-50' : ''}`}>
+              {filtered_staff.slice((staffPage - 1) * PAGE_SIZE, staffPage * PAGE_SIZE).map((s, idx, page) => (
+                <button key={s.id}
+                  onClick={() => void openStaffProfile(s.id, s.name)}
+                  className={`w-full flex items-center gap-3 px-4 py-3 text-left active:bg-slate-50 transition-colors ${idx < page.length - 1 ? 'border-b border-slate-50' : ''}`}>
                   <div className={`w-10 h-10 rounded-xl flex items-center justify-center font-bold text-sm shrink-0 ${s.role === 'TEACHER' ? 'bg-emerald-50 text-emerald-700' : 'bg-blue-50 text-blue-700'}`}>
                     {s.name.split(' ').map(w => w[0]).join('').slice(0, 2).toUpperCase()}
                   </div>
@@ -1216,17 +878,24 @@ export const SchoolsManager: React.FC<Props> = ({ onBack }) => {
                       </div>
                     )}
                   </div>
-                </div>
+                  <ChevronRight size={14} className="text-slate-300 shrink-0 ml-1" />
+                </button>
               ))}
             </div>
           )}
-          {filtered_staff.length > staffShown && (
-            <button onClick={() => setStaffShown(s => s + 50)}
-              className="w-full mt-3 py-3 bg-white border border-slate-200 rounded-2xl font-black text-xs text-indigo-700 hover:bg-indigo-50 transition-colors">
-              Load More ({filtered_staff.length - staffShown} remaining)
-            </button>
+          {filtered_staff.length > PAGE_SIZE && (
+            <Pagination page={staffPage} pageSize={PAGE_SIZE} total={filtered_staff.length} onChange={setStaffPage} />
           )}
         </div>
+        {profileTarget && (
+          <ProfileSheet
+            target={profileTarget}
+            data={profileData}
+            extra={profileExtra}
+            loading={profileLoading}
+            onClose={closeProfile}
+          />
+        )}
       </div>
     );
   }
@@ -1249,24 +918,6 @@ export const SchoolsManager: React.FC<Props> = ({ onBack }) => {
               Ye school ka <span className="font-black text-slate-600">office number</span> hai (display only). Login mobile niche Principal section me alag hai.
             </p>
             <Field form={form} setForm={setForm} label="Full Address" k="address" placeholder="Street, Area, City, PIN" />
-            <div className="grid grid-cols-2 gap-3">
-              <div>
-                <label className="block text-[10px] font-black uppercase tracking-widest text-slate-500 mb-1.5">Plan</label>
-                <select value={form.plan} onChange={e => setForm(f => ({ ...f, plan: e.target.value as BillingPlan }))}
-                  className="w-full border border-slate-200 bg-slate-50 rounded-xl px-3 py-3 font-bold text-sm outline-none focus:border-blue-500 focus:bg-white transition-colors">
-                  {Object.values(BillingPlan).map(p => (
-                    <option key={p} value={p}>₹{livePricing[p].toLocaleString('en-IN')}/yr — {p}</option>
-                  ))}
-                </select>
-              </div>
-              <div>
-                <label className="block text-[10px] font-black uppercase tracking-widest text-slate-500 mb-1.5">Status</label>
-                <select value={form.status} onChange={e => setForm(f => ({ ...f, status: e.target.value as SchoolStatus }))}
-                  className="w-full border border-slate-200 bg-slate-50 rounded-xl px-3 py-3 font-bold text-sm outline-none focus:border-blue-500 focus:bg-white transition-colors">
-                  {Object.values(SchoolStatus).map(s => <option key={s}>{s}</option>)}
-                </select>
-              </div>
-            </div>
           </div>
           <div className="bg-white rounded-2xl p-4 border border-blue-100 shadow-sm space-y-4">
             <div className="flex items-start gap-2">
@@ -1284,11 +935,204 @@ export const SchoolsManager: React.FC<Props> = ({ onBack }) => {
             <Field form={form} setForm={setForm} label="Email *" k="principalEmail" placeholder="principal@school.edu.in" />
             <Field form={form} setForm={setForm} label="Login Mobile *" k="principalPhone" placeholder="10-digit mobile (login ID)" />
           </div>
+
+          {/* Capacity limits — moved into Edit so a stray tap on the
+              detail screen can't accidentally raise/lower a school's
+              hard caps. Save inside this card has its own type-last-4
+              gate before it touches the DB. */}
+          <SchoolLimitsCard
+            school={selected}
+            onSaved={(patch) => setSelected(prev => prev ? { ...prev, ...patch } : null)}
+          />
+
+          {/* New Academic Year creation toggle — also Edit-only with a
+              type-last-4 gate. Accidental flip used to lock principals
+              out of creating a new year (or, worse, let them roll into
+              a new year before they were ready). */}
+          <div className="bg-white rounded-2xl border border-slate-100 shadow-sm p-4">
+            <div className="flex items-start justify-between gap-3">
+              <div className="min-w-0">
+                <p className="text-[10px] font-black uppercase tracking-widest text-slate-400">New Academic Year</p>
+                <div className="text-sm font-black text-slate-900 mt-1">
+                  {selected.newYearCreationEnabled ? 'Creation enabled' : 'Creation disabled'}
+                </div>
+                <p className="text-[11px] font-bold text-slate-500 mt-1 leading-relaxed">
+                  {selected.newYearCreationEnabled
+                    ? 'Principal can create a new academic year from Settings.'
+                    : 'Principal cannot create a new academic year. Year-end rollover ke kuch din pehle on karein.'}
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={() => setPendingAyToggle(!selected.newYearCreationEnabled)}
+                className={`shrink-0 w-12 h-7 rounded-full relative transition-colors active:scale-95 transition-transform ${selected.newYearCreationEnabled ? 'bg-emerald-500' : 'bg-slate-300'}`}
+                aria-label="Toggle new academic year creation">
+                <span className={`absolute top-0.5 w-6 h-6 bg-white rounded-full shadow transition-all ${selected.newYearCreationEnabled ? 'left-[22px]' : 'left-0.5'}`} />
+              </button>
+            </div>
+          </div>
+
+          {/* Save Changes — primary action for the school-info form. */}
           <button onClick={handleUpdate} disabled={isSubmitting}
             className="w-full flex items-center justify-center gap-2 bg-blue-600 text-white font-black text-xs uppercase tracking-widest py-4 rounded-2xl active:scale-95 transition-transform shadow-lg disabled:opacity-60">
             {isSubmitting ? 'Updating…' : <><Save size={16} /> Save Changes</>}
           </button>
+
+          {/* Danger zone — kept visually separate at the bottom, behind
+              its own type-last-4 confirmation. Reset Password used to
+              live one tap away in the detail view; moved here so it
+              can't be triggered without entering Edit + typing 4 digits
+              of the principal's mobile. */}
+          <div className="bg-rose-50/40 border border-rose-200 rounded-2xl p-4 mt-2">
+            <div className="flex items-start gap-2 mb-3">
+              <div className="w-7 h-7 rounded-lg bg-rose-100 text-rose-600 flex items-center justify-center shrink-0 mt-0.5">
+                <AlertCircle size={13} />
+              </div>
+              <div className="min-w-0">
+                <p className="text-[10px] font-black uppercase tracking-widest text-rose-700">Danger Zone</p>
+                <p className="text-[10px] font-bold text-slate-600 leading-relaxed mt-0.5">
+                  Reset karne par principal ki saari sessions kat jayengi aur ek one-time password mile ga (24h cooldown).
+                </p>
+              </div>
+            </div>
+            <button
+              type="button"
+              onClick={() => openResetModal(selected.id)}
+              className="w-full flex items-center justify-center gap-2 bg-rose-600 hover:bg-rose-700 text-white font-black text-xs uppercase tracking-widest py-3 rounded-xl active:scale-95 transition-transform shadow-sm">
+              <Key size={14} /> Reset Principal Password
+            </button>
+
+            {/* School status toggle — moved below Reset Password so all
+                destructive / high-impact actions live in one Danger Zone
+                block, each behind its own type-last-4 confirm. */}
+            <div className="mt-4 pt-4 border-t border-rose-200/70">
+              <div className="flex items-start justify-between gap-3">
+                <div className="min-w-0">
+                  <p className="text-[10px] font-black uppercase tracking-widest text-rose-700">School Status</p>
+                  <p className="text-sm font-black text-slate-900 mt-0.5">
+                    {form.status === SchoolStatus.ACTIVE ? 'Active' : 'Inactive'}
+                  </p>
+                  <p className="text-[10px] font-bold text-slate-600 mt-0.5 leading-relaxed">
+                    {form.status === SchoolStatus.ACTIVE
+                      ? 'Principal aur staff login kar sakte hain. Inactive karne par sabhi sessions block ho jayengi.'
+                      : 'Login band hai. Toggle karke active karein, principals ko reload karna padega.'}
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setPendingStatusToggle(form.status === SchoolStatus.ACTIVE ? SchoolStatus.INACTIVE : SchoolStatus.ACTIVE)}
+                  className={`shrink-0 w-12 h-7 rounded-full relative transition-colors active:scale-95 ${form.status === SchoolStatus.ACTIVE ? 'bg-emerald-500' : 'bg-slate-300'}`}
+                  aria-label="Toggle school active status">
+                  <span className={`absolute top-0.5 w-6 h-6 bg-white rounded-full shadow transition-all ${form.status === SchoolStatus.ACTIVE ? 'left-[22px]' : 'left-0.5'}`} />
+                </button>
+              </div>
+            </div>
+          </div>
         </div>
+
+        {/* ── RESET CONFIRM (inline, type-last-4) ───────────────────────
+            Rendered locally inside EDIT instead of via the global
+            ConfirmModal store — that route was silently dropping the
+            prompt in this view (HMR / nested-modal interaction). The
+            principal's last 4 mobile digits act as the type-to-confirm
+            so a stray tap can't trigger a credential rotation. */}
+        {pendingResetSchoolId && (
+          <ResetConfirmDialog
+            school={selected}
+            onCancel={cancelResetConfirm}
+            onConfirm={confirmAndReset}
+          />
+        )}
+
+        {/* ── SCHOOL STATUS TOGGLE CONFIRM (inline) ─────────────────────
+            Active ↔ Inactive flip. Locked behind the principal's mobile
+            last-4 because turning a school inactive kills every login
+            for that school. */}
+        {pendingStatusToggle !== null && (
+          <SchoolStatusToggleConfirmDialog
+            school={selected}
+            next={pendingStatusToggle}
+            saving={statusToggleSaving}
+            onCancel={() => setPendingStatusToggle(null)}
+            onConfirm={confirmStatusToggle}
+          />
+        )}
+
+        {/* ── AY CREATION TOGGLE CONFIRM (inline) ───────────────────────
+            Same inline-render pattern as the reset confirm above. Shown
+            whenever the super-admin flips the toggle; locks the action
+            behind the principal's mobile last-4 so a stray tap can't
+            silently flip year-creation rights. */}
+        {pendingAyToggle !== null && (
+          <AyToggleConfirmDialog
+            school={selected}
+            next={pendingAyToggle}
+            saving={ayToggleSaving}
+            onCancel={() => setPendingAyToggle(null)}
+            onConfirm={confirmAyToggle}
+          />
+        )}
+
+        {/* ── PRINCIPAL PASSWORD RESET MODAL ────────────────────────────────
+            Shows the server-generated temp password once. Server enforces
+            a 24h cooldown per school + force-logout on the principal so
+            the old session can't keep working. */}
+        {resetSchoolId && (
+          <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-50 flex items-end sm:items-center justify-center p-0 sm:p-4">
+            <div className="w-full sm:max-w-md bg-white rounded-t-3xl sm:rounded-3xl p-6 pb-8 animate-in slide-in-from-bottom-8">
+              <div className="flex justify-between items-center mb-4">
+                <div className="flex items-start gap-3">
+                  <div className="w-10 h-10 rounded-xl bg-rose-100 text-rose-600 flex items-center justify-center shrink-0">
+                    <AlertCircle size={20} />
+                  </div>
+                  <div>
+                    <h3 className="text-lg font-black text-slate-900">
+                      {resetDone ? 'Password Reset' : 'Reset Principal Password?'}
+                    </h3>
+                    <p className="text-[11px] font-bold text-slate-400 mt-0.5">{selected.name}</p>
+                  </div>
+                </div>
+                <button onClick={closeResetModal} className="w-8 h-8 bg-slate-100 rounded-full flex items-center justify-center shrink-0 active:scale-90 transition-transform">
+                  <X size={16} className="text-slate-500" />
+                </button>
+              </div>
+
+              {!resetDone ? (
+                /* In-flight: type-last-4 already passed, server call
+                   running. Show a busy state instead of a redundant
+                   "Confirm Reset" button. */
+                <div className="py-8 flex flex-col items-center gap-3">
+                  <div className="w-8 h-8 border-2 border-rose-200 border-t-rose-600 rounded-full animate-spin" />
+                  <p className="text-xs font-black text-slate-600">Generating temp password…</p>
+                </div>
+              ) : (
+                <>
+                  <div className="bg-emerald-50 border border-emerald-200 rounded-xl p-3 mb-4 flex gap-2">
+                    <CheckCircle2 size={14} className="text-emerald-600 shrink-0 mt-0.5" />
+                    <p className="text-[11px] font-bold text-emerald-800 leading-relaxed">
+                      Password reset for <span className="font-black">{resetDone.principalName}</span> (mobile {resetDone.mobile}).
+                      Share this immediately — it will not be shown again.
+                    </p>
+                  </div>
+                  <label className="text-[10px] font-black text-slate-500 uppercase tracking-wider">Temporary Password</label>
+                  <div className="mt-1 flex gap-2">
+                    <div className="flex-1 bg-slate-50 border border-slate-200 rounded-xl px-3 py-3 font-black text-slate-900 text-sm tabular-nums break-all">
+                      {resetDone.password}
+                    </div>
+                    <button onClick={() => { navigator.clipboard.writeText(resetDone.password); showToast('Copied!'); }}
+                      className="px-3 py-3 bg-slate-100 hover:bg-slate-200 rounded-xl active:scale-95 transition-all">
+                      <Copy size={14} className="text-slate-600" />
+                    </button>
+                  </div>
+                  <button onClick={closeResetModal}
+                    className="w-full mt-5 py-3 bg-emerald-600 hover:bg-emerald-700 text-white font-black rounded-xl text-sm active:scale-95 transition-all">
+                    Done
+                  </button>
+                </>
+              )}
+            </div>
+          </div>
+        )}
       </div>
     );
   }
@@ -1334,12 +1178,543 @@ export const SchoolsManager: React.FC<Props> = ({ onBack }) => {
   return null;
 };
 
+// ─── Reset password confirm dialog ───────────────────────────────────────────
+// Type-last-4-of-principal's-login-mobile gate. Inline (rendered next to
+// where the action fires) instead of routed through the global
+// ConfirmModal store — that route was silently dropping prompts in the
+// EDIT view (mounted at App.tsx but state not reflecting). Accepts the
+// principal's LOGIN mobile last 4 (schools.principal_phone — the auth
+// identity), not the school's office phone.
+const ResetConfirmDialog: React.FC<{
+  school: School;
+  onCancel: () => void;
+  onConfirm: () => void;
+}> = ({ school, onCancel, onConfirm }) => {
+  const fullPhone = (school.principalPhone ?? '').replace(/\D/g, '');
+  const last4 = fullPhone.slice(-4);
+  const masked = fullPhone.length >= 4 ? `XXXXXX${last4}` : '(set nahi hai)';
+  const [text, setText] = useState('');
+  const [error, setError] = useState(false);
+
+  const tryConfirm = () => {
+    // If no mobile registered, accept any non-empty input as confirmation.
+    // Otherwise require an exact last-4 match.
+    if (last4.length === 4) {
+      if (text.replace(/\D/g, '').slice(-4) !== last4) {
+        setError(true);
+        return;
+      }
+    }
+    onConfirm();
+  };
+
+  return (
+    <div className="fixed inset-0 z-[120] bg-black/60 backdrop-blur-sm flex items-end sm:items-center justify-center p-4 animate-in fade-in duration-150"
+      onClick={onCancel}>
+      <div className="bg-white w-full sm:max-w-md rounded-3xl p-6 shadow-2xl animate-in slide-in-from-bottom-4"
+        onClick={e => e.stopPropagation()}>
+        <div className="flex items-start gap-3 mb-3">
+          <div className="w-11 h-11 rounded-2xl bg-rose-50 text-rose-600 flex items-center justify-center shrink-0">
+            <Key size={20} />
+          </div>
+          <div className="min-w-0 flex-1">
+            <p className="text-base font-black text-slate-900">Reset Principal Password?</p>
+            <p className="text-[12px] font-bold text-slate-500 mt-1 leading-relaxed">
+              <span className="font-black text-slate-800">{school.principalName || 'Principal'}</span> ki saari sessions kat jayengi aur ek one-time temp password milega (24h cooldown).
+            </p>
+          </div>
+        </div>
+
+        <div className="bg-slate-50 border border-slate-200 rounded-xl p-3 mt-2 text-[11px] font-bold text-slate-600">
+          <span className="block text-[10px] uppercase tracking-widest text-slate-400 mb-0.5">Login mobile</span>
+          {masked}
+        </div>
+
+        <p className="text-[11px] font-black uppercase tracking-widest text-slate-500 mt-4 mb-2">
+          {last4.length === 4
+            ? "Principal ke login mobile ke last 4 digits daalein"
+            : 'Confirm karne ke liye "RESET" type karein'}
+        </p>
+        <input
+          type={last4.length === 4 ? 'text' : 'text'}
+          inputMode={last4.length === 4 ? 'numeric' : undefined}
+          pattern={last4.length === 4 ? '[0-9]*' : undefined}
+          maxLength={last4.length === 4 ? 4 : 8}
+          autoFocus
+          autoComplete="off"
+          value={text}
+          onChange={e => {
+            const v = last4.length === 4
+              ? e.target.value.replace(/\D/g, '').slice(0, 4)
+              : e.target.value.slice(0, 8);
+            setText(v);
+            setError(false);
+          }}
+          onKeyDown={e => { if (e.key === 'Enter') tryConfirm(); }}
+          placeholder={last4.length === 4 ? '••••' : 'RESET'}
+          className={`w-full px-4 py-3.5 bg-slate-50 border rounded-xl font-black text-2xl text-center tracking-[0.4em] text-slate-900 outline-none transition-colors ${
+            error ? 'border-rose-400 bg-rose-50' : 'border-slate-200 focus:border-rose-500'
+          }`}
+        />
+        {error && (
+          <p className="text-[11px] font-black text-rose-600 mt-2">
+            Galat number — login mobile ke last 4 digits check karein.
+          </p>
+        )}
+
+        <div className="flex gap-3 mt-5">
+          <button onClick={onCancel}
+            className="flex-1 py-3 bg-slate-100 text-slate-700 font-black rounded-2xl text-sm uppercase tracking-widest active:scale-95 transition-transform">
+            Cancel
+          </button>
+          <button onClick={tryConfirm}
+            disabled={last4.length === 4 ? text.length < 4 : text.trim().toUpperCase() !== 'RESET'}
+            className="flex-1 py-3 bg-rose-600 hover:bg-rose-700 text-white font-black rounded-2xl text-sm uppercase tracking-widest active:scale-95 transition-transform disabled:opacity-40">
+            Reset
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+};
+
+// ─── AY creation toggle confirm ──────────────────────────────────────────────
+// Same inline gate pattern as ResetConfirmDialog. Locks the toggle behind
+// the principal's mobile last-4 so a stray tap can't silently grant or
+// revoke year-creation rights for a school.
+const AyToggleConfirmDialog: React.FC<{
+  school: School;
+  next: boolean;
+  saving: boolean;
+  onCancel: () => void;
+  onConfirm: () => void;
+}> = ({ school, next, saving, onCancel, onConfirm }) => {
+  const fullPhone = (school.principalPhone ?? '').replace(/\D/g, '');
+  const last4 = fullPhone.slice(-4);
+  const masked = fullPhone.length >= 4 ? `XXXXXX${last4}` : '(set nahi hai)';
+  const [text, setText] = useState('');
+  const [error, setError] = useState(false);
+
+  const tryConfirm = () => {
+    if (last4.length === 4) {
+      if (text.replace(/\D/g, '').slice(-4) !== last4) {
+        setError(true);
+        return;
+      }
+    } else if (text.trim().toUpperCase() !== (next ? 'ENABLE' : 'DISABLE')) {
+      setError(true);
+      return;
+    }
+    onConfirm();
+  };
+
+  return (
+    <div className="fixed inset-0 z-[120] bg-black/60 backdrop-blur-sm flex items-end sm:items-center justify-center p-4 animate-in fade-in duration-150"
+      onClick={saving ? undefined : onCancel}>
+      <div className="bg-white w-full sm:max-w-md rounded-3xl p-6 shadow-2xl animate-in slide-in-from-bottom-4"
+        onClick={e => e.stopPropagation()}>
+        <div className="flex items-start gap-3 mb-3">
+          <div className={`w-11 h-11 rounded-2xl flex items-center justify-center shrink-0 ${next ? 'bg-emerald-50 text-emerald-600' : 'bg-amber-50 text-amber-600'}`}>
+            <AlertCircle size={20} />
+          </div>
+          <div className="min-w-0 flex-1">
+            <p className="text-base font-black text-slate-900">
+              {next ? 'Enable AY creation?' : 'Disable AY creation?'}
+            </p>
+            <p className="text-[12px] font-bold text-slate-500 mt-1 leading-relaxed">
+              {next
+                ? `${school.principalName || 'Principal'} ko Settings se naya academic year banane ki permission mil jayegi.`
+                : `${school.principalName || 'Principal'} naya academic year nahi bana payenge jab tak aap dobara enable na karein.`}
+            </p>
+          </div>
+        </div>
+
+        <div className="bg-slate-50 border border-slate-200 rounded-xl p-3 mt-2 text-[11px] font-bold text-slate-600">
+          <span className="block text-[10px] uppercase tracking-widest text-slate-400 mb-0.5">Login mobile</span>
+          {masked}
+        </div>
+
+        <p className="text-[11px] font-black uppercase tracking-widest text-slate-500 mt-4 mb-2">
+          {last4.length === 4
+            ? 'Principal ke login mobile ke last 4 digits daalein'
+            : `Confirm karne ke liye "${next ? 'ENABLE' : 'DISABLE'}" type karein`}
+        </p>
+        <input
+          type="text"
+          inputMode={last4.length === 4 ? 'numeric' : undefined}
+          pattern={last4.length === 4 ? '[0-9]*' : undefined}
+          maxLength={last4.length === 4 ? 4 : 10}
+          autoFocus
+          autoComplete="off"
+          value={text}
+          onChange={e => {
+            const v = last4.length === 4
+              ? e.target.value.replace(/\D/g, '').slice(0, 4)
+              : e.target.value.slice(0, 10);
+            setText(v);
+            setError(false);
+          }}
+          onKeyDown={e => { if (e.key === 'Enter') tryConfirm(); }}
+          placeholder={last4.length === 4 ? '••••' : (next ? 'ENABLE' : 'DISABLE')}
+          className={`w-full px-4 py-3.5 bg-slate-50 border rounded-xl font-black text-2xl text-center tracking-[0.4em] text-slate-900 outline-none transition-colors ${
+            error ? 'border-rose-400 bg-rose-50' : `border-slate-200 ${next ? 'focus:border-emerald-500' : 'focus:border-amber-500'}`
+          }`}
+        />
+        {error && (
+          <p className="text-[11px] font-black text-rose-600 mt-2">
+            Galat input — phir se check karein.
+          </p>
+        )}
+
+        <div className="flex gap-3 mt-5">
+          <button onClick={onCancel} disabled={saving}
+            className="flex-1 py-3 bg-slate-100 text-slate-700 font-black rounded-2xl text-sm uppercase tracking-widest active:scale-95 transition-transform disabled:opacity-50">
+            Cancel
+          </button>
+          <button onClick={tryConfirm} disabled={saving}
+            className={`flex-1 py-3 text-white font-black rounded-2xl text-sm uppercase tracking-widest active:scale-95 transition-transform disabled:opacity-50 ${next ? 'bg-emerald-600 hover:bg-emerald-700' : 'bg-amber-600 hover:bg-amber-700'}`}>
+            {saving ? 'Saving…' : (next ? 'Enable' : 'Disable')}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+};
+
 // ─── Capacity limits card ───────────────────────────────────────────────────
 // Hard caps on active students + active staff. Inline editable; the DB
 // rejects lowering below the school's current count (trigger added in
 // migration 0082) so this component just surfaces that error to the user.
 //
 // Inputs are blanked → NULL on save (= unlimited). Numbers must be ≥ 0.
+// ─── Full profile sheet (super-admin) ────────────────────────────────────────
+// Read-only drawer that surfaces every column on a students / staff row.
+// Empty / null values are hidden so the sheet stays scannable. Photos
+// render inline if present; long fields wrap.
+const ProfileSheet: React.FC<{
+  target: { type: 'student' | 'staff'; id: string; name: string };
+  data: Record<string, unknown> | null;
+  extra: Record<string, unknown> | null;
+  loading: boolean;
+  onClose: () => void;
+}> = ({ target, data, extra, loading, onClose }) => {
+  // Friendly labels + grouping per type. Anything not listed here falls
+  // into a generic "More" group so we never silently drop a column.
+  const STUDENT_GROUPS: { title: string; fields: { key: string; label: string }[] }[] = [
+    { title: 'Identity', fields: [
+      { key: 'name',        label: 'Name' },
+      { key: 'admission_no',label: 'Admission No' },
+      { key: 'roll_no',     label: 'Roll No' },
+      { key: 'dob',         label: 'Date of Birth' },
+      { key: 'gender',      label: 'Gender' },
+      { key: 'blood_group', label: 'Blood Group' },
+      { key: 'religion',    label: 'Religion' },
+      { key: 'caste',       label: 'Caste' },
+      { key: 'aadhaar_no',  label: 'Aadhaar' },
+      { key: 'pen_number',  label: 'PEN Number' },
+      { key: 'birth_cert_no', label: 'Birth Cert No' },
+    ]},
+    { title: 'Contact', fields: [
+      { key: 'phone',   label: 'Phone' },
+      { key: 'email',   label: 'Email' },
+      { key: 'address', label: 'Address' },
+    ]},
+    { title: 'Father', fields: [
+      { key: 'father_name',       label: 'Name' },
+      { key: 'father_phone',      label: 'Phone' },
+      { key: 'father_email',      label: 'Email' },
+      { key: 'father_occupation', label: 'Occupation' },
+      { key: 'father_income',     label: 'Income' },
+    ]},
+    { title: 'Mother', fields: [
+      { key: 'mother_name',       label: 'Name' },
+      { key: 'mother_phone',      label: 'Phone' },
+      { key: 'mother_occupation', label: 'Occupation' },
+    ]},
+    { title: 'Guardian', fields: [
+      { key: 'guardian_name',     label: 'Name' },
+      { key: 'guardian_phone',    label: 'Phone' },
+      { key: 'guardian_relation', label: 'Relation' },
+    ]},
+    { title: 'Admin / Status', fields: [
+      { key: 'admission_date', label: 'Admission Date' },
+      { key: 'status',         label: 'Status' },
+      { key: 'is_active',      label: 'Active' },
+      { key: 'is_rte',         label: 'RTE' },
+      { key: 'tc_number',      label: 'TC Number' },
+      { key: 'created_at',     label: 'Created' },
+      { key: 'updated_at',     label: 'Updated' },
+    ]},
+  ];
+  const STAFF_GROUPS: { title: string; fields: { key: string; label: string }[] }[] = [
+    { title: 'Identity', fields: [
+      { key: 'name',       label: 'Name' },
+      { key: 'role',       label: 'Role' },
+      { key: 'subject',    label: 'Subject' },
+      { key: 'aadhaar_no', label: 'Aadhaar' },
+    ]},
+    { title: 'Contact', fields: [
+      { key: 'phone',   label: 'Phone' },
+      { key: 'email',   label: 'Email' },
+      { key: 'address', label: 'Address' },
+    ]},
+    { title: 'Employment', fields: [
+      { key: 'salary',       label: 'Salary' },
+      { key: 'joining_date', label: 'Joining Date' },
+      { key: 'status',       label: 'Status' },
+      { key: 'is_active',    label: 'Active' },
+      { key: 'created_at',   label: 'Created' },
+      { key: 'updated_at',   label: 'Updated' },
+    ]},
+  ];
+
+  const formatVal = (v: unknown): string => {
+    if (v === null || v === undefined || v === '') return '';
+    if (typeof v === 'boolean') return v ? 'Yes' : 'No';
+    if (typeof v === 'number') return v.toLocaleString('en-IN');
+    if (typeof v === 'string') {
+      // ISO timestamp → friendlier
+      if (/^\d{4}-\d{2}-\d{2}T/.test(v)) {
+        const d = new Date(v);
+        if (!isNaN(d.getTime())) return d.toLocaleString('en-IN', {
+          day: '2-digit', month: 'short', year: 'numeric',
+          hour: 'numeric', minute: '2-digit', hour12: true,
+        });
+      }
+      if (/^\d{4}-\d{2}-\d{2}$/.test(v)) {
+        const d = new Date(v + 'T00:00:00');
+        if (!isNaN(d.getTime())) return d.toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' });
+      }
+      return v;
+    }
+    return String(v);
+  };
+
+  const groups = target.type === 'student' ? STUDENT_GROUPS : STAFF_GROUPS;
+  const photo = data ? (data.photo as string | null) : null;
+  const initials = target.name.split(' ').map(w => w[0]).join('').slice(0, 2).toUpperCase();
+
+  return (
+    <div className="fixed inset-0 z-[110] bg-black/60 backdrop-blur-sm flex items-end sm:items-center justify-center p-0 sm:p-4 animate-in fade-in duration-150"
+      onClick={onClose}>
+      <div className="bg-slate-50 w-full sm:max-w-lg max-h-[92vh] rounded-t-3xl sm:rounded-3xl overflow-hidden flex flex-col animate-in slide-in-from-bottom-4 sm:zoom-in-95"
+        onClick={e => e.stopPropagation()}>
+        {/* Header */}
+        <div className="bg-white border-b border-slate-100 px-4 py-3 flex items-center gap-3">
+          {photo ? (
+            <img src={photo} alt={target.name} className="w-12 h-12 rounded-2xl object-cover shrink-0 bg-slate-100" />
+          ) : (
+            <div className="w-12 h-12 rounded-2xl bg-indigo-50 text-indigo-700 flex items-center justify-center font-black text-base shrink-0">
+              {initials}
+            </div>
+          )}
+          <div className="flex-1 min-w-0">
+            <p className="font-black text-slate-900 text-sm truncate">{target.name}</p>
+            <p className="text-[10px] font-black uppercase tracking-widest text-slate-400 mt-0.5">
+              {target.type === 'student' ? 'Student profile' : 'Staff profile'}
+            </p>
+          </div>
+          <button onClick={onClose} className="w-8 h-8 bg-slate-100 rounded-full flex items-center justify-center active:scale-95 transition-transform shrink-0">
+            <X size={16} className="text-slate-500" />
+          </button>
+        </div>
+
+        {/* Body */}
+        <div className="flex-1 overflow-y-auto p-4 space-y-3">
+          {loading && (
+            <div className="text-center py-12">
+              <div className="w-8 h-8 border-2 border-slate-200 border-t-indigo-600 rounded-full animate-spin mx-auto mb-2" />
+              <p className="text-xs font-bold text-slate-400">Loading profile…</p>
+            </div>
+          )}
+
+          {!loading && !data && (
+            <div className="text-center py-12 text-slate-400">
+              <p className="text-sm font-bold">Profile not found</p>
+            </div>
+          )}
+
+          {!loading && data && (
+            <>
+              {/* Latest academic record (students only) */}
+              {target.type === 'student' && extra && (
+                <div className="bg-white rounded-2xl border border-slate-100 shadow-sm p-3">
+                  <p className="text-[10px] font-black uppercase tracking-widest text-slate-400 mb-2">Current Year</p>
+                  <div className="grid grid-cols-2 gap-2">
+                    {[
+                      { label: 'Class', val: extra.class_name },
+                      { label: 'Section', val: extra.section },
+                      { label: 'Roll', val: extra.roll_no },
+                      { label: 'Total Fee', val: typeof extra.total_fee === 'number' ? `₹${(extra.total_fee as number).toLocaleString('en-IN')}` : '' },
+                      { label: 'Paid', val: typeof extra.paid_fee === 'number' ? `₹${(extra.paid_fee as number).toLocaleString('en-IN')}` : '' },
+                      { label: 'Fee Status', val: extra.fee_status },
+                      { label: 'Attendance', val: typeof extra.attendance_percent === 'number' ? `${extra.attendance_percent}%` : '' },
+                      { label: 'Status', val: extra.status },
+                    ].filter(r => r.val !== null && r.val !== undefined && r.val !== '').map(r => (
+                      <div key={r.label} className="bg-slate-50 rounded-lg px-2.5 py-1.5">
+                        <p className="text-[9px] font-black uppercase tracking-widest text-slate-400">{r.label}</p>
+                        <p className="text-xs font-black text-slate-800 mt-0.5 break-words">{String(r.val)}</p>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {/* Grouped fields */}
+              {groups.map(g => {
+                const rows = g.fields
+                  .map(f => ({ ...f, val: formatVal(data[f.key]) }))
+                  .filter(r => r.val !== '');
+                if (rows.length === 0) return null;
+                return (
+                  <div key={g.title} className="bg-white rounded-2xl border border-slate-100 shadow-sm p-3">
+                    <p className="text-[10px] font-black uppercase tracking-widest text-slate-400 mb-2">{g.title}</p>
+                    <div className="space-y-1.5">
+                      {rows.map(r => (
+                        <div key={r.key} className="flex items-start gap-3 text-xs">
+                          <span className="font-bold text-slate-400 w-28 shrink-0">{r.label}</span>
+                          <span className="font-black text-slate-800 break-words flex-1 min-w-0">{r.val}</span>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                );
+              })}
+
+              {/* Anything we didn't surface in the curated groups —
+                  show under "More" so columns added later don't get
+                  silently dropped. */}
+              {(() => {
+                const known = new Set([
+                  'id', 'school_id', 'user_id', 'photo',
+                  ...groups.flatMap(g => g.fields.map(f => f.key)),
+                ]);
+                const extras = Object.entries(data)
+                  .filter(([k, v]) => !known.has(k) && v !== null && v !== undefined && v !== '');
+                if (extras.length === 0) return null;
+                return (
+                  <div className="bg-white rounded-2xl border border-slate-100 shadow-sm p-3">
+                    <p className="text-[10px] font-black uppercase tracking-widest text-slate-400 mb-2">More</p>
+                    <div className="space-y-1.5">
+                      {extras.map(([k, v]) => (
+                        <div key={k} className="flex items-start gap-3 text-xs">
+                          <span className="font-bold text-slate-400 w-28 shrink-0">{k}</span>
+                          <span className="font-black text-slate-800 break-words flex-1 min-w-0">{formatVal(v)}</span>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                );
+              })()}
+            </>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+};
+
+// ─── School active/inactive toggle confirm ───────────────────────────────────
+// Same inline pattern as AyToggleConfirmDialog. Inactive blocks every
+// login for the school, so we gate behind the principal's mobile last-4.
+const SchoolStatusToggleConfirmDialog: React.FC<{
+  school: School;
+  next: SchoolStatus;
+  saving: boolean;
+  onCancel: () => void;
+  onConfirm: () => void;
+}> = ({ school, next, saving, onCancel, onConfirm }) => {
+  const fullPhone = (school.principalPhone ?? '').replace(/\D/g, '');
+  const last4 = fullPhone.slice(-4);
+  const masked = fullPhone.length >= 4 ? `XXXXXX${last4}` : '(set nahi hai)';
+  const isActivating = next === SchoolStatus.ACTIVE;
+  const [text, setText] = useState('');
+  const [error, setError] = useState(false);
+
+  const tryConfirm = () => {
+    if (last4.length === 4) {
+      if (text.replace(/\D/g, '').slice(-4) !== last4) {
+        setError(true);
+        return;
+      }
+    } else if (text.trim().toUpperCase() !== (isActivating ? 'ACTIVATE' : 'DEACTIVATE')) {
+      setError(true);
+      return;
+    }
+    onConfirm();
+  };
+
+  return (
+    <div className="fixed inset-0 z-[120] bg-black/60 backdrop-blur-sm flex items-end sm:items-center justify-center p-4 animate-in fade-in duration-150"
+      onClick={saving ? undefined : onCancel}>
+      <div className="bg-white w-full sm:max-w-md rounded-3xl p-6 shadow-2xl animate-in slide-in-from-bottom-4"
+        onClick={e => e.stopPropagation()}>
+        <div className="flex items-start gap-3 mb-3">
+          <div className={`w-11 h-11 rounded-2xl flex items-center justify-center shrink-0 ${isActivating ? 'bg-emerald-50 text-emerald-600' : 'bg-rose-50 text-rose-600'}`}>
+            <AlertCircle size={20} />
+          </div>
+          <div className="min-w-0 flex-1">
+            <p className="text-base font-black text-slate-900">
+              {isActivating ? 'Activate school?' : 'Deactivate school?'}
+            </p>
+            <p className="text-[12px] font-bold text-slate-500 mt-1 leading-relaxed">
+              {isActivating
+                ? `${school.name} ke principal aur staff dobara login kar payenge.`
+                : `${school.name} ki saari sessions kat jayengi. Principal aur staff jab tak dobara active na karein, login nahi kar payenge.`}
+            </p>
+          </div>
+        </div>
+
+        <div className="bg-slate-50 border border-slate-200 rounded-xl p-3 mt-2 text-[11px] font-bold text-slate-600">
+          <span className="block text-[10px] uppercase tracking-widest text-slate-400 mb-0.5">Login mobile</span>
+          {masked}
+        </div>
+
+        <p className="text-[11px] font-black uppercase tracking-widest text-slate-500 mt-4 mb-2">
+          {last4.length === 4
+            ? 'Principal ke login mobile ke last 4 digits daalein'
+            : `Confirm karne ke liye "${isActivating ? 'ACTIVATE' : 'DEACTIVATE'}" type karein`}
+        </p>
+        <input
+          type="text"
+          inputMode={last4.length === 4 ? 'numeric' : undefined}
+          pattern={last4.length === 4 ? '[0-9]*' : undefined}
+          maxLength={last4.length === 4 ? 4 : 12}
+          autoFocus
+          autoComplete="off"
+          value={text}
+          onChange={e => {
+            const v = last4.length === 4
+              ? e.target.value.replace(/\D/g, '').slice(0, 4)
+              : e.target.value.slice(0, 12);
+            setText(v);
+            setError(false);
+          }}
+          onKeyDown={e => { if (e.key === 'Enter') tryConfirm(); }}
+          placeholder={last4.length === 4 ? '••••' : (isActivating ? 'ACTIVATE' : 'DEACTIVATE')}
+          className={`w-full px-4 py-3.5 bg-slate-50 border rounded-xl font-black text-2xl text-center tracking-[0.4em] text-slate-900 outline-none transition-colors ${
+            error ? 'border-rose-400 bg-rose-50' : `border-slate-200 ${isActivating ? 'focus:border-emerald-500' : 'focus:border-rose-500'}`
+          }`}
+        />
+        {error && (
+          <p className="text-[11px] font-black text-rose-600 mt-2">Galat input — phir se check karein.</p>
+        )}
+
+        <div className="flex gap-3 mt-5">
+          <button onClick={onCancel} disabled={saving}
+            className="flex-1 py-3 bg-slate-100 text-slate-700 font-black rounded-2xl text-sm uppercase tracking-widest active:scale-95 transition-transform disabled:opacity-50">
+            Cancel
+          </button>
+          <button onClick={tryConfirm} disabled={saving}
+            className={`flex-1 py-3 text-white font-black rounded-2xl text-sm uppercase tracking-widest active:scale-95 transition-transform disabled:opacity-50 ${isActivating ? 'bg-emerald-600 hover:bg-emerald-700' : 'bg-rose-600 hover:bg-rose-700'}`}>
+            {saving ? 'Saving…' : (isActivating ? 'Activate' : 'Deactivate')}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+};
+
 const SchoolLimitsCard: React.FC<{
   school: School;
   onSaved: (patch: Partial<School>) => void;
@@ -1405,6 +1780,16 @@ const SchoolLimitsCard: React.FC<{
     if (veh !== null && activeVehicles !== null && veh < activeVehicles && veh > 0) {
       showToast(`Cannot set max vehicles below current active count (${activeVehicles}). Deactivate vehicles first.`, 'error');
       return;
+    }
+    // Type-last-4 gate so a stray tap can't push new caps to the DB.
+    const last4 = (school.principalPhone ?? '').replace(/\D/g, '').slice(-4);
+    if (last4.length === 4) {
+      const ok = await useUIStore.getState().askMobileConfirm({
+        title: 'Save Capacity Limits?',
+        message: `Type the last 4 digits of ${school.principalName || 'principal'}'s mobile (${school.principalPhone ?? ''}) to confirm new limits — Students: ${stu ?? '∞'}, Staff: ${stf ?? '∞'}, Vehicles: ${veh ?? '∞'}${veh === 0 ? ' (transport disabled)' : ''}.`,
+        expectedLast4: last4,
+      });
+      if (!ok) return;
     }
     setSaving(true);
     try {
@@ -1473,9 +1858,14 @@ const SchoolLimitsCard: React.FC<{
         <button
           onClick={handleSave}
           disabled={saving}
-          className="mt-3 w-full py-2.5 bg-slate-900 hover:bg-slate-800 text-white font-black text-xs uppercase tracking-widest rounded-xl active:scale-[0.98] transition-all disabled:opacity-50">
-          {saving ? 'Saving…' : 'Save Limits'}
+          className="mt-3 w-full py-3 bg-slate-900 hover:bg-slate-800 text-white font-black text-xs uppercase tracking-widest rounded-xl active:scale-95 transition-transform shadow-sm disabled:opacity-50 flex items-center justify-center gap-2">
+          {saving ? 'Saving…' : <><Save size={14} /> Save Limits</>}
         </button>
+      )}
+      {!dirty && (
+        <p className="mt-3 text-[10px] font-bold text-slate-400 text-center">
+          Change a value above to enable Save.
+        </p>
       )}
     </div>
   );

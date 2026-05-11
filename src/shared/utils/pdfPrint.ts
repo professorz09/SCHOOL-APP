@@ -121,6 +121,45 @@ function srgbify(clonedDoc: Document): void {
     }
     node = walker.nextNode();
   }
+
+  // Final layer: html2canvas v1 also reads raw stylesheet rules (not just
+  // computed styles) to resolve some properties — Tailwind v4 ships its
+  // theme tokens as CSS variables whose values are `oklch(...)`, and the
+  // parser blows up on them with "Attempting to parse an unsupported color
+  // function 'oklch'" before our inline overrides are even consulted.
+  //
+  // So nuke every modern colour function out of every <style> tag and
+  // adopted stylesheet in the cloned document. We replace each function
+  // call with the canvas-resolved rgb() form (or rgb(0,0,0) as a last
+  // resort). Inline style rewrites above still win for actual element
+  // colour — this just keeps the parser from throwing on theme tokens.
+  const sanitizeCssText = (css: string): string => {
+    if (!MODERN_COLOR_RE.test(css)) return css;
+    return css.replace(COLOR_FN_GLOBAL, fn => {
+      const resolved = resolveSingleColor(fn);
+      return MODERN_COLOR_RE.test(resolved) ? 'rgb(0,0,0)' : resolved;
+    });
+  };
+  for (const styleEl of Array.from(clonedDoc.querySelectorAll('style'))) {
+    if (styleEl.textContent) {
+      styleEl.textContent = sanitizeCssText(styleEl.textContent);
+    }
+  }
+  // Also nuke CSS custom properties on :root that resolve to oklch — some
+  // Tailwind v4 utilities reference them via var(--tw-*).
+  const root = clonedDoc.documentElement;
+  if (root && clonedDoc.defaultView) {
+    const rootStyle = clonedDoc.defaultView.getComputedStyle(root);
+    for (let i = 0; i < rootStyle.length; i++) {
+      const prop = rootStyle.item(i);
+      if (!prop.startsWith('--')) continue;
+      const val = rootStyle.getPropertyValue(prop);
+      if (MODERN_COLOR_RE.test(val)) {
+        const fixed = sanitizeCssText(val);
+        if (fixed !== val) root.style.setProperty(prop, fixed);
+      }
+    }
+  }
 }
 
 /** Render one DOM node and place it (centered, fit-to-page) on a new A4 page. */

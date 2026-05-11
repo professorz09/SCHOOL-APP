@@ -1,7 +1,7 @@
-import React, { useEffect } from 'react';
+import React, { useEffect, useState } from 'react';
 import { Building2, ShieldCheck, IndianRupee, BarChart3, MailPlus, History, AlertCircle, TrendingUp, Users, Settings as SettingsIcon } from 'lucide-react';
 import { useSchoolStore } from '@/roles/super-admin/schoolStore';
-import { useBillingStore } from '@/roles/super-admin/billingStore';
+import { supabase } from '@/lib/supabase';
 import { SchoolStatus } from '@/shared/config/constants';
 
 interface SADashboardProps {
@@ -10,28 +10,50 @@ interface SADashboardProps {
 
 export const SADashboard: React.FC<SADashboardProps> = ({ onNavigate }) => {
   const { schools, fetchSchools } = useSchoolStore();
-  const { billingYears, fetchAll } = useBillingStore();
+
+  // Live billing rollup from school_billing_installments. Pull this month's
+  // collections + a school-wise outstanding count. The legacy
+  // billingYears / school_billings stack is gone, so we query directly
+  // off the new flat table.
+  const [thisMonthCollected, setThisMonthCollected] = useState(0);
+  const [overdueCount,       setOverdueCount]       = useState(0);
+  const [settledCount,       setSettledCount]       = useState(0);
 
   useEffect(() => {
     fetchSchools();
-    fetchAll();
+    void loadBillingRollup();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  const loadBillingRollup = async () => {
+    const now = new Date();
+    const monthStart = new Date(now.getFullYear(), now.getMonth(), 1).toISOString();
+    const { data, error } = await supabase
+      .from('school_billing_installments')
+      .select('school_id, amount, paid_amount, paid_at');
+    if (error) return; // silent — dashboard still renders zeros
+    type Row = { school_id: string; amount: number; paid_amount: number; paid_at: string | null };
+    const rows = (data ?? []) as Row[];
+
+    let monthSum = 0;
+    const perSchool = new Map<string, number>();
+    for (const r of rows) {
+      const outstanding = r.amount - r.paid_amount;
+      perSchool.set(r.school_id, (perSchool.get(r.school_id) ?? 0) + outstanding);
+      // "This month collected" — paid_at falls inside the current month.
+      if (r.paid_at && r.paid_at >= monthStart) {
+        monthSum += r.paid_amount;
+      }
+    }
+    setThisMonthCollected(monthSum);
+    const schoolStates = [...perSchool.values()];
+    setOverdueCount(schoolStates.filter(o => o > 0).length);
+    setSettledCount(schoolStates.filter(o => o === 0).length);
+  };
 
   const activeSchools = schools.filter(s => s.status === SchoolStatus.ACTIVE).length;
   const trialSchools = schools.filter(s => s.status === SchoolStatus.TRIAL).length;
   const totalUsers = schools.reduce((acc, s) => acc + s.studentCount + s.teacherCount, 0);
-
-  // Latest billing year per school
-  const latestYears = Object.values(
-    billingYears.reduce<Record<string, typeof billingYears[0]>>((acc, y) => {
-      const prev = acc[y.schoolId];
-      if (!prev || y.startDate > prev.startDate) acc[y.schoolId] = y;
-      return acc;
-    }, {})
-  );
-  const overdueCount   = latestYears.filter(y => y.outstanding > 0).length;
-  const settledCount   = latestYears.filter(y => y.outstanding === 0).length;
-  const totalCollected = billingYears.reduce((s, y) => s + y.totalPaid, 0);
 
   const actions = [
     { label: 'Schools', icon: Building2, color: 'bg-emerald-50 text-emerald-600', view: 'schools' },
@@ -119,14 +141,14 @@ export const SADashboard: React.FC<SADashboardProps> = ({ onNavigate }) => {
         <div className="flex items-center justify-between mb-4">
           <div className="flex items-center gap-2">
             <IndianRupee size={16} className="text-emerald-400" />
-            <span className="text-[10px] font-black uppercase tracking-widest text-slate-400">Total Collected</span>
+            <span className="text-[10px] font-black uppercase tracking-widest text-slate-400">This Month Collected</span>
           </div>
           <div className="flex items-center gap-1 bg-emerald-500/20 text-emerald-400 text-[10px] font-black px-2 py-0.5 rounded-full">
-            <TrendingUp size={10} /> All Time
+            <TrendingUp size={10} /> {new Date().toLocaleDateString('en-IN', { month: 'short', year: 'numeric' })}
           </div>
         </div>
         <div className="text-3xl font-black">
-          ₹{totalCollected.toLocaleString('en-IN')}
+          ₹{thisMonthCollected.toLocaleString('en-IN')}
         </div>
         <div className="flex gap-3 mt-4">
           <div>
@@ -191,7 +213,7 @@ export const SADashboard: React.FC<SADashboardProps> = ({ onNavigate }) => {
                     <div>
                       <div className="font-extrabold text-slate-900 text-sm">{school.name}</div>
                       <div className="text-[10px] font-bold text-slate-400 mt-0.5 uppercase tracking-widest">
-                        {school.plan} · {school.studentCount.toLocaleString('en-IN')} students
+                        {school.studentCount.toLocaleString('en-IN')} students
                       </div>
                     </div>
                   </div>

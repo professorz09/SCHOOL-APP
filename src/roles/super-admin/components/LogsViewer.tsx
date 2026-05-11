@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useState } from 'react';
-import { ArrowLeft, History, ShieldCheck, Building2, IndianRupee, MailPlus, Server, Shield, Search, Download, X } from 'lucide-react';
+import { ArrowLeft, History, ShieldCheck, Building2, IndianRupee, MailPlus, Server, Shield, Search, Download, X, ChevronLeft, ChevronRight } from 'lucide-react';
 import { useLogsStore } from '@/roles/super-admin/logsStore';
 import { useUIStore } from '@/store/uiStore';
 import { LogType } from '@/shared/config/constants';
@@ -28,8 +28,9 @@ export const LogsViewer: React.FC<Props> = ({ onBack }) => {
   const [search, setSearch] = useState('');
   const [fromDate, setFromDate] = useState('');
   const [toDate, setToDate] = useState('');
-  const [shown, setShown] = useState(50);
-  useEffect(() => { setShown(50); }, [activeFilter, search, fromDate, toDate]);
+  const PAGE_SIZE = 25;
+  const [page, setPage] = useState(1);
+  useEffect(() => { setPage(1); }, [activeFilter, search, fromDate, toDate]);
 
   useEffect(() => {
     fetchLogs().catch(e => showToast(e instanceof Error ? e.message : 'Failed to load logs', 'error'));
@@ -73,13 +74,18 @@ export const LogsViewer: React.FC<Props> = ({ onBack }) => {
       [l.timestamp, l.entityType, l.action, l.entity, l.performedBy].map(esc).join(','),
     );
     const csv = [header, ...rows].join('\n');
-    const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
+    // BOM so Excel opens UTF-8 cleanly.
+    const blob = new Blob(['﻿' + csv], { type: 'text/csv;charset=utf-8;' });
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
     a.download = `system-logs-${new Date().toISOString().slice(0, 10)}.csv`;
+    a.style.display = 'none';
+    document.body.appendChild(a);
     a.click();
-    URL.revokeObjectURL(url);
+    // Defer cleanup — Safari + mobile WebKit need the URL alive while
+    // they actually start the download, otherwise the file is empty.
+    setTimeout(() => { a.remove(); URL.revokeObjectURL(url); }, 1000);
     showToast(`Exported ${visible.length} entries`);
   };
 
@@ -166,7 +172,7 @@ export const LogsViewer: React.FC<Props> = ({ onBack }) => {
             <p className="font-bold text-sm">No logs for this filter</p>
           </div>
         )}
-        {visible.slice(0, shown).map(log => {
+        {visible.slice((page - 1) * PAGE_SIZE, page * PAGE_SIZE).map(log => {
           const meta = LOG_META[log.entityType];
           return (
             <div key={log.id} className="bg-white rounded-2xl border border-slate-100 shadow-sm p-4 flex gap-3 items-start">
@@ -192,18 +198,89 @@ export const LogsViewer: React.FC<Props> = ({ onBack }) => {
             </div>
           );
         })}
-        {visible.length > shown && (
-          <button onClick={() => setShown(s => s + 50)}
-            className="w-full py-3 bg-white border border-slate-200 rounded-2xl font-black text-xs text-blue-700 hover:bg-blue-50 transition-colors">
-            Load More ({visible.length - shown} remaining)
-          </button>
-        )}
-        {visible.length > 0 && (
-          <p className="text-center text-[10px] font-bold text-slate-300 pt-1">
-            Showing {Math.min(shown, visible.length)} of {visible.length}
-          </p>
+        {visible.length > PAGE_SIZE && (
+          <Pagination
+            page={page}
+            pageSize={PAGE_SIZE}
+            total={visible.length}
+            onChange={setPage}
+          />
         )}
       </div>
     </div>
   );
 };
+
+// ─── Reusable pagination control ────────────────────────────────────────────
+// Page-number style: Prev | 1 2 [3] 4 5 | Next. Window slides around the
+// current page so we never render hundreds of buttons. Used here in the
+// logs viewer; export-grade so other heavy lists can reuse it.
+export const Pagination: React.FC<{
+  page: number;
+  pageSize: number;
+  total: number;
+  onChange: (next: number) => void;
+}> = ({ page, pageSize, total, onChange }) => {
+  const totalPages = Math.max(1, Math.ceil(total / pageSize));
+  const safePage = Math.min(Math.max(1, page), totalPages);
+  const pages = pageWindow(safePage, totalPages, 5);
+  const start = total === 0 ? 0 : (safePage - 1) * pageSize + 1;
+  const end = Math.min(total, safePage * pageSize);
+  return (
+    <div className="bg-white border border-slate-100 rounded-2xl shadow-sm p-3 mt-2">
+      <div className="flex items-center justify-between gap-2 flex-wrap">
+        <p className="text-[10px] font-black uppercase tracking-widest text-slate-400">
+          {start}–{end} of {total}
+        </p>
+        <div className="flex items-center gap-1">
+          <button
+            onClick={() => onChange(safePage - 1)}
+            disabled={safePage <= 1}
+            className="w-8 h-8 rounded-lg bg-slate-100 hover:bg-slate-200 disabled:opacity-40 disabled:cursor-not-allowed flex items-center justify-center active:scale-95 transition-transform">
+            <ChevronLeft size={14} className="text-slate-600" />
+          </button>
+          {pages[0] > 1 && (
+            <>
+              <PageBtn n={1} active={safePage === 1} onClick={() => onChange(1)} />
+              {pages[0] > 2 && <span className="text-[10px] font-bold text-slate-400 px-1">…</span>}
+            </>
+          )}
+          {pages.map(n => (
+            <PageBtn key={n} n={n} active={n === safePage} onClick={() => onChange(n)} />
+          ))}
+          {pages[pages.length - 1] < totalPages && (
+            <>
+              {pages[pages.length - 1] < totalPages - 1 && <span className="text-[10px] font-bold text-slate-400 px-1">…</span>}
+              <PageBtn n={totalPages} active={safePage === totalPages} onClick={() => onChange(totalPages)} />
+            </>
+          )}
+          <button
+            onClick={() => onChange(safePage + 1)}
+            disabled={safePage >= totalPages}
+            className="w-8 h-8 rounded-lg bg-slate-100 hover:bg-slate-200 disabled:opacity-40 disabled:cursor-not-allowed flex items-center justify-center active:scale-95 transition-transform">
+            <ChevronRight size={14} className="text-slate-600" />
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+};
+
+const PageBtn: React.FC<{ n: number; active: boolean; onClick: () => void }> = ({ n, active, onClick }) => (
+  <button
+    onClick={onClick}
+    className={`min-w-8 h-8 px-2 rounded-lg text-xs font-black active:scale-95 transition-transform ${
+      active ? 'bg-slate-900 text-white' : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
+    }`}>
+    {n}
+  </button>
+);
+
+function pageWindow(current: number, total: number, size: number): number[] {
+  if (total <= size) return Array.from({ length: total }, (_, i) => i + 1);
+  const half = Math.floor(size / 2);
+  let start = Math.max(1, current - half);
+  let end = start + size - 1;
+  if (end > total) { end = total; start = end - size + 1; }
+  return Array.from({ length: end - start + 1 }, (_, i) => start + i);
+}

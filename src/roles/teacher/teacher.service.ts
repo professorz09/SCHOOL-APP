@@ -1199,7 +1199,18 @@ Class: ${meta.className}
     return getMyStaff();
   },
 
-  /** All period slot definitions for this school's active year, sort_order asc. */
+  /** Period slot definitions for this school's active year. Returns
+   *  the school-default rows (class_name IS NULL) — per-class slots
+   *  added by Customize mode are intentionally excluded here because
+   *  the teacher day-view is a single chronological timeline; mixing
+   *  Class 5's 9 AM slot with Class 11's 8 AM slot would render a
+   *  confused two-track strip.
+   *
+   *  The teacher's actual scheduled periods (timetable_entries) still
+   *  resolve correctly — they reference slot_id (UUID) directly, so
+   *  even a class-specific slot's entry will display. The slot
+   *  metadata for those entries gets joined in-memory via
+   *  getMyTimetable's slots payload (separate code path). */
   async getPeriodSlots(): Promise<Array<{
     slotId: string; label: string; startTime: string; endTime: string;
     type: string; sortOrder: number;
@@ -1208,8 +1219,9 @@ Class: ${meta.className}
     const yearId = await getActiveYearId();
     const { data, error } = await supabase
       .from('timetable_periods')
-      .select('id, name, start_time, end_time, period_type, sort_order')
+      .select('id, name, start_time, end_time, period_type, sort_order, class_name')
       .eq('school_id', schoolId).eq('academic_year_id', yearId)
+      .is('class_name', null)
       .order('sort_order');
     if (error) throw new Error(error.message);
     const rows = (data ?? []) as Array<{
@@ -1223,7 +1235,6 @@ Class: ${meta.className}
         type: r.period_type, sortOrder: r.sort_order,
       }));
     }
-    // DB has no custom periods — return the static defaults.
     return Object.entries(DEFAULT_SLOT_BY_ID).map(([slotId, p]) => ({
       slotId, label: p.name, startTime: p.start_time, endTime: p.end_time,
       type: p.period_type, sortOrder: p.sort_order,

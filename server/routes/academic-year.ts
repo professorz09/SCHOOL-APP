@@ -140,11 +140,26 @@ academicYearRouter.post('/sections', requireAuth, PRINCIPAL, async (req, res) =>
       throw new ApiError(400, 'sections array required');
     }
 
+    // Surface a clear error if a row is missing class_name / section
+    // before we hand the payload to Postgres (the DB error message
+    // ("each section needs class_name and section") is correct but
+    // confusing for principals). Same guard for create-with-sections
+    // below.
+    const bad = body.sections.find(
+      (s) => !s.className?.trim() || !s.section?.trim(),
+    );
+    if (bad) {
+      throw new ApiError(
+        400,
+        `Section payload incomplete — class name aur section dono blank nahi ho sakte (got ${JSON.stringify(bad)}).`,
+      );
+    }
+
     const rows = body.sections.map(s => ({
       school_id:        req.user.school_id,
       academic_year_id: body.yearId,
-      class_name:       s.className,
-      section:          s.section,
+      class_name:       s.className.trim(),
+      section:          s.section.trim(),
       class_teacher:    s.classTeacher ?? null,
     }));
 
@@ -170,6 +185,19 @@ academicYearRouter.post('/create-with-sections', requireAuth, PRINCIPAL, async (
       sections: { className: string; section: string; stream?: string | null; capacity: number }[];
     }>(req, ['label', 'startDate', 'endDate', 'board', 'medium', 'streams', 'sections']);
 
+    if (!Array.isArray(body.sections) || body.sections.length === 0) {
+      throw new ApiError(400, 'Kam se kam ek section zaroori hai academic year banane ke liye.');
+    }
+    const badSec = body.sections.find(
+      (s) => !s.className?.trim() || !s.section?.trim(),
+    );
+    if (badSec) {
+      throw new ApiError(
+        400,
+        `Section payload incomplete — har section ka class name + section dono required hain (got ${JSON.stringify(badSec)}).`,
+      );
+    }
+
     const db = userDb(req.jwt);
     const { data, error } = await db.rpc('create_academic_year_with_sections', {
       p_label:    body.label.trim(),
@@ -179,13 +207,22 @@ academicYearRouter.post('/create-with-sections', requireAuth, PRINCIPAL, async (
       p_medium:   body.medium,
       p_streams:  body.streams,
       p_sections: body.sections.map(s => ({
-        class_name: s.className,
-        section:    s.section,
+        class_name: s.className.trim(),
+        section:    s.section.trim(),
         stream:     s.stream ?? null,
         capacity:   s.capacity,
       })),
     });
-    if (error) throw new ApiError(500, error.message);
+    if (error) {
+      // Translate the DB's terse guard message into something the
+      // principal can act on. Keep the original tail so we don't lose
+      // debugging info.
+      const m = error.message ?? '';
+      if (/each section needs class_name and section/i.test(m)) {
+        throw new ApiError(400, `Ek ya zyada sections ka class name / section blank tha — Step 2 me jaake fix karein. (${m})`);
+      }
+      throw new ApiError(500, m);
+    }
     ok(res, { yearId: data as string }, 201);
   } catch (err) { fail(res, err); }
 });

@@ -270,10 +270,12 @@ export const AnalyticsManager: React.FC<Props> = ({ onBack }) => {
       const a    = document.createElement('a');
       a.href     = url;
       a.download = `${folder}.zip`;
+      a.style.display = 'none';
       document.body.appendChild(a);
       a.click();
-      a.remove();
-      URL.revokeObjectURL(url);
+      // Deferred cleanup — multi-MB zips on Safari / mobile WebKit
+      // truncate to 0 bytes if we revoke synchronously after click.
+      setTimeout(() => { a.remove(); URL.revokeObjectURL(url); }, 1000);
       showToast('Export downloaded');
     } catch (e) {
       showToast(e instanceof Error ? e.message : 'Export failed', 'error');
@@ -320,8 +322,12 @@ export const AnalyticsManager: React.FC<Props> = ({ onBack }) => {
     const url  = URL.createObjectURL(blob);
     const a    = document.createElement('a');
     a.href = url; a.download = filename;
-    document.body.appendChild(a); a.click(); a.remove();
-    URL.revokeObjectURL(url);
+    a.style.display = 'none';
+    document.body.appendChild(a);
+    a.click();
+    // Deferred cleanup — synchronous revoke after click() races the
+    // file fetch on Safari / mobile WebKit, producing empty files.
+    setTimeout(() => { a.remove(); URL.revokeObjectURL(url); }, 1000);
   };
 
   // Single source of truth for running a report. Rate-limit + error

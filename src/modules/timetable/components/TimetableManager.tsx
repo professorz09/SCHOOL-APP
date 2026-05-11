@@ -1,8 +1,9 @@
 import React, { useState, useCallback, useEffect } from 'react';
 import { ArrowLeft, Plus, Trash2, ChevronDown, AlertTriangle, CheckCircle2, Edit3, Clock, BookOpen, Coffee, Sparkles, MapPin, Calendar } from 'lucide-react';
-import { HolidaysManager } from '@/modules/timetable/components/HolidaysManager';
+import { HolidaysManager, TIMETABLE_CUSTOMIZE_STORAGE_KEY, isTimetableCustomizeOn } from '@/modules/timetable/components/HolidaysManager';
 import {
-  timetableService, PERIOD_SLOTS, DAYS, TimetableEntry, TDay, TimetableTeacher,
+  timetableService, PERIOD_SLOTS, DAYS, TDay, TimetableEntry, TimetableTeacher,
+  NON_TEACHING_TYPES, SlotType,
 } from '@/modules/timetable/timetable.service';
 import { useUIStore } from '@/store/uiStore';
 import { useAcademicYear } from '@/shared/context/AcademicYearContext';
@@ -20,20 +21,42 @@ const slotBg: Record<string, string> = {
   FREE: 'bg-slate-50 border-slate-200 text-slate-400',
 };
 
-interface EntryFormState {
-  subject: string;
-  teacherId: string;
-  room: string;
-  startTime: string;
-  endTime: string;
-}
-
+// Unified slot editor state. Replaces the earlier 2-modal split
+// (slotTimeModal for activities + editModal for teaching). A single
+// modal with a Teaching ↔ Non-teaching toggle at the top — switching
+// the toggle reveals different field sets but the underlying state
+// is one object. Save dispatches to the right backend based on mode.
 interface SlotTimeModal {
   slotId: string;
   label: string;
   startTime: string;
   endTime: string;
+  type: SlotType;
+  // Teaching-mode fields (used only when mode === Teaching). Pre-filled
+  // from any existing timetable_entry for the active day so principal
+  // can edit/clear/save in place.
+  subject: string;
+  teacherId: string;
+  room: string;
+  existingEntryId: string | null;
+  // Tracks whether this is a brand-new slot the principal is adding
+  // via "Add Period". In that case we INSERT instead of UPDATE.
+  isNew?: boolean;
 }
+
+// Non-teaching activity presets — shown as quick chips inside the
+// "Non-teaching" branch of the editor. Picking one auto-fills label +
+// type so principal doesn't have to type common cases. CUSTOM = blank
+// label, principal types whatever.
+const ACTIVITY_PRESETS: Array<{ type: SlotType; label: string; defaultName: string }> = [
+  { type: 'PRAYER',        label: 'Prayer',       defaultName: 'Prayer' },
+  { type: 'ASSEMBLY',      label: 'Assembly',     defaultName: 'Assembly' },
+  { type: 'SHORT_BREAK',   label: 'Short Break',  defaultName: 'Short Break' },
+  { type: 'LUNCH',         label: 'Lunch',        defaultName: 'Lunch Break' },
+  { type: 'SPORTS_BREAK',  label: 'Sports',       defaultName: 'Sports Break' },
+  { type: 'NO_TEACHING',   label: 'No Teaching',  defaultName: 'Free Period' },
+  { type: 'CUSTOM',        label: 'Custom',       defaultName: '' },
+];
 
 interface Props { onBack: () => void; }
 
@@ -61,15 +84,25 @@ export const TimetableManager: React.FC<Props> = ({ onBack }) => {
   const [activeDay, setActiveDay] = useState<TDay>('Monday');
   const [entries, setEntries] = useState<TimetableEntry[]>([]);
   const [slots, setSlots] = useState(() => [...PERIOD_SLOTS]);
-  const [editModal, setEditModal] = useState<{ slotId: string; existing?: TimetableEntry } | null>(null);
-  const [form, setForm] = useState<EntryFormState>({ subject: '', teacherId: '', room: '', startTime: '', endTime: '' });
+  const [customizeOn, setCustomizeOn] = useState<boolean>(() => isTimetableCustomizeOn());
+  // Per-class slot resolution lives in reload() now; no separate effect
+  // so we don't flash the school default between renders.
+
+  // Toggle the customize flag — persists in localStorage so the
+  // principal's preference survives reloads. Drives the Delete button
+  // on slot edit + the "+ Add Period" tile at the bottom of the day.
+  const toggleCustomize = () => {
+    const next = !customizeOn;
+    setCustomizeOn(next);
+    try { localStorage.setItem(TIMETABLE_CUSTOMIZE_STORAGE_KEY, next ? '1' : '0'); } catch { /* quota / private mode */ }
+    showToast(next ? 'Customize mode ON — Add / Delete periods' : 'Customize mode OFF');
+  };
   const [conflictMsg, setConflictMsg] = useState('');
   const [successMsg, setSuccessMsg] = useState('');
   // Loading flags for the modal action buttons. Without these the buttons
   // looked stuck while the server round-trip was in flight (~half-second on
   // slow networks) and users would tap multiple times.
   const [isSaving, setIsSaving] = useState(false);
-  const [isDeleting, setIsDeleting] = useState(false);
   const [slotTimeModal, setSlotTimeModal] = useState<SlotTimeModal | null>(null);
   const [teachers, setTeachers] = useState<TimetableTeacher[]>([]);
   // School-wide subject suggestions (autocomplete). No managed list, no
@@ -91,9 +124,13 @@ export const TimetableManager: React.FC<Props> = ({ onBack }) => {
   }, [showHolidays]);
 
   const reload = useCallback((cls: ClassRow) => {
-    // Service indexes entries by classId which is the "label" (e.g. "8-A")
+    // Service indexes entries by classId which is the "label" (e.g. "8-A").
+    // Slots are CLASS-SPECIFIC — earlier this used the global PERIOD_SLOTS
+    // which briefly flashed the school default before the [selectedClass]
+    // useEffect overwrote it, making the row appear to "disappear" on
+    // class switch. Resolve per-class up front so there's no flicker.
     setEntries(timetableService.getClassTimetable(cls.label));
-    setSlots([...PERIOD_SLOTS]);
+    setSlots(timetableService.getSlotsForClass(cls.label));
   }, []);
 
   useEffect(() => {
@@ -136,7 +173,7 @@ export const TimetableManager: React.FC<Props> = ({ onBack }) => {
   const handleClassChange = (cls: ClassRow) => {
     setSelectedClass(cls);
     reload(cls);
-    setEditModal(null);
+    setSlotTimeModal(null);
   };
 
   // Day-name → 0-6 index used by the weekly_off config (Sun=0 … Sat=6).
@@ -147,139 +184,152 @@ export const TimetableManager: React.FC<Props> = ({ onBack }) => {
   const isOffDay = (d: string) => weeklyOff.includes(DAY_TO_IDX[d] ?? -1);
 
   const openEdit = (slotId: string) => {
-    // Block the entire assignment flow on a weekly-off day. Even time-only
-    // edits on assembly / break / lunch shouldn't happen — there's no
-    // school that day. Toast tells the user to flip Sunday off in Holidays
-    // first if they actually want to schedule on it.
     if (isOffDay(activeDay)) {
-      showToast(`${activeDay} school holiday hai — Holidays se off hatao agar class lagani hai`, 'info');
+      showToast(`${activeDay} school holiday hai — Weekly Off se hatao agar class lagani hai`, 'info');
       return;
     }
-    const slot = PERIOD_SLOTS.find(s => s.slotId === slotId)!;
-    // Fixed slots (assembly, break, lunch) open time-edit modal
-    if (slot.isFixed) {
-      setSlotTimeModal({ slotId: slot.slotId, label: slot.label, startTime: slot.startTime, endTime: slot.endTime });
+    // Edit gating: any change (assign teacher, switch type, change
+    // time, delete) requires Customize mode to be ON. This protects
+    // the recurring schedule from accidental edits during routine
+    // viewing — principal flips the chip top-right when actually
+    // editing, then locks it back.
+    if (!customizeOn) {
+      showToast('Edit karne ke liye top-right ka "Customize" chip on karein', 'info');
+      return;
+    }
+    // Use the local per-class `slots` array — NOT the global
+    // PERIOD_SLOTS. Per-class slots (added via Add Period) only
+    // live in the resolved state, not the global default.
+    const slot = slots.find(s => s.slotId === slotId);
+    if (!slot) {
+      showToast('Slot data refresh ho raha hai — ek baar dobara try karein', 'error');
       return;
     }
     const existing = entries.find(e => e.day === activeDay && e.slotId === slotId);
-    setForm({
-      subject: existing?.subject ?? '',
-      teacherId: existing?.teacherId ?? teachers[0]?.id ?? '',
-      room: existing?.room ?? '',
+    setSlotTimeModal({
+      slotId: slot.slotId,
+      label: slot.label,
       startTime: slot.startTime,
       endTime: slot.endTime,
+      type: slot.type,
+      subject:         existing?.subject ?? '',
+      teacherId:       existing?.teacherId ?? teachers[0]?.id ?? '',
+      room:            existing?.room ?? '',
+      existingEntryId: existing?.id ?? null,
     });
     setConflictMsg('');
-    setEditModal({ slotId, existing });
   };
 
-  const handleSave = async () => {
-    if (!selectedClass) return;
-    if (!form.subject || !form.teacherId) return;
+  // Unified save — routes to the right service call based on whether
+  // the modal is in Teaching (saves an entry for the active day) or
+  // Non-teaching mode (saves the slot config). Handles new-slot
+  // creation in both modes too.
+  const handleUnifiedSlotSave = async () => {
+    if (!slotTimeModal || !selectedClass) return;
     if (!editGuard.canEdit) {
       showToast('Year closed — pehle Correction Mode enable karein', 'error');
       return;
     }
-    const teacher = teachers.find(t => t.id === form.teacherId)!;
+    if (!slotTimeModal.startTime || !slotTimeModal.endTime) {
+      showToast('Start and end time required', 'error'); return;
+    }
+    if (slotTimeModal.startTime >= slotTimeModal.endTime) {
+      showToast('Start time end time se pehle hona chahiye', 'error'); return;
+    }
 
-    // Update slot time if changed (apply BEFORE save so overlap check uses the new time)
-    const slot = PERIOD_SLOTS.find(s => s.slotId === editModal!.slotId)!;
-    if (form.startTime !== slot.startTime || form.endTime !== slot.endTime) {
-      timetableService.updateSlotTime(editModal!.slotId, form.startTime, form.endTime);
+    const isTeaching = slotTimeModal.type === 'CLASS';
+
+    if (isTeaching) {
+      if (!slotTimeModal.subject.trim()) { showToast('Subject zaroori hai', 'error'); return; }
+      if (!slotTimeModal.teacherId)      { showToast('Teacher select karein', 'error'); return; }
+    } else {
+      if (!slotTimeModal.label.trim())   { showToast('Activity ka naam zaroori hai', 'error'); return; }
     }
 
     setIsSaving(true);
+    setConflictMsg('');
     try {
-      const r = await editGuard.gate(
-        () => timetableService.saveEntry({
-          id: editModal?.existing?.id,
-          classId: selectedClass.label,
-          className: selectedClass.className, // use the original DB class_name
-          section: selectedClass.section,
-          day: activeDay,
-          slotId: editModal!.slotId,
-          subject: form.subject,
-          teacherId: form.teacherId,
-          teacherName: teacher.name,
-          room: form.room,
-          // academicYearId is resolved server-side by timetable.service from the
-          // active academic_year — passing a placeholder here would be ignored
-          // and misleading. Service-side _activeYearId is the single source of
-          // truth.
-          academicYearId: '',
-        }),
-        {
-          entityType: 'timetable_entry',
-          entityId: editModal?.existing?.id ?? `${selectedClass.label}/${activeDay}/${editModal!.slotId}`,
-        },
-      );
-
-      if (r === undefined) return; // user cancelled correction prompt
-      if (!r.ok) {
-        const c = r.conflict;
-        const where = c ? `${c.className}-${c.section} · ${c.subject}` : '';
-        setConflictMsg(r.reason ? `${r.reason}${where ? ` (${where})` : ''}` : 'Conflict detected');
-        return;
+      let slotId = slotTimeModal.slotId;
+      // ── Step 1: ensure the slot row exists with the right type/time.
+      // addCustomSlot returns the new row's UUID directly — earlier we
+      // tried to "find" the fresh slot by matching start_time + label
+      // which mis-identified the wrong row when two slots had the same
+      // start time, then the entry insert hit the (section,day,slot)
+      // unique constraint with a duplicate.
+      if (slotTimeModal.isNew) {
+        slotId = await timetableService.addCustomSlot({
+          className: selectedClass.label,
+          name:      slotTimeModal.label || (isTeaching ? `Period ${slots.length + 1}` : 'Activity'),
+          startTime: slotTimeModal.startTime,
+          endTime:   slotTimeModal.endTime,
+          type:      slotTimeModal.type,
+        });
+      } else {
+        await timetableService.updateSlot(slotTimeModal.slotId, {
+          name: slotTimeModal.label,
+          startTime: slotTimeModal.startTime,
+          endTime: slotTimeModal.endTime,
+          type: slotTimeModal.type,
+        });
       }
-      reload(selectedClass);
-      setEditModal(null);
-      setSuccessMsg('Saved!');
-      setTimeout(() => setSuccessMsg(''), 2000);
+
+      // ── Step 2: handle the entry side (teaching mode only)
+      if (isTeaching) {
+        const teacher = teachers.find(t => t.id === slotTimeModal.teacherId);
+        if (!teacher) throw new Error('Teacher not found');
+        const result = await timetableService.saveEntry({
+          id:             slotTimeModal.existingEntryId ?? undefined,
+          academicYearId: currentYear?.id ?? '',
+          className:      selectedClass.className,
+          section:        selectedClass.section,
+          classId:        selectedClass.label,
+          day:            activeDay,
+          slotId,
+          subject:        slotTimeModal.subject.trim(),
+          teacherId:      teacher.id,
+          teacherName:    teacher.name,
+          room:           slotTimeModal.room.trim(),
+        });
+        if (!result.ok) {
+          setConflictMsg(result.reason ?? 'Save failed');
+          return;
+        }
+      } else if (slotTimeModal.existingEntryId) {
+        // Switched from teaching → non-teaching: drop the entry on
+        // this slot for the active day so the cell renders cleanly
+        // as the new activity.
+        await timetableService.deleteEntry(slotTimeModal.existingEntryId);
+      }
+
+      setSlots(timetableService.getSlotsForClass(selectedClass.label));
+      setEntries(timetableService.getClassTimetable(selectedClass.label));
+      setSlotTimeModal(null);
+      showToast(slotTimeModal.isNew ? 'Period added' : 'Saved');
     } catch (e) {
-      // Earlier this had try/finally but no catch — a network or RLS
-      // failure threw silently into the click promise sink. Spinner
-      // stopped, no error, principal assumed the save landed when it
-      // didn't.
-      showToast(e instanceof Error ? e.message : 'Could not save period', 'error');
+      showToast(e instanceof Error ? e.message : 'Save failed', 'error');
     } finally {
       setIsSaving(false);
     }
   };
 
-  const handleDelete = async () => {
-    if (editModal?.existing && selectedClass) {
-      if (!editGuard.canEdit) {
-        showToast('Year closed — pehle Correction Mode enable karein', 'error');
-        return;
-      }
-      setIsDeleting(true);
-      try {
-        const result = await editGuard.gate(
-          () => timetableService.deleteEntry(editModal.existing!.id),
-          { entityType: 'timetable_entry', entityId: editModal.existing.id },
-        );
-        if (result === undefined) return; // user cancelled
-        reload(selectedClass);
-      } catch (e) {
-        showToast(e instanceof Error ? e.message : 'Delete failed', 'error');
-        return;
-      } finally {
-        setIsDeleting(false);
-      }
+  const handleSlotDelete = async () => {
+    if (!slotTimeModal || slotTimeModal.isNew) return;
+    if (!editGuard.canEdit) { showToast('Year closed — pehle Correction Mode enable karein', 'error'); return; }
+    const ok = await useUIStore.getState().askConfirm({
+      title: 'Slot delete karein?',
+      message: `${slotTimeModal.label} hata diya jayega. Agar koi class is slot pe assigned hai, server reject karega — pehle assignments hatao.`,
+      destructive: true,
+      confirmLabel: 'Delete',
+    });
+    if (!ok) return;
+    try {
+      await timetableService.deleteSlot(slotTimeModal.slotId);
+      setSlots([...PERIOD_SLOTS]);
+      setSlotTimeModal(null);
+      showToast('Slot deleted');
+    } catch (e) {
+      showToast(e instanceof Error ? e.message : 'Delete failed', 'error');
     }
-    setEditModal(null);
-  };
-
-  const handleSlotTimeSave = async () => {
-    if (!slotTimeModal) return;
-    if (!slotTimeModal.startTime || !slotTimeModal.endTime) {
-      showToast('Start and end time required', 'error'); return;
-    }
-    if (!editGuard.canEdit) {
-      showToast('Year closed — pehle Correction Mode enable karein', 'error');
-      return;
-    }
-    const result = await editGuard.gate(
-      () => {
-        timetableService.updateSlotTime(slotTimeModal.slotId, slotTimeModal.startTime, slotTimeModal.endTime);
-        return true;
-      },
-      { entityType: 'period_slot', entityId: slotTimeModal.slotId },
-    );
-    if (result === undefined) return; // user cancelled
-    setSlots([...PERIOD_SLOTS]);
-    setSlotTimeModal(null);
-    showToast(`${slotTimeModal.label} time updated`);
   };
 
   const dayEntries = entries.filter(e => e.day === activeDay);
@@ -292,28 +342,62 @@ export const TimetableManager: React.FC<Props> = ({ onBack }) => {
 
   return (
     <div className="w-full bg-slate-50 flex flex-col animate-in slide-in-from-right-8 duration-300">
-      {/* Header */}
+      {/* Header.
+          Mobile: title row + actions row stacked, so 3-button overflow
+          is impossible. Desktop (lg+): single row with full labels.
+          Earlier the row tried to fit Title + Customize + Holidays in
+          one line and Holidays got truncated. */}
       <div className="bg-white border-b border-slate-100 px-4 lg:px-6 pt-4 lg:pt-6 pb-0 sticky top-0 z-10 shadow-sm">
-        <div className="flex items-center gap-3 pb-3 lg:pb-4">
-          <button onClick={onBack} className="p-2 -ml-2 bg-slate-100 rounded-full text-slate-600 hover:bg-slate-200 transition-colors">
+        <div className="flex items-center gap-3 pb-2 lg:pb-4">
+          <button onClick={onBack} className="p-2 -ml-2 bg-slate-100 rounded-full text-slate-600 hover:bg-slate-200 transition-colors shrink-0">
             <ArrowLeft size={20} />
           </button>
-          <div className="flex-1">
-            <h2 className="text-xl lg:text-2xl font-black text-slate-900 uppercase tracking-tight">Timetable Manager</h2>
-            <p className="text-[10px] lg:text-xs font-bold text-slate-400">Tap a period to assign · Tap Assembly/Break to change time</p>
+          <div className="flex-1 min-w-0">
+            <h2 className="text-lg lg:text-2xl font-black text-slate-900 uppercase tracking-tight leading-tight truncate">Timetable</h2>
+            <p className="text-[10px] lg:text-xs font-bold text-slate-400 truncate">Tap any period to assign / edit</p>
           </div>
           {successMsg && (
-            <div className="flex items-center gap-1 text-emerald-600 text-[10px] lg:text-xs font-black bg-emerald-50 border border-emerald-200 px-2.5 py-1 rounded-full">
+            <div className="hidden lg:flex items-center gap-1 text-emerald-600 text-xs font-black bg-emerald-50 border border-emerald-200 px-2.5 py-1 rounded-full shrink-0">
               <CheckCircle2 size={14} /> {successMsg}
             </div>
           )}
-          {/* Holidays shortcut — opens the school-wide holiday calendar
-              (Diwali, 15 Aug, etc.) and weekly-off picker. */}
+          {/* Desktop action buttons — full labels. Mobile uses the
+              second row below to avoid overflow. */}
+          <div className="hidden lg:flex items-center gap-2 shrink-0">
+            <button
+              onClick={toggleCustomize}
+              className={`flex items-center gap-1.5 px-3 py-2 rounded-xl text-xs font-black uppercase tracking-wide active:scale-95 transition-transform ${
+                customizeOn
+                  ? 'bg-emerald-100 text-emerald-700 ring-1 ring-emerald-300'
+                  : 'bg-slate-100 hover:bg-slate-200 text-slate-600'
+              }`}>
+              <Edit3 size={13} /> Customize {customizeOn && '· ON'}
+            </button>
+            <button
+              onClick={() => setShowHolidays(true)}
+              className="flex items-center gap-1.5 px-3 py-2 bg-rose-50 hover:bg-rose-100 text-rose-700 rounded-xl text-xs font-black uppercase tracking-wide active:scale-95 transition-transform">
+              <Calendar size={13} /> Weekly Off
+            </button>
+          </div>
+        </div>
+
+        {/* Mobile-only action row — same buttons, full width below
+            the title so neither overflows. Hidden on desktop where
+            both fit in the header row already. */}
+        <div className="flex lg:hidden items-center gap-2 pb-3">
+          <button
+            onClick={toggleCustomize}
+            className={`flex-1 flex items-center justify-center gap-1.5 px-3 py-2 rounded-xl text-[11px] font-black uppercase tracking-wide active:scale-95 transition-transform ${
+              customizeOn
+                ? 'bg-emerald-100 text-emerald-700 ring-1 ring-emerald-300'
+                : 'bg-slate-100 hover:bg-slate-200 text-slate-600'
+            }`}>
+            <Edit3 size={13} /> Customize {customizeOn && '· ON'}
+          </button>
           <button
             onClick={() => setShowHolidays(true)}
-            title="Manage school holidays"
-            className="flex items-center gap-1.5 px-3 py-2 bg-rose-50 hover:bg-rose-100 text-rose-700 rounded-xl text-[11px] font-black uppercase tracking-wide active:scale-95 transition-transform">
-            <Calendar size={13} /> Holidays
+            className="flex-1 flex items-center justify-center gap-1.5 px-3 py-2 bg-rose-50 hover:bg-rose-100 text-rose-700 rounded-xl text-[11px] font-black uppercase tracking-wide active:scale-95 transition-transform">
+            <Calendar size={13} /> Weekly Off
           </button>
         </div>
 
@@ -449,8 +533,11 @@ export const TimetableManager: React.FC<Props> = ({ onBack }) => {
                       {/* Dot on the rail */}
                       <div className={`absolute -left-[26px] lg:-left-[28px] top-3 w-4 h-4 rounded-full ring-4 ${dotColor}`} />
 
-                      <button onClick={() => openEdit(slot.slotId)}
-                        className={`w-full text-left rounded-2xl shadow-sm overflow-hidden transition-all active:scale-[0.98] ${cardClass}`}>
+                      <button
+                        onClick={() => openEdit(slot.slotId)}
+                        className={`w-full text-left rounded-2xl shadow-sm overflow-hidden transition-all ${
+                          customizeOn ? 'active:scale-[0.98]' : 'cursor-default opacity-95'
+                        } ${cardClass}`}>
                         <div className="px-3 lg:px-4 py-3 flex items-center gap-3 lg:gap-4">
                           {/* Time block */}
                           <div className="shrink-0 w-20 lg:w-24">
@@ -474,9 +561,11 @@ export const TimetableManager: React.FC<Props> = ({ onBack }) => {
                                     : <Sparkles size={14} className="text-violet-500" />}
                                   {slot.label}
                                 </div>
-                                <div className="flex items-center gap-1 text-[10px] lg:text-[11px] font-bold text-slate-500 mt-1">
-                                  <Clock size={10} /> Tap to edit time
-                                </div>
+                                {customizeOn && (
+                                  <div className="flex items-center gap-1 text-[10px] lg:text-[11px] font-bold text-slate-500 mt-1">
+                                    <Clock size={10} /> Tap to edit time
+                                  </div>
+                                )}
                               </>
                             ) : entry ? (
                               <>
@@ -510,8 +599,11 @@ export const TimetableManager: React.FC<Props> = ({ onBack }) => {
                             )}
                           </div>
 
-                          {/* Edit affordance for filled class slots */}
-                          {!isFixed && entry && (
+                          {/* Edit affordance for filled class slots —
+                              shown only when Customize is ON (cards are
+                              read-only otherwise so the pencil icon
+                              would be misleading). */}
+                          {!isFixed && entry && customizeOn && (
                             <div className="shrink-0">
                               <Edit3 size={14} className="text-slate-300" />
                             </div>
@@ -521,6 +613,52 @@ export const TimetableManager: React.FC<Props> = ({ onBack }) => {
                     </div>
                   );
                 })}
+
+                {/* Add Period — only when Holidays → Customize Timetable
+                    toggle is ON. Lets the principal add an extra slot
+                    to THIS class without touching the school default. */}
+                {customizeOn && (
+                  <div className="relative">
+                    <div className="absolute -left-[26px] lg:-left-[28px] top-3 w-4 h-4 rounded-full ring-4 bg-blue-300 ring-blue-100" />
+                    <button
+                      onClick={async () => {
+                        // Confirm first — adding a class-scoped slot
+                        // creates a custom row in timetable_periods that
+                        // diverges this class from the school default,
+                        // so we make the principal acknowledge it.
+                        const ok = await useUIStore.getState().askConfirm({
+                          title: 'Naya period add karein?',
+                          message: `${selectedClass?.label} ke liye ek naya slot banega. Aap iska type (Teaching / Non-teaching), label aur time set kar sakte ho. Continue?`,
+                          confirmLabel: 'Add',
+                          cancelLabel:  'Cancel',
+                        });
+                        if (!ok) return;
+                        // Stack the new slot just after the last existing
+                        // one. Default end = start + 40 min so principal
+                        // doesn't see a half-empty form.
+                        const last = slots[slots.length - 1];
+                        const startTime = last?.endTime ?? '14:00';
+                        const [h, m] = startTime.split(':').map(Number);
+                        const endTotal = (h * 60 + m + 40) % (24 * 60);
+                        const endTime = `${String(Math.floor(endTotal / 60)).padStart(2, '0')}:${String(endTotal % 60).padStart(2, '0')}`;
+                        setSlotTimeModal({
+                          slotId: 'new-' + Date.now(),
+                          label: `Period ${slots.filter(s => s.type === 'CLASS').length + 1}`,
+                          startTime,
+                          endTime,
+                          type: 'CLASS',
+                          subject: '',
+                          teacherId: teachers[0]?.id ?? '',
+                          room: '',
+                          existingEntryId: null,
+                          isNew: true,
+                        });
+                      }}
+                      className="w-full text-left rounded-2xl border-2 border-dashed border-blue-300 bg-blue-50/40 hover:bg-blue-50 hover:border-blue-400 active:scale-[0.98] transition-all px-4 py-3 flex items-center justify-center gap-2 text-blue-700 font-black text-xs uppercase tracking-widest">
+                      <Plus size={14} /> Add Period
+                    </button>
+                  </div>
+                )}
               </div>
             </div>
 
@@ -544,116 +682,121 @@ export const TimetableManager: React.FC<Props> = ({ onBack }) => {
         )}
       </div>
 
-      {/* Slot Time Edit Modal (for Assembly / Break / Lunch) */}
-      {slotTimeModal && (
+      {/* Unified slot editor.
+          Top toggle: Teaching ↔ Non-teaching.
+          • Teaching: subject + teacher + time → saves a timetable_entry
+            for the active day AND, if needed, flips the slot's type to
+            CLASS so it stops rendering as an activity row.
+          • Non-teaching: label + activity preset + time → saves the
+            slot row (timetable_periods) and clears any teaching entry
+            that was on this slot for the active day.
+          • Delete button visible whenever the Customize toggle is ON
+            (in Holidays) — for both modes. */}
+      {slotTimeModal && (() => {
+        const isTeachingMode = slotTimeModal.type === 'CLASS';
+        return (
         <div className="absolute inset-0 bg-slate-900/50 backdrop-blur-sm z-50 flex items-end">
-          <div className="w-full bg-white rounded-t-3xl p-6 pb-8 animate-in slide-in-from-bottom-8 duration-300">
-            <div className="flex justify-between items-center mb-5">
-              <div>
-                <p className="text-[9px] font-black uppercase tracking-widest text-slate-400">Edit Time Slot</p>
-                <h3 className="text-lg font-black text-slate-900 mt-0.5">{slotTimeModal.label}</h3>
+          <div className="w-full bg-white rounded-t-3xl p-6 pb-8 animate-in slide-in-from-bottom-8 duration-300 max-h-[92vh] overflow-y-auto">
+            {/* Header: just context (class + day + new/edit) — slot
+                label lives in the input below, no need to echo it as a
+                big H3 too. Earlier "Period 8" appeared twice — title +
+                label field — which read like a bug. */}
+            <div className="flex items-start justify-between mb-4">
+              <div className="min-w-0">
+                <p className="text-[10px] font-black uppercase tracking-widest text-slate-500">
+                  {slotTimeModal.isNew ? 'Add Period' : 'Edit Period'}
+                </p>
+                <p className="text-[11px] font-bold text-slate-400 mt-0.5">
+                  {selectedClass?.label}
+                  {' · '}{activeDay}
+                </p>
               </div>
-              <button onClick={() => setSlotTimeModal(null)} className="w-8 h-8 bg-slate-100 rounded-full flex items-center justify-center text-slate-500">✕</button>
+              <button onClick={() => setSlotTimeModal(null)} className="w-8 h-8 bg-slate-100 rounded-full flex items-center justify-center text-slate-500 shrink-0">✕</button>
             </div>
 
-            <div className="grid grid-cols-2 gap-4 mb-5">
+            {/* Mode toggle — Teaching vs Non-teaching. The choice
+                drives which fields appear below and which save path
+                runs. Switching modes preserves time + label. */}
+            <div className="grid grid-cols-2 gap-2 mb-4 p-1 bg-slate-100 rounded-2xl">
+              <button
+                onClick={() => setSlotTimeModal(m => m ? {
+                  ...m,
+                  type: 'CLASS',
+                  // Reset label to a sensible default if user is leaving
+                  // an activity preset (Lunch/Prayer) for teaching.
+                  label: ACTIVITY_PRESETS.some(p => p.defaultName === m.label) || !m.label.trim()
+                    ? `Period ${slots.filter(s => s.type === 'CLASS').length + (m.isNew ? 1 : 0)}`
+                    : m.label,
+                } : m)}
+                className={`py-2.5 rounded-xl text-xs font-black uppercase tracking-widest transition-colors ${
+                  isTeachingMode ? 'bg-blue-600 text-white shadow-sm' : 'bg-transparent text-slate-500'
+                }`}>
+                Teaching
+              </button>
+              <button
+                onClick={() => setSlotTimeModal(m => m ? {
+                  ...m,
+                  type: m.type === 'CLASS' ? 'SHORT_BREAK' : m.type,
+                  label: m.type === 'CLASS' || m.label.startsWith('Period ') ? 'Short Break' : m.label,
+                } : m)}
+                className={`py-2.5 rounded-xl text-xs font-black uppercase tracking-widest transition-colors ${
+                  !isTeachingMode ? 'bg-amber-500 text-white shadow-sm' : 'bg-transparent text-slate-500'
+                }`}>
+                Non-Teaching
+              </button>
+            </div>
+
+            {/* Common: time range */}
+            <div className="grid grid-cols-2 gap-3 mb-4">
               <div>
-                <label className="text-[9px] font-black uppercase tracking-widest text-slate-400 mb-1.5 block">Start Time</label>
+                <label className="text-[10px] font-black uppercase tracking-widest text-slate-400 mb-1.5 block">Start</label>
                 <input
                   type="time"
                   value={slotTimeModal.startTime}
                   onChange={e => setSlotTimeModal(m => m ? { ...m, startTime: e.target.value } : m)}
-                  className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-3 text-sm font-bold text-slate-900 outline-none focus:border-violet-500"
+                  className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3 py-3 text-sm font-bold text-slate-900 outline-none focus:border-blue-500"
                 />
               </div>
               <div>
-                <label className="text-[9px] font-black uppercase tracking-widest text-slate-400 mb-1.5 block">End Time</label>
+                <label className="text-[10px] font-black uppercase tracking-widest text-slate-400 mb-1.5 block">End</label>
                 <input
                   type="time"
                   value={slotTimeModal.endTime}
                   onChange={e => setSlotTimeModal(m => m ? { ...m, endTime: e.target.value } : m)}
-                  className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-3 text-sm font-bold text-slate-900 outline-none focus:border-violet-500"
+                  className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3 py-3 text-sm font-bold text-slate-900 outline-none focus:border-blue-500"
                 />
               </div>
             </div>
 
-            <button onClick={handleSlotTimeSave}
-              className="w-full py-3 bg-violet-600 text-white rounded-xl text-sm font-black">
-              Save Time
-            </button>
-          </div>
-        </div>
-      )}
+            {isTeachingMode ? (
+              <>
+                {/* Period label (e.g. "Period 1") — small, optional. */}
+                <label className="text-[10px] font-black uppercase tracking-widest text-slate-400 mb-1.5 block">Period Label</label>
+                <input
+                  type="text"
+                  value={slotTimeModal.label}
+                  onChange={e => setSlotTimeModal(m => m ? { ...m, label: e.target.value } : m)}
+                  placeholder="e.g. Period 1"
+                  className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-3 text-sm font-bold text-slate-900 outline-none focus:border-blue-500 mb-3"
+                />
 
-      {/* Period Edit Modal */}
-      {editModal && (
-        <div className="absolute inset-0 bg-slate-900/50 backdrop-blur-sm z-50 flex items-end">
-          <div className="w-full bg-white rounded-t-3xl p-6 pb-8 animate-in slide-in-from-bottom-8 duration-300 max-h-[90vh] overflow-y-auto">
-            <div className="flex justify-between items-center mb-5">
-              <div>
-                <p className="text-[9px] font-black uppercase tracking-widest text-slate-400">
-                  {selectedClass?.label} · {activeDay}
-                </p>
-                <h3 className="text-lg font-black text-slate-900 mt-0.5">
-                  {slots.find(s => s.slotId === editModal.slotId)?.label}
-                </h3>
-              </div>
-              <button onClick={() => setEditModal(null)} className="w-8 h-8 bg-slate-100 rounded-full flex items-center justify-center text-slate-500">✕</button>
-            </div>
-
-            {conflictMsg && (
-              <div className="flex items-start gap-2 bg-rose-50 border border-rose-200 rounded-2xl p-3 mb-4">
-                <AlertTriangle size={14} className="text-rose-500 mt-0.5 shrink-0" />
-                <p className="text-[11px] font-bold text-rose-700">{conflictMsg}</p>
-              </div>
-            )}
-
-            <div className="space-y-3">
-              {/* Time Range */}
-              <div>
-                <label className="text-[9px] font-black uppercase tracking-widest text-slate-400 mb-1.5 block">Time Range</label>
-                <div className="grid grid-cols-2 gap-3">
-                  <div>
-                    <label className="text-[8px] font-black text-slate-400 mb-1 block">From</label>
-                    <input
-                      type="time"
-                      value={form.startTime}
-                      onChange={e => setForm(f => ({ ...f, startTime: e.target.value }))}
-                      className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3 py-2.5 text-sm font-bold text-slate-900 outline-none focus:border-blue-500"
-                    />
-                  </div>
-                  <div>
-                    <label className="text-[8px] font-black text-slate-400 mb-1 block">To</label>
-                    <input
-                      type="time"
-                      value={form.endTime}
-                      onChange={e => setForm(f => ({ ...f, endTime: e.target.value }))}
-                      className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3 py-2.5 text-sm font-bold text-slate-900 outline-none focus:border-blue-500"
-                    />
-                  </div>
-                </div>
-              </div>
-
-              {/* Subject — free-text with autocomplete from school's existing subjects. */}
-              <div>
-                <label className="text-[9px] font-black uppercase tracking-widest text-slate-400 mb-1.5 block">Subject</label>
+                <label className="text-[10px] font-black uppercase tracking-widest text-slate-400 mb-1.5 block">Subject</label>
                 <input
                   list="timetable-subject-suggestions"
-                  value={form.subject}
-                  onChange={e => setForm(f => ({ ...f, subject: e.target.value }))}
-                  placeholder="Type or pick (e.g. Mathematics)"
-                  className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-3 text-sm font-bold text-slate-900 outline-none focus:border-blue-500"
+                  value={slotTimeModal.subject}
+                  onChange={e => setSlotTimeModal(m => m ? { ...m, subject: e.target.value } : m)}
+                  placeholder="e.g. Mathematics"
+                  className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-3 text-sm font-bold text-slate-900 outline-none focus:border-blue-500 mb-3"
                 />
                 <datalist id="timetable-subject-suggestions">
                   {subjectSuggestions.map(s => <option key={s} value={s} />)}
                 </datalist>
-              </div>
 
-              {/* Teacher */}
-              <div>
-                <label className="text-[9px] font-black uppercase tracking-widest text-slate-400 mb-1.5 block">Teacher</label>
-                <div className="relative">
-                  <select value={form.teacherId} onChange={e => { setForm(f => ({ ...f, teacherId: e.target.value })); setConflictMsg(''); }}
+                <label className="text-[10px] font-black uppercase tracking-widest text-slate-400 mb-1.5 block">Teacher</label>
+                <div className="relative mb-3">
+                  <select
+                    value={slotTimeModal.teacherId}
+                    onChange={e => setSlotTimeModal(m => m ? { ...m, teacherId: e.target.value } : m)}
                     className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-3 text-sm font-bold text-slate-900 outline-none focus:border-blue-500 appearance-none pr-8">
                     {teachers.map(t => (
                       <option key={t.id} value={t.id}>{t.name} ({t.subject})</option>
@@ -661,33 +804,85 @@ export const TimetableManager: React.FC<Props> = ({ onBack }) => {
                   </select>
                   <ChevronDown size={14} className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 pointer-events-none" />
                 </div>
-              </div>
 
-              {/* Room */}
-              <div>
-                <label className="text-[9px] font-black uppercase tracking-widest text-slate-400 mb-1.5 block">Room (optional)</label>
-                <input value={form.room} onChange={e => setForm(f => ({ ...f, room: e.target.value }))}
-                  placeholder="e.g. Room 12, Lab, Hall A"
-                  className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-3 text-sm font-bold text-slate-900 outline-none focus:border-blue-500" />
-              </div>
-            </div>
+                <label className="text-[10px] font-black uppercase tracking-widest text-slate-400 mb-1.5 block">Room (optional)</label>
+                <input
+                  value={slotTimeModal.room}
+                  onChange={e => setSlotTimeModal(m => m ? { ...m, room: e.target.value } : m)}
+                  placeholder="e.g. Room 12 / Lab"
+                  className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-3 text-sm font-bold text-slate-900 outline-none focus:border-blue-500 mb-3" />
 
-            <div className="flex gap-3 mt-5">
-              {editModal.existing && (
-                <button onClick={handleDelete} disabled={isDeleting || isSaving}
-                  className="flex items-center gap-2 px-4 py-3 bg-rose-50 text-rose-600 border border-rose-200 rounded-xl text-xs font-black disabled:opacity-50 disabled:cursor-not-allowed">
-                  <Trash2 size={14} /> {isDeleting ? 'Removing…' : 'Remove'}
+                {conflictMsg && (
+                  <div className="flex items-start gap-2 bg-rose-50 border border-rose-200 rounded-xl p-3 mb-3">
+                    <AlertTriangle size={14} className="text-rose-500 mt-0.5 shrink-0" />
+                    <p className="text-[11px] font-bold text-rose-700">{conflictMsg}</p>
+                  </div>
+                )}
+              </>
+            ) : (
+              <>
+                {/* Activity preset chips — quick-pick common labels. */}
+                <p className="text-[10px] font-black uppercase tracking-widest text-slate-400 mb-2">Activity type</p>
+                <div className="grid grid-cols-3 gap-1.5 mb-3">
+                  {ACTIVITY_PRESETS.map(p => (
+                    <button key={p.type}
+                      onClick={() => setSlotTimeModal(m => m ? {
+                        ...m,
+                        type: p.type,
+                        label: ACTIVITY_PRESETS.some(x => x.defaultName === m.label) || !m.label.trim()
+                          ? p.defaultName
+                          : m.label,
+                      } : m)}
+                      className={`px-2 py-2 rounded-lg text-[10px] font-black uppercase tracking-widest border transition-colors ${
+                        slotTimeModal.type === p.type
+                          ? 'bg-amber-500 text-white border-amber-500'
+                          : 'bg-slate-50 text-slate-600 border-slate-200 hover:border-slate-300'
+                      }`}>
+                      {p.label}
+                    </button>
+                  ))}
+                </div>
+
+                <label className="text-[10px] font-black uppercase tracking-widest text-slate-400 mb-1.5 block">Activity name</label>
+                <input
+                  type="text"
+                  value={slotTimeModal.label}
+                  onChange={e => setSlotTimeModal(m => m ? { ...m, label: e.target.value } : m)}
+                  placeholder="e.g. Prayer / Lunch / Yoga"
+                  className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-3 text-sm font-bold text-slate-900 outline-none focus:border-amber-500 mb-3"
+                />
+
+                <p className="text-[10px] font-bold text-slate-500 bg-slate-50 rounded-xl p-2.5 mb-3">
+                  Non-teaching slot — koi teacher allot karne ki zaroorat nahi.
+                </p>
+              </>
+            )}
+
+            <div className="flex gap-2">
+              {/* Delete shown for existing slots only when Customize toggle
+                  is ON — protects accidental deletes on the default
+                  schedule. */}
+              {!slotTimeModal.isNew && customizeOn && (
+                <button onClick={handleSlotDelete}
+                  className="px-4 py-3 bg-rose-50 text-rose-700 border border-rose-200 rounded-xl text-sm font-black active:scale-95 transition-transform">
+                  Delete
                 </button>
               )}
-              <button onClick={handleSave} disabled={isSaving || isDeleting}
-                className="flex-1 py-3 bg-slate-900 text-white rounded-xl text-sm font-black disabled:opacity-60 disabled:cursor-not-allowed flex items-center justify-center gap-2">
+              <button
+                onClick={handleUnifiedSlotSave}
+                disabled={isSaving}
+                className={`flex-1 py-3 text-white rounded-xl text-sm font-black active:scale-95 transition-transform flex items-center justify-center gap-2 disabled:opacity-60 disabled:cursor-not-allowed ${
+                  isTeachingMode ? 'bg-blue-600 hover:bg-blue-700' : 'bg-amber-600 hover:bg-amber-700'
+                }`}>
                 {isSaving && <span className="w-3.5 h-3.5 border-2 border-white/40 border-t-white rounded-full animate-spin" />}
-                {isSaving ? 'Saving…' : 'Save Period'}
+                {isSaving ? 'Saving…' : slotTimeModal.isNew ? 'Create' : 'Save'}
               </button>
             </div>
           </div>
         </div>
-      )}
+        );
+      })()}
+
     </div>
   );
 };

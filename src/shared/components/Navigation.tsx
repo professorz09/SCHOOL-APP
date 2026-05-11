@@ -116,10 +116,17 @@ export const SidebarNav: React.FC<SidebarNavProps> = ({ role, currentTab, setTab
             {ROLE_LABEL[role]}
           </div>
         </div>
-        <button className="relative p-2 -mr-1 rounded-full text-slate-500 hover:bg-slate-100 transition-colors shrink-0" title="Notifications">
-          <Bell size={18} />
-          <span className="absolute top-0.5 right-0.5 w-2.5 h-2.5 bg-red-500 rounded-full border-2 border-white"/>
-        </button>
+        {/* Notification bell hidden for super-admin — they don't have
+            a notification stream that's user-relevant (they manage
+            schools at platform level, not per-school activity). For
+            other roles it stays as a placeholder until a real feed
+            wires in. */}
+        {role !== 'SUPER_ADMIN' && (
+          <button className="relative p-2 -mr-1 rounded-full text-slate-500 hover:bg-slate-100 transition-colors shrink-0" title="Notifications">
+            <Bell size={18} />
+            <span className="absolute top-0.5 right-0.5 w-2.5 h-2.5 bg-red-500 rounded-full border-2 border-white"/>
+          </button>
+        )}
       </div>
 
       {/* ── Nav items ── */}
@@ -194,10 +201,14 @@ export const Header: React.FC<HeaderProps> = ({ role }) => {
           </p>
         </div>
       </div>
-      <button className="relative p-2 bg-slate-100 rounded-full text-slate-600 hover:bg-slate-200 transition-colors shrink-0">
-        <Bell size={20} />
-        <span className="absolute -top-1 -right-1 w-4 h-4 bg-red-500 text-white text-[10px] font-bold flex items-center justify-center rounded-full border-2 border-white">3</span>
-      </button>
+      {/* Mobile header bell — hidden for super-admin (no per-school
+          notification stream relevant to them). */}
+      {role !== 'SUPER_ADMIN' && (
+        <button className="relative p-2 bg-slate-100 rounded-full text-slate-600 hover:bg-slate-200 transition-colors shrink-0">
+          <Bell size={20} />
+          <span className="absolute -top-1 -right-1 w-4 h-4 bg-red-500 text-white text-[10px] font-bold flex items-center justify-center rounded-full border-2 border-white">3</span>
+        </button>
+      )}
     </div>
   );
 };

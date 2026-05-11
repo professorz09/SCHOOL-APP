@@ -180,8 +180,12 @@ function buildMonthlyGrid(
   payments: SalaryPayment[],
 ): MonthRow[] {
   try {
-    if (!staff.joiningDate) return [];
-    const fromDate = new Date(staff.joiningDate);
+    // salary_start_date wins — that's when the school *starts paying*.
+    // Falls back to joining_date for legacy rows that haven't been
+    // migrated. If neither is set, no grid (we'd have nothing to bound).
+    const fromIso = staff.salaryStartDate || staff.joiningDate;
+    if (!fromIso) return [];
+    const fromDate = new Date(fromIso);
     if (Number.isNaN(fromDate.getTime())) return [];
     const today = new Date();
     let toDate = today;
@@ -453,9 +457,25 @@ const STAFF_TEXT_FIELDS: ReadonlyArray<{ label: string; key: StaffTextKey; place
   { label: 'Address',     key: 'address',   placeholder: 'Residential address' },
 ];
 
+/** First-of-next-month relative to a YYYY-MM-DD ISO date. Used as the
+ *  default salaryStartDate when the principal picks a joining date — a
+ *  staff member joining on Oct-18 should have their first paid month be
+ *  November, not a partial October. */
+function firstOfNextMonth(iso: string): string {
+  if (!iso) return '';
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return '';
+  const next = new Date(d.getFullYear(), d.getMonth() + 1, 1);
+  // Format YYYY-MM-DD locally (avoid UTC drift across timezones).
+  const yyyy = next.getFullYear();
+  const mm = String(next.getMonth() + 1).padStart(2, '0');
+  return `${yyyy}-${mm}-01`;
+}
+
 const BLANK: Omit<StaffMember, 'id'> = {
   name: '', role: 'TEACHER', subject: '', phone: '', email: '', aadhaarNo: '',
-  salary: 0, joiningDate: todayIso(), status: 'ACTIVE',
+  salary: 0, joiningDate: todayIso(), salaryStartDate: firstOfNextMonth(todayIso()),
+  status: 'ACTIVE',
   assignedClasses: [], address: '', photo: '',
 };
 
@@ -614,6 +634,9 @@ export const StaffManager: React.FC<Props> = ({ onBack }) => {
 
   const handleCreate = async () => {
     if (!form.name.trim()) { showToast('Staff name required', 'error'); return; }
+    if (form.name.trim().length < 2) {
+      showToast('Staff name kam se kam 2 letters ka ho', 'error'); return;
+    }
     if (!Number.isFinite(form.salary) || form.salary <= 0 || form.salary > 10_000_000) {
       showToast('Monthly salary must be between ₹1 and ₹1,00,00,000', 'error'); return;
     }
@@ -622,6 +645,39 @@ export const StaffManager: React.FC<Props> = ({ onBack }) => {
     }
     if (!form.joiningDate) {
       showToast('Joining date required', 'error'); return;
+    }
+    if (!form.salaryStartDate) {
+      showToast('First salary month required', 'error'); return;
+    }
+    // Sanity: first-salary-from cannot be before joining date.
+    if (form.salaryStartDate < form.joiningDate) {
+      showToast('First salary month joining date se pehle nahi ho sakta', 'error'); return;
+    }
+    // Joining date sanity — refuse 1970-style typos and absurdly future dates.
+    const jd = new Date(form.joiningDate);
+    const minJd = new Date(); minJd.setFullYear(minJd.getFullYear() - 50);
+    const maxJd = new Date(); maxJd.setFullYear(maxJd.getFullYear() + 1);
+    if (jd < minJd || jd > maxJd) {
+      showToast('Joining date 50 saal pehle ya 1 saal aage se zyada nahi ho sakti', 'error');
+      return;
+    }
+    // Phone (optional) — if provided, must be 10 digits.
+    if (form.phone && form.phone.trim()) {
+      const cleaned = form.phone.replace(/\D/g, '').slice(-10);
+      if (cleaned.length !== 10) {
+        showToast('Phone must be a 10-digit mobile number', 'error'); return;
+      }
+    }
+    // Email (optional) — if provided, basic shape check.
+    if (form.email && form.email.trim() && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(form.email.trim())) {
+      showToast('Email format galat hai', 'error'); return;
+    }
+    // Aadhaar (optional) — if provided, must be exactly 12 digits.
+    if (form.aadhaarNo && form.aadhaarNo.trim()) {
+      const cleaned = form.aadhaarNo.replace(/\D/g, '');
+      if (cleaned.length !== 12) {
+        showToast('Aadhaar number 12 digits ka hota hai', 'error'); return;
+      }
     }
     setIsSubmitting(true);
     try {
@@ -632,18 +688,24 @@ export const StaffManager: React.FC<Props> = ({ onBack }) => {
       const member = await staffService.create(form);
 
       // Upload any documents queued during creation — best-effort. Staff is
-      // already inserted, so failed uploads don't abort the flow; we just
-      // warn for the ones that didn't make it.
+      // already inserted, so failed uploads don't abort the flow; we surface
+      // the first error so the principal knows why (silent failures used to
+      // leave them guessing — was it the file size? type? bucket?).
       let uploadFailures = 0;
+      let firstErrMsg = '';
       for (const { type, file } of pendingDocs) {
         try { await staffService.uploadDocument(member.id, type, file); }
         catch (err) {
           console.error('[staff create] doc upload failed:', type, file.name, err);
           uploadFailures++;
+          if (!firstErrMsg) firstErrMsg = err instanceof Error ? err.message : String(err);
         }
       }
       if (uploadFailures > 0) {
-        showToast(`Staff added — but ${uploadFailures} document(s) failed to upload`, 'error');
+        showToast(
+          `Staff added — ${uploadFailures} document(s) failed: ${firstErrMsg}`,
+          'error',
+        );
       } else {
         showToast(`${member.name} added${pendingDocs.length ? ` with ${pendingDocs.length} document(s)` : ''}`);
       }
@@ -1122,13 +1184,36 @@ export const StaffManager: React.FC<Props> = ({ onBack }) => {
                 className="w-full border border-slate-200 bg-slate-50 rounded-xl px-4 py-3 font-bold text-sm outline-none focus:border-blue-500" />
             </div>
           </div>
-          <div>
-            <label className="block text-[10px] font-black uppercase tracking-widest text-slate-500 mb-1.5">Joining Date</label>
-            <input type="date" value={form.joiningDate} onChange={e => setForm(f => ({ ...f, joiningDate: e.target.value }))}
-              className="w-full border border-slate-200 bg-slate-50 rounded-xl px-3 py-3 font-bold text-sm outline-none focus:border-blue-500" />
+          <div className="grid grid-cols-2 gap-3">
+            <div>
+              <label className="block text-[10px] font-black uppercase tracking-widest text-slate-500 mb-1.5">Joining Date</label>
+              <input type="date" value={form.joiningDate}
+                onChange={e => {
+                  const next = e.target.value;
+                  setForm(f => ({
+                    ...f,
+                    joiningDate: next,
+                    // Auto-shift salaryStartDate when the principal hasn't
+                    // already manually picked one outside the auto-derived
+                    // value. We treat "still equal to the previous default"
+                    // as "untouched" so manual edits stick.
+                    salaryStartDate:
+                      f.salaryStartDate === firstOfNextMonth(f.joiningDate)
+                        ? firstOfNextMonth(next)
+                        : f.salaryStartDate,
+                  }));
+                }}
+                className="w-full border border-slate-200 bg-slate-50 rounded-xl px-3 py-3 font-bold text-sm outline-none focus:border-blue-500" />
+            </div>
+            <div>
+              <label className="block text-[10px] font-black uppercase tracking-widest text-slate-500 mb-1.5">First Salary From *</label>
+              <input type="date" value={form.salaryStartDate}
+                onChange={e => setForm(f => ({ ...f, salaryStartDate: e.target.value }))}
+                className="w-full border border-slate-200 bg-slate-50 rounded-xl px-3 py-3 font-bold text-sm outline-none focus:border-blue-500" />
+            </div>
           </div>
           <p className="text-[10px] font-bold text-slate-400 leading-relaxed">
-            The salary you enter is recorded as the &quot;Initial&quot; entry in this staff member&apos;s salary history. You can revise it any time from the Salary tab.
+            <span className="text-slate-600 font-black">First Salary From</span> = jis month se salary deni hai. Default: joining ke <span className="text-slate-600 font-black">agle month ki 1 tarikh</span> (kyunki joining day me partial salary nahi deni). The amount you enter is recorded as the &quot;Initial&quot; entry in salary history — revise any time from the Salary tab.
           </p>
         </div>
 
@@ -1277,6 +1362,15 @@ export const StaffManager: React.FC<Props> = ({ onBack }) => {
               <input type="date" value={editForm.joiningDate} onChange={e => setEditForm(f => ({ ...f, joiningDate: e.target.value }))}
                 className="w-full border border-slate-200 bg-slate-50 rounded-xl px-3 py-3 font-bold text-sm outline-none focus:border-blue-500" />
             </div>
+          </div>
+          <div>
+            <label className="block text-[10px] font-black uppercase tracking-widest text-slate-500 mb-1.5">First Salary From</label>
+            <input type="date" value={editForm.salaryStartDate}
+              onChange={e => setEditForm(f => ({ ...f, salaryStartDate: e.target.value }))}
+              className="w-full border border-slate-200 bg-slate-50 rounded-xl px-3 py-3 font-bold text-sm outline-none focus:border-blue-500" />
+            <p className="text-[10px] font-bold text-slate-400 mt-1 leading-relaxed">
+              Salary ledger ke months iss tarikh se start honge. Past payments touch nahi honge.
+            </p>
           </div>
           <div>
             <label className="block text-[10px] font-black uppercase tracking-widest text-slate-500 mb-1.5">Status</label>

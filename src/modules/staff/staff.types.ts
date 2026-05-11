@@ -64,6 +64,10 @@ export interface StaffMember {
   aadhaarNo: string;
   salary: number;
   joiningDate: string;
+  /** First month from which paid salary is owed. Distinct from joiningDate
+   *  because schools typically don't pay for a partial join month — first
+   *  salary lands in the *next* month. Format: YYYY-MM-DD (always day=01). */
+  salaryStartDate: string;
   status: StaffStatus;
   assignedClasses: string[];
   address: string;

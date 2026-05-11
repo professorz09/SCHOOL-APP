@@ -39,11 +39,6 @@ export const SettingsManager: React.FC<Props> = ({ onBack, initialView }) => {
   const [qrUploading, setQrUploading] = useState(false);
   const [feeStructures, setFeeStructures] = useState<FeeStructureItem[]>([]);
   const [editingFs, setEditingFs] = useState<FeeStructureItem | null>(null);
-  // "Apply to whole class?" prompt after saving a CLASS-scoped fee
-  // structure. Replaces a window.confirm() that exposed the codespaces
-  // dev hostname as the dialog title.
-  const [applyFsTarget, setApplyFsTarget] = useState<FeeStructureItem | null>(null);
-  const [applyFsBusy, setApplyFsBusy] = useState(false);
   const [feeStructuresLoading, setFeeStructuresLoading] = useState(false);
   const [schoolInfo, setSchoolInfo] = useState<SchoolInfo>({
     name: '', tagline: '', address: '', city: '', state: '', pin: '',
@@ -223,45 +218,10 @@ export const SettingsManager: React.FC<Props> = ({ onBack, initialView }) => {
       });
       setEditingFs(null);
       setView('FEE_STRUCT');
-
-      // After saving a CLASS-scoped structure, offer to fan it out to every
-      // student in that class who doesn't yet have a schedule. Without this
-      // step the structure is dormant. The decision goes through a modal
-      // (see applyFsTarget below) instead of window.confirm so the dialog
-      // title doesn't surface the codespaces dev hostname.
-      const isClassScope = saved.structureType === 'CLASS'
-        && saved.className && saved.className !== 'TRANSPORT' && saved.className !== 'ALL_CLASSES';
-      if (isClassScope) {
-        setApplyFsTarget(saved);
-        return;
-      }
       showToast(`Fee structure "${saved.name}" saved`);
     } catch (e) {
       showToast(e instanceof Error ? e.message : 'Failed to save fee structure', 'error');
     }
-  };
-
-  const runApplyFs = async () => {
-    if (!applyFsTarget) return;
-    setApplyFsBusy(true);
-    try {
-      const result = await apiPrincipal.feeStructureApplyToClass({ structureId: applyFsTarget.id });
-      showToast(
-        `Generated for ${result.generated} student${result.generated === 1 ? '' : 's'}` +
-        (result.skipped > 0 ? ` · ${result.skipped} already had a schedule` : ''),
-      );
-      setApplyFsTarget(null);
-    } catch (e) {
-      showToast(e instanceof Error ? e.message : 'Schedule generation failed', 'error');
-    } finally {
-      setApplyFsBusy(false);
-    }
-  };
-
-  const skipApplyFs = () => {
-    if (!applyFsTarget) return;
-    showToast(`Fee structure "${applyFsTarget.name}" saved`);
-    setApplyFsTarget(null);
   };
 
   const handleSaveSchoolInfo = async () => {
@@ -617,10 +577,12 @@ export const SettingsManager: React.FC<Props> = ({ onBack, initialView }) => {
                       {fs.lateFee.enabled && <span className="ml-1 text-amber-600">· Late fee on</span>}
                     </div>
                   </div>
-                  <div className="flex gap-1.5 shrink-0">
-                    <button onClick={() => { setEditingFs(fs); setView('FEE_STRUCT_EDIT'); }} className="p-2 bg-indigo-50 text-indigo-600 rounded-xl"><Edit2 size={13} /></button>
-                    <button onClick={() => handleDeleteFs(fs.id)} className="p-2 bg-rose-50 text-rose-500 rounded-xl"><Trash2 size={13} /></button>
-                  </div>
+                  {editorEnabled && (
+                    <div className="flex gap-1.5 shrink-0">
+                      <button onClick={() => { setEditingFs(fs); setView('FEE_STRUCT_EDIT'); }} className="p-2 bg-indigo-50 text-indigo-600 rounded-xl"><Edit2 size={13} /></button>
+                      <button onClick={() => handleDeleteFs(fs.id)} className="p-2 bg-rose-50 text-rose-500 rounded-xl"><Trash2 size={13} /></button>
+                    </div>
+                  )}
                 </div>
                 {fs.feeHeads.length > 0 && (
                   <div className="px-4 pb-3.5 flex flex-wrap gap-2 border-t border-slate-100 pt-3">
@@ -630,7 +592,7 @@ export const SettingsManager: React.FC<Props> = ({ onBack, initialView }) => {
                         <span className="font-black">{h.name}</span>
                         <span className="text-slate-400">·</span>
                         <span className="text-emerald-600 font-black">₹{h.amount.toLocaleString('en-IN')}</span>
-                        <span className="text-slate-400 text-[9px]">{h.frequency === 'MONTHLY' ? '/mo' : h.frequency === 'QUARTERLY' ? '/qtr' : h.frequency === 'HALF_YEARLY' ? '/6mo' : h.frequency === 'ANNUAL' ? '/yr' : '×1'}</span>
+                        <span className="text-slate-400 text-[9px]">{h.frequency === 'MONTHLY' ? '/mo' : 'once'}</span>
                       </span>
                     ))}
                     {fs.feeHeads.length > 4 && (
@@ -647,33 +609,6 @@ export const SettingsManager: React.FC<Props> = ({ onBack, initialView }) => {
       </div>
     </div>
 
-    {applyFsTarget && (
-      <div className="fixed inset-0 z-50 bg-black/50 flex items-end lg:items-center justify-center p-4 animate-in fade-in duration-150"
-        onClick={() => !applyFsBusy && skipApplyFs()}>
-        <div onClick={e => e.stopPropagation()}
-          className="bg-white rounded-3xl w-full lg:max-w-md p-5 lg:p-6 shadow-2xl animate-in slide-in-from-bottom-4 lg:zoom-in-95 duration-200">
-          <p className="text-base font-black text-slate-900">Apply to whole class?</p>
-          <p className="text-[12px] font-bold text-slate-500 mt-2 leading-relaxed">
-            Generate this fee schedule for every student of <span className="text-slate-900 font-black">{applyFsTarget.className}</span>?
-            Students who already have a schedule for this year will be skipped.
-          </p>
-          <div className="flex gap-3 mt-5">
-            <button
-              onClick={skipApplyFs}
-              disabled={applyFsBusy}
-              className="flex-1 py-3 bg-slate-100 text-slate-700 font-black rounded-2xl text-sm uppercase tracking-widest active:scale-95 transition-transform disabled:opacity-50">
-              Skip
-            </button>
-            <button
-              onClick={runApplyFs}
-              disabled={applyFsBusy}
-              className="flex-1 py-3 bg-indigo-600 hover:bg-indigo-700 text-white font-black rounded-2xl text-sm uppercase tracking-widest active:scale-95 transition-transform disabled:opacity-60">
-              {applyFsBusy ? 'Generating…' : 'Apply'}
-            </button>
-          </div>
-        </div>
-      </div>
-    )}
     </>
   );
 

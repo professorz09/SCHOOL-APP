@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   ArrowLeft, ChevronLeft, ChevronRight, ShieldCheck,
   Save, Download, RefreshCw, Search, Lock,
@@ -11,7 +11,7 @@ import { useUIStore } from '@/store/uiStore';
 import { useAcademicYear } from '@/shared/context/AcademicYearContext';
 import { useEditGuard } from '@/store/correctionStore';
 import { useEditorModeStore } from '@/store/editorModeStore';
-import { apiAttendance } from '@/lib/apiClient';
+import { apiAttendance, apiPrincipal } from '@/lib/apiClient';
 import { todayIST, istDateOf } from '@/shared/utils/date';
 import { supabase } from '@/lib/supabase';
 import { useAuthStore } from '@/store/authStore';
@@ -132,6 +132,35 @@ export const StudentAttendanceManager: React.FC<Props> = ({ onBack }) => {
   const [markDate, setMarkDate]       = useState(todayStr());
   const [markStudents, setMarkStudents] = useState<AttendanceStudentRecord[]>([]);
   const [markConflict, setMarkConflict] = useState<SharedAttendanceRecord | null>(null);
+  // Strip ref so we can scroll the picked date into view when Mark
+  // opens — otherwise it sits at the leftmost (Custom tile + oldest
+  // dates) and today is hidden off-screen to the right.
+  const markStripRef = useRef<HTMLDivElement | null>(null);
+  useEffect(() => {
+    if (view !== 'MARK') return;
+    const el = markStripRef.current;
+    if (!el) return;
+    // Scroll all the way right so today (last tile in chronological
+    // strip) lands centered / visible.
+    requestAnimationFrame(() => {
+      el.scrollLeft = el.scrollWidth;
+    });
+  }, [view, markDate]);
+
+  // Weekly-off days (0=Sun … 6=Sat) — drives the auto-holiday default
+  // on Mark Attendance and any "weekday is a school holiday" hints.
+  // Pulled once on mount; falls back to [0] (Sunday) on failure.
+  const [weeklyOff, setWeeklyOff] = useState<number[]>([0]);
+  useEffect(() => {
+    apiPrincipal.weeklyOffGet()
+      .then(r => setWeeklyOff(r.days ?? [0]))
+      .catch(() => { /* keep default Sunday-off */ });
+  }, []);
+  const isWeeklyOffDate = useCallback((date: string): boolean => {
+    if (!date) return false;
+    const dow = new Date(date + 'T00:00:00').getDay();
+    return weeklyOff.includes(dow);
+  }, [weeklyOff]);
 
   const session = useAuthStore(s => s.session);
 
@@ -516,12 +545,26 @@ export const StudentAttendanceManager: React.FC<Props> = ({ onBack }) => {
         const stus = await sharedAttendance.getStudents(existing.id);
         setMarkStudents(stus);
       } else {
-        // Drop inactive / TC-issued students from the mark roster —
-        // they shouldn't be markable for new attendance entries.
+        // Filter the mark roster:
+        //   • Drop inactive / TC-issued — not markable for new entries.
+        //   • Drop pre-admission — a student admitted on 2025-09-01
+        //     should NOT appear in the mark list for 2025-08-15. The
+        //     attendance grid already hides them; mark view must agree.
         const ss = students.filter(s => s.className === className && s.section === section)
           .filter(s => s.isActive !== false && (s as any).status !== 'TC_ISSUED')
+          .filter(s => !isPreEnrollment(s.admissionDate ?? '', date))
           .sort((a, b) => parseInt(a.rollNo) - parseInt(b.rollNo));
-        setMarkStudents(ss.map(s => ({ id: s.id, name: s.name, rollNo: s.rollNo, isPresent: true, status: 'present' as AttendanceCellStatus })));
+        // On weekly-off days (Sundays by default) default the entire
+        // roster to 'holiday' so the principal doesn't have to click
+        // "All Holiday" every Sunday. They can still flip individual
+        // rows back to present/absent if a class happens to run.
+        const offDay = isWeeklyOffDate(date);
+        const defaultStatus: AttendanceCellStatus = offDay ? 'holiday' : 'present';
+        setMarkStudents(ss.map(s => ({
+          id: s.id, name: s.name, rollNo: s.rollNo,
+          isPresent: !offDay,
+          status: defaultStatus,
+        })));
       }
     } catch (e) { showToast((e as Error).message || 'Failed to check', 'error'); }
   };
@@ -531,9 +574,20 @@ export const StudentAttendanceManager: React.FC<Props> = ({ onBack }) => {
   // instead of stacking a toast on every tap (the earlier behaviour
   // produced 4-5 identical "Locked" toasts when the principal kept
   // probing the rows).
+  // Toggle cycles a row through present → absent → holiday → present.
+  // Holiday is included so Sunday-default rows can be flipped to
+  // present individually (e.g. Sunday extra class) without exiting the
+  // bulk-holiday state for everyone else.
   const toggleMarkStudent = (id: string) => {
     if (markConflict && !editorModeActive) return;
-    setMarkStudents(prev => prev.map(s => s.id === id ? { ...s, isPresent: !s.isPresent, status: s.status === 'absent' ? 'present' : 'absent' } : s));
+    setMarkStudents(prev => prev.map(s => {
+      if (s.id !== id) return s;
+      const nextStatus: AttendanceCellStatus =
+        s.status === 'present' ? 'absent' :
+        s.status === 'absent'  ? 'holiday' :
+                                 'present';
+      return { ...s, status: nextStatus, isPresent: nextStatus === 'present' };
+    }));
   };
 
   // Two paths: fresh mark (no existing record) or edit-of-locked
@@ -599,9 +653,14 @@ export const StudentAttendanceManager: React.FC<Props> = ({ onBack }) => {
       );
       if (result === undefined) return;
       await refreshRecords();
-      showToast('Attendance saved');
-      setView('GRID');
-      setGridClass(markClass); setGridSection(markSection);
+      showToast('Attendance saved & locked');
+      // Re-run checkConflict so the just-saved record loads back as
+      // an existing (locked) record — markConflict gets set, toggles
+      // become no-ops, and the "Locked" banner appears. Earlier this
+      // switched to GRID immediately and the principal couldn't see
+      // the lock confirmation on the same screen, leading them to
+      // wonder if the save / lock actually applied.
+      await checkConflict(markClass, markSection, markDate);
     } catch (e) {
       showToast((e as Error).message || 'Failed to mark', 'error');
     } finally { setIsSubmitting(false); }
@@ -1220,34 +1279,62 @@ export const StudentAttendanceManager: React.FC<Props> = ({ onBack }) => {
             </button>
             <div>
               <h2 className="text-xl font-black text-slate-900 uppercase tracking-tight">Mark Attendance</h2>
-              <p className="text-[10px] font-bold text-slate-400">Select class, section &amp; date</p>
+              <p className="text-[10px] font-bold text-slate-400">Class &middot; Section &middot; Date</p>
             </div>
           </div>
         </div>
         <div className="flex-1 overflow-y-auto p-4 pb-36 space-y-4">
           <div className="bg-white rounded-2xl border border-slate-100 shadow-sm p-4 space-y-3">
-            <div>
-              <label className="text-[9px] font-black uppercase tracking-widest text-slate-400 mb-1 block">Class</label>
-              <select value={markClass} onChange={e => { setMarkClass(e.target.value); setMarkSection(''); setMarkConflict(null); setMarkStudents([]); }}
-                className="w-full border border-slate-200 rounded-xl px-3 py-2.5 text-sm font-bold text-slate-800 focus:outline-none focus:border-blue-400 bg-white">
-                <option value="">Select class...</option>
-                {classOptions.map(c => <option key={c.name} value={c.name}>{c.name}</option>)}
-              </select>
-            </div>
-            <div>
-              <label className="text-[9px] font-black uppercase tracking-widest text-slate-400 mb-1 block">Section</label>
-              <select value={markSection} onChange={e => { setMarkSection(e.target.value); if (markClass && e.target.value && markDate) checkConflict(markClass, e.target.value, markDate); }}
-                disabled={!markClass}
-                className="w-full border border-slate-200 rounded-xl px-3 py-2.5 text-sm font-bold text-slate-800 focus:outline-none focus:border-blue-400 bg-white disabled:opacity-50">
-                <option value="">Select section...</option>
-                {(classOptions.find(c => c.name === markClass)?.sections ?? []).map(sec => (
-                  <option key={sec} value={sec}>Section {sec}</option>
-                ))}
-              </select>
+            {/* Class + Section share one row on mobile — earlier each
+                took its own full-width block which pushed the date
+                strip below the fold. 50/50 grid keeps the form tight. */}
+            <div className="grid grid-cols-2 gap-2">
+              <div>
+                <label className="text-[9px] font-black uppercase tracking-widest text-slate-400 mb-1 block">Class</label>
+                <select value={markClass} onChange={e => { setMarkClass(e.target.value); setMarkSection(''); setMarkConflict(null); setMarkStudents([]); }}
+                  className="w-full border border-slate-200 rounded-xl px-3 py-2.5 text-sm font-bold text-slate-800 focus:outline-none focus:border-blue-400 bg-white">
+                  <option value="">Class…</option>
+                  {classOptions.map(c => <option key={c.name} value={c.name}>{c.name}</option>)}
+                </select>
+              </div>
+              <div>
+                <label className="text-[9px] font-black uppercase tracking-widest text-slate-400 mb-1 block">Section</label>
+                <select value={markSection} onChange={e => { setMarkSection(e.target.value); if (markClass && e.target.value && markDate) checkConflict(markClass, e.target.value, markDate); }}
+                  disabled={!markClass}
+                  className="w-full border border-slate-200 rounded-xl px-3 py-2.5 text-sm font-bold text-slate-800 focus:outline-none focus:border-blue-400 bg-white disabled:opacity-50">
+                  <option value="">Section…</option>
+                  {(classOptions.find(c => c.name === markClass)?.sections ?? []).map(sec => (
+                    <option key={sec} value={sec}>{sec}</option>
+                  ))}
+                </select>
+              </div>
             </div>
             <div>
               <label className="text-[9px] font-black uppercase tracking-widest text-slate-400 mb-1 block">Date</label>
-              <div className="flex overflow-x-auto hide-scrollbar border border-slate-100 rounded-xl p-1">
+              <div ref={markStripRef} className="flex overflow-x-auto hide-scrollbar border border-slate-100 rounded-xl p-1">
+                {/* Custom date — LEFTMOST tile so the strip reads
+                    chronologically: [Pick older] [day-13] … [today].
+                    Size matches day tiles below exactly. Bounded by
+                    the active year's start date so principal can't
+                    pick outside the year by mistake. */}
+                <label
+                  className="shrink-0 relative flex flex-col items-center justify-center mx-0.5 px-2.5 py-1.5 rounded-xl border-2 border-dashed border-slate-300 text-slate-500 hover:border-blue-300 hover:text-blue-600 cursor-pointer transition-colors"
+                  title="Pick any older date">
+                  <input type="date"
+                    value={markDate}
+                    max={todayStr()}
+                    min={currentYear?.startDate}
+                    onChange={e => {
+                      const d = e.target.value;
+                      if (!d) return;
+                      setMarkDate(d);
+                      if (markClass && markSection) checkConflict(markClass, markSection, d);
+                    }}
+                    className="absolute inset-0 opacity-0 cursor-pointer" />
+                  <span className="text-[9px] font-black uppercase tracking-widest pointer-events-none">Pick</span>
+                  <span className="text-base font-black tabular-nums leading-none my-0.5 pointer-events-none">📅</span>
+                  <span className="text-[8px] font-bold uppercase tracking-wide opacity-75 pointer-events-none">Date</span>
+                </label>
                 {dateStrip.map(d => {
                   const sel = markDate === d;
                   const t   = d === todayStr();
@@ -1272,34 +1359,26 @@ export const StudentAttendanceManager: React.FC<Props> = ({ onBack }) => {
             </div>
           </div>
           {markConflict && (
-            <div className={`rounded-2xl p-4 border ${
+            <div className={`rounded-xl px-3 py-2 border flex items-center gap-2 ${
               editorModeActive ? 'bg-amber-50 border-amber-200' : 'bg-slate-50 border-slate-200'
             }`}>
-              <div className="flex items-start gap-2">
-                {editorModeActive
-                  ? <AlertCircle size={16} className="text-amber-600 shrink-0 mt-0.5"/>
-                  : <Lock size={14} className="text-slate-500 shrink-0 mt-0.5"/>}
-                <div>
-                  <div className={`font-black text-sm ${editorModeActive ? 'text-amber-800' : 'text-slate-700'}`}>
-                    Already marked · {markConflict.totalPresent}P / {markConflict.totalAbsent}A
-                  </div>
-                  {/* Audit line — who locked this date and when. The
-                      timestamp is the most recent server write, so an
-                      edited record reads "by Suresh · 12:04 today" rather
-                      than the stale original time. */}
-                  {(markConflict.markedBy || markConflict.markedAt) && (
-                    <div className={`text-[10px] font-bold mt-1 ${editorModeActive ? 'text-amber-700' : 'text-slate-600'}`}>
-                      Locked by {markConflict.markedBy || 'Unknown'}
-                      {markConflict.markedAt && ` · ${new Date(markConflict.markedAt).toLocaleString('en-IN', {
-                        day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit',
-                      })}`}
-                    </div>
+              {editorModeActive
+                ? <AlertCircle size={13} className="text-amber-600 shrink-0"/>
+                : <Lock size={12} className="text-slate-500 shrink-0"/>}
+              <div className="min-w-0 flex-1">
+                <div className={`text-[11px] font-black ${editorModeActive ? 'text-amber-800' : 'text-slate-700'}`}>
+                  {editorModeActive ? 'Editing locked record' : 'Locked'} · {markConflict.totalPresent}P / {markConflict.totalAbsent}A
+                  {markConflict.markedAt && (
+                    <span className={`ml-1 font-bold ${editorModeActive ? 'text-amber-600' : 'text-slate-400'}`}>
+                      · {new Date(markConflict.markedAt).toLocaleDateString('en-IN', { day: '2-digit', month: 'short' })}
+                    </span>
                   )}
-                  <div className={`text-[10px] font-bold mt-1 ${editorModeActive ? 'text-amber-600' : 'text-slate-500'}`}>
-                    {editorModeActive
-                      ? 'Editor Mode on — tap a row to flip status. Saving will ask for a reason.'
-                      : 'Enable Editor Mode in Settings to make corrections.'}
-                  </div>
+                </div>
+                <div className={`text-[9px] font-bold leading-tight ${editorModeActive ? 'text-amber-700' : 'text-slate-500'}`}>
+                  {editorModeActive
+                    ? 'Tap rows to flip · save will ask reason'
+                    : 'Editor Mode se edit hoga'}
+                  {markConflict.markedBy && ` · by ${markConflict.markedBy}`}
                 </div>
               </div>
             </div>
@@ -1331,12 +1410,6 @@ export const StudentAttendanceManager: React.FC<Props> = ({ onBack }) => {
                     </button>
                   </div>
                 )}
-                {isAllHoliday && (
-                  <div className="bg-slate-100 border border-slate-200 rounded-2xl p-3 text-center">
-                    <p className="text-[11px] font-black text-slate-700">Holiday for all students</p>
-                    <p className="text-[10px] font-bold text-slate-500 mt-0.5">Tap All Present or All Absent to switch back to per-student marking.</p>
-                  </div>
-                )}
                 <div className="bg-white rounded-2xl border border-slate-100 shadow-sm overflow-hidden">
                   {markStudents.map((s, idx) => {
                     const rowBg =
@@ -1354,9 +1427,8 @@ export const StudentAttendanceManager: React.FC<Props> = ({ onBack }) => {
                     // hit All Present / All Absent first.
                     return (
                       <button key={s.id}
-                        onClick={() => { if (s.status !== 'holiday') toggleMarkStudent(s.id); }}
-                        disabled={s.status === 'holiday'}
-                        className={`w-full flex items-center gap-3 px-4 py-3.5 text-left ${idx < markStudents.length - 1 ? 'border-b border-slate-100' : ''} ${rowBg} ${s.status === 'holiday' ? 'cursor-default' : ''}`}>
+                        onClick={() => toggleMarkStudent(s.id)}
+                        className={`w-full flex items-center gap-3 px-4 py-3.5 text-left ${idx < markStudents.length - 1 ? 'border-b border-slate-100' : ''} ${rowBg}`}>
                         <div className="flex-1">
                           <div className="font-bold text-slate-900 text-sm">{s.name}</div>
                           <div className="text-[10px] font-bold text-slate-400">Roll {s.rollNo.padStart(2,'0')}</div>
@@ -1416,7 +1488,20 @@ export const StudentAttendanceManager: React.FC<Props> = ({ onBack }) => {
             principal-marked records. Records list (still reachable for
             history/corrections) sits in the Grid view's "Records" link. */}
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-          <button onClick={() => setView('MARK')}
+          <button
+            onClick={() => {
+              // Reset markDate to today every time the principal opens
+              // Mark Attendance — otherwise a leftover custom date from
+              // last session (or correction mode) leaves them stuck on
+              // an older date with today hidden behind the Custom tile.
+              const t = todayStr();
+              // Clamp to active year if today falls outside (closed-year
+              // correction mode etc.). Same logic as the strip's anchor.
+              const start = currentYear?.startDate;
+              const end   = currentYear?.endDate;
+              setMarkDate(start && t < start ? start : end && t > end ? end : t);
+              setView('MARK');
+            }}
             className="flex items-center gap-4 bg-gradient-to-br from-blue-600 to-indigo-600 text-white rounded-2xl p-4 shadow-md hover:shadow-lg active:scale-[0.98] transition-all text-left">
             <div className="w-11 h-11 rounded-xl bg-white/15 border border-white/25 flex items-center justify-center shrink-0">
               <Save size={20}/>

@@ -204,10 +204,12 @@ export const StaffAttendanceManager: React.FC<Props> = ({ onBack, startTab = 'OV
 
   useEffect(() => {
     if (!stripRef.current) return;
-    const todayEl = stripRef.current.querySelector('[data-today="true"]');
-    if (todayEl && 'scrollIntoView' in todayEl) {
-      (todayEl as HTMLElement).scrollIntoView({ behavior: 'auto', inline: 'end', block: 'nearest' });
-    }
+    // Scroll the strip to the right end so today (last tile in
+    // chronological order) is visible on first open. Earlier this
+    // used scrollIntoView('end') which sometimes fired before render
+    // and missed; scrollLeft = scrollWidth inside rAF is bulletproof.
+    const el = stripRef.current;
+    requestAnimationFrame(() => { el.scrollLeft = el.scrollWidth; });
   }, [dateStrip]);
 
   // hardLocked = salary generated OR year closed without correction mode
@@ -385,8 +387,24 @@ export const StaffAttendanceManager: React.FC<Props> = ({ onBack, startTab = 'OV
               right jumps straight to it — lock rules apply
               automatically (saved + not editor mode = softLocked, and
               the server hard-rejects edits to is_locked rows). */}
-          <div className="flex items-center gap-2 border-t border-slate-100 -mx-4 lg:-mx-6 px-4 lg:px-6 pt-1.5 lg:pt-2 pb-1 lg:pb-2">
-            <div ref={stripRef} className="flex flex-1 overflow-x-auto hide-scrollbar">
+          <div className="border-t border-slate-100 -mx-4 lg:-mx-6 px-4 lg:px-6 pt-1.5 lg:pt-2 pb-1 lg:pb-2">
+            <div ref={stripRef} className="flex overflow-x-auto hide-scrollbar">
+              {/* Custom date picker — sits BEFORE the 14-day window
+                  (= leftmost tile) so the strip reads chronologically:
+                  [Custom] [day-13] … [today]. Older dates ke liye yahan
+                  se pick karo, recent 14 days ke liye seedhi tile.
+                  Size exactly matches the day tiles below. */}
+              <label
+                className="shrink-0 relative flex flex-col items-center justify-center mx-0.5 lg:mx-1 px-2.5 lg:px-3.5 py-1.5 lg:py-2 rounded-xl border-2 border-dashed border-slate-300 text-slate-500 hover:border-blue-300 hover:text-blue-600 cursor-pointer transition-colors"
+                title="Pick any older date">
+                <input type="date" value={selectedDate}
+                  max={today()}
+                  onChange={e => { if (e.target.value) loadDate(e.target.value); setSearch(''); }}
+                  className="absolute inset-0 opacity-0 cursor-pointer" />
+                <span className="text-[9px] lg:text-[10px] font-black uppercase tracking-widest pointer-events-none">Pick</span>
+                <span className="text-base lg:text-lg font-black tabular-nums leading-none my-0.5 pointer-events-none">📅</span>
+                <span className="text-[8px] lg:text-[9px] font-bold uppercase tracking-wide opacity-75 pointer-events-none">Date</span>
+              </label>
               {dateStrip.map(d => {
                 const isSelected = selectedDate === d;
                 const today_flag = isToday(d);
@@ -406,20 +424,6 @@ export const StaffAttendanceManager: React.FC<Props> = ({ onBack, startTab = 'OV
                 );
               })}
             </div>
-            {/* Native date picker — simplest, mobile-friendly. Jumps
-                the grid to the picked date; if it's outside the strip,
-                lock rules still gate edits. Capped at today so a typo
-                can't put attendance into the future. */}
-            <label className="shrink-0 flex flex-col items-center justify-center w-12 lg:w-14 px-1 py-1.5 lg:py-2 rounded-xl border-2 border-dashed border-slate-200 text-slate-500 hover:border-blue-300 hover:text-blue-600 cursor-pointer transition-colors"
-              title="Pick any older date">
-              <input type="date" value={selectedDate}
-                max={today()}
-                onChange={e => { if (e.target.value) loadDate(e.target.value); setSearch(''); }}
-                className="absolute opacity-0 w-12 lg:w-14 h-14 cursor-pointer" />
-              <span className="text-[9px] lg:text-[10px] font-black uppercase tracking-widest pointer-events-none">Pick</span>
-              <span className="text-base lg:text-lg font-black leading-none my-0.5 pointer-events-none">📅</span>
-              <span className="text-[8px] lg:text-[9px] font-bold uppercase tracking-wide opacity-75 pointer-events-none">Date</span>
-            </label>
           </div>
 
         </div>
@@ -554,25 +558,10 @@ export const StaffAttendanceManager: React.FC<Props> = ({ onBack, startTab = 'OV
             </div>
           )}
 
-          {(record.savedAt || record.modifiedAt) && (
-            <div className="text-center mt-4 space-y-1">
-              {record.savedAt && !record.modifiedAt && (
-                <p className="text-[9px] font-bold text-slate-400">
-                  Last saved: {new Date(record.savedAt).toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit' })}
-                </p>
-              )}
-              {record.modifiedAt && (
-                <>
-                  <p className="text-[9px] font-bold text-slate-400">
-                    First saved: {record.savedAt ? new Date(record.savedAt).toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit' }) : '—'}
-                  </p>
-                  <p className="flex items-center justify-center gap-1 text-[9px] font-black text-indigo-500">
-                    <Pencil size={9} /> Modified: {new Date(record.modifiedAt).toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit' })} (Editor Mode)
-                  </p>
-                </>
-              )}
-            </div>
-          )}
+          {/* Save timestamp footnote removed — the same info is shown
+              by the SAVED chip in the header AND the locked banner in
+              the footer ("Attendance Saved · 07:24"). Three copies of
+              the same line was too noisy. */}
         </div>
 
         {/* Footer — fixed on mobile, sticky-within-container on desktop so it

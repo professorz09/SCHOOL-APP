@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useState } from 'react';
-import { X, Loader2, CheckCircle2, AlertTriangle, Bus, IndianRupee, Calendar } from 'lucide-react';
+import { X, Loader2, CheckCircle2, AlertTriangle, Bus, IndianRupee, Calendar, Lock } from 'lucide-react';
 import { studentService } from '@/modules/students/student.service';
 import { feeService } from '@/modules/fees/fee.service';
 import type { FeeStructureRecord } from '@/modules/fees/fees.types';
@@ -71,6 +71,51 @@ export const StudentClassAssignmentModal: React.FC<Props> = ({ student, onClose,
   const [submitting, setSubmitting] = useState(false);
   const [rollChecking, setRollChecking] = useState(false);
   const [rollAvailable, setRollAvailable] = useState<boolean | null>(null);
+
+  // Mid-session reassignment policy. `isChange` distinguishes a fresh
+  // allotment (student has no class yet) from a class swap (student is
+  // already in a class for the active year). Swaps are gated:
+  //   • 7-day grace from admission_date → free swap (typo fixes)
+  //   • After 7 days: locked once ANY payment exists. TC-only exit.
+  // Initial allotments are always allowed.
+  const isChange = Boolean(student.className && student.className.trim());
+  const [lockState, setLockState] = useState<'checking' | 'allowed' | 'locked'>(
+    isChange ? 'checking' : 'allowed'
+  );
+  const daysSinceAdmission = useMemo(() => {
+    if (!student.admissionDate) return Infinity;
+    const ms = Date.now() - new Date(student.admissionDate).getTime();
+    return Math.floor(ms / (1000 * 60 * 60 * 24));
+  }, [student.admissionDate]);
+
+  useEffect(() => {
+    if (!isChange) return;
+    let cancelled = false;
+    (async () => {
+      // Within grace window → no need to check payments.
+      if (daysSinceAdmission <= 7) {
+        if (!cancelled) setLockState('allowed');
+        return;
+      }
+      // Wait for activeYear to resolve — without an AY id the check
+      // would fall back to all-years and break promotion (Class 5 paid
+      // → can't move to Class 6). Treat missing AY as transient.
+      if (!activeYear?.id) {
+        if (!cancelled) setLockState('checking');
+        return;
+      }
+      try {
+        const paid = await studentService.hasAnyPayment(student.id, activeYear.id);
+        if (cancelled) return;
+        setLockState(paid ? 'locked' : 'allowed');
+      } catch {
+        // Fail closed — if we can't verify payment state, treat as locked
+        // so a network glitch doesn't accidentally permit a reshuffle.
+        if (!cancelled) setLockState('locked');
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [isChange, daysSinceAdmission, student.id, activeYear?.id]);
 
   // Load fee structures + transport vehicles + sections for active year
   useEffect(() => {
@@ -212,6 +257,10 @@ export const StudentClassAssignmentModal: React.FC<Props> = ({ student, onClose,
   }, [className]);
 
   const submit = async () => {
+    if (lockState === 'locked') {
+      showToast('Class change blocked — TC route use karein', 'error');
+      return;
+    }
     if (!rollNo.trim()) {
       showToast('Roll number required', 'error');
       return;
@@ -284,16 +333,65 @@ export const StudentClassAssignmentModal: React.FC<Props> = ({ student, onClose,
           </button>
         </div>
 
-        {/* Body — single column on mobile, 2-column grid from lg upward.
-            Transport / annual-fee summary span full width via lg:col-span-2.
-            Earlier this was a vertical stack at every breakpoint, which on a
-            wide desktop modal forced the principal to scroll past basic
-            class fields just to reach the Allot button. */}
-        <div className="flex-1 overflow-y-auto p-4 space-y-4 lg:space-y-0 lg:grid lg:grid-cols-2 lg:gap-x-6 lg:gap-y-4">
+        {/* Mid-session reassignment guard. Shown only for class CHANGES
+            (not initial allotments). Renders a full-pane lock state when
+            the student has any paid installment and grace window passed. */}
+        {isChange && lockState === 'checking' && (
+          <div className="flex-1 flex items-center justify-center p-8">
+            <div className="flex items-center gap-2 text-slate-500">
+              <Loader2 size={18} className="animate-spin" />
+              <span className="text-sm font-bold">Payment status check ho raha hai…</span>
+            </div>
+          </div>
+        )}
+        {isChange && lockState === 'locked' && (
+          <div className="flex-1 overflow-y-auto p-5">
+            <div className="bg-rose-50 border-2 border-rose-200 rounded-2xl p-5 flex flex-col items-center text-center gap-3">
+              <div className="w-14 h-14 rounded-full bg-rose-100 flex items-center justify-center">
+                <Lock size={26} className="text-rose-600" />
+              </div>
+              <h4 className="text-base font-black text-rose-700">Class change locked</h4>
+              <p className="text-xs font-bold text-rose-600 leading-relaxed max-w-sm">
+                Is student ke liye 7-din grace window khatam ho chuki hai aur
+                fees bhi paid ho chuki hain. Class change ab block hai.
+              </p>
+              <div className="bg-white border border-rose-200 rounded-xl px-3 py-2 text-left w-full max-w-sm space-y-1">
+                <p className="text-[11px] font-black text-slate-600">
+                  Aage badhne ka tarika:
+                </p>
+                <p className="text-[11px] font-bold text-slate-600 leading-snug">
+                  • TC issue karke student withdraw karein
+                  <br />• Naye class me fresh admission karein
+                  <br />• Paid history dono jagah linked rahegi
+                </p>
+              </div>
+              <p className="text-[10px] font-bold text-slate-400">
+                Admission se {Number.isFinite(daysSinceAdmission) ? daysSinceAdmission : '—'} din ho gaye hain
+              </p>
+            </div>
+          </div>
+        )}
+        {(!isChange || lockState === 'allowed') &&
+        /* Body — vertical stack of labelled cards (banners → Class&Roll
+            → Fees → Transport). Earlier the 2-col grid scattered fee
+            fields across 4 cells and the principal had to mentally
+            stitch the money decision back together. */
+        (
+        <div className="flex-1 overflow-y-auto p-4 space-y-4">
+
+          {isChange && daysSinceAdmission <= 7 && (
+            <div className="flex items-start gap-2 bg-amber-50 border border-amber-200 rounded-xl px-3 py-2">
+              <AlertTriangle size={14} className="text-amber-600 shrink-0 mt-0.5" />
+              <p className="text-[10px] font-black text-amber-700 leading-snug">
+                Grace window — {7 - daysSinceAdmission} din baki. Iske baad fee paid
+                hone par class change lock ho jayega; TC route hi rahega.
+              </p>
+            </div>
+          )}
 
           {/* Active year badge */}
           {activeYear && (
-            <div className="flex items-center gap-2 bg-indigo-50 rounded-xl px-3 py-2 lg:col-span-2">
+            <div className="flex items-center gap-2 bg-indigo-50 rounded-xl px-3 py-2">
               <Calendar size={12} className="text-indigo-600" />
               <span className="text-[10px] font-black text-indigo-700">
                 Academic Year: {activeYear.name}
@@ -301,132 +399,154 @@ export const StudentClassAssignmentModal: React.FC<Props> = ({ student, onClose,
             </div>
           )}
 
-          {/* Class */}
-          <div>
-            <label className="text-[10px] font-black uppercase text-slate-500">Class *</label>
-            <select
-              value={className}
-              onChange={e => setClassName(e.target.value)}
-              className="w-full mt-1 px-3 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-sm font-bold"
-            >
-              {CLASS_OPTIONS.map(c => <option key={c}>{c}</option>)}
-            </select>
-          </div>
+          {/* ── CLASS & ROLL CARD ────────────────────────────────────
+              Identity-related fields grouped under one labelled card to
+              mirror the Fees card below — visually balanced. Inside,
+              Class+Section live on row 1, Roll+Date on row 2. */}
+          <div className="lg:col-span-2 bg-white border border-slate-200 rounded-2xl p-4 space-y-3 shadow-sm">
+            <p className="text-[11px] font-black uppercase tracking-widest text-slate-700">
+              Class & Roll
+            </p>
 
-          {/* Section — from DB */}
-          <div>
-            <label className="text-[10px] font-black uppercase text-slate-500">Section *</label>
-            {loadingMeta ? (
-              <div className="mt-1 flex items-center gap-2 px-3 py-2.5 bg-slate-50 border border-slate-200 rounded-xl">
-                <Loader2 size={14} className="animate-spin text-slate-400" />
-                <span className="text-xs font-bold text-slate-400">Sections load ho rahe hain…</span>
+            <div className="grid grid-cols-1 lg:grid-cols-2 gap-3">
+              {/* Class */}
+              <div>
+                <label className="text-[10px] font-black uppercase text-slate-500">Class *</label>
+                <select
+                  value={className}
+                  onChange={e => setClassName(e.target.value)}
+                  className="w-full mt-1 px-3 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-sm font-bold">
+                  {CLASS_OPTIONS.map(c => <option key={c}>{c}</option>)}
+                </select>
               </div>
-            ) : sectionsForClass.length === 0 ? (
-              <div className="mt-1 px-3 py-2.5 bg-amber-50 border border-amber-200 rounded-xl">
-                <p className="text-[11px] font-bold text-amber-700">
-                  Is class ke liye koi section nahi mila. Academic Year Wizard se sections add karein.
-                </p>
-              </div>
-            ) : (
-              <div className="mt-1 grid grid-cols-3 gap-2">
-                {sectionsForClass.map(sec => (
-                  <button
-                    key={sec.id}
-                    type="button"
-                    onClick={() => { setSectionId(sec.id); setSectionName(sec.section); }}
-                    className={`py-2.5 px-2 rounded-xl text-xs font-black border transition-all text-center leading-tight ${
-                      sectionId === sec.id
-                        ? 'bg-indigo-600 text-white border-indigo-600'
-                        : 'bg-slate-50 text-slate-600 border-slate-200'
-                    }`}
-                  >
-                    {sec.section}
-                  </button>
-                ))}
-              </div>
-            )}
-          </div>
 
-          {/* Roll + Allotment Date */}
-          <div className="grid grid-cols-2 gap-3">
-            <div>
-              <label className="text-[10px] font-black uppercase text-slate-500">Roll Number</label>
-              <div className="relative mt-1">
-                <input
-                  value={rollNo}
-                  onChange={e => setRollNo(e.target.value.replace(/[^\d]/g, '').slice(0, 3))}
-                  inputMode="numeric"
-                  placeholder="01"
-                  className={`w-full px-3 py-2.5 bg-slate-50 border rounded-xl text-sm font-bold pr-10
-                    ${rollAvailable === false ? 'border-rose-400'
-                    : rollAvailable === true ? 'border-emerald-400' : 'border-slate-200'}`}
-                />
-                <div className="absolute right-3 top-1/2 -translate-y-1/2">
-                  {rollChecking
-                    ? <Loader2 size={16} className="animate-spin text-slate-400" />
-                    : rollAvailable === true ? <CheckCircle2 size={16} className="text-emerald-500" />
-                    : rollAvailable === false ? <AlertTriangle size={16} className="text-rose-500" />
-                    : null}
+              {/* Section — from DB */}
+              <div>
+                <label className="text-[10px] font-black uppercase text-slate-500">Section *</label>
+                {loadingMeta ? (
+                  <div className="mt-1 flex items-center gap-2 px-3 py-2.5 bg-slate-50 border border-slate-200 rounded-xl">
+                    <Loader2 size={14} className="animate-spin text-slate-400" />
+                    <span className="text-xs font-bold text-slate-400">Sections load ho rahe hain…</span>
+                  </div>
+                ) : sectionsForClass.length === 0 ? (
+                  <div className="mt-1 px-3 py-2.5 bg-amber-50 border border-amber-200 rounded-xl">
+                    <p className="text-[11px] font-bold text-amber-700">
+                      Is class ke liye koi section nahi mila. Academic Year Wizard se sections add karein.
+                    </p>
+                  </div>
+                ) : (
+                  <div className="mt-1 grid grid-cols-3 gap-2">
+                    {sectionsForClass.map(sec => (
+                      <button
+                        key={sec.id}
+                        type="button"
+                        onClick={() => { setSectionId(sec.id); setSectionName(sec.section); }}
+                        className={`py-2.5 px-2 rounded-xl text-xs font-black border transition-all text-center leading-tight ${
+                          sectionId === sec.id
+                            ? 'bg-indigo-600 text-white border-indigo-600'
+                            : 'bg-slate-50 text-slate-600 border-slate-200'
+                        }`}>
+                        {sec.section}
+                      </button>
+                    ))}
+                  </div>
+                )}
+              </div>
+            </div>
+
+            <div className="grid grid-cols-2 gap-3">
+              <div>
+                <label className="text-[10px] font-black uppercase text-slate-500">Roll Number</label>
+                <div className="relative mt-1">
+                  <input
+                    value={rollNo}
+                    onChange={e => setRollNo(e.target.value.replace(/[^\d]/g, '').slice(0, 3))}
+                    inputMode="numeric"
+                    placeholder="01"
+                    className={`w-full px-3 py-2.5 bg-slate-50 border rounded-xl text-sm font-bold pr-10
+                      ${rollAvailable === false ? 'border-rose-400'
+                      : rollAvailable === true ? 'border-emerald-400' : 'border-slate-200'}`}
+                  />
+                  <div className="absolute right-3 top-1/2 -translate-y-1/2">
+                    {rollChecking
+                      ? <Loader2 size={16} className="animate-spin text-slate-400" />
+                      : rollAvailable === true ? <CheckCircle2 size={16} className="text-emerald-500" />
+                      : rollAvailable === false ? <AlertTriangle size={16} className="text-rose-500" />
+                      : null}
+                  </div>
                 </div>
+                {rollAvailable === false && (
+                  <p className="text-[10px] font-bold text-rose-600 mt-1">
+                    Roll {rollNo} already in use in {className}.
+                  </p>
+                )}
               </div>
-              {rollAvailable === false && (
-                <p className="text-[10px] font-bold text-rose-600 mt-1">
-                  Roll {rollNo} already in use in {className}.
+              <div>
+                <label className="text-[10px] font-black uppercase text-slate-500">Allotment Date</label>
+                <input
+                  type="date"
+                  value={allotmentDate}
+                  onChange={e => setAllotmentDate(e.target.value)}
+                  className="w-full mt-1 px-3 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-sm font-bold"
+                />
+              </div>
+            </div>
+          </div>
+
+          {/* ── FEES CARD ─────────────────────────────────────────────
+              Earlier the fee-structure dropdown, RTE checkbox, discount
+              inputs and annual total were 4 separate sibling blocks
+              landing in a 2-col grid — visually chaotic and the most
+              important field (fee structure) felt buried. Now one
+              labelled card holds the entire money decision in flow:
+              structure → exemption → discount → computed total. */}
+          <div className="lg:col-span-2 bg-white border border-slate-200 rounded-2xl p-4 space-y-3 shadow-sm">
+            <div className="flex items-center gap-2">
+              <IndianRupee size={14} className="text-indigo-600" />
+              <p className="text-[11px] font-black uppercase tracking-widest text-slate-700">Fees</p>
+            </div>
+
+            {/* 1. Fee structure dropdown — primary decision */}
+            <div>
+              <label className="text-[10px] font-black uppercase text-slate-500">Fee Structure *</label>
+              {matchingStructures.length === 0 && !loadingMeta ? (
+                <div className="mt-1 px-3 py-2.5 bg-amber-50 border border-amber-200 rounded-xl">
+                  <p className="text-[11px] font-bold text-amber-700">
+                    Koi fee structure nahi mila. Settings → Fees se banayein.
+                  </p>
+                </div>
+              ) : (
+                <select
+                  value={structureId}
+                  onChange={e => setStructureId(e.target.value)}
+                  disabled={loadingMeta}
+                  className={`w-full mt-1 px-3 py-2.5 border rounded-xl text-sm font-bold ${
+                    !structureId
+                      ? 'border-rose-300 bg-rose-50 focus:border-rose-500'
+                      : 'border-slate-200 bg-slate-50'
+                  }`}>
+                  <option value="">— Fee schedule choose karein (zaroori hai) —</option>
+                  {matchingStructures.map(s => (
+                    <option key={s.id} value={s.id}>
+                      {s.name} · {s.className} · ₹{
+                        s.feeHeads.reduce((sum, h) => {
+                          const times = h.frequency === 'MONTHLY' ? (s.monthlyDueDates.length || 12) : 1;
+                          return sum + h.amount * times;
+                        }, 0).toLocaleString('en-IN')
+                      }/yr
+                    </option>
+                  ))}
+                </select>
+              )}
+              {selectedStructure && (
+                <p className="text-[10px] font-bold text-slate-500 mt-1">
+                  {selectedStructure.feeHeads.length} heads · {selectedStructure.billingCycle.toLowerCase()} · {selectedStructure.monthlyDueDates.length} installments
                 </p>
               )}
             </div>
-            <div>
-              <label className="text-[10px] font-black uppercase text-slate-500">Allotment Date</label>
-              <input
-                type="date"
-                value={allotmentDate}
-                onChange={e => setAllotmentDate(e.target.value)}
-                className="w-full mt-1 px-3 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-sm font-bold"
-              />
-            </div>
-          </div>
 
-          {/* Fee structure picker — filtered by class */}
-          <div>
-            <label className="text-[10px] font-black uppercase text-slate-500">Fee Structure *</label>
-            {matchingStructures.length === 0 && !loadingMeta ? (
-              <div className="mt-1 px-3 py-2.5 bg-amber-50 border border-amber-200 rounded-xl">
-                <p className="text-[11px] font-bold text-amber-700">
-                  Koi fee structure nahi mila. Settings → Fees se banayein.
-                </p>
-              </div>
-            ) : (
-              <select
-                value={structureId}
-                onChange={e => setStructureId(e.target.value)}
-                disabled={loadingMeta}
-                className="w-full mt-1 px-3 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-sm font-bold"
-              >
-                <option value="">— Fee schedule choose karein (zaroori hai) —</option>
-                {matchingStructures.map(s => (
-                  <option key={s.id} value={s.id}>
-                    {s.name} · {s.className} · ₹{
-                      s.feeHeads.reduce((sum, h) => {
-                        const times = h.frequency === 'MONTHLY' ? (s.monthlyDueDates.length || 12)
-                          : h.frequency === 'QUARTERLY' ? 4
-                          : h.frequency === 'HALF_YEARLY' ? 2 : 1;
-                        return sum + h.amount * times;
-                      }, 0).toLocaleString('en-IN')
-                    }/yr
-                  </option>
-                ))}
-              </select>
-            )}
-            {selectedStructure && (
-              <p className="text-[10px] font-bold text-slate-500 mt-1">
-                {selectedStructure.feeHeads.length} heads · {selectedStructure.billingCycle.toLowerCase()} · {selectedStructure.monthlyDueDates.length} installments
-              </p>
-            )}
-          </div>
-
-          {/* RTE + discount */}
-          <div className="space-y-2">
-            <label className="flex items-center gap-2 px-3 py-2.5 bg-emerald-50 rounded-xl cursor-pointer">
+            {/* 2. RTE exemption — overrides discount/total entirely */}
+            <label className="flex items-center gap-2 px-3 py-2.5 bg-emerald-50 border border-emerald-100 rounded-xl cursor-pointer">
               <input
                 type="checkbox"
                 checked={isRte}
@@ -435,44 +555,56 @@ export const StudentClassAssignmentModal: React.FC<Props> = ({ student, onClose,
               />
               <span className="text-xs font-black text-emerald-700">RTE student (free admission)</span>
             </label>
-            <div className="grid grid-cols-2 gap-2">
-              <div>
-                <label className="text-[9px] font-black uppercase text-slate-500">Discount Amount (₹)</label>
-                <input
-                  type="number"
-                  min={0}
-                  value={discountAmount}
-                  onChange={e => setDiscountAmount(Math.max(0, parseInt(e.target.value) || 0))}
-                  className="w-full mt-0.5 px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-xs font-bold"
-                />
-              </div>
-              <div>
-                <label className="text-[9px] font-black uppercase text-slate-500">Discount (%)</label>
-                <input
-                  type="number"
-                  min={0}
-                  max={100}
-                  value={discountPct}
-                  onChange={e => setDiscountPct(Math.min(100, Math.max(0, parseInt(e.target.value) || 0)))}
-                  className="w-full mt-0.5 px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-xs font-bold"
-                />
-              </div>
-            </div>
-          </div>
 
-          {/* Computed annual total */}
-          <div className="flex items-center justify-between px-3 py-2.5 bg-indigo-50 rounded-xl lg:col-span-2">
-            <span className="text-xs font-black uppercase text-indigo-600 flex items-center gap-1">
-              <IndianRupee size={12} /> Annual Fee (discount ke baad)
-            </span>
-            <span className="text-base font-black text-indigo-900">
-              ₹{totalFee.toLocaleString('en-IN')}
-            </span>
+            {/* 3. Discount — only when not RTE */}
+            {!isRte && (
+              <div>
+                <p className="text-[9px] font-black uppercase text-slate-500 mb-1.5">Discount (optional)</p>
+                <div className="grid grid-cols-2 gap-2">
+                  <div className="relative">
+                    <span className="absolute left-3 top-1/2 -translate-y-1/2 text-xs font-black text-slate-400">₹</span>
+                    <input
+                      type="number"
+                      min={0}
+                      value={discountAmount || ''}
+                      onChange={e => setDiscountAmount(Math.max(0, parseInt(e.target.value) || 0))}
+                      placeholder="Amount"
+                      className="w-full pl-7 pr-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-xs font-bold"
+                    />
+                  </div>
+                  <div className="relative">
+                    <span className="absolute right-3 top-1/2 -translate-y-1/2 text-xs font-black text-slate-400">%</span>
+                    <input
+                      type="number"
+                      min={0}
+                      max={100}
+                      value={discountPct || ''}
+                      onChange={e => setDiscountPct(Math.min(100, Math.max(0, parseInt(e.target.value) || 0)))}
+                      placeholder="Percent"
+                      className="w-full pl-3 pr-7 py-2 bg-slate-50 border border-slate-200 rounded-lg text-xs font-bold"
+                    />
+                  </div>
+                </div>
+                <p className="text-[9px] font-bold text-slate-400 mt-1">
+                  Higher value applies (₹ vs %)
+                </p>
+              </div>
+            )}
+
+            {/* 4. Computed annual total — pinned at the bottom of the card */}
+            <div className="flex items-center justify-between px-3 py-2.5 bg-indigo-50 border border-indigo-100 rounded-xl">
+              <span className="text-[10px] font-black uppercase text-indigo-600">
+                Annual fee {!isRte && (discountAmount || discountPct) ? '(discount ke baad)' : ''}
+              </span>
+              <span className="text-base font-black text-indigo-900 tabular-nums">
+                {isRte ? 'FREE' : `₹${totalFee.toLocaleString('en-IN')}`}
+              </span>
+            </div>
           </div>
 
           {/* Transport (optional) — full-width since the inner grid is
               already 2-column at desktop sizes. */}
-          <div className="border border-slate-200 rounded-xl p-3 space-y-3 lg:col-span-2">
+          <div className="border border-slate-200 rounded-xl p-3 space-y-3">
             <label className="flex items-center gap-2 cursor-pointer">
               <input
                 type="checkbox"
@@ -547,6 +679,7 @@ export const StudentClassAssignmentModal: React.FC<Props> = ({ student, onClose,
             )}
           </div>
         </div>
+        )}
 
         {/* Footer */}
         <div className="px-4 py-3 border-t border-slate-100 flex gap-2">
@@ -554,23 +687,26 @@ export const StudentClassAssignmentModal: React.FC<Props> = ({ student, onClose,
             onClick={onClose}
             className="flex-1 px-4 py-3 bg-slate-100 text-slate-700 font-black text-xs rounded-xl active:scale-95"
           >
-            Cancel
+            {isChange && lockState === 'locked' ? 'Close' : 'Cancel'}
           </button>
-          <button
-            onClick={submit}
-            disabled={
-              submitting
-              || rollAvailable === false
-              || !rollNo.trim()
-              || !sectionId
-              || !selectedStructure
-              || (transportEnabled && (!vehicleId || !stopId || !selectedTransportStructure))
-            }
-            className="flex-1 px-4 py-3 bg-indigo-600 text-white font-black text-xs rounded-xl active:scale-95 disabled:opacity-60 flex items-center justify-center gap-1.5"
-          >
-            {submitting && <Loader2 size={14} className="animate-spin" />}
-            {submitting ? 'Allot ho raha hai…' : 'Class Allot Karein'}
-          </button>
+          {!(isChange && lockState === 'locked') && (
+            <button
+              onClick={submit}
+              disabled={
+                submitting
+                || lockState === 'checking'
+                || rollAvailable === false
+                || !rollNo.trim()
+                || !sectionId
+                || !selectedStructure
+                || (transportEnabled && (!vehicleId || !stopId || !selectedTransportStructure))
+              }
+              className="flex-1 px-4 py-3 bg-indigo-600 text-white font-black text-xs rounded-xl active:scale-95 disabled:opacity-60 flex items-center justify-center gap-1.5"
+            >
+              {submitting && <Loader2 size={14} className="animate-spin" />}
+              {submitting ? 'Allot ho raha hai…' : isChange ? 'Class Change Karein' : 'Class Allot Karein'}
+            </button>
+          )}
         </div>
       </div>
     </div>

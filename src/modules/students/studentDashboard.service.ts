@@ -242,16 +242,24 @@ function slotTypeFromName(name: string): PeriodType {
   return 'CLASS';
 }
 
-async function loadSlots(schoolId: string, yearId: string): Promise<PeriodSlot[]> {
+async function loadSlots(schoolId: string, yearId: string, className: string | null): Promise<PeriodSlot[]> {
+  // Per-class slot resolution: schools can define class-specific slot
+  // sets (migration 0108). Try the student's own class first; if no
+  // class-specific row exists, fall back to the school default
+  // (class_name IS NULL); finally fall back to the hard-coded default.
   const { data } = await supabase
     .from('timetable_periods')
-    .select('id, name, start_time, end_time, period_type, sort_order')
+    .select('id, name, start_time, end_time, period_type, sort_order, class_name')
     .eq('school_id', schoolId).eq('academic_year_id', yearId)
     .order('sort_order', { ascending: true });
-  const rows = (data ?? []) as Array<{
+  const allRows = (data ?? []) as Array<{
     id: string; name: string; start_time: string; end_time: string;
-    period_type: string; sort_order: number;
+    period_type: string; sort_order: number; class_name: string | null;
   }>;
+  let rows = className
+    ? allRows.filter(r => r.class_name === className)
+    : [];
+  if (rows.length === 0) rows = allRows.filter(r => !r.class_name);
   if (rows.length === 0) return [...DEFAULT_SLOTS];
   // IMPORTANT: slotId must equal `timetable_periods.id` so it joins on
   // `timetable_entries.slot_id`, which the teacher write-path persists as
@@ -339,7 +347,7 @@ export const studentDashboardService = {
     const ctx = await getStudentContext();
     if (!ctx.sectionId || !ctx.yearId) return [];
 
-    const slots = await loadSlots(ctx.schoolId, ctx.yearId);
+    const slots = await loadSlots(ctx.schoolId, ctx.yearId, ctx.className);
     const slotByLowerId = new Map(slots.map(s => [s.slotId.toLowerCase(), s]));
 
     const { data, error } = await supabase

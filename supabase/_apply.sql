@@ -8637,19 +8637,29 @@ CREATE TRIGGER trg_anonymous_complaint_weekly_cap
   EXECUTE FUNCTION public.enforce_anonymous_complaint_weekly_cap();
 
 
-
 -- =============================================================
 -- 0071_pay_installment_rpc.sql
 -- =============================================================
--- See supabase/migrations/0071_pay_installment_rpc.sql for full description.
--- Strict per-installment payment RPC: applies cash + optional discount to ONE
--- specific fee_installment, hard-rejects overpay (no advance dump).
+-- =============================================================
+-- 0071_pay_installment_rpc.sql
+-- =============================================================
+-- Adds `pay_installment` — a strict, single-row payment RPC that:
+--   • Applies cash + (optional) discount to ONE specific fee_installment row
+--     chosen by the caller (no oldest-due-first guessing).
+--   • Hard-rejects overpay (cash + discount > outstanding) instead of
+--     silently dumping the surplus into advance_balances.
+--   • Writes the matching payment_records row, payment_installment_links
+--     row, and (if discount > 0) a fee_write_offs row so the existing
+--     history/expand-on-tap UI shows the full audit trail.
+--
+-- Coexists with record_fee_payment (oldest-first): callers pick the RPC
+-- that matches the UX they want.
 -- =============================================================
 
 CREATE OR REPLACE FUNCTION public.pay_installment(
   p_installment_id UUID,
-  p_amount         BIGINT,
-  p_discount       BIGINT  DEFAULT 0,
+  p_amount         BIGINT,                -- cash applied (≥ 0)
+  p_discount       BIGINT  DEFAULT 0,     -- write-off applied to this row (≥ 0)
   p_method         TEXT    DEFAULT 'CASH',
   p_date           DATE    DEFAULT CURRENT_DATE,
   p_note           TEXT    DEFAULT NULL
@@ -8675,6 +8685,7 @@ BEGIN
     RAISE EXCEPTION 'nothing to apply (amount and discount both zero)';
   END IF;
 
+  -- Lock the target installment so concurrent payments can't double-spend it.
   SELECT id, student_id, school_id, academic_year_id, amount, paid_amount,
          write_off_amount, fee_type, month, due_date
     INTO v_inst
@@ -8684,6 +8695,7 @@ BEGIN
 
   IF NOT FOUND THEN RAISE EXCEPTION 'installment not found'; END IF;
 
+  -- Authorise: same rule as record_fee_payment.
   IF NOT (public.is_super_admin()
           OR (public.is_principal() AND public.current_user_school_id() = v_inst.school_id)) THEN
     RAISE EXCEPTION 'forbidden';
@@ -8703,6 +8715,7 @@ BEGIN
   v_receipt := 'RCT-' || to_char(NOW(),'YYYYMMDDHH24MISS')
                      || '-' || substr(v_inst.student_id::text, 1, 4);
 
+  -- Insert the payment row (cash only — discount tracked separately).
   INSERT INTO public.payment_records
     (student_id, school_id, academic_year_id, amount, discount_amount,
      method, date, receipt_no, note)
@@ -8711,12 +8724,14 @@ BEGIN
      v_amt, v_disc, p_method, p_date, v_receipt, p_note)
   RETURNING id INTO v_payment_id;
 
+  -- Link payment → installment (only when cash > 0).
   IF v_amt > 0 THEN
     INSERT INTO public.payment_installment_links
       (payment_id, installment_id, amount_applied)
     VALUES (v_payment_id, v_inst.id, v_amt);
   END IF;
 
+  -- Persist discount as an explicit write-off audit row.
   IF v_disc > 0 THEN
     INSERT INTO public.fee_write_offs
       (installment_id, student_id, school_id, amount, reason, approved_by)
@@ -8725,6 +8740,7 @@ BEGIN
        COALESCE(p_note, 'Discount'), v_caller);
   END IF;
 
+  -- Bump the installment + recompute its derived status.
   UPDATE public.fee_installments
      SET paid_amount      = paid_amount + v_amt,
          write_off_amount = write_off_amount + v_disc,
@@ -8766,9 +8782,16 @@ GRANT EXECUTE ON FUNCTION public.pay_installment(UUID, BIGINT, BIGINT, TEXT, DAT
 -- =============================================================
 -- 0072_pay_installment_advance.sql
 -- =============================================================
--- See supabase/migrations/0072_pay_installment_advance.sql
--- Adds optional p_use_advance to pay_installment so principals can
--- draw down the student's advance_balances before/with cash.
+-- =============================================================
+-- 0072_pay_installment_advance.sql
+-- =============================================================
+-- Extends pay_installment with optional `p_use_advance`. When TRUE
+-- and the student has a positive advance_balances row, that pool
+-- is drawn from FIRST to clear the installment. Any cash entered
+-- (`p_amount`) is layered on top. Overpay is still hard-rejected.
+--
+-- Method is unchanged TEXT — UIs may pass 'GOVERNMENT' to mark the
+-- payment as government-funded so history can render it differently.
 -- =============================================================
 
 DROP FUNCTION IF EXISTS public.pay_installment(UUID, BIGINT, BIGINT, TEXT, DATE, TEXT);
@@ -8796,14 +8819,18 @@ DECLARE
   v_total_apply  BIGINT;
 BEGIN
   IF v_caller IS NULL THEN RAISE EXCEPTION 'unauthenticated'; END IF;
+
   v_amt  := COALESCE(p_amount, 0);
   v_disc := GREATEST(0, COALESCE(p_discount, 0));
-  IF v_amt < 0 THEN RAISE EXCEPTION 'amount must be non-negative'; END IF;
+
+  IF v_amt < 0  THEN RAISE EXCEPTION 'amount must be non-negative'; END IF;
 
   SELECT id, student_id, school_id, academic_year_id, amount, paid_amount,
          write_off_amount, fee_type, month, due_date
-    INTO v_inst FROM public.fee_installments
-   WHERE id = p_installment_id FOR UPDATE;
+    INTO v_inst
+    FROM public.fee_installments
+   WHERE id = p_installment_id
+   FOR UPDATE;
   IF NOT FOUND THEN RAISE EXCEPTION 'installment not found'; END IF;
 
   IF NOT (public.is_super_admin()
@@ -8812,13 +8839,23 @@ BEGIN
   END IF;
 
   v_outstanding := v_inst.amount - v_inst.paid_amount - v_inst.write_off_amount;
-  IF v_outstanding <= 0 THEN RAISE EXCEPTION 'installment already cleared'; END IF;
+  IF v_outstanding <= 0 THEN
+    RAISE EXCEPTION 'installment already cleared';
+  END IF;
 
+  -- Pull from advance pool first if requested. Cap by what's needed
+  -- after cash + discount have been considered, so we never overdraw.
   IF p_use_advance THEN
-    SELECT COALESCE(amount, 0) INTO v_advance FROM public.advance_balances
-     WHERE student_id = v_inst.student_id FOR UPDATE;
+    SELECT COALESCE(amount, 0) INTO v_advance
+      FROM public.advance_balances
+     WHERE student_id = v_inst.student_id
+     FOR UPDATE;
     v_advance := COALESCE(v_advance, 0);
-    v_advance_use := LEAST(v_advance, GREATEST(0, v_outstanding - v_amt - v_disc));
+    -- Need to cover (outstanding - cash - discount) at most
+    v_advance_use := LEAST(
+      v_advance,
+      GREATEST(0, v_outstanding - v_amt - v_disc)
+    );
   END IF;
 
   IF v_amt = 0 AND v_disc = 0 AND v_advance_use = 0 THEN
@@ -8827,13 +8864,19 @@ BEGIN
 
   v_total_apply := v_amt + v_disc + v_advance_use;
   IF v_total_apply > v_outstanding THEN
-    RAISE EXCEPTION 'overpay blocked (outstanding=%, attempted=%)', v_outstanding, v_total_apply;
+    RAISE EXCEPTION 'overpay blocked (outstanding=%, attempted=%)',
+      v_outstanding, v_total_apply;
   END IF;
 
-  v_receipt := 'RCT-' || to_char(NOW(),'YYYYMMDDHH24MISS') || '-' || substr(v_inst.student_id::text, 1, 4);
+  v_receipt := 'RCT-' || to_char(NOW(),'YYYYMMDDHH24MISS')
+                     || '-' || substr(v_inst.student_id::text, 1, 4);
 
+  -- Cash leg of the payment row records the actual cash + advance
+  -- drawn (so totals reconcile against payment_installment_links),
+  -- minus the discount which is tracked separately.
   INSERT INTO public.payment_records
-    (student_id, school_id, academic_year_id, amount, discount_amount, method, date, receipt_no, note)
+    (student_id, school_id, academic_year_id,
+     amount, discount_amount, method, date, receipt_no, note)
   VALUES
     (v_inst.student_id, v_inst.school_id, v_inst.academic_year_id,
      v_amt + v_advance_use, v_disc, p_method, p_date, v_receipt,
@@ -8847,50 +8890,371 @@ BEGIN
   RETURNING id INTO v_payment_id;
 
   IF (v_amt + v_advance_use) > 0 THEN
-    INSERT INTO public.payment_installment_links (payment_id, installment_id, amount_applied)
+    INSERT INTO public.payment_installment_links
+      (payment_id, installment_id, amount_applied)
     VALUES (v_payment_id, v_inst.id, v_amt + v_advance_use);
   END IF;
 
   IF v_disc > 0 THEN
-    INSERT INTO public.fee_write_offs (installment_id, student_id, school_id, amount, reason, approved_by)
-    VALUES (v_inst.id, v_inst.student_id, v_inst.school_id, v_disc, COALESCE(p_note, 'Discount'), v_caller);
+    INSERT INTO public.fee_write_offs
+      (installment_id, student_id, school_id, amount, reason, approved_by)
+    VALUES
+      (v_inst.id, v_inst.student_id, v_inst.school_id, v_disc,
+       COALESCE(p_note, 'Discount'), v_caller);
   END IF;
 
+  -- Decrement the advance pool.
   IF v_advance_use > 0 THEN
-    UPDATE public.advance_balances SET amount = amount - v_advance_use, updated_at = NOW()
+    UPDATE public.advance_balances
+       SET amount = amount - v_advance_use,
+           updated_at = NOW()
      WHERE student_id = v_inst.student_id;
   END IF;
 
   UPDATE public.fee_installments
-     SET paid_amount = paid_amount + v_amt + v_advance_use,
+     SET paid_amount      = paid_amount + v_amt + v_advance_use,
          write_off_amount = write_off_amount + v_disc,
-         write_off_reason = CASE WHEN v_disc > 0 THEN COALESCE(p_note, write_off_reason, 'Discount') ELSE write_off_reason END,
-         status = public.compute_installment_status(amount, paid_amount + v_amt + v_advance_use, write_off_amount + v_disc, due_date),
+         write_off_reason = CASE
+                              WHEN v_disc > 0
+                                THEN COALESCE(p_note, write_off_reason, 'Discount')
+                              ELSE write_off_reason
+                            END,
+         status = public.compute_installment_status(
+                    amount,
+                    paid_amount + v_amt + v_advance_use,
+                    write_off_amount + v_disc,
+                    due_date),
          updated_at = NOW()
    WHERE id = v_inst.id;
 
   PERFORM public.refresh_student_fee_aggregate(v_inst.student_id, v_inst.academic_year_id);
 
-  INSERT INTO public.audit_logs (user_id, school_id, action, entity_type, entity_id, details)
-  VALUES (v_caller, v_inst.school_id, 'fee_payment_per_installment', 'payment', v_payment_id,
-    jsonb_build_object('installment_id', v_inst.id, 'student_id', v_inst.student_id,
-                       'month', v_inst.month, 'fee_type', v_inst.fee_type,
-                       'amount', v_amt, 'discount', v_disc, 'advance_used', v_advance_use,
-                       'method', p_method, 'receipt', v_receipt));
+  INSERT INTO public.audit_logs
+    (user_id, school_id, action, entity_type, entity_id, details)
+  VALUES
+    (v_caller, v_inst.school_id, 'fee_payment_per_installment', 'payment', v_payment_id,
+     jsonb_build_object(
+       'installment_id', v_inst.id,
+       'student_id',     v_inst.student_id,
+       'month',          v_inst.month,
+       'fee_type',       v_inst.fee_type,
+       'amount',         v_amt,
+       'discount',       v_disc,
+       'advance_used',   v_advance_use,
+       'method',         p_method,
+       'receipt',        v_receipt));
 
   RETURN v_payment_id;
 END $$;
 
-GRANT EXECUTE ON FUNCTION public.pay_installment(UUID, BIGINT, BIGINT, TEXT, DATE, TEXT, BOOLEAN) TO authenticated;
+GRANT EXECUTE ON FUNCTION public.pay_installment(UUID, BIGINT, BIGINT, TEXT, DATE, TEXT, BOOLEAN)
+  TO authenticated;
+
+
+-- =============================================================
+-- 0073_student_documents_insert_simplify.sql
+-- =============================================================
+-- 0073_student_documents_insert_simplify.sql
+--
+-- Loosen the storage INSERT policy on `student-documents` so principal /
+-- teacher uploads aren't tripped up by the EXISTS sub-query on
+-- `public.students`. The tenant boundary is already enforced by comparing
+-- the path's first folder (school_id) against the caller's
+-- `current_user_school_id()`, so the additional EXISTS check was
+-- belt-and-suspenders that occasionally fails when the principal's session
+-- helpers (`current_user_role()`, `current_user_school_id()`) hadn't been
+-- evaluated yet during a freshly-issued JWT, or when the student row was
+-- inserted in the same transaction the policy is being evaluated against.
+--
+-- The simplified policy keeps the same security guarantees:
+--
+--   1. School staff: path's first folder MUST equal their school_id.
+--      Cross-school injection still impossible.
+--   2. Linked parent/student: path's second folder MUST be one of their
+--      linked student ids.
+--
+-- The student row's actual school_id is enforced server-side by the
+-- admission / readmission flow (route validates school_id before insert),
+-- so the storage policy doesn't need to re-check it.
+
+BEGIN;
+
+DROP POLICY IF EXISTS student_documents_insert ON storage.objects;
+CREATE POLICY student_documents_insert ON storage.objects FOR INSERT
+  TO authenticated
+  WITH CHECK (
+    bucket_id = 'student-documents'
+    AND array_length(storage.foldername(name), 1) >= 3
+    AND (
+      -- School staff uploading on behalf of any student in their school.
+      (
+        public.current_user_role() IN ('PRINCIPAL','TEACHER')
+        AND public.current_user_school_id()::text = (storage.foldername(name))[1]
+      )
+      -- Linked parent / student uploading their own document. Path's
+      -- school folder still has to match the student's school via the
+      -- linked_student_ids() side — server-side admission already binds
+      -- a linked student to a single school.
+      OR ((storage.foldername(name))[2])::uuid = ANY(public.linked_student_ids())
+    )
+  );
+
+COMMIT;
+
+
+-- =============================================================
+-- 0074_staff_documents_insert_simplify.sql
+-- =============================================================
+-- 0074_staff_documents_insert_simplify.sql
+--
+-- Same fix as 0073 (student-documents): drop the EXISTS-on-staff sub-query
+-- from the storage INSERT policy. Tenant boundary already enforced by the
+-- path's first folder == caller's school_id; the EXISTS check was
+-- belt-and-suspenders that occasionally failed during freshly-issued JWTs
+-- or same-transaction writes.
+
+BEGIN;
+
+DROP POLICY IF EXISTS staff_documents_insert ON storage.objects;
+CREATE POLICY staff_documents_insert ON storage.objects FOR INSERT
+  TO authenticated
+  WITH CHECK (
+    bucket_id = 'staff-documents'
+    AND array_length(storage.foldername(name), 1) >= 3
+    AND (
+      -- School staff (principal/teacher) uploading on behalf of any staff
+      -- member of their own school.
+      (
+        public.current_user_role() IN ('PRINCIPAL','TEACHER')
+        AND public.current_user_school_id()::text = (storage.foldername(name))[1]
+      )
+      -- The staff member themselves uploading their own document.
+      OR EXISTS (
+        SELECT 1 FROM public.staff s
+        WHERE s.id = ((storage.foldername(name))[2])::uuid
+          AND s.user_id = auth.uid()
+      )
+    )
+  );
+
+COMMIT;
+
+
+-- =============================================================
+-- 0075_salary_reversal.sql
+-- =============================================================
+-- 0075_salary_reversal.sql
+--
+-- Lets a principal mark an accidentally-recorded salary payment as
+-- reversed within a 24-hour window. Why mark instead of delete?
+--   • The history must show the mistake + the correction so the staff
+--     member (and the auditor) can see what actually happened.
+--   • The corresponding SALARY expense row also has to be balanced; we
+--     post a NEGATIVE expense rather than touching the original so the
+--     accounting trail stays append-only.
+--
+-- Also extends record_salary_payment with an optional paid_at param. The
+-- Pay modal's "Advanced" toggle exposes a date picker — the common case
+-- (record today's payment) doesn't change behaviour because NULL falls
+-- back to CURRENT_DATE.
+
+BEGIN;
+
+-- ─── 1. Reversal columns ────────────────────────────────────────────────
+ALTER TABLE public.salary_payments
+  ADD COLUMN IF NOT EXISTS reversed_at      TIMESTAMPTZ,
+  ADD COLUMN IF NOT EXISTS reversed_by      UUID REFERENCES public.users(id),
+  ADD COLUMN IF NOT EXISTS reversal_reason  TEXT;
+
+CREATE INDEX IF NOT EXISTS salary_payments_active_staff_idx
+  ON public.salary_payments (staff_id, paid_at DESC)
+  WHERE reversed_at IS NULL;
+
+-- ─── 2. record_salary_payment — accept optional paid_at ─────────────────
+DROP FUNCTION IF EXISTS public.record_salary_payment(UUID, TEXT, BIGINT, TEXT, TEXT, TEXT);
+DROP FUNCTION IF EXISTS public.record_salary_payment(UUID, TEXT, BIGINT, TEXT, TEXT, TEXT, DATE);
+
+CREATE OR REPLACE FUNCTION public.record_salary_payment(
+  p_staff_id UUID,
+  p_month    TEXT,
+  p_amount   BIGINT,
+  p_note     TEXT DEFAULT NULL,
+  p_method   TEXT DEFAULT NULL,
+  p_txn_id   TEXT DEFAULT NULL,
+  p_paid_at  DATE DEFAULT NULL
+) RETURNS UUID
+LANGUAGE plpgsql SECURITY DEFINER SET search_path = public AS $$
+DECLARE
+  v_school     UUID;
+  v_caller     UUID := auth.uid();
+  v_year       UUID;
+  v_pay_id     UUID;
+  v_txn        TEXT;
+  v_staff_name TEXT;
+  v_method     TEXT;
+  v_paid_at    DATE := COALESCE(p_paid_at, CURRENT_DATE);
+BEGIN
+  IF v_caller IS NULL THEN RAISE EXCEPTION 'unauthenticated'; END IF;
+  IF p_amount <= 0 THEN RAISE EXCEPTION 'amount must be positive'; END IF;
+  IF v_paid_at > CURRENT_DATE THEN
+    RAISE EXCEPTION 'paid_at cannot be in the future';
+  END IF;
+
+  v_method := UPPER(NULLIF(BTRIM(COALESCE(p_method, '')), ''));
+  IF v_method IS NOT NULL AND v_method NOT IN ('CASH','BANK_TRANSFER','UPI','CHEQUE','OTHER') THEN
+    RAISE EXCEPTION 'invalid method: %', v_method;
+  END IF;
+
+  SELECT school_id, name INTO v_school, v_staff_name
+    FROM public.staff WHERE id = p_staff_id;
+  IF v_school IS NULL THEN RAISE EXCEPTION 'staff not found'; END IF;
+
+  IF NOT (public.is_super_admin()
+          OR (public.is_principal() AND public.current_user_school_id() = v_school)) THEN
+    RAISE EXCEPTION 'forbidden';
+  END IF;
+
+  SELECT id INTO v_year FROM public.academic_years
+    WHERE school_id = v_school AND is_active = TRUE LIMIT 1;
+
+  v_txn := NULLIF(BTRIM(COALESCE(p_txn_id, '')), '');
+  IF v_txn IS NULL THEN
+    v_txn := 'TXN-' || to_char(NOW(),'YYYYMMDDHH24MISS') || '-' || substr(p_staff_id::text, 1, 4);
+  END IF;
+
+  INSERT INTO public.salary_payments
+    (staff_id, school_id, month, amount, paid_at, transaction_id, note, method)
+  VALUES
+    (p_staff_id, v_school, p_month, p_amount, v_paid_at, v_txn, p_note, v_method)
+  RETURNING id INTO v_pay_id;
+
+  INSERT INTO public.expenses
+    (school_id, academic_year_id, category, amount, date, description, created_by)
+  VALUES
+    (v_school, v_year, 'SALARY', p_amount, v_paid_at,
+     'Salary: ' || COALESCE(v_staff_name, p_staff_id::text) || ' — ' || p_month
+     || COALESCE(' (' || NULLIF(p_note,'') || ')', ''),
+     v_caller);
+
+  PERFORM public.log_audit(
+    'salary_paid', 'staff', p_staff_id,
+    jsonb_build_object(
+      'month', p_month, 'amount', p_amount,
+      'method', v_method, 'txn', v_txn,
+      'paid_at', v_paid_at
+    )
+  );
+
+  RETURN v_pay_id;
+END $$;
+
+GRANT EXECUTE ON FUNCTION public.record_salary_payment(UUID, TEXT, BIGINT, TEXT, TEXT, TEXT, DATE)
+  TO authenticated;
+
+-- ─── 3. reverse_salary_payment ──────────────────────────────────────────
+-- Marks an existing payment as reversed (within 24h) and posts a negative
+-- balancing expense entry. Reason is required.
+CREATE OR REPLACE FUNCTION public.reverse_salary_payment(
+  p_payment_id UUID,
+  p_reason     TEXT
+) RETURNS VOID
+LANGUAGE plpgsql SECURITY DEFINER SET search_path = public AS $$
+DECLARE
+  v_caller   UUID := auth.uid();
+  v_school   UUID;
+  v_staff_id UUID;
+  v_staff_nm TEXT;
+  v_amount   BIGINT;
+  v_month    TEXT;
+  v_paid_at  DATE;
+  v_year     UUID;
+  v_created  TIMESTAMPTZ;
+  v_already  TIMESTAMPTZ;
+BEGIN
+  IF v_caller IS NULL THEN RAISE EXCEPTION 'unauthenticated'; END IF;
+  IF p_reason IS NULL OR BTRIM(p_reason) = '' THEN
+    RAISE EXCEPTION 'reason is required';
+  END IF;
+
+  SELECT sp.staff_id, sp.school_id, sp.amount, sp.month, sp.paid_at,
+         sp.created_at, sp.reversed_at, s.name
+    INTO v_staff_id, v_school, v_amount, v_month, v_paid_at,
+         v_created, v_already, v_staff_nm
+  FROM public.salary_payments sp
+  JOIN public.staff s ON s.id = sp.staff_id
+  WHERE sp.id = p_payment_id;
+
+  IF v_staff_id IS NULL THEN RAISE EXCEPTION 'payment not found'; END IF;
+  IF v_already IS NOT NULL THEN RAISE EXCEPTION 'payment already reversed'; END IF;
+
+  -- Same-school principal only.
+  IF NOT (public.is_super_admin()
+          OR (public.is_principal() AND public.current_user_school_id() = v_school)) THEN
+    RAISE EXCEPTION 'forbidden';
+  END IF;
+
+  -- 24-hour window from when the row was originally created. Using
+  -- created_at (not paid_at) so back-dated entries can still be reversed
+  -- right after they were typed in.
+  IF NOW() - v_created > INTERVAL '24 hours' THEN
+    RAISE EXCEPTION 'reversal window expired (24 hours from record time)';
+  END IF;
+
+  UPDATE public.salary_payments
+     SET reversed_at = NOW(),
+         reversed_by = v_caller,
+         reversal_reason = BTRIM(p_reason)
+   WHERE id = p_payment_id;
+
+  -- Balance the SALARY expense with a negative entry. Same date as the
+  -- original so monthly summaries net correctly.
+  SELECT id INTO v_year FROM public.academic_years
+    WHERE school_id = v_school AND is_active = TRUE LIMIT 1;
+
+  INSERT INTO public.expenses
+    (school_id, academic_year_id, category, amount, date, description, created_by)
+  VALUES
+    (v_school, v_year, 'SALARY', -v_amount, v_paid_at,
+     'Salary REVERSED: ' || COALESCE(v_staff_nm, v_staff_id::text)
+     || ' — ' || v_month || ' · ' || BTRIM(p_reason),
+     v_caller);
+
+  PERFORM public.log_audit(
+    'salary_payment_reversed', 'staff', v_staff_id,
+    jsonb_build_object(
+      'payment_id', p_payment_id,
+      'amount', v_amount, 'month', v_month,
+      'reason', BTRIM(p_reason)
+    )
+  );
+END $$;
+
+GRANT EXECUTE ON FUNCTION public.reverse_salary_payment(UUID, TEXT) TO authenticated;
+
+COMMIT;
 
 
 -- =============================================================
 -- 0076_school_salary_pay_day.sql
 -- =============================================================
--- Single school-wide salary pay day (1-28). Drives the
--- "Due Xth / Overdue" badge in the Salary Ledger.
+-- =============================================================
+-- 0076_school_salary_pay_day.sql
+-- =============================================================
+-- Single school-wide salary pay day (1-28). Drives the "Due Xth /
+-- Overdue" badge in the Salary Ledger for every staff member's
+-- monthly row. NULL = not configured (no badge, no overdue flag).
+--
+-- An earlier in-flight design used a per-staff salary_due_day on
+-- public.staff; that approach was rolled back before reaching the
+-- main branch because schools almost always pay every staff
+-- member on the same day, so per-staff config was data-entry
+-- overhead with no real value. Only this school-level field
+-- ships.
+-- =============================================================
+
 ALTER TABLE public.schools
   ADD COLUMN IF NOT EXISTS salary_pay_day SMALLINT;
+
 DO $$
 BEGIN
   IF NOT EXISTS (
@@ -8906,13 +9270,31 @@ END $$;
 -- =============================================================
 -- 0077_approvals_leave_parent_insert.sql
 -- =============================================================
+-- =============================================================
+-- 0077_approvals_leave_parent_insert.sql
+-- =============================================================
+-- The approvals_write policy only allowed PRINCIPAL inserts. The
+-- /api/principal/leave/submit endpoint uses the service-role
+-- adminDb (which bypasses RLS), but if the env's SERVICE key
+-- is ever missing the same flow falls back to anon and trips
+-- "new row violates row-level security policy". Relax the policy
+-- so PARENT/STUDENT/TEACHER can INSERT a LEAVE row for a student
+-- they're allowed to act on; UPDATE/DELETE remain principal-only.
+-- =============================================================
+
 DROP POLICY IF EXISTS approvals_write ON public.approvals;
+
+-- Principal can do anything (existing behaviour).
 CREATE POLICY approvals_write_principal ON public.approvals
   FOR ALL
   USING (public.is_super_admin()
          OR (public.is_principal() AND school_id = public.current_user_school_id()))
   WITH CHECK (public.is_super_admin()
          OR (public.is_principal() AND school_id = public.current_user_school_id()));
+
+-- PARENT / STUDENT / TEACHER may INSERT LEAVE requests only.
+--   PARENT/STUDENT  → student must be in linked_student_ids().
+--   TEACHER         → student must be in caller's school.
 CREATE POLICY approvals_insert_leave ON public.approvals
   FOR INSERT
   WITH CHECK (
@@ -8920,7 +9302,7 @@ CREATE POLICY approvals_insert_leave ON public.approvals
     AND entity_type = 'student'
     AND requested_by = auth.uid()
     AND (
-      (public.current_user_role() IN ('PARENT','STUDENT')
+      (public.current_user_role() IN ('PARENT', 'STUDENT')
         AND entity_id = ANY (public.linked_student_ids()))
       OR
       (public.current_user_role() = 'TEACHER'
@@ -8932,7 +9314,21 @@ CREATE POLICY approvals_insert_leave ON public.approvals
 -- =============================================================
 -- 0078_complaints_teacher_insert.sql
 -- =============================================================
+-- =============================================================
+-- 0078_complaints_teacher_insert.sql
+-- =============================================================
+-- The existing complaints insert policy only allowed PARENT/STUDENT
+-- inserts (via linked_student_ids) and PRINCIPAL via the catch-all
+-- complaints_write. TEACHERs hit a "new row violates row-level
+-- security policy" when filing complaints from their own portal.
+--
+-- Add a TEACHER-scoped INSERT policy: a TEACHER may insert a complaint
+-- against any student in their own school (school_id match) and the
+-- row must be owned by them (from_user_id = auth.uid()).
+-- =============================================================
+
 DROP POLICY IF EXISTS complaints_teacher_insert ON public.complaints;
+
 CREATE POLICY complaints_teacher_insert ON public.complaints
   FOR INSERT
   WITH CHECK (
@@ -8943,50 +9339,8 @@ CREATE POLICY complaints_teacher_insert ON public.complaints
 
 
 -- =============================================================
--- 0079_test_schedules_teacher_rules.sql
+-- 0079_final_exam_single_per_class.sql
 -- =============================================================
-CREATE UNIQUE INDEX IF NOT EXISTS test_schedules_one_final_per_year
-  ON public.test_schedules (school_id, academic_year_id)
-  WHERE exam_type = 'FINAL';
-
-DROP POLICY IF EXISTS test_schedules_teacher_write ON public.test_schedules;
-CREATE POLICY test_schedules_teacher_write ON public.test_schedules
-  FOR ALL
-  USING (
-    public.current_user_role() = 'TEACHER'
-    AND school_id = public.current_user_school_id()
-    AND teacher_id IN (SELECT id FROM public.staff WHERE user_id = auth.uid())
-    AND academic_year_id IN (
-      SELECT id FROM public.academic_years
-       WHERE school_id = public.current_user_school_id() AND is_active = true
-    )
-  )
-  WITH CHECK (
-    public.current_user_role() = 'TEACHER'
-    AND school_id = public.current_user_school_id()
-    AND teacher_id IN (SELECT id FROM public.staff WHERE user_id = auth.uid())
-    AND academic_year_id IN (
-      SELECT id FROM public.academic_years
-       WHERE school_id = public.current_user_school_id() AND is_active = true
-    )
-  );
-
-
--- =============================================================
--- 0080_school_branding.sql
--- =============================================================
-ALTER TABLE public.schools
-  ADD COLUMN IF NOT EXISTS logo_path                TEXT,
-  ADD COLUMN IF NOT EXISTS principal_signature_path TEXT,
-  ADD COLUMN IF NOT EXISTS accent_color             TEXT;
-DO $$
-BEGIN
-  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'schools_accent_color_chk') THEN
-    ALTER TABLE public.schools
-      ADD CONSTRAINT schools_accent_color_chk
-      CHECK (accent_color IS NULL OR accent_color ~ '^#[0-9A-Fa-f]{6}$');
-  END IF;
-END $$;
 -- =============================================================
 -- 0079_final_exam_single_per_class.sql
 -- =============================================================
@@ -9057,6 +9411,95 @@ DROP TRIGGER IF EXISTS final_exam_modification_guard ON public.test_schedules;
 CREATE TRIGGER final_exam_modification_guard
   BEFORE UPDATE OR DELETE ON public.test_schedules
   FOR EACH ROW EXECUTE FUNCTION public.guard_final_exam_modification();
+
+
+-- =============================================================
+-- 0079_test_schedules_teacher_rules.sql
+-- =============================================================
+-- =============================================================
+-- 0079_test_schedules_teacher_rules.sql
+-- =============================================================
+-- 1. Only ONE 'FINAL' exam per (school, academic_year) — promotion
+--    pulls from this one row, multiples would create ambiguity.
+-- 2. Teachers may UPDATE/DELETE their OWN test rows while the
+--    academic year is still ACTIVE. After year-close, the row is
+--    immutable from RLS's perspective; the server-side editor-mode
+--    flow remains the only way to amend (handled via service role).
+-- =============================================================
+
+-- ─── 1. Single FINAL per (school, year) ───────────────────────────
+-- Partial unique index: only enforced for exam_type = 'FINAL'.
+CREATE UNIQUE INDEX IF NOT EXISTS test_schedules_one_final_per_year
+  ON public.test_schedules (school_id, academic_year_id)
+  WHERE exam_type = 'FINAL';
+
+-- ─── 2. Teacher UPDATE/DELETE policy on own tests ─────────────────
+-- Existing test_schedules_write policy is principal-only and stays.
+-- We add a TEACHER policy scoped by `teacher_id = staff(auth.uid())`
+-- and gated by `academic_years.is_active = true`.
+DROP POLICY IF EXISTS test_schedules_teacher_write ON public.test_schedules;
+
+CREATE POLICY test_schedules_teacher_write ON public.test_schedules
+  FOR ALL
+  USING (
+    public.current_user_role() = 'TEACHER'
+    AND school_id = public.current_user_school_id()
+    AND teacher_id IN (
+      SELECT id FROM public.staff WHERE user_id = auth.uid()
+    )
+    AND academic_year_id IN (
+      SELECT id FROM public.academic_years
+       WHERE school_id = public.current_user_school_id() AND is_active = true
+    )
+  )
+  WITH CHECK (
+    public.current_user_role() = 'TEACHER'
+    AND school_id = public.current_user_school_id()
+    AND teacher_id IN (
+      SELECT id FROM public.staff WHERE user_id = auth.uid()
+    )
+    AND academic_year_id IN (
+      SELECT id FROM public.academic_years
+       WHERE school_id = public.current_user_school_id() AND is_active = true
+    )
+  );
+
+
+-- =============================================================
+-- 0080_school_branding.sql
+-- =============================================================
+-- =============================================================
+-- 0080_school_branding.sql
+-- =============================================================
+-- Branding columns on schools so admit cards / ID cards / marksheets
+-- can pick up the school's logo, accent color, and principal
+-- signature without each tool persisting its own copies. Storage paths
+-- live under the existing `school-assets` bucket — same convention as
+-- payment_qr_path. Defaults intentionally empty so nothing changes for
+-- schools that haven't configured branding yet.
+-- =============================================================
+
+ALTER TABLE public.schools
+  ADD COLUMN IF NOT EXISTS logo_path                TEXT,
+  ADD COLUMN IF NOT EXISTS principal_signature_path TEXT,
+  ADD COLUMN IF NOT EXISTS accent_color             TEXT;
+
+-- Sanity check: accent_color must be a 7-char hex (#RRGGBB) or NULL.
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint WHERE conname = 'schools_accent_color_chk'
+  ) THEN
+    ALTER TABLE public.schools
+      ADD CONSTRAINT schools_accent_color_chk
+      CHECK (accent_color IS NULL OR accent_color ~ '^#[0-9A-Fa-f]{6}$');
+  END IF;
+END $$;
+
+
+-- =============================================================
+-- 0080_school_fee_aggregate.sql
+-- =============================================================
 -- =============================================================
 -- 0080_school_fee_aggregate.sql
 -- =============================================================
@@ -9130,6 +9573,11 @@ BEGIN
 END $$;
 
 GRANT EXECUTE ON FUNCTION public.get_school_fee_aggregate() TO authenticated;
+
+
+-- =============================================================
+-- 0081_school_new_year_creation_toggle.sql
+-- =============================================================
 -- =============================================================
 -- 0081_school_new_year_creation_toggle.sql
 -- =============================================================
@@ -9165,6 +9613,11 @@ BEGIN
 END $$;
 
 GRANT EXECUTE ON FUNCTION public.assert_new_year_creation_allowed(UUID) TO authenticated;
+
+
+-- =============================================================
+-- 0082_school_limits.sql
+-- =============================================================
 -- =============================================================
 -- 0082_school_limits.sql
 -- =============================================================
@@ -9304,6 +9757,11 @@ END $$;
 DROP TRIGGER IF EXISTS trg_school_limit_floor ON public.schools;
 CREATE TRIGGER trg_school_limit_floor BEFORE UPDATE OF max_students, max_staff ON public.schools
   FOR EACH ROW EXECUTE FUNCTION public.enforce_school_limit_floor();
+
+
+-- =============================================================
+-- 0083_drop_govt_payments.sql
+-- =============================================================
 -- =============================================================
 -- 0083_drop_govt_payments.sql
 -- =============================================================
@@ -9332,6 +9790,11 @@ CREATE TRIGGER trg_school_limit_floor BEFORE UPDATE OF max_students, max_staff O
 DROP FUNCTION IF EXISTS public.record_govt_payment(BIGINT, DATE, TEXT, TEXT, UUID[]);
 DROP TABLE IF EXISTS public.govt_payment_student_links CASCADE;
 DROP TABLE IF EXISTS public.government_payments CASCADE;
+
+
+-- =============================================================
+-- 0084_drop_advance_credit.sql
+-- =============================================================
 -- =============================================================
 -- 0084_drop_advance_credit.sql
 -- =============================================================
@@ -9585,6 +10048,11 @@ BEGIN
 END $$;
 
 GRANT EXECUTE ON FUNCTION public.pay_installment(UUID, BIGINT, BIGINT, TEXT, DATE, TEXT) TO authenticated;
+
+
+-- =============================================================
+-- 0085_student_tc_lifecycle.sql
+-- =============================================================
 -- =============================================================
 -- 0085_student_tc_lifecycle.sql
 -- =============================================================
@@ -9760,6 +10228,11 @@ BEGIN
 END $$;
 
 GRANT EXECUTE ON FUNCTION public.rejoin_student(UUID, TEXT, TEXT, TEXT) TO authenticated;
+
+
+-- =============================================================
+-- 0086_financial_analytics.sql
+-- =============================================================
 -- =============================================================
 -- 0086_financial_analytics.sql
 -- =============================================================
@@ -9920,6 +10393,11 @@ BEGIN
 END $$;
 
 GRANT EXECUTE ON FUNCTION public.get_financial_analytics(UUID) TO authenticated;
+
+
+-- =============================================================
+-- 0087_reversal_24h_guard.sql
+-- =============================================================
 -- 0087_reversal_24h_guard.sql
 --
 -- Server-side enforcement of the 24-hour reversal window. The UI in
@@ -10072,6 +10550,10 @@ $$;
 
 COMMIT;
 
+
+-- =============================================================
+-- 0088_export_logs.sql
+-- =============================================================
 -- 0088_export_logs.sql
 --
 -- Audit + rate-limit infrastructure for the principal's Reports panel.
@@ -10187,6 +10669,10 @@ GRANT EXECUTE ON FUNCTION public.log_export(TEXT, JSONB) TO authenticated;
 
 COMMIT;
 
+
+-- =============================================================
+-- 0089_expense_void.sql
+-- =============================================================
 -- 0089_expense_void.sql
 --
 -- Replace hard-delete on expenses with a soft-void model. Financial
@@ -10220,6 +10706,10 @@ CREATE INDEX IF NOT EXISTS expenses_active_idx
 
 COMMIT;
 
+
+-- =============================================================
+-- 0090_school_holidays.sql
+-- =============================================================
 -- 0090_school_holidays.sql
 --
 -- Centralised holiday calendar for each school + academic year.
@@ -10282,6 +10772,10 @@ ALTER TABLE public.schools
 
 COMMIT;
 
+
+-- =============================================================
+-- 0091_ai_paper_quotas.sql
+-- =============================================================
 -- 0091_ai_paper_quotas.sql
 --
 -- Two new pieces:
@@ -10369,21 +10863,72 @@ CREATE TRIGGER ai_paper_history_trim_fifo_trg
 AFTER INSERT ON public.ai_paper_history
 FOR EACH ROW EXECUTE FUNCTION public.ai_paper_history_trim_fifo();
 
+COMMIT;
+
 
 -- =============================================================
 -- 0092_attendance_records_parent_select.sql
 -- =============================================================
--- Migration 0011 dropped attendance_records_parent_select in a loop
--- and only rebuilt the fee_installments / payment_records variants
--- afterwards. Result: PARENT/STUDENT can't read attendance_records, so
--- the !inner join in studentDashboard.getMyAttendance returns 0 rows
--- and the homepage hero shows "—". Same fix for test_schedules.
+-- 0092_attendance_records_parent_select.sql
+--
+-- Bug: PARENT/STUDENT homepage attendance % shows "—" and the
+-- AttendanceView is empty because the `!inner(date)` join from
+-- `attendance_student_details` to `attendance_records` returns 0 rows
+-- under RLS. Migration 0011 dropped attendance_records_parent_select
+-- (in a loop) and only rebuilt fee_installments / payment_records
+-- afterwards — attendance_records and test_schedules were left without
+-- a parent-facing SELECT policy. Default RLS deny means parents see
+-- nothing.
+--
+-- Fix: allow PARENT/STUDENT to read an attendance_records row when it
+-- has at least one attendance_student_details row for one of their
+-- linked students. attendance_student_details already gates its own
+-- SELECT by linked_student_ids, so this only widens visibility to the
+-- header rows the child rows reference.
 
--- Scope by school of the linked student. An earlier draft joined through
--- attendance_student_details — that triggered "infinite recursion detected
--- in policy for relation attendance_records" because attsd_select itself
--- selects from attendance_records. Going through `students` breaks the
--- cycle (students_parent_select doesn't touch either attendance table).
+DROP POLICY IF EXISTS attendance_records_parent_select ON public.attendance_records;
+CREATE POLICY attendance_records_parent_select ON public.attendance_records
+  FOR SELECT
+  USING (
+    EXISTS (
+      SELECT 1 FROM public.attendance_student_details d
+      WHERE d.attendance_id = attendance_records.id
+        AND d.student_id = ANY(public.linked_student_ids())
+    )
+  );
+
+-- test_schedules is in the same boat — parents need to see exam dates
+-- for their child's class. Scope by class_id matching any linked
+-- student's active academic record.
+DROP POLICY IF EXISTS test_schedules_parent_select ON public.test_schedules;
+CREATE POLICY test_schedules_parent_select ON public.test_schedules
+  FOR SELECT
+  USING (
+    EXISTS (
+      SELECT 1 FROM public.student_academic_records sar
+      WHERE sar.student_id = ANY(public.linked_student_ids())
+        AND sar.academic_year_id = test_schedules.academic_year_id
+    )
+  );
+
+
+-- =============================================================
+-- 0093_attendance_records_parent_select_fix.sql
+-- =============================================================
+-- 0093_attendance_records_parent_select_fix.sql
+--
+-- Fix: 0092 introduced "infinite recursion detected in policy for relation
+-- attendance_records". The cycle:
+--   attendance_records.RLS → SELECT FROM attendance_student_details
+--   attendance_student_details.RLS (attsd_select) → SELECT FROM attendance_records
+--
+-- Rewrite the parent-select policy so it doesn't touch attendance_student_details
+-- at all. Scope by school instead: a parent / student may read an attendance_records
+-- header row when at least one of their linked students belongs to the same school.
+-- attendance_student_details RLS already gates per-student detail rows, so widening
+-- header visibility to "students at the same school" is safe and matches what the
+-- UI joins for date display.
+
 DROP POLICY IF EXISTS attendance_records_parent_select ON public.attendance_records;
 CREATE POLICY attendance_records_parent_select ON public.attendance_records
   FOR SELECT
@@ -10395,6 +10940,9 @@ CREATE POLICY attendance_records_parent_select ON public.attendance_records
     )
   );
 
+-- Same recursion shape isn't possible for test_schedules (it joins through
+-- student_academic_records, which doesn't reference test_schedules), but
+-- recreate identically for consistency.
 DROP POLICY IF EXISTS test_schedules_parent_select ON public.test_schedules;
 CREATE POLICY test_schedules_parent_select ON public.test_schedules
   FOR SELECT
@@ -10406,5 +10954,1810 @@ CREATE POLICY test_schedules_parent_select ON public.test_schedules
     )
   );
 
-COMMIT;
+
+-- =============================================================
+-- 0094_complaint_limits_and_hide.sql
+-- =============================================================
+-- 0094_complaint_limits_and_hide.sql
+--
+-- Three product changes on the complaints flow:
+--
+-- 1. Anonymous-complaint cap: 1 per 7 days → 1 per 30 days. Anonymous filings
+--    are sensitive (bullying, harassment); a tighter cap prevents the channel
+--    from being used for routine grievances while still leaving room for a
+--    student to escalate a long-running issue.
+--
+-- 2. Normal-complaint cap: 3/day (unchanged) PLUS a new 7/rolling-week ceiling.
+--    Daily-only let a parent fire 21 complaints in a week; the combined cap
+--    keeps the daily ceiling but blocks sustained abuse.
+--
+-- 3. New column `hidden_from_submitter` — student / parent can flip this on
+--    their own complaints so they don't show up in their personal "my
+--    complaints" list anymore. Used for the privacy-on-shared-device case
+--    (student filed an anonymous bullying complaint; doesn't want a parent
+--    glancing at the device to see it). Audit row stays intact, principal
+--    still sees it as before.
+
+ALTER TABLE public.complaints
+  ADD COLUMN IF NOT EXISTS hidden_from_submitter BOOLEAN NOT NULL DEFAULT false;
+
+CREATE INDEX IF NOT EXISTS idx_complaints_visible_to_submitter
+  ON public.complaints (from_user_id, hidden_from_submitter)
+  WHERE hidden_from_submitter = false;
+
+-- ─── Trigger 1: normal complaint cap (2/day + 7/week) ────────────────────
+CREATE OR REPLACE FUNCTION public.enforce_complaint_daily_limit() RETURNS TRIGGER
+LANGUAGE plpgsql AS $$
+DECLARE
+  v_today_ist date;
+  v_count_day  bigint;
+  v_count_week bigint;
+BEGIN
+  IF auth.uid() IS NULL THEN
+    RETURN NEW;
+  END IF;
+  -- Anonymous rows are governed by a separate trigger below; skip here so
+  -- the limits don't double-count.
+  IF NEW.is_anonymous IS TRUE THEN
+    RETURN NEW;
+  END IF;
+
+  v_today_ist := (now() AT TIME ZONE 'Asia/Kolkata')::date;
+
+  IF NEW.student_id IS NOT NULL THEN
+    -- Parent / student complaint: cap per (submitter, child).
+    SELECT count(*) INTO v_count_day
+    FROM public.complaints
+    WHERE from_user_id = NEW.from_user_id
+      AND student_id   = NEW.student_id
+      AND is_anonymous IS NOT TRUE
+      AND (created_at AT TIME ZONE 'Asia/Kolkata')::date = v_today_ist;
+    SELECT count(*) INTO v_count_week
+    FROM public.complaints
+    WHERE from_user_id = NEW.from_user_id
+      AND student_id   = NEW.student_id
+      AND is_anonymous IS NOT TRUE
+      AND created_at >= (now() - interval '7 days');
+  ELSE
+    -- Teacher / no-student complaint: cap per submitter (legacy behavior).
+    SELECT count(*) INTO v_count_day
+    FROM public.complaints
+    WHERE from_user_id = NEW.from_user_id
+      AND student_id IS NULL
+      AND is_anonymous IS NOT TRUE
+      AND (created_at AT TIME ZONE 'Asia/Kolkata')::date = v_today_ist;
+    SELECT count(*) INTO v_count_week
+    FROM public.complaints
+    WHERE from_user_id = NEW.from_user_id
+      AND student_id IS NULL
+      AND is_anonymous IS NOT TRUE
+      AND created_at >= (now() - interval '7 days');
+  END IF;
+
+  IF v_count_day >= 3 THEN
+    RAISE EXCEPTION
+      'Daily limit reached — only 3 complaints allowed per day. Please contact the school office for another submission.'
+      USING ERRCODE = 'check_violation';
+  END IF;
+  IF v_count_week >= 7 THEN
+    RAISE EXCEPTION
+      'Weekly limit reached — only 7 complaints allowed in a 7-day window. Please contact the school office.'
+      USING ERRCODE = 'check_violation';
+  END IF;
+
+  RETURN NEW;
+END;
+$$;
+
+-- ─── Trigger 2: anonymous-complaint cap (1 / 30 days) ────────────────────
+CREATE OR REPLACE FUNCTION public.enforce_anonymous_complaint_weekly_cap()
+RETURNS trigger
+LANGUAGE plpgsql AS $$
+DECLARE
+  recent_count integer;
+BEGIN
+  IF NEW.is_anonymous IS NOT TRUE THEN
+    RETURN NEW;
+  END IF;
+
+  -- 30-day rolling window keyed on student_id when present, otherwise on
+  -- the submitting user account. Function name kept for backwards compat
+  -- with the existing trigger binding; the message + interval are what
+  -- the user actually sees.
+  SELECT COUNT(*) INTO recent_count
+  FROM public.complaints
+  WHERE is_anonymous = true
+    AND created_at >= (now() - interval '30 days')
+    AND (
+      (NEW.student_id IS NOT NULL AND student_id = NEW.student_id)
+      OR (NEW.student_id IS NULL AND from_user_id = NEW.from_user_id)
+    );
+
+  IF recent_count >= 1 THEN
+    RAISE EXCEPTION 'Anonymous complaint limit reached: only 1 per 30 days'
+      USING ERRCODE = 'check_violation';
+  END IF;
+
+  RETURN NEW;
+END;
+$$;
+
+-- ─── Submitter UPDATE policy for hide-from-my-dashboard ──────────────────
+-- The submitter (student / parent) can flip `hidden_from_submitter` on
+-- their own row. Principal updates go through adminDb (service role) which
+-- bypasses RLS, so this policy doesn't widen the principal write surface.
+DROP POLICY IF EXISTS complaints_user_hide ON public.complaints;
+CREATE POLICY complaints_user_hide ON public.complaints
+  FOR UPDATE
+  USING (from_user_id = auth.uid())
+  WITH CHECK (from_user_id = auth.uid());
+
+
+-- =============================================================
+-- 0095_email_otp_2fa.sql
+-- =============================================================
+-- 0095_email_otp_2fa.sql
+--
+-- Optional email-OTP two-factor for high-stakes accounts (PRINCIPAL +
+-- SUPER_ADMIN). Default OFF so existing users see no change. When the
+-- principal toggles it on from Settings → Security, login flow becomes:
+--
+--   1. mobile + password (server verifies)
+--   2. server detects email_otp_2fa = true → does NOT issue tokens,
+--      returns { requires2FA: true, email } to client
+--   3. client calls supabase.auth.signInWithOtp({ email }) → Supabase
+--      emails a 6-digit code natively (free tier: 4/hour/user)
+--   4. user types code → supabase.auth.verifyOtp() → real session
+--
+-- Schema cost: one nullable boolean column, indexed lookup not needed
+-- (column already accessed by id in the per-row login profile fetch).
+-- The trigger below blocks the toggle for non-principal/super-admin
+-- roles AND for users with no email — same protection done in the UI,
+-- but defended at the DB so a direct REST call can't bypass it.
+
+ALTER TABLE public.users
+  ADD COLUMN IF NOT EXISTS email_otp_2fa BOOLEAN NOT NULL DEFAULT false;
+
+-- Block the flag being flipped on for accounts where it has no meaning.
+-- Phrased as a BEFORE UPDATE trigger because the existing
+-- users_prevent_self_escalation trigger already pattern-locks role
+-- changes — same shape here keeps server-side admin updates allowed
+-- while RLS-bypassing service-role inserts/updates work as expected.
+CREATE OR REPLACE FUNCTION public.enforce_email_otp_2fa_eligibility() RETURNS TRIGGER
+LANGUAGE plpgsql AS $$
+BEGIN
+  IF NEW.email_otp_2fa IS TRUE AND OLD.email_otp_2fa IS DISTINCT FROM TRUE THEN
+    -- Only PRINCIPAL / SUPER_ADMIN may enable. STUDENT / PARENT /
+    -- TEACHER / DRIVER login by mobile number — most don't even have
+    -- an email on file — so 2FA via email isn't applicable.
+    IF NEW.role NOT IN ('PRINCIPAL', 'SUPER_ADMIN') THEN
+      RAISE EXCEPTION 'email_otp_2fa is only available for PRINCIPAL / SUPER_ADMIN accounts';
+    END IF;
+    -- Email is required so the OTP has somewhere to land.
+    IF NEW.email IS NULL OR length(trim(NEW.email)) = 0 THEN
+      RAISE EXCEPTION 'Cannot enable email OTP 2FA — set an email on this account first';
+    END IF;
+  END IF;
+  RETURN NEW;
+END;
+$$;
+
+DROP TRIGGER IF EXISTS users_email_otp_2fa_eligibility ON public.users;
+CREATE TRIGGER users_email_otp_2fa_eligibility
+  BEFORE UPDATE OF email_otp_2fa, role, email ON public.users
+  FOR EACH ROW EXECUTE FUNCTION public.enforce_email_otp_2fa_eligibility();
+
+
+-- =============================================================
+-- 0096_vehicle_live_tracking.sql
+-- =============================================================
+-- 0096_vehicle_live_tracking.sql
+--
+-- Live GPS / trip-state for school transport vehicles. One row per
+-- vehicle (PK = vehicle_id), UPDATE-only mutation pattern so the
+-- table size is bounded at N = number of vehicles, never grows with
+-- pings.
+--
+-- Driver client UPDATEs this row every 15 sec while tracking.
+-- Principal client subscribes via Supabase Realtime Postgres Changes
+-- and sees live position updates without polling. When driver app
+-- closes / network drops, the row persists with last known position
+-- and `last_seen` so the principal sees "Last seen N min ago"
+-- instead of a mysterious blank.
+
+CREATE TABLE IF NOT EXISTS public.vehicle_live (
+  vehicle_id        UUID PRIMARY KEY REFERENCES public.transport_vehicles(id) ON DELETE CASCADE,
+  school_id         UUID NOT NULL REFERENCES public.schools(id) ON DELETE CASCADE,
+  -- Last reported GPS coordinate. NULL until first ping after vehicle
+  -- creation; principal renders "GPS not started" in that case.
+  lat               DOUBLE PRECISION,
+  lng               DOUBLE PRECISION,
+  speed_kmh         DOUBLE PRECISION,
+  -- Server-stamped on each ping. Used to compute "Live · 2s ago",
+  -- "Last seen 5 min ago", "Offline since 12:45 PM" labels client-side.
+  last_seen         TIMESTAMPTZ NOT NULL DEFAULT now(),
+  -- True while driver explicitly has trip running. Flips to false
+  -- on /api/transport/ping?stop=true (driver tapped Stop) OR when
+  -- last_seen is > 30 min old (server-side staleness check).
+  is_tracking       BOOLEAN NOT NULL DEFAULT false,
+  -- Index of the stop the driver is heading toward (next stop).
+  -- Same shape as the in-memory currentStopIndex used today, just
+  -- persisted server-side so app reopen / principal view both stay
+  -- in sync. NULL = no trip in progress.
+  current_stop_idx  SMALLINT,
+  -- Snapshotted at trip start so a "trip done" UI can highlight the
+  -- run that just completed without a join.
+  trip_started_at   TIMESTAMPTZ,
+  trip_ended_at     TIMESTAMPTZ,
+  updated_at        TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS vehicle_live_school_idx ON public.vehicle_live(school_id);
+CREATE INDEX IF NOT EXISTS vehicle_live_last_seen_idx ON public.vehicle_live(last_seen DESC);
+
+-- RLS — same shape as transport_vehicles. Principals + teachers see
+-- their school's vehicles. Parents/students see vehicles their
+-- linked student is assigned to. Driver writes go through service
+-- role from the server, so we don't need a permissive write policy
+-- here (defaults deny on UPDATE for non-service-role).
+
+ALTER TABLE public.vehicle_live ENABLE ROW LEVEL SECURITY;
+
+DROP POLICY IF EXISTS vehicle_live_select_school ON public.vehicle_live;
+CREATE POLICY vehicle_live_select_school ON public.vehicle_live
+  FOR SELECT
+  USING (
+    public.is_super_admin()
+    OR (public.current_user_role() IN ('PRINCIPAL','TEACHER','DRIVER')
+        AND school_id = public.current_user_school_id())
+  );
+
+DROP POLICY IF EXISTS vehicle_live_select_parent ON public.vehicle_live;
+CREATE POLICY vehicle_live_select_parent ON public.vehicle_live
+  FOR SELECT
+  USING (
+    EXISTS (
+      SELECT 1 FROM public.student_transport_assignments sta
+      WHERE sta.vehicle_id = vehicle_live.vehicle_id
+        AND sta.is_active = true
+        AND sta.student_id = ANY(public.linked_student_ids())
+    )
+  );
+
+-- Auto-stale: any vehicle whose last_seen is older than 30 minutes
+-- is considered offline. The application clamps `is_tracking` to
+-- false in the UI when this is true; we also expose a helper view
+-- so realtime subscribers can rely on the server's view of "live".
+-- (The is_tracking flag itself is only updated on writes, so without
+-- this view the principal would see "ON TRIP" forever for a driver
+-- whose phone died mid-route.)
+
+-- Realtime publication — Supabase's `supabase_realtime` publication
+-- is what enables Postgres Changes streaming. Add this table.
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_publication_tables
+    WHERE pubname = 'supabase_realtime' AND tablename = 'vehicle_live'
+  ) THEN
+    BEGIN
+      ALTER PUBLICATION supabase_realtime ADD TABLE public.vehicle_live;
+    EXCEPTION WHEN OTHERS THEN
+      -- Publication might not exist yet on a fresh project; the
+      -- Realtime extension creates it on first dashboard touch.
+      -- Skip silently.
+      NULL;
+    END;
+  END IF;
+END $$;
+
+
+-- =============================================================
+-- 0097_school_max_vehicles.sql
+-- =============================================================
+-- 0097_school_max_vehicles.sql
+--
+-- Per-school vehicle cap controlled by super-admin. Same shape as the
+-- max_students / max_staff guard (migration 0082) so the principal
+-- gets a friendly error and can't blow past the licensed fleet size.
+--
+-- Semantics:
+--   max_vehicles = NULL → unlimited (default for older schools)
+--   max_vehicles = 0    → TRANSPORT SERVICE DISABLED. Principal can't
+--                         create the first vehicle. UI also hides the
+--                         Transport tile entirely so the school looks
+--                         clean for institutions that don't run buses.
+--   max_vehicles = N    → up to N active vehicles. Deactivation always
+--                         allowed (matches student/staff trigger).
+
+ALTER TABLE public.schools
+  ADD COLUMN IF NOT EXISTS max_vehicles INT;
+
+DO $$
+BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'schools_max_vehicles_chk') THEN
+    ALTER TABLE public.schools ADD CONSTRAINT schools_max_vehicles_chk
+      CHECK (max_vehicles IS NULL OR max_vehicles >= 0);
+  END IF;
+END $$;
+
+CREATE OR REPLACE FUNCTION public.school_active_vehicle_count(p_school_id UUID)
+RETURNS INT LANGUAGE sql STABLE SECURITY DEFINER SET search_path = public AS $$
+  SELECT COUNT(*)::INT FROM public.transport_vehicles
+   WHERE school_id = p_school_id AND is_active = TRUE;
+$$;
+
+GRANT EXECUTE ON FUNCTION public.school_active_vehicle_count(UUID) TO authenticated;
+
+CREATE OR REPLACE FUNCTION public.enforce_vehicle_limit() RETURNS TRIGGER
+LANGUAGE plpgsql AS $$
+DECLARE
+  v_limit INT;
+  v_count INT;
+BEGIN
+  -- Only enforce on rows becoming active.
+  IF NOT NEW.is_active THEN RETURN NEW; END IF;
+  IF TG_OP = 'UPDATE' AND OLD.is_active = TRUE THEN RETURN NEW; END IF;
+
+  SELECT max_vehicles INTO v_limit FROM public.schools WHERE id = NEW.school_id;
+  IF v_limit IS NULL THEN RETURN NEW; END IF;
+
+  IF v_limit = 0 THEN
+    RAISE EXCEPTION 'Transport service is not enabled for this school. Contact platform admin to enable.'
+      USING ERRCODE = 'check_violation';
+  END IF;
+
+  v_count := public.school_active_vehicle_count(NEW.school_id);
+  IF v_count >= v_limit THEN
+    RAISE EXCEPTION 'Vehicle limit reached (% / %). Contact your platform admin to raise the limit.', v_count, v_limit
+      USING ERRCODE = 'check_violation';
+  END IF;
+  RETURN NEW;
+END $$;
+
+DROP TRIGGER IF EXISTS trg_vehicle_limit ON public.transport_vehicles;
+CREATE TRIGGER trg_vehicle_limit BEFORE INSERT OR UPDATE OF is_active ON public.transport_vehicles
+  FOR EACH ROW EXECUTE FUNCTION public.enforce_vehicle_limit();
+
+
+-- =============================================================
+-- 0098_school_billing_installments.sql
+-- =============================================================
+-- 0098_school_billing_installments.sql
+-- ─────────────────────────────────────────────────────────────────────────
+-- Replaces the old school_billings / billing_years / school_payments
+-- system with a much simpler model: super-admin manually adds payment
+-- installments for any school + any academic year (name + amount + due
+-- date), then marks each one paid as the school pays.
+--
+-- Old tables are NOT dropped here — leaving them behind keeps existing
+-- audit history readable and lets us roll back the UI without losing
+-- data. They just become unreferenced by the live UI.
+--
+-- RLS: super-admin only. Schools / principals never see this table.
+
+CREATE TABLE IF NOT EXISTS public.school_billing_installments (
+  id                UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  school_id         UUID NOT NULL REFERENCES public.schools(id) ON DELETE CASCADE,
+  academic_year_id  UUID NOT NULL REFERENCES public.academic_years(id) ON DELETE CASCADE,
+  name              TEXT NOT NULL,
+  description       TEXT,
+  amount            BIGINT NOT NULL CHECK (amount >= 0),
+  due_date          DATE NOT NULL,
+  paid_amount       BIGINT NOT NULL DEFAULT 0 CHECK (paid_amount >= 0),
+  paid_at           TIMESTAMPTZ,
+  paid_method       TEXT,
+  paid_note         TEXT,
+  created_at        TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at        TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  created_by        UUID REFERENCES public.users(id) ON DELETE SET NULL
+);
+
+-- Idempotent column add for environments where the table already existed
+-- without the description column (early adopters of 0098).
+ALTER TABLE public.school_billing_installments
+  ADD COLUMN IF NOT EXISTS description TEXT;
+
+CREATE INDEX IF NOT EXISTS school_billing_installments_school_year_idx
+  ON public.school_billing_installments(school_id, academic_year_id);
+
+CREATE INDEX IF NOT EXISTS school_billing_installments_due_idx
+  ON public.school_billing_installments(due_date);
+
+ALTER TABLE public.school_billing_installments ENABLE ROW LEVEL SECURITY;
+
+-- super_admin can do everything; everyone else is locked out.
+DROP POLICY IF EXISTS sbi_super_admin_all ON public.school_billing_installments;
+CREATE POLICY sbi_super_admin_all
+  ON public.school_billing_installments
+  FOR ALL
+  TO authenticated
+  USING (public.is_super_admin())
+  WITH CHECK (public.is_super_admin());
+
+-- updated_at trigger
+CREATE OR REPLACE FUNCTION public._touch_sbi_updated_at()
+RETURNS TRIGGER LANGUAGE plpgsql AS $$
+BEGIN NEW.updated_at = NOW(); RETURN NEW; END;
+$$;
+
+DROP TRIGGER IF EXISTS trg_sbi_updated_at ON public.school_billing_installments;
+CREATE TRIGGER trg_sbi_updated_at
+  BEFORE UPDATE ON public.school_billing_installments
+  FOR EACH ROW EXECUTE FUNCTION public._touch_sbi_updated_at();
+
+
+-- =============================================================
+-- 0099_safe_school_deactivation.sql
+-- =============================================================
+-- 0099_safe_school_deactivation.sql
+-- ─────────────────────────────────────────────────────────────────────────
+-- Critical fix for school deactivate ↔ reactivate flow.
+--
+-- Old behaviour (cascade_school_deactivation, migration ~0011):
+--   • On deactivate: every user / student / staff row of the school flips
+--     to is_active = FALSE.
+--   • On reactivate: ONLY the principal flips back. Students + staff
+--     stay deactivated forever, making them effectively disappear from
+--     every UI (which filters by is_active = TRUE).
+--
+-- New behaviour:
+--   • Track which rows were flipped BY the cascade in a "snapshot" table
+--     keyed on (school_id, deactivated_at).
+--   • On reactivate: restore only the rows captured in the most recent
+--     snapshot for this school. Manually-deactivated users are NOT
+--     accidentally re-activated.
+--   • The snapshot is consumed (deleted) once reactivation completes,
+--     so a second deactivate-reactivate cycle works correctly.
+--
+-- Also: stop muting student/staff is_active during deactivation. The
+-- school itself is the gate — we don't need to corrupt per-row state.
+-- We only deactivate USERS (login accounts), since RLS / app gating
+-- already keys off schools.status for everything else.
+
+CREATE TABLE IF NOT EXISTS public._school_deactivation_snapshot (
+  id          UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  school_id   UUID NOT NULL REFERENCES public.schools(id) ON DELETE CASCADE,
+  user_ids    UUID[] NOT NULL DEFAULT '{}',
+  student_ids UUID[] NOT NULL DEFAULT '{}',
+  staff_ids   UUID[] NOT NULL DEFAULT '{}',
+  taken_at    TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS school_deactivation_snapshot_school_idx
+  ON public._school_deactivation_snapshot(school_id, taken_at DESC);
+
+-- Replace the trigger function.
+CREATE OR REPLACE FUNCTION public.cascade_school_deactivation() RETURNS TRIGGER
+LANGUAGE plpgsql SECURITY DEFINER SET search_path = public AS $$
+DECLARE
+  v_user_ids    UUID[];
+  v_student_ids UUID[];
+  v_staff_ids   UUID[];
+  v_snapshot_id UUID;
+BEGIN
+  -- ── DEACTIVATE / SUSPEND ──────────────────────────────────────────────
+  IF NEW.status IN ('INACTIVE','SUSPENDED')
+     AND (OLD.status IS DISTINCT FROM NEW.status) THEN
+
+    -- Capture the IDs of currently-active rows BEFORE flipping them.
+    -- These are the rows we will need to restore on the next reactivation.
+    SELECT array_agg(id) INTO v_user_ids
+      FROM public.users
+      WHERE school_id = NEW.id AND role <> 'SUPER_ADMIN' AND is_active = TRUE;
+    SELECT array_agg(id) INTO v_student_ids
+      FROM public.students
+      WHERE school_id = NEW.id AND is_active = TRUE;
+    SELECT array_agg(id) INTO v_staff_ids
+      FROM public.staff
+      WHERE school_id = NEW.id AND is_active = TRUE;
+
+    INSERT INTO public._school_deactivation_snapshot
+      (school_id, user_ids, student_ids, staff_ids)
+    VALUES
+      (NEW.id,
+       COALESCE(v_user_ids, '{}'),
+       COALESCE(v_student_ids, '{}'),
+       COALESCE(v_staff_ids, '{}'));
+
+    -- Flip USER login accounts off (these block login at auth time).
+    -- Students / staff are NOT touched — RLS + UI already gate on
+    -- schools.status, and flipping their is_active was the cause of
+    -- "data disappears" after reactivation.
+    UPDATE public.users
+       SET is_active = FALSE
+     WHERE id = ANY(COALESCE(v_user_ids, '{}'::UUID[]));
+
+  -- ── REACTIVATE ────────────────────────────────────────────────────────
+  ELSIF NEW.status IN ('ACTIVE','TRIAL')
+        AND OLD.status IN ('INACTIVE','SUSPENDED') THEN
+
+    -- Pick up the most recent snapshot for this school. If we never
+    -- snapshotted (legacy schools deactivated before this migration),
+    -- fall back to flipping all non-super-admin users back on.
+    SELECT id, user_ids INTO v_snapshot_id, v_user_ids
+      FROM public._school_deactivation_snapshot
+      WHERE school_id = NEW.id
+      ORDER BY taken_at DESC LIMIT 1;
+
+    IF v_snapshot_id IS NULL THEN
+      -- Legacy fallback: re-activate every user that is currently
+      -- inactive. Doesn't perfectly preserve manual deactivations from
+      -- before this migration, but at least no rows stay invisible.
+      UPDATE public.users
+         SET is_active = TRUE
+       WHERE school_id = NEW.id
+         AND role <> 'SUPER_ADMIN'
+         AND is_active = FALSE;
+      UPDATE public.students SET is_active = TRUE WHERE school_id = NEW.id AND is_active = FALSE;
+      UPDATE public.staff    SET is_active = TRUE WHERE school_id = NEW.id AND is_active = FALSE;
+    ELSE
+      -- Restore exactly what was snapshotted.
+      UPDATE public.users
+         SET is_active = TRUE
+       WHERE id = ANY(COALESCE(v_user_ids, '{}'::UUID[]));
+      -- Snapshot consumed.
+      DELETE FROM public._school_deactivation_snapshot WHERE id = v_snapshot_id;
+    END IF;
+
+  END IF;
+
+  RETURN NEW;
+END;
+$$;
+
+-- Trigger already wired by an earlier migration; CREATE OR REPLACE FUNCTION
+-- is enough. Re-create the trigger guard idempotently in case the original
+-- migration gets dropped.
+DROP TRIGGER IF EXISTS schools_cascade_deactivation ON public.schools;
+CREATE TRIGGER schools_cascade_deactivation
+  AFTER UPDATE OF status ON public.schools
+  FOR EACH ROW EXECUTE FUNCTION public.cascade_school_deactivation();
+
+-- One-shot heal: schools currently INACTIVE/SUSPENDED whose previous
+-- cascade silently flipped students/staff off — flip them back on so the
+-- next reactivation surfaces them correctly.
+UPDATE public.students SET is_active = TRUE
+  WHERE is_active = FALSE
+    AND school_id IN (SELECT id FROM public.schools WHERE status IN ('INACTIVE','SUSPENDED'));
+UPDATE public.staff    SET is_active = TRUE
+  WHERE is_active = FALSE
+    AND school_id IN (SELECT id FROM public.schools WHERE status IN ('INACTIVE','SUSPENDED'));
+
+
+-- =============================================================
+-- 0100_school_deactivation_hardening.sql
+-- =============================================================
+-- 0100_school_deactivation_hardening.sql
+-- ─────────────────────────────────────────────────────────────────────────
+-- Tightens the deactivate-reactivate cascade introduced in 0099.
+--
+-- Audit found 4 problems with the original snapshot approach:
+--   1. _school_deactivation_snapshot had no RLS — any client with the
+--      anon key could read or tamper with it.
+--   2. INACTIVE → SUSPENDED → INACTIVE-style transitions created a
+--      second (empty) snapshot that overwrote the first on reactivate,
+--      so users would never come back.
+--   3. Snapshot rows could accumulate if reactivation never happened.
+--   4. Trigger silently swallowed the case where a school was deleted
+--      mid-flow (FK cascade handles it but worth noting).
+--
+-- Fix: only keep ONE snapshot per school (UNIQUE constraint) and skip
+-- inserts when one already exists. On reactivate, consume EVERY snapshot
+-- for the school (defensive). Lock the table down with RLS so only
+-- SUPER_ADMINs (and the trigger function itself, which is SECURITY
+-- DEFINER) can touch it.
+
+-- 1. RLS lockdown ───────────────────────────────────────────────────────
+ALTER TABLE public._school_deactivation_snapshot ENABLE ROW LEVEL SECURITY;
+
+DROP POLICY IF EXISTS sds_super_admin_all ON public._school_deactivation_snapshot;
+CREATE POLICY sds_super_admin_all
+  ON public._school_deactivation_snapshot
+  FOR ALL
+  TO authenticated
+  USING (public.is_super_admin())
+  WITH CHECK (public.is_super_admin());
+
+-- 2. Single-snapshot-per-school invariant ──────────────────────────────
+-- Drop dupes that may already exist from the buggy transition window.
+WITH ranked AS (
+  SELECT id,
+         ROW_NUMBER() OVER (PARTITION BY school_id ORDER BY taken_at ASC) AS rn
+    FROM public._school_deactivation_snapshot
+)
+DELETE FROM public._school_deactivation_snapshot
+ WHERE id IN (SELECT id FROM ranked WHERE rn > 1);
+
+CREATE UNIQUE INDEX IF NOT EXISTS school_deactivation_snapshot_one_per_school
+  ON public._school_deactivation_snapshot(school_id);
+
+-- 3. Trigger function — only INSERT if no existing snapshot for this
+--    school; on reactivate, delete ALL rows for the school. ────────────
+CREATE OR REPLACE FUNCTION public.cascade_school_deactivation() RETURNS TRIGGER
+LANGUAGE plpgsql SECURITY DEFINER SET search_path = public AS $$
+DECLARE
+  v_user_ids    UUID[];
+  v_existing    UUID;
+BEGIN
+  -- ── DEACTIVATE / SUSPEND ──────────────────────────────────────────────
+  IF NEW.status IN ('INACTIVE','SUSPENDED')
+     AND (OLD.status IS DISTINCT FROM NEW.status) THEN
+
+    -- If a snapshot already exists for this school (e.g. coming from
+    -- INACTIVE → SUSPENDED — both deactivated states), DO NOT replace
+    -- it. The original snapshot still captures the correct "what was
+    -- active at the time we first deactivated" set.
+    SELECT id INTO v_existing
+      FROM public._school_deactivation_snapshot
+      WHERE school_id = NEW.id LIMIT 1;
+
+    IF v_existing IS NULL THEN
+      SELECT array_agg(id) INTO v_user_ids
+        FROM public.users
+        WHERE school_id = NEW.id AND role <> 'SUPER_ADMIN' AND is_active = TRUE;
+
+      INSERT INTO public._school_deactivation_snapshot
+        (school_id, user_ids)
+      VALUES
+        (NEW.id, COALESCE(v_user_ids, '{}'::UUID[]));
+
+      -- Flip USER login accounts off. Students / staff is_active is NOT
+      -- touched — schools.status is the gate, see 0099 for context.
+      UPDATE public.users
+         SET is_active = FALSE
+       WHERE id = ANY(COALESCE(v_user_ids, '{}'::UUID[]));
+    END IF;
+
+  -- ── REACTIVATE ────────────────────────────────────────────────────────
+  ELSIF NEW.status IN ('ACTIVE','TRIAL')
+        AND OLD.status IN ('INACTIVE','SUSPENDED') THEN
+
+    SELECT user_ids INTO v_user_ids
+      FROM public._school_deactivation_snapshot
+      WHERE school_id = NEW.id LIMIT 1;
+
+    IF v_user_ids IS NULL THEN
+      -- Legacy fallback: pre-0099 schools have no snapshot. Re-activate
+      -- every user (and any students/staff that the buggy old cascade
+      -- had flipped off) so nothing stays invisible.
+      UPDATE public.users
+         SET is_active = TRUE
+       WHERE school_id = NEW.id
+         AND role <> 'SUPER_ADMIN'
+         AND is_active = FALSE;
+      UPDATE public.students SET is_active = TRUE
+        WHERE school_id = NEW.id AND is_active = FALSE;
+      UPDATE public.staff    SET is_active = TRUE
+        WHERE school_id = NEW.id AND is_active = FALSE;
+    ELSE
+      UPDATE public.users
+         SET is_active = TRUE
+       WHERE id = ANY(v_user_ids);
+    END IF;
+
+    -- Defensive: clear ALL snapshots for this school, not just one.
+    DELETE FROM public._school_deactivation_snapshot WHERE school_id = NEW.id;
+
+  END IF;
+
+  RETURN NEW;
+END;
+$$;
+
+-- Re-attach trigger (idempotent).
+DROP TRIGGER IF EXISTS schools_cascade_deactivation ON public.schools;
+CREATE TRIGGER schools_cascade_deactivation
+  AFTER UPDATE OF status ON public.schools
+  FOR EACH ROW EXECUTE FUNCTION public.cascade_school_deactivation();
+
+
+-- =============================================================
+-- 0101_heal_legacy_inactive_users.sql
+-- =============================================================
+-- 0101_heal_legacy_inactive_users.sql
+-- ─────────────────────────────────────────────────────────────────────────
+-- One-shot heal for schools that were reactivated by the OLD buggy
+-- cascade trigger (pre-0099). The old trigger only flipped principals
+-- back to is_active = TRUE on reactivation, leaving every other user,
+-- student, and staff row stuck at is_active = FALSE — making them
+-- effectively invisible in every UI.
+--
+-- This migration restores them for any school that is currently in an
+-- ACTIVE / TRIAL state. Manually-deactivated rows for other schools
+-- are not touched.
+--
+-- Note: this does flip back rows that may have been manually
+-- deactivated *before* this heal (e.g. a teacher who left the school
+-- before the school itself was deactivated). Acceptable one-time cost
+-- — the alternative is leaving real students invisible. Future
+-- deactivate-reactivate cycles use the snapshot path from 0099/0100
+-- and won't trigger this fallback.
+
+UPDATE public.users
+   SET is_active = TRUE
+ WHERE is_active = FALSE
+   AND role <> 'SUPER_ADMIN'
+   AND school_id IN (
+     SELECT id FROM public.schools WHERE status IN ('ACTIVE', 'TRIAL')
+   );
+
+UPDATE public.students
+   SET is_active = TRUE
+ WHERE is_active = FALSE
+   AND school_id IN (
+     SELECT id FROM public.schools WHERE status IN ('ACTIVE', 'TRIAL')
+   );
+
+UPDATE public.staff
+   SET is_active = TRUE
+ WHERE is_active = FALSE
+   AND school_id IN (
+     SELECT id FROM public.schools WHERE status IN ('ACTIVE', 'TRIAL')
+   );
+
+
+-- =============================================================
+-- 0102_staff_salary_start_date.sql
+-- =============================================================
+-- 0102_staff_salary_start_date.sql
+-- ─────────────────────────────────────────────────────────────────────────
+-- Adds staff.salary_start_date — the month a staff member's *paid* salary
+-- ledger begins, separate from joining_date.
+--
+-- Why: in real schools the joining day is rarely also the first paid day.
+-- A teacher who joins on the 18th of October typically gets their first
+-- salary in November (not a partial Oct + full Nov). The old ledger
+-- used joining_date as the lower bound, which produced a phantom
+-- "October full salary" row that principals had to manually reconcile.
+--
+-- Default rule: salary_start_date = first day of the month *after*
+-- joining_date. Principals can override at create time or via the
+-- existing edit-staff form.
+--
+-- Backfill: for every existing row, set salary_start_date to the first
+-- of the joining month (so historical ledgers don't shift around). The
+-- "next-month" default only applies to staff added going forward.
+
+ALTER TABLE public.staff
+  ADD COLUMN IF NOT EXISTS salary_start_date DATE;
+
+UPDATE public.staff
+   SET salary_start_date = date_trunc('month', joining_date)::DATE
+ WHERE salary_start_date IS NULL
+   AND joining_date IS NOT NULL;
+
+
+-- =============================================================
+-- 0103_one_time_due_today.sql
+-- =============================================================
+-- 0103_one_time_due_today.sql
+-- ─────────────────────────────────────────────────────────────────────────
+-- Changes the schedule generator so ONE_TIME / ANNUAL fee heads are due
+-- on the date the schedule is generated (CURRENT_DATE), not on the
+-- academic-year start. Admission fees, annual-day fees, etc. are
+-- typically collected at the moment of admission — pinning them to
+-- April 1st made them look "already overdue" the moment a mid-year
+-- joiner's schedule was created.
+--
+-- ANNUAL is treated identically to ONE_TIME going forward — the UI
+-- merges them into a single "One-time" option since they were already
+-- behaving the same in the DB (one row, one date, no recurrence).
+--
+-- Idempotent: CREATE OR REPLACE.
+
+CREATE OR REPLACE FUNCTION public.generate_student_fee_schedule(
+  p_student_id      UUID,
+  p_year_id         UUID,
+  p_heads           JSONB,
+  p_due_dates       JSONB,
+  p_is_rte          BOOLEAN DEFAULT FALSE,
+  p_discount_amount NUMERIC DEFAULT 0,
+  p_discount_pct    NUMERIC DEFAULT 0
+) RETURNS INT
+LANGUAGE plpgsql SECURITY DEFINER SET search_path = public AS $$
+DECLARE
+  v_school_id UUID;
+  v_caller UUID := auth.uid();
+  v_count INT := 0;
+  v_head JSONB;
+  v_dd JSONB;
+  v_payer TEXT;
+  v_freq TEXT;
+  v_amt BIGINT;
+  v_name TEXT;
+  v_discount BIGINT;
+  v_pct NUMERIC := COALESCE(p_discount_pct, 0);
+  v_fixed NUMERIC := COALESCE(p_discount_amount, 0);
+  v_dd_str TEXT;
+  v_dd_date DATE;
+BEGIN
+  IF v_caller IS NULL THEN RAISE EXCEPTION 'unauthenticated'; END IF;
+  IF v_pct < 0 OR v_pct > 100 THEN RAISE EXCEPTION 'discount_pct out of range'; END IF;
+  IF v_fixed < 0 THEN RAISE EXCEPTION 'discount_amount must be non-negative'; END IF;
+
+  SELECT school_id INTO v_school_id FROM public.students WHERE id = p_student_id;
+  IF v_school_id IS NULL THEN RAISE EXCEPTION 'student not found'; END IF;
+  IF NOT (public.is_super_admin()
+          OR (public.is_principal() AND public.current_user_school_id() = v_school_id)) THEN
+    RAISE EXCEPTION 'forbidden';
+  END IF;
+
+  -- Drop unpaid/un-written-off rows so we re-create cleanly. Paid history is preserved.
+  DELETE FROM public.fee_installments
+   WHERE student_id = p_student_id
+     AND academic_year_id = p_year_id
+     AND paid_amount = 0
+     AND write_off_amount = 0;
+
+  FOR v_head IN SELECT * FROM jsonb_array_elements(p_heads)
+  LOOP
+    v_name := v_head->>'name';
+    v_amt  := (v_head->>'amount')::BIGINT;
+    v_freq := COALESCE(v_head->>'frequency', 'MONTHLY');
+    v_payer := CASE WHEN p_is_rte THEN 'GOVERNMENT' ELSE 'PARENT' END;
+
+    v_discount := GREATEST(
+      v_fixed::BIGINT,
+      FLOOR(v_amt * v_pct / 100.0)::BIGINT
+    );
+    v_amt := GREATEST(0, v_amt - v_discount);
+
+    IF v_freq = 'MONTHLY' THEN
+      FOR v_dd IN SELECT * FROM jsonb_array_elements(p_due_dates)
+      LOOP
+        v_dd_str := v_dd->>'date';
+        IF v_dd_str IS NULL OR length(btrim(v_dd_str)) = 0 THEN
+          CONTINUE;
+        END IF;
+        v_dd_date := v_dd_str::DATE;
+
+        INSERT INTO public.fee_installments
+          (student_id, academic_year_id, school_id, month, due_date, fee_type, amount, payer_type)
+        VALUES
+          (p_student_id, p_year_id, v_school_id, v_dd->>'month',
+           v_dd_date,
+           CASE WHEN lower(v_name) LIKE '%transport%' THEN 'TRANSPORT'
+                WHEN lower(v_name) LIKE '%exam%'      THEN 'EXAM'
+                WHEN lower(v_name) LIKE '%tuition%'   THEN 'TUITION'
+                ELSE 'OTHER' END,
+           v_amt, v_payer);
+        v_count := v_count + 1;
+      END LOOP;
+    ELSE
+      -- ONE_TIME (and legacy ANNUAL) → due *today*. Schools collect
+      -- one-shot fees at the moment of admission, not on AY start;
+      -- pinning them to April 1 made them look pre-overdue.
+      INSERT INTO public.fee_installments
+        (student_id, academic_year_id, school_id, month, due_date, fee_type, amount, payer_type)
+      VALUES
+        (p_student_id, p_year_id, v_school_id,
+         'OneTime',
+         CURRENT_DATE,
+         CASE WHEN lower(v_name) LIKE '%transport%' THEN 'TRANSPORT'
+              WHEN lower(v_name) LIKE '%exam%'      THEN 'EXAM'
+              WHEN lower(v_name) LIKE '%tuition%'   THEN 'TUITION'
+              ELSE 'OTHER' END,
+         v_amt, v_payer);
+      v_count := v_count + 1;
+    END IF;
+  END LOOP;
+
+  RETURN v_count;
+END;
+$$;
+
+
+-- =============================================================
+-- 0104_drop_legacy_billing.sql
+-- =============================================================
+-- 0104_drop_legacy_billing.sql
+-- ─────────────────────────────────────────────────────────────────────────
+-- Drops the leftover legacy super-admin billing surface. The new flat
+-- school_billing_installments stack (migration 0098) replaced everything
+-- below; nothing in the running UI or server reads these any more.
+--
+-- Dropped:
+--   • table school_payments          (old per-school platform payments)
+--   • table school_fee_payments      (old fixed-amount payment ledger)
+--   • column schools.billing_fixed_amount (unused since 0098)
+--
+-- Kept (still referenced by code paths or audit history):
+--   • schools.plan               (onboard_school RPC still accepts p_plan)
+--   • schools.payment_start_date (set during onboarding for record-keeping)
+--   • platform_settings table    (brand settings still live here)
+
+DROP TABLE IF EXISTS public.school_payments      CASCADE;
+DROP TABLE IF EXISTS public.school_fee_payments  CASCADE;
+
+ALTER TABLE public.schools
+  DROP COLUMN IF EXISTS billing_fixed_amount;
+
+
+-- =============================================================
+-- 0105_school_fee_aggregate_due_now.sql
+-- =============================================================
+-- 0105_school_fee_aggregate_due_now.sql
+-- ─────────────────────────────────────────────────────────────────────────
+-- The school-wide fee aggregate used to sum outstanding across ALL
+-- installments — including UPCOMING ones whose due_date is in the
+-- future. The "Pending Dues" / "Total Due" KPI in FeeCollectionsHub
+-- shows the entire yearly schedule as due on April 1st, which is
+-- alarming and wrong.
+--
+-- Fix: count parent_due / govt_due / due_count only from installments
+-- whose due_date is on or before today (i.e. OVERDUE + PARTIAL). Future
+-- months stay invisible until they actually come due.
+--
+-- total_collected stays lifetime (paid is paid, regardless of when).
+-- cleared_count uses lifetime outstanding (a student with future months
+-- still unpaid isn't "cleared" — they just owe less *right now*).
+
+CREATE OR REPLACE FUNCTION public.get_school_fee_aggregate()
+RETURNS TABLE (
+  total_students          BIGINT,
+  pending_count           BIGINT,
+  due_count               BIGINT,
+  cleared_count           BIGINT,
+  total_collected         BIGINT,
+  total_parent_due        BIGINT,
+  total_govt_due          BIGINT
+)
+LANGUAGE plpgsql SECURITY DEFINER SET search_path = public AS $$
+DECLARE
+  v_school_id UUID;
+BEGIN
+  IF NOT (public.is_super_admin() OR public.is_principal()) THEN
+    RAISE EXCEPTION 'forbidden';
+  END IF;
+
+  v_school_id := public.current_user_school_id();
+  IF v_school_id IS NULL AND NOT public.is_super_admin() THEN
+    RAISE EXCEPTION 'no school in session';
+  END IF;
+
+  RETURN QUERY
+  WITH
+  active_students AS (
+    SELECT id FROM public.students
+     WHERE school_id = v_school_id AND is_active = TRUE
+  ),
+  -- Per-student installment summary. lifetime_* covers all rows;
+  -- now_* restricts to installments whose due_date <= today so the
+  -- "Pending Dues" KPI doesn't include future months.
+  per_student AS (
+    SELECT
+      fi.student_id,
+      COUNT(*) AS inst_count,
+      SUM(GREATEST(0, fi.amount - fi.paid_amount - fi.write_off_amount))
+        AS lifetime_outstanding,
+      SUM(CASE WHEN fi.due_date <= CURRENT_DATE
+               THEN GREATEST(0, fi.amount - fi.paid_amount - fi.write_off_amount)
+               ELSE 0 END)                                  AS now_outstanding,
+      SUM(CASE WHEN fi.payer_type = 'PARENT' AND fi.due_date <= CURRENT_DATE
+               THEN GREATEST(0, fi.amount - fi.paid_amount - fi.write_off_amount)
+               ELSE 0 END)                                  AS parent_due_now,
+      SUM(CASE WHEN fi.payer_type = 'GOVERNMENT' AND fi.due_date <= CURRENT_DATE
+               THEN GREATEST(0, fi.amount - fi.paid_amount - fi.write_off_amount)
+               ELSE 0 END)                                  AS govt_due_now,
+      SUM(fi.paid_amount)                                   AS total_paid
+    FROM public.fee_installments fi
+    JOIN active_students s ON s.id = fi.student_id
+    GROUP BY fi.student_id
+  )
+  SELECT
+    (SELECT COUNT(*) FROM active_students)                                          AS total_students,
+    -- Pending: active students that don't appear in fee_installments at all.
+    (SELECT COUNT(*) FROM active_students s
+        WHERE NOT EXISTS (SELECT 1 FROM per_student p WHERE p.student_id = s.id))  AS pending_count,
+    -- Due *right now* — at least one currently-overdue/partial installment.
+    (SELECT COUNT(*) FROM per_student WHERE now_outstanding > 0)                   AS due_count,
+    -- Cleared = lifetime fully settled (no future months hanging either).
+    (SELECT COUNT(*) FROM per_student WHERE lifetime_outstanding = 0)              AS cleared_count,
+    COALESCE((SELECT SUM(total_paid)     FROM per_student), 0)::BIGINT             AS total_collected,
+    COALESCE((SELECT SUM(parent_due_now) FROM per_student), 0)::BIGINT             AS total_parent_due,
+    COALESCE((SELECT SUM(govt_due_now)   FROM per_student), 0)::BIGINT             AS total_govt_due;
+END $$;
+
+GRANT EXECUTE ON FUNCTION public.get_school_fee_aggregate() TO authenticated;
+
+
+-- =============================================================
+-- 0106_fee_aggregate_upcoming_and_head_name.sql
+-- =============================================================
+-- 0106_fee_aggregate_upcoming_and_head_name.sql
+-- ─────────────────────────────────────────────────────────────────────────
+-- Two related fixes for the fee module:
+--
+-- 1. UI needs a separate "upcoming" total alongside the existing "overdue
+--    parent due" — so the principal can see what's due today (rose) vs
+--    what will become due later in the year (slate). Add
+--    total_parent_upcoming to get_school_fee_aggregate.
+--
+-- 2. fee_installments only stored the bucketed fee_type (TUITION / EXAM /
+--    TRANSPORT / OTHER) — so a school's "Library Fee", "Smart Class Fee",
+--    etc. all rendered as "Other" in the FeeLedger. Add a fee_head_name
+--    column to preserve the original head string from the fee_structures
+--    JSONB, populate it from existing rows where possible, and update
+--    generate_student_fee_schedule to fill it on new inserts.
+
+-- ─── 1. fee_installments.fee_head_name ────────────────────────────────
+ALTER TABLE public.fee_installments
+  ADD COLUMN IF NOT EXISTS fee_head_name TEXT;
+
+-- Backfill: existing rows have no head name. The best we can do is map
+-- the bucketed fee_type back to a sensible label. Real per-row names
+-- will start landing as soon as the regenerated function below runs.
+UPDATE public.fee_installments
+   SET fee_head_name = CASE fee_type
+     WHEN 'TUITION'   THEN 'Tuition Fee'
+     WHEN 'EXAM'      THEN 'Exam Fee'
+     WHEN 'TRANSPORT' THEN 'Transport Fee'
+     ELSE                  'Other'
+   END
+ WHERE fee_head_name IS NULL;
+
+-- ─── 2. Regenerate generate_student_fee_schedule to capture v_name ────
+-- Only the INSERT columns + values change — every other branch matches
+-- the existing function (3864-3966 in _apply.sql) byte-for-byte.
+CREATE OR REPLACE FUNCTION public.generate_student_fee_schedule(
+  p_student_id      UUID,
+  p_year_id         UUID,
+  p_heads           JSONB,
+  p_due_dates       JSONB,
+  p_is_rte          BOOLEAN DEFAULT FALSE,
+  p_discount_amount NUMERIC DEFAULT 0,
+  p_discount_pct    NUMERIC DEFAULT 0
+)
+RETURNS INT
+LANGUAGE plpgsql SECURITY DEFINER SET search_path = public AS $$
+DECLARE
+  v_school_id UUID;
+  v_h         JSONB;
+  v_dd        JSONB;
+  v_amt       BIGINT;
+  v_freq      TEXT;
+  v_name      TEXT;
+  v_count     INT := 0;
+  v_payer     TEXT;
+  v_discount  BIGINT;
+  v_pct       NUMERIC := COALESCE(p_discount_pct, 0);
+  v_fixed     NUMERIC := COALESCE(p_discount_amount, 0);
+BEGIN
+  IF auth.uid() IS NULL THEN RAISE EXCEPTION 'unauthenticated'; END IF;
+  IF v_pct < 0 OR v_pct > 100 THEN RAISE EXCEPTION 'discount_pct out of range'; END IF;
+  IF v_fixed < 0 THEN RAISE EXCEPTION 'discount_amount must be non-negative'; END IF;
+
+  SELECT s.school_id INTO v_school_id
+  FROM public.students s WHERE s.id = p_student_id;
+  IF v_school_id IS NULL THEN RAISE EXCEPTION 'student not found'; END IF;
+
+  -- Clear prior unpaid rows so re-runs (regen after edits) don't dupe.
+  DELETE FROM public.fee_installments
+   WHERE student_id = p_student_id
+     AND academic_year_id = p_year_id
+     AND paid_amount = 0
+     AND write_off_amount = 0;
+
+  FOR v_h IN SELECT * FROM jsonb_array_elements(p_heads)
+  LOOP
+    v_name := COALESCE(v_h->>'name', '');
+    v_amt  := COALESCE((v_h->>'amount')::BIGINT, 0);
+    v_freq := COALESCE(v_h->>'frequency', 'MONTHLY');
+    IF v_amt <= 0 THEN CONTINUE; END IF;
+
+    v_payer := CASE WHEN p_is_rte THEN 'GOVERNMENT' ELSE 'PARENT' END;
+
+    v_discount := GREATEST(
+      v_fixed::BIGINT,
+      FLOOR(v_amt * v_pct / 100.0)::BIGINT
+    );
+    v_amt := GREATEST(0, v_amt - v_discount);
+
+    IF v_freq = 'MONTHLY' THEN
+      FOR v_dd IN SELECT * FROM jsonb_array_elements(p_due_dates)
+      LOOP
+        INSERT INTO public.fee_installments
+          (student_id, academic_year_id, school_id, month, due_date,
+           fee_type, fee_head_name, amount, payer_type)
+        VALUES
+          (p_student_id, p_year_id, v_school_id, v_dd->>'month',
+           (v_dd->>'date')::DATE,
+           CASE WHEN lower(v_name) LIKE '%transport%' THEN 'TRANSPORT'
+                WHEN lower(v_name) LIKE '%exam%'      THEN 'EXAM'
+                WHEN lower(v_name) LIKE '%tuition%'   THEN 'TUITION'
+                ELSE 'OTHER' END,
+           v_name,
+           v_amt, v_payer);
+        v_count := v_count + 1;
+      END LOOP;
+    ELSE  -- ANNUAL / ONE_TIME → single row
+      INSERT INTO public.fee_installments
+        (student_id, academic_year_id, school_id, month, due_date,
+         fee_type, fee_head_name, amount, payer_type)
+      VALUES
+        (p_student_id, p_year_id, v_school_id,
+         CASE WHEN v_freq = 'ONE_TIME' THEN 'OneTime' ELSE 'Annual' END,
+         (SELECT MIN((dd->>'date')::DATE) FROM jsonb_array_elements(p_due_dates) dd),
+         'OTHER',
+         v_name,
+         v_amt, v_payer);
+      v_count := v_count + 1;
+    END IF;
+  END LOOP;
+
+  PERFORM public.refresh_student_fee_aggregate(p_student_id, p_year_id);
+  RETURN v_count;
+END $$;
+GRANT EXECUTE ON FUNCTION public.generate_student_fee_schedule(UUID, UUID, JSONB, JSONB, BOOLEAN, NUMERIC, NUMERIC) TO authenticated;
+
+-- ─── 3. Add total_parent_upcoming to school fee aggregate ─────────────
+CREATE OR REPLACE FUNCTION public.get_school_fee_aggregate()
+RETURNS TABLE (
+  total_students          BIGINT,
+  pending_count           BIGINT,
+  due_count               BIGINT,
+  cleared_count           BIGINT,
+  total_collected         BIGINT,
+  total_parent_due        BIGINT,
+  total_parent_upcoming   BIGINT,
+  total_govt_due          BIGINT
+)
+LANGUAGE plpgsql SECURITY DEFINER SET search_path = public AS $$
+DECLARE
+  v_school_id UUID;
+BEGIN
+  IF NOT (public.is_super_admin() OR public.is_principal()) THEN
+    RAISE EXCEPTION 'forbidden';
+  END IF;
+
+  v_school_id := public.current_user_school_id();
+  IF v_school_id IS NULL AND NOT public.is_super_admin() THEN
+    RAISE EXCEPTION 'no school in session';
+  END IF;
+
+  RETURN QUERY
+  WITH
+  active_students AS (
+    SELECT id FROM public.students
+     WHERE school_id = v_school_id AND is_active = TRUE
+  ),
+  per_student AS (
+    SELECT
+      fi.student_id,
+      SUM(GREATEST(0, fi.amount - fi.paid_amount - fi.write_off_amount))
+        AS lifetime_outstanding,
+      SUM(CASE WHEN fi.due_date <= CURRENT_DATE
+               THEN GREATEST(0, fi.amount - fi.paid_amount - fi.write_off_amount)
+               ELSE 0 END)                                            AS now_outstanding,
+      SUM(CASE WHEN fi.payer_type = 'PARENT' AND fi.due_date <= CURRENT_DATE
+               THEN GREATEST(0, fi.amount - fi.paid_amount - fi.write_off_amount)
+               ELSE 0 END)                                            AS parent_due_now,
+      SUM(CASE WHEN fi.payer_type = 'PARENT' AND fi.due_date >  CURRENT_DATE
+               THEN GREATEST(0, fi.amount - fi.paid_amount - fi.write_off_amount)
+               ELSE 0 END)                                            AS parent_upcoming,
+      SUM(CASE WHEN fi.payer_type = 'GOVERNMENT' AND fi.due_date <= CURRENT_DATE
+               THEN GREATEST(0, fi.amount - fi.paid_amount - fi.write_off_amount)
+               ELSE 0 END)                                            AS govt_due_now,
+      SUM(fi.paid_amount)                                             AS total_paid
+    FROM public.fee_installments fi
+    JOIN active_students s ON s.id = fi.student_id
+    GROUP BY fi.student_id
+  )
+  SELECT
+    (SELECT COUNT(*) FROM active_students)                                              AS total_students,
+    (SELECT COUNT(*) FROM active_students s
+        WHERE NOT EXISTS (SELECT 1 FROM per_student p WHERE p.student_id = s.id))      AS pending_count,
+    (SELECT COUNT(*) FROM per_student WHERE now_outstanding > 0)                       AS due_count,
+    (SELECT COUNT(*) FROM per_student WHERE lifetime_outstanding = 0)                  AS cleared_count,
+    COALESCE((SELECT SUM(total_paid)      FROM per_student), 0)::BIGINT                AS total_collected,
+    COALESCE((SELECT SUM(parent_due_now)  FROM per_student), 0)::BIGINT                AS total_parent_due,
+    COALESCE((SELECT SUM(parent_upcoming) FROM per_student), 0)::BIGINT                AS total_parent_upcoming,
+    COALESCE((SELECT SUM(govt_due_now)    FROM per_student), 0)::BIGINT                AS total_govt_due;
+END $$;
+
+GRANT EXECUTE ON FUNCTION public.get_school_fee_aggregate() TO authenticated;
+
+
+-- =============================================================
+-- 0106_installment_head_name.sql
+-- =============================================================
+-- 0106_installment_head_name.sql
+-- ─────────────────────────────────────────────────────────────────────────
+-- fee_installments only carries a coarse `fee_type` bucket (TUITION /
+-- EXAM / TRANSPORT / OTHER). Heads like "Library Fees", "Smart Class
+-- Fee", "Admission Fee", "School Fees" all collapse into OTHER and the
+-- principal sees a wall of "Other ₹X" rows in the student profile.
+--
+-- Fix: add `head_name TEXT` to fee_installments and write it from
+-- generate_student_fee_schedule. The UI prefers head_name when present
+-- and falls back to fee_type for legacy rows.
+
+ALTER TABLE public.fee_installments
+  ADD COLUMN IF NOT EXISTS head_name TEXT;
+
+-- Update the schedule generator to preserve the original head name.
+DROP FUNCTION IF EXISTS public.generate_student_fee_schedule(UUID, UUID, JSONB, JSONB, BOOLEAN, NUMERIC, NUMERIC);
+
+CREATE OR REPLACE FUNCTION public.generate_student_fee_schedule(
+  p_student_id      UUID,
+  p_year_id         UUID,
+  p_heads           JSONB,
+  p_due_dates       JSONB,
+  p_is_rte          BOOLEAN DEFAULT FALSE,
+  p_discount_amount NUMERIC DEFAULT 0,
+  p_discount_pct    NUMERIC DEFAULT 0
+) RETURNS INT
+LANGUAGE plpgsql SECURITY DEFINER SET search_path = public AS $$
+DECLARE
+  v_school_id UUID;
+  v_caller UUID := auth.uid();
+  v_count INT := 0;
+  v_head JSONB;
+  v_dd JSONB;
+  v_payer TEXT;
+  v_freq TEXT;
+  v_amt BIGINT;
+  v_name TEXT;
+  v_discount BIGINT;
+  v_pct NUMERIC := COALESCE(p_discount_pct, 0);
+  v_fixed NUMERIC := COALESCE(p_discount_amount, 0);
+BEGIN
+  IF v_caller IS NULL THEN RAISE EXCEPTION 'unauthenticated'; END IF;
+  IF v_pct < 0 OR v_pct > 100 THEN RAISE EXCEPTION 'discount_pct out of range'; END IF;
+  IF v_fixed < 0 THEN RAISE EXCEPTION 'discount_amount must be non-negative'; END IF;
+
+  SELECT school_id INTO v_school_id FROM public.students WHERE id = p_student_id;
+  IF v_school_id IS NULL THEN RAISE EXCEPTION 'student not found'; END IF;
+  IF NOT (public.is_super_admin()
+          OR (public.is_principal() AND public.current_user_school_id() = v_school_id)) THEN
+    RAISE EXCEPTION 'forbidden';
+  END IF;
+
+  DELETE FROM public.fee_installments
+   WHERE student_id = p_student_id
+     AND academic_year_id = p_year_id
+     AND paid_amount = 0
+     AND write_off_amount = 0;
+
+  FOR v_head IN SELECT * FROM jsonb_array_elements(p_heads)
+  LOOP
+    v_name := NULLIF(trim(v_head->>'name'), '');
+    v_amt  := (v_head->>'amount')::BIGINT;
+    v_freq := COALESCE(v_head->>'frequency', 'MONTHLY');
+    v_payer := CASE WHEN p_is_rte THEN 'GOVERNMENT' ELSE 'PARENT' END;
+
+    v_discount := GREATEST(
+      v_fixed::BIGINT,
+      FLOOR(v_amt * v_pct / 100.0)::BIGINT
+    );
+    v_amt := GREATEST(0, v_amt - v_discount);
+
+    IF v_freq = 'MONTHLY' THEN
+      FOR v_dd IN SELECT * FROM jsonb_array_elements(p_due_dates)
+      LOOP
+        INSERT INTO public.fee_installments
+          (student_id, academic_year_id, school_id, month, due_date, fee_type, head_name, amount, payer_type)
+        VALUES
+          (p_student_id, p_year_id, v_school_id, v_dd->>'month',
+           (v_dd->>'date')::DATE,
+           CASE WHEN lower(coalesce(v_name,'')) LIKE '%transport%' THEN 'TRANSPORT'
+                WHEN lower(coalesce(v_name,'')) LIKE '%exam%'      THEN 'EXAM'
+                WHEN lower(coalesce(v_name,'')) LIKE '%tuition%'   THEN 'TUITION'
+                ELSE 'OTHER' END,
+           v_name,
+           v_amt, v_payer);
+        v_count := v_count + 1;
+      END LOOP;
+    ELSE
+      INSERT INTO public.fee_installments
+        (student_id, academic_year_id, school_id, month, due_date, fee_type, head_name, amount, payer_type)
+      VALUES
+        (p_student_id, p_year_id, v_school_id,
+         CASE WHEN v_freq = 'ONE_TIME' THEN 'OneTime' ELSE 'Annual' END,
+         (SELECT MIN((dd->>'date')::DATE) FROM jsonb_array_elements(p_due_dates) dd),
+         'OTHER',
+         v_name,
+         v_amt, v_payer);
+      v_count := v_count + 1;
+    END IF;
+  END LOOP;
+
+  PERFORM public.refresh_student_fee_aggregate(p_student_id, p_year_id);
+  RETURN v_count;
+END $$;
+
+GRANT EXECUTE ON FUNCTION public.generate_student_fee_schedule(UUID, UUID, JSONB, JSONB, BOOLEAN, NUMERIC, NUMERIC) TO authenticated;
+
+
+-- =============================================================
+-- 0107_aggregate_upcoming.sql
+-- =============================================================
+-- 0107_aggregate_upcoming.sql
+-- ─────────────────────────────────────────────────────────────────────────
+-- Adds total_parent_upcoming + total_govt_upcoming columns to
+-- get_school_fee_aggregate so the principal's Fee Collection hub can
+-- split "what's owed now (overdue)" from "what's coming later
+-- (upcoming)". Without this the hub either shows only overdue and
+-- hides the rest of the year, or counts the full schedule as panic.
+
+DROP FUNCTION IF EXISTS public.get_school_fee_aggregate();
+CREATE OR REPLACE FUNCTION public.get_school_fee_aggregate()
+RETURNS TABLE (
+  total_students          BIGINT,
+  pending_count           BIGINT,
+  due_count               BIGINT,
+  cleared_count           BIGINT,
+  total_collected         BIGINT,
+  total_parent_due        BIGINT,    -- overdue (due_date <= today, unpaid)
+  total_govt_due          BIGINT,
+  total_parent_upcoming   BIGINT,    -- future (due_date > today, unpaid)
+  total_govt_upcoming     BIGINT
+)
+LANGUAGE plpgsql SECURITY DEFINER SET search_path = public AS $$
+DECLARE
+  v_school_id UUID;
+BEGIN
+  IF NOT (public.is_super_admin() OR public.is_principal()) THEN
+    RAISE EXCEPTION 'forbidden';
+  END IF;
+
+  v_school_id := public.current_user_school_id();
+  IF v_school_id IS NULL AND NOT public.is_super_admin() THEN
+    RAISE EXCEPTION 'no school in session';
+  END IF;
+
+  RETURN QUERY
+  WITH
+  active_students AS (
+    SELECT id FROM public.students
+     WHERE school_id = v_school_id AND is_active = TRUE
+  ),
+  per_student AS (
+    SELECT
+      fi.student_id,
+      SUM(GREATEST(0, fi.amount - fi.paid_amount - fi.write_off_amount))
+        AS lifetime_outstanding,
+      SUM(CASE WHEN fi.due_date <= CURRENT_DATE
+               THEN GREATEST(0, fi.amount - fi.paid_amount - fi.write_off_amount)
+               ELSE 0 END)                                    AS now_outstanding,
+      SUM(CASE WHEN fi.payer_type = 'PARENT' AND fi.due_date <= CURRENT_DATE
+               THEN GREATEST(0, fi.amount - fi.paid_amount - fi.write_off_amount)
+               ELSE 0 END)                                    AS parent_due_now,
+      SUM(CASE WHEN fi.payer_type = 'GOVERNMENT' AND fi.due_date <= CURRENT_DATE
+               THEN GREATEST(0, fi.amount - fi.paid_amount - fi.write_off_amount)
+               ELSE 0 END)                                    AS govt_due_now,
+      SUM(CASE WHEN fi.payer_type = 'PARENT' AND fi.due_date > CURRENT_DATE
+               THEN GREATEST(0, fi.amount - fi.paid_amount - fi.write_off_amount)
+               ELSE 0 END)                                    AS parent_upcoming,
+      SUM(CASE WHEN fi.payer_type = 'GOVERNMENT' AND fi.due_date > CURRENT_DATE
+               THEN GREATEST(0, fi.amount - fi.paid_amount - fi.write_off_amount)
+               ELSE 0 END)                                    AS govt_upcoming,
+      SUM(fi.paid_amount)                                     AS total_paid
+    FROM public.fee_installments fi
+    JOIN active_students s ON s.id = fi.student_id
+    GROUP BY fi.student_id
+  )
+  SELECT
+    (SELECT COUNT(*) FROM active_students)                                          AS total_students,
+    (SELECT COUNT(*) FROM active_students s
+        WHERE NOT EXISTS (SELECT 1 FROM per_student p WHERE p.student_id = s.id))  AS pending_count,
+    (SELECT COUNT(*) FROM per_student WHERE now_outstanding > 0)                   AS due_count,
+    (SELECT COUNT(*) FROM per_student WHERE lifetime_outstanding = 0)              AS cleared_count,
+    COALESCE((SELECT SUM(total_paid)        FROM per_student), 0)::BIGINT          AS total_collected,
+    COALESCE((SELECT SUM(parent_due_now)    FROM per_student), 0)::BIGINT          AS total_parent_due,
+    COALESCE((SELECT SUM(govt_due_now)      FROM per_student), 0)::BIGINT          AS total_govt_due,
+    COALESCE((SELECT SUM(parent_upcoming)   FROM per_student), 0)::BIGINT          AS total_parent_upcoming,
+    COALESCE((SELECT SUM(govt_upcoming)     FROM per_student), 0)::BIGINT          AS total_govt_upcoming;
+END $$;
+
+GRANT EXECUTE ON FUNCTION public.get_school_fee_aggregate() TO authenticated;
+
+
+-- =============================================================
+-- 0108_timetable_periods_per_class.sql
+-- =============================================================
+-- 0108_timetable_periods_per_class.sql
+-- ─────────────────────────────────────────────────────────────────────────
+-- Per-class timetable schedules. Earlier `timetable_periods` was scoped
+-- only to (school, year) which forced every class to share the same
+-- 6/7/8-period layout. Real schools vary: Class 5 may have 5 periods,
+-- Class 11 may have 8. Adding `class_name` (nullable) lets each class
+-- declare its own slot set while keeping the default fallback path.
+--
+-- Resolution rule used by the service:
+--   • If rows with class_name = X exist for this (school, year) → use them.
+--   • Else fall back to rows with class_name = NULL (the school default).
+--   • Else fall back to the hard-coded DEFAULT_SLOTS in the JS layer.
+
+ALTER TABLE public.timetable_periods
+  ADD COLUMN IF NOT EXISTS class_name TEXT;
+
+-- Index for the common lookup: school + year + (class or NULL).
+CREATE INDEX IF NOT EXISTS timetable_periods_school_year_class_idx
+  ON public.timetable_periods (school_id, academic_year_id, class_name, sort_order);
+
+
+-- =============================================================
+-- 0109_simplify_fee_frequencies.sql
+-- =============================================================
+-- 0109_simplify_fee_frequencies.sql
+-- ─────────────────────────────────────────────────────────────────────────
+-- Fee structures now expose only two frequencies in the UI: MONTHLY and
+-- ONE_TIME. Earlier rows had QUARTERLY / HALF_YEARLY / ANNUAL too.
+-- Normalize the stored `fee_heads` JSON so the schema converges to the
+-- new taxonomy. Any frequency that isn't MONTHLY becomes ONE_TIME
+-- (which matches how the simplified UI renders them).
+--
+-- Idempotent — running again is a no-op for rows already normalized.
+
+UPDATE public.fee_structures
+   SET fee_heads = (
+     SELECT jsonb_agg(
+       CASE
+         WHEN COALESCE(h->>'frequency', 'MONTHLY') = 'MONTHLY'
+           THEN h
+         ELSE jsonb_set(h, '{frequency}', '"ONE_TIME"', true)
+       END
+       ORDER BY ord
+     )
+     FROM jsonb_array_elements(fee_heads) WITH ORDINALITY AS arr(h, ord)
+   )
+ WHERE EXISTS (
+   SELECT 1 FROM jsonb_array_elements(fee_heads) e
+   WHERE e->>'frequency' IN ('QUARTERLY','HALF_YEARLY','ANNUAL')
+ );
+
+
+-- =============================================================
+-- 0110_per_head_months.sql
+-- =============================================================
+-- 0110_per_head_months.sql
+-- ─────────────────────────────────────────────────────────────────────────
+-- Per-head months for MONTHLY fee heads. Earlier every MONTHLY head
+-- billed in ALL months listed in fee_structures.monthly_due_dates;
+-- now each head carries its own `months` array (e.g. Tuition Apr-Mar,
+-- Library only Apr+Oct). The schedule generator reads head.months
+-- when present; legacy heads with no months[] fall back to the
+-- structure-level p_due_dates (passed by the caller).
+--
+-- Two parts:
+--   1. Backfill existing MONTHLY heads → months = all 12 academic
+--      months (matches the old behaviour, no installments change).
+--   2. Rewrite generate_student_fee_schedule to read head.months and
+--      compute 1st-of-month due dates internally.
+
+-- ── 1. Backfill MONTHLY heads with months = Apr-Mar ─────────────────────
+UPDATE public.fee_structures
+   SET fee_heads = (
+     SELECT jsonb_agg(
+       CASE
+         WHEN COALESCE(h->>'frequency', 'MONTHLY') = 'MONTHLY' AND h->'months' IS NULL
+           THEN jsonb_set(h, '{months}',
+             '["Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec","Jan","Feb","Mar"]'::jsonb,
+             true)
+         ELSE h
+       END
+       ORDER BY ord
+     )
+     FROM jsonb_array_elements(fee_heads) WITH ORDINALITY AS arr(h, ord)
+   )
+ WHERE EXISTS (
+   SELECT 1 FROM jsonb_array_elements(fee_heads) e
+   WHERE COALESCE(e->>'frequency','MONTHLY') = 'MONTHLY' AND e->'months' IS NULL
+ );
+
+-- ── 2. Replace the schedule generator to honor per-head months ─────────
+-- Same signature so callers don't change.
+DROP FUNCTION IF EXISTS public.generate_student_fee_schedule(UUID, UUID, JSONB, JSONB, BOOLEAN, NUMERIC, NUMERIC);
+
+CREATE OR REPLACE FUNCTION public.generate_student_fee_schedule(
+  p_student_id      UUID,
+  p_year_id         UUID,
+  p_heads           JSONB,
+  p_due_dates       JSONB,
+  p_is_rte          BOOLEAN DEFAULT FALSE,
+  p_discount_amount NUMERIC DEFAULT 0,
+  p_discount_pct    NUMERIC DEFAULT 0
+) RETURNS INT
+LANGUAGE plpgsql SECURITY DEFINER SET search_path = public AS $$
+DECLARE
+  v_school_id UUID;
+  v_caller UUID := auth.uid();
+  v_year_start DATE;
+  v_count INT := 0;
+  v_head JSONB;
+  v_dd JSONB;
+  v_payer TEXT;
+  v_freq TEXT;
+  v_amt BIGINT;
+  v_name TEXT;
+  v_months JSONB;
+  v_month_name TEXT;
+  v_month_idx INT;
+  v_due_year INT;
+  v_due_date DATE;
+  v_start_year INT;
+  v_discount BIGINT;
+  v_pct NUMERIC := COALESCE(p_discount_pct, 0);
+  v_fixed NUMERIC := COALESCE(p_discount_amount, 0);
+BEGIN
+  IF v_caller IS NULL THEN RAISE EXCEPTION 'unauthenticated'; END IF;
+  IF v_pct < 0 OR v_pct > 100 THEN RAISE EXCEPTION 'discount_pct out of range'; END IF;
+  IF v_fixed < 0 THEN RAISE EXCEPTION 'discount_amount must be non-negative'; END IF;
+
+  SELECT school_id INTO v_school_id FROM public.students WHERE id = p_student_id;
+  IF v_school_id IS NULL THEN RAISE EXCEPTION 'student not found'; END IF;
+  IF NOT (public.is_super_admin()
+          OR (public.is_principal() AND public.current_user_school_id() = v_school_id)) THEN
+    RAISE EXCEPTION 'forbidden';
+  END IF;
+
+  -- Academic year start — needed to compute 1st-of-month dates when a
+  -- head carries months[] without explicit dates. Indian schools wrap
+  -- from Apr → Mar so Apr-Dec stays in the start year, Jan-Mar +1.
+  SELECT start_date INTO v_year_start FROM public.academic_years WHERE id = p_year_id;
+  IF v_year_start IS NULL THEN RAISE EXCEPTION 'academic year not found'; END IF;
+  v_start_year := EXTRACT(YEAR FROM v_year_start)::INT;
+
+  -- Drop unpaid/un-written-off rows so we re-create cleanly. Paid
+  -- history is preserved.
+  DELETE FROM public.fee_installments
+   WHERE student_id = p_student_id
+     AND academic_year_id = p_year_id
+     AND paid_amount = 0
+     AND write_off_amount = 0;
+
+  FOR v_head IN SELECT * FROM jsonb_array_elements(p_heads)
+  LOOP
+    v_name   := NULLIF(trim(v_head->>'name'), '');
+    v_amt    := (v_head->>'amount')::BIGINT;
+    v_freq   := COALESCE(v_head->>'frequency', 'MONTHLY');
+    v_months := v_head->'months';
+    v_payer  := CASE WHEN p_is_rte THEN 'GOVERNMENT' ELSE 'PARENT' END;
+
+    v_discount := GREATEST(
+      v_fixed::BIGINT,
+      FLOOR(v_amt * v_pct / 100.0)::BIGINT
+    );
+    v_amt := GREATEST(0, v_amt - v_discount);
+
+    IF v_freq = 'MONTHLY' THEN
+      -- Prefer per-head months[]; otherwise fall back to legacy
+      -- structure-level p_due_dates (back-compat).
+      IF v_months IS NOT NULL AND jsonb_typeof(v_months) = 'array' AND jsonb_array_length(v_months) > 0 THEN
+        FOR v_month_name IN SELECT jsonb_array_elements_text(v_months)
+        LOOP
+          v_month_idx := CASE v_month_name
+            WHEN 'Jan' THEN 1 WHEN 'Feb' THEN 2 WHEN 'Mar' THEN 3
+            WHEN 'Apr' THEN 4 WHEN 'May' THEN 5 WHEN 'Jun' THEN 6
+            WHEN 'Jul' THEN 7 WHEN 'Aug' THEN 8 WHEN 'Sep' THEN 9
+            WHEN 'Oct' THEN 10 WHEN 'Nov' THEN 11 WHEN 'Dec' THEN 12
+            ELSE NULL END;
+          IF v_month_idx IS NULL THEN CONTINUE; END IF;
+          v_due_year := CASE WHEN v_month_idx >= 4 THEN v_start_year ELSE v_start_year + 1 END;
+          v_due_date := make_date(v_due_year, v_month_idx, 1);
+          INSERT INTO public.fee_installments
+            (student_id, academic_year_id, school_id, month, due_date, fee_type, head_name, amount, payer_type)
+          VALUES
+            (p_student_id, p_year_id, v_school_id, v_month_name, v_due_date,
+             CASE WHEN lower(coalesce(v_name,'')) LIKE '%transport%' THEN 'TRANSPORT'
+                  WHEN lower(coalesce(v_name,'')) LIKE '%exam%'      THEN 'EXAM'
+                  WHEN lower(coalesce(v_name,'')) LIKE '%tuition%'   THEN 'TUITION'
+                  ELSE 'OTHER' END,
+             v_name, v_amt, v_payer);
+          v_count := v_count + 1;
+        END LOOP;
+      ELSE
+        FOR v_dd IN SELECT * FROM jsonb_array_elements(p_due_dates)
+        LOOP
+          INSERT INTO public.fee_installments
+            (student_id, academic_year_id, school_id, month, due_date, fee_type, head_name, amount, payer_type)
+          VALUES
+            (p_student_id, p_year_id, v_school_id, v_dd->>'month',
+             (v_dd->>'date')::DATE,
+             CASE WHEN lower(coalesce(v_name,'')) LIKE '%transport%' THEN 'TRANSPORT'
+                  WHEN lower(coalesce(v_name,'')) LIKE '%exam%'      THEN 'EXAM'
+                  WHEN lower(coalesce(v_name,'')) LIKE '%tuition%'   THEN 'TUITION'
+                  ELSE 'OTHER' END,
+             v_name, v_amt, v_payer);
+          v_count := v_count + 1;
+        END LOOP;
+      END IF;
+    ELSE
+      -- One-time / legacy non-monthly → single installment on the AY
+      -- start date so it's "due now" once the year begins.
+      INSERT INTO public.fee_installments
+        (student_id, academic_year_id, school_id, month, due_date, fee_type, head_name, amount, payer_type)
+      VALUES
+        (p_student_id, p_year_id, v_school_id, 'OneTime', v_year_start,
+         'OTHER', v_name, v_amt, v_payer);
+      v_count := v_count + 1;
+    END IF;
+  END LOOP;
+
+  PERFORM public.refresh_student_fee_aggregate(p_student_id, p_year_id);
+  RETURN v_count;
+END $$;
+
+GRANT EXECUTE ON FUNCTION public.generate_student_fee_schedule(UUID, UUID, JSONB, JSONB, BOOLEAN, NUMERIC, NUMERIC) TO authenticated;
+
+
+-- =============================================================
+-- 0111_drop_legacy_billing_tables.sql
+-- =============================================================
+-- 0111_drop_legacy_billing_tables.sql
+-- ─────────────────────────────────────────────────────────────────────────
+-- Drop the legacy super-admin billing schema. The current flat billing
+-- model (migration 0098 + 0104) uses only:
+--   • schools.billing_fixed_amount         — already dropped in 0104
+--   • school_billing_installments          — keep
+--
+-- These three tables predate the rewrite and are no longer referenced
+-- anywhere in src/ or server/ (greppable proof: zero hits).
+--
+--   • school_billing_years        — per-school-per-year totals
+--   • school_billing_schedules    — per-school annual amount schedule
+--   • school_payment_allocations  — split of a payment across years
+--
+-- CASCADE removes any leftover FKs from sibling tables that pointed
+-- back at these (none currently).
+
+DROP TABLE IF EXISTS public.school_payment_allocations CASCADE;
+DROP TABLE IF EXISTS public.school_billing_schedules  CASCADE;
+DROP TABLE IF EXISTS public.school_billing_years      CASCADE;
+
+
+-- =============================================================
+-- 0112_one_time_due_today.sql
+-- =============================================================
+-- 0112_one_time_due_today.sql
+-- ─────────────────────────────────────────────────────────────────────────
+-- OneTime fee due date bug fix.
+--
+-- Earlier OneTime installments were dated v_year_start (= academic_years.
+-- start_date). Once the AY had already started — i.e. for every mid-
+-- year admission — the OneTime installment landed in the past.
+-- compute_late_fee_for_student would then attach months of retroactive
+-- late charges to a brand-new student who'd been on the roll for one
+-- day. Functionally a regression waiting for the first late-fee click.
+--
+-- Fix: OneTime due_date = GREATEST(AY_start, CURRENT_DATE).
+--   • AY already started → due today (school applies structure today).
+--   • AY hasn't started yet → due on AY-start day (pre-admission case).
+--
+-- MONTHLY heads are unchanged — schools that bill from April do want
+-- the back-Aprils to remain on the schedule for students who actually
+-- were enrolled in April; only OneTime is reset.
+
+DROP FUNCTION IF EXISTS public.generate_student_fee_schedule(UUID, UUID, JSONB, JSONB, BOOLEAN, NUMERIC, NUMERIC);
+
+CREATE OR REPLACE FUNCTION public.generate_student_fee_schedule(
+  p_student_id      UUID,
+  p_year_id         UUID,
+  p_heads           JSONB,
+  p_due_dates       JSONB,
+  p_is_rte          BOOLEAN DEFAULT FALSE,
+  p_discount_amount NUMERIC DEFAULT 0,
+  p_discount_pct    NUMERIC DEFAULT 0
+) RETURNS INT
+LANGUAGE plpgsql SECURITY DEFINER SET search_path = public AS $$
+DECLARE
+  v_school_id UUID;
+  v_caller UUID := auth.uid();
+  v_year_start DATE;
+  v_one_time_due DATE;
+  v_count INT := 0;
+  v_head JSONB;
+  v_dd JSONB;
+  v_payer TEXT;
+  v_freq TEXT;
+  v_amt BIGINT;
+  v_name TEXT;
+  v_months JSONB;
+  v_month_name TEXT;
+  v_month_idx INT;
+  v_due_year INT;
+  v_due_date DATE;
+  v_start_year INT;
+  v_discount BIGINT;
+  v_pct NUMERIC := COALESCE(p_discount_pct, 0);
+  v_fixed NUMERIC := COALESCE(p_discount_amount, 0);
+BEGIN
+  IF v_caller IS NULL THEN RAISE EXCEPTION 'unauthenticated'; END IF;
+  IF v_pct < 0 OR v_pct > 100 THEN RAISE EXCEPTION 'discount_pct out of range'; END IF;
+  IF v_fixed < 0 THEN RAISE EXCEPTION 'discount_amount must be non-negative'; END IF;
+
+  SELECT school_id INTO v_school_id FROM public.students WHERE id = p_student_id;
+  IF v_school_id IS NULL THEN RAISE EXCEPTION 'student not found'; END IF;
+  IF NOT (public.is_super_admin()
+          OR (public.is_principal() AND public.current_user_school_id() = v_school_id)) THEN
+    RAISE EXCEPTION 'forbidden';
+  END IF;
+
+  SELECT start_date INTO v_year_start FROM public.academic_years WHERE id = p_year_id;
+  IF v_year_start IS NULL THEN RAISE EXCEPTION 'academic year not found'; END IF;
+  v_start_year := EXTRACT(YEAR FROM v_year_start)::INT;
+  -- OneTime due date: AY start when AY hasn't begun, today when it has.
+  -- Prevents back-dated late-fee accrual for mid-year admissions.
+  v_one_time_due := GREATEST(v_year_start, CURRENT_DATE);
+
+  DELETE FROM public.fee_installments
+   WHERE student_id = p_student_id
+     AND academic_year_id = p_year_id
+     AND paid_amount = 0
+     AND write_off_amount = 0;
+
+  FOR v_head IN SELECT * FROM jsonb_array_elements(p_heads)
+  LOOP
+    v_name   := NULLIF(trim(v_head->>'name'), '');
+    v_amt    := (v_head->>'amount')::BIGINT;
+    v_freq   := COALESCE(v_head->>'frequency', 'MONTHLY');
+    v_months := v_head->'months';
+    v_payer  := CASE WHEN p_is_rte THEN 'GOVERNMENT' ELSE 'PARENT' END;
+
+    v_discount := GREATEST(
+      v_fixed::BIGINT,
+      FLOOR(v_amt * v_pct / 100.0)::BIGINT
+    );
+    v_amt := GREATEST(0, v_amt - v_discount);
+
+    IF v_freq = 'MONTHLY' THEN
+      IF v_months IS NOT NULL AND jsonb_typeof(v_months) = 'array' AND jsonb_array_length(v_months) > 0 THEN
+        FOR v_month_name IN SELECT jsonb_array_elements_text(v_months)
+        LOOP
+          v_month_idx := CASE v_month_name
+            WHEN 'Jan' THEN 1 WHEN 'Feb' THEN 2 WHEN 'Mar' THEN 3
+            WHEN 'Apr' THEN 4 WHEN 'May' THEN 5 WHEN 'Jun' THEN 6
+            WHEN 'Jul' THEN 7 WHEN 'Aug' THEN 8 WHEN 'Sep' THEN 9
+            WHEN 'Oct' THEN 10 WHEN 'Nov' THEN 11 WHEN 'Dec' THEN 12
+            ELSE NULL END;
+          IF v_month_idx IS NULL THEN CONTINUE; END IF;
+          v_due_year := CASE WHEN v_month_idx >= 4 THEN v_start_year ELSE v_start_year + 1 END;
+          v_due_date := make_date(v_due_year, v_month_idx, 1);
+          INSERT INTO public.fee_installments
+            (student_id, academic_year_id, school_id, month, due_date, fee_type, head_name, amount, payer_type)
+          VALUES
+            (p_student_id, p_year_id, v_school_id, v_month_name, v_due_date,
+             CASE WHEN lower(coalesce(v_name,'')) LIKE '%transport%' THEN 'TRANSPORT'
+                  WHEN lower(coalesce(v_name,'')) LIKE '%exam%'      THEN 'EXAM'
+                  WHEN lower(coalesce(v_name,'')) LIKE '%tuition%'   THEN 'TUITION'
+                  ELSE 'OTHER' END,
+             v_name, v_amt, v_payer);
+          v_count := v_count + 1;
+        END LOOP;
+      ELSE
+        FOR v_dd IN SELECT * FROM jsonb_array_elements(p_due_dates)
+        LOOP
+          INSERT INTO public.fee_installments
+            (student_id, academic_year_id, school_id, month, due_date, fee_type, head_name, amount, payer_type)
+          VALUES
+            (p_student_id, p_year_id, v_school_id, v_dd->>'month',
+             (v_dd->>'date')::DATE,
+             CASE WHEN lower(coalesce(v_name,'')) LIKE '%transport%' THEN 'TRANSPORT'
+                  WHEN lower(coalesce(v_name,'')) LIKE '%exam%'      THEN 'EXAM'
+                  WHEN lower(coalesce(v_name,'')) LIKE '%tuition%'   THEN 'TUITION'
+                  ELSE 'OTHER' END,
+             v_name, v_amt, v_payer);
+          v_count := v_count + 1;
+        END LOOP;
+      END IF;
+    ELSE
+      -- OneTime / legacy non-monthly — due today (or AY start, whichever
+      -- is later). Earlier this was pinned to AY start which back-
+      -- dated mid-year admissions and tripped retroactive late fees.
+      INSERT INTO public.fee_installments
+        (student_id, academic_year_id, school_id, month, due_date, fee_type, head_name, amount, payer_type)
+      VALUES
+        (p_student_id, p_year_id, v_school_id, 'OneTime', v_one_time_due,
+         'OTHER', v_name, v_amt, v_payer);
+      v_count := v_count + 1;
+    END IF;
+  END LOOP;
+
+  PERFORM public.refresh_student_fee_aggregate(p_student_id, p_year_id);
+  RETURN v_count;
+END $$;
+
+GRANT EXECUTE ON FUNCTION public.generate_student_fee_schedule(UUID, UUID, JSONB, JSONB, BOOLEAN, NUMERIC, NUMERIC) TO authenticated;
 

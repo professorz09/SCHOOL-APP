@@ -70,6 +70,32 @@ authRouter.post('/login', loginLimiterByMobile, async (req, res) => {
       email: string | null; email_otp_2fa: boolean;
     };
     const p = profile as ProfileRow;
+
+    // School-level inactivity check. We surface this as a *distinct*
+    // error (not the generic password message) because:
+    //   • The password is correct — telling the user it's wrong is a
+    //     bug, not a feature. Confused users blast the support line.
+    //   • School inactivity is not a secret: anyone can see the school
+    //     is offline by attempting any other action.
+    // User enumeration risk is lower for school-level state than for
+    // per-user state.
+    if (p.school_id) {
+      const { data: school } = await adminDb
+        .from('schools')
+        .select('status, name')
+        .eq('id', p.school_id)
+        .maybeSingle();
+      const sch = school as { status: string; name: string } | null;
+      if (sch && (sch.status === 'INACTIVE' || sch.status === 'SUSPENDED')) {
+        try { await adminDb.auth.admin.signOut(data.user.id); } catch { /* ignore */ }
+        console.warn('[auth.login] school inactive', { mobile, role: p.role, schoolStatus: sch.status });
+        throw new ApiError(
+          403,
+          `${sch.name} abhi ${sch.status === 'SUSPENDED' ? 'suspended' : 'inactive'} hai. Super-admin se contact karein.`,
+        );
+      }
+    }
+
     if (!p.is_active) {
       try { await adminDb.auth.admin.signOut(data.user.id); } catch { /* ignore */ }
       console.warn('[auth.login] inactive account', { mobile, role: p.role });

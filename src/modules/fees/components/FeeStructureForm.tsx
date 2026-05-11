@@ -1,26 +1,54 @@
-import React, { useState, useMemo } from 'react';
-import { ArrowLeft, Plus, Trash2, Save, ChevronDown, AlertCircle, RotateCcw, Zap, Calendar } from 'lucide-react';
+// FeeStructureForm — simplified.
+//
+// User's spec: only 2 frequency choices per head (Monthly | OneTime).
+// Earlier the form exposed 5 frequencies (Monthly / Quarterly /
+// Half-Yearly / Annual / OneTime) + 5 billing cycles + per-month due
+// date pickers + transaction fees + descriptions — which mapped to
+// real-world variation but overwhelmed the 95% of schools that just
+// want "Tuition Monthly + Admission OneTime".
+//
+// New model:
+//   • Top: Structure Name
+//   • Below: Type (Class / Vehicle) + Class picker with "All Classes"
+//   • Below: Headers — Name + Amount + Monthly|OneTime toggle
+//   • Monthly heads → 12 installments, each due on the 1st of the
+//     respective academic-year month (Apr 1, May 1, …, Mar 1)
+//   • OneTime heads → 1 installment, due on the AY start date
+//
+// Quarterly / Half-Yearly / Annual rows from older records are
+// rendered as OneTime in the UI; on save they're persisted as
+// ONE_TIME so the schema converges to the new taxonomy.
+
+import React, { useState } from 'react';
+import { ArrowLeft, Plus, Trash2 } from 'lucide-react';
 import { useUIStore } from '@/store/uiStore';
 
-// ─── Data Types ────────────────────────────────────────────────────────────────
+// ─── Types ─────────────────────────────────────────────────────────────────────
 
 export type BillingCycle = 'MONTHLY' | 'QUARTERLY' | 'HALF_YEARLY' | 'ANNUALLY' | 'CUSTOM';
-
 export type FeeHeadFrequency = 'MONTHLY' | 'QUARTERLY' | 'HALF_YEARLY' | 'ANNUAL' | 'ONE_TIME';
+
+// Frequency the UI actually supports going forward. Legacy values are
+// folded into ONE_TIME on display.
+type SimpleFreq = 'MONTHLY' | 'ONE_TIME';
+const toSimple = (f: FeeHeadFrequency): SimpleFreq => (f === 'MONTHLY' ? 'MONTHLY' : 'ONE_TIME');
 
 export interface FeeHead {
   id: string;
   name: string;
   amount: number;
   frequency: FeeHeadFrequency;
+  // For MONTHLY heads, the academic-year months this head bills in
+  // (e.g. ['Apr','May','Jun'] or ['Jan','Mar'] for a custom-schedule
+  // head). Defaults to all 12 months when omitted. Ignored for
+  // ONE_TIME heads.
+  months?: string[];
+  // Kept for back-compat with stored rows — UI no longer surfaces them.
   description: string;
   transactionFee: number;
 }
 
-export interface MonthlyDueDate {
-  month: string;
-  date: string;
-}
+export interface MonthlyDueDate { month: string; date: string }
 
 export interface LateFeeConfig {
   enabled: boolean;
@@ -41,7 +69,7 @@ export interface FeeStructureItem {
   lateFee: LateFeeConfig;
 }
 
-// ─── Constants ─────────────────────────────────────────────────────────────────
+// ─── Constants ────────────────────────────────────────────────────────────────
 
 const ACADEMIC_MONTHS = ['Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec','Jan','Feb','Mar'];
 const MONTH_INDEX: Record<string, number> = {
@@ -55,215 +83,172 @@ const CLASS_OPTIONS = [
   '12th Science','12th Commerce','12th Arts','12th Maths',
 ];
 
-// Preset months per billing cycle. The first month of each "period" within the
-// academic year (Apr-start) is selected so installments are evenly spaced.
-const CYCLE_MONTHS: Record<Exclude<BillingCycle, 'CUSTOM'>, string[]> = {
-  MONTHLY:     ['Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec','Jan','Feb','Mar'],
-  QUARTERLY:   ['Apr','Jul','Oct','Jan'],
-  HALF_YEARLY: ['Apr','Oct'],
-  ANNUALLY:    ['Apr'],
-};
-
-const CYCLE_LABEL: Record<BillingCycle, string> = {
-  MONTHLY: 'Monthly', QUARTERLY: 'Quarterly', HALF_YEARLY: 'Half-Yearly',
-  ANNUALLY: 'Annually', CUSTOM: 'Custom',
-};
-
-const COMMON_FEE_HEADS = [
-  { name: 'Tuition Fee', frequency: 'MONTHLY' as const },
-  { name: 'Admission Fee', frequency: 'ONE_TIME' as const },
-  { name: 'Exam Fee', frequency: 'ANNUAL' as const },
-  { name: 'Lab Fee', frequency: 'MONTHLY' as const },
-  { name: 'Smart Class Fee', frequency: 'MONTHLY' as const },
-  { name: 'Sports Fee', frequency: 'ANNUAL' as const },
-  { name: 'Library Fee', frequency: 'ANNUAL' as const },
-  { name: 'Computer Lab Fee', frequency: 'MONTHLY' as const },
-  { name: 'Annual Day Fee', frequency: 'ONE_TIME' as const },
-  { name: 'Transport Fee', frequency: 'MONTHLY' as const },
-];
-
-const FREQ_LABEL: Record<FeeHeadFrequency, string> = {
-  MONTHLY: 'Monthly', QUARTERLY: 'Quarterly', HALF_YEARLY: 'Half-Yearly',
-  ANNUAL: 'Annual', ONE_TIME: 'One-time',
-};
-
-// How many times a frequency-based head appears per year given billing cycle months count
-function freqMultiplier(freq: FeeHeadFrequency, installmentCount: number): number {
-  if (freq === 'MONTHLY') return installmentCount;
-  if (freq === 'QUARTERLY') return 4;
-  if (freq === 'HALF_YEARLY') return 2;
-  return 1; // ANNUAL, ONE_TIME
-}
-
-function pad(n: number) { return n < 10 ? `0${n}` : `${n}`; }
-
-function buildDueDatesForMonths(startDate: string, months: string[]): MonthlyDueDate[] {
-  const startYear = startDate ? parseInt(startDate.slice(0, 4)) : new Date().getFullYear();
-  return months.map(month => {
-    const mIdx = MONTH_INDEX[month];
-    const year = mIdx >= 4 ? startYear : startYear + 1;
-    return { month, date: `${year}-${pad(mIdx)}-10` };
-  });
-}
-
-// Given a billing cycle, return the months it covers. CUSTOM falls back to
-// any months caller already selected (so we don't wipe their picks).
-function monthsForCycle(cycle: BillingCycle, currentMonths: string[]): string[] {
-  if (cycle === 'CUSTOM') return currentMonths.length ? currentMonths : ['Apr'];
-  return CYCLE_MONTHS[cycle];
-}
-
-// Annual total across all fee heads (uses freqMultiplier per head frequency)
-function calcAnnual(heads: FeeHead[], installmentCount: number): number {
-  return heads.reduce((sum, h) => {
-    const times = freqMultiplier(h.frequency, installmentCount);
-    const txFee = (h.transactionFee ?? 0) * times;
-    return sum + h.amount * times + txFee;
-  }, 0);
-}
-
 const BLANK_LATE_FEE: LateFeeConfig = {
   enabled: false, gracePeriodDays: 5, type: 'FIXED', amount: 100, maxCap: 1000,
 };
 
-// ─── Props ─────────────────────────────────────────────────────────────────────
+// ─── Helpers ──────────────────────────────────────────────────────────────────
+
+const pad = (n: number) => (n < 10 ? `0${n}` : `${n}`);
+
+// Build "1st of every picked month" due dates for the academic year.
+// Apr-Dec use start year, Jan-Mar use start year + 1 (Indian academic
+// year wraps). months[] order is preserved.
+function buildDueDatesForMonths(activeYearStartDate: string, months: string[]): MonthlyDueDate[] {
+  const startYear = activeYearStartDate
+    ? parseInt(activeYearStartDate.slice(0, 4))
+    : new Date().getFullYear();
+  return months.map(month => {
+    const mIdx = MONTH_INDEX[month];
+    const year = mIdx >= 4 ? startYear : startYear + 1;
+    return { month, date: `${year}-${pad(mIdx)}-01` };
+  });
+}
+
+// Default = every academic month (Apr → Mar). Used as the initial set
+// for a new Monthly head; principal can drop months they don't bill.
+const DEFAULT_MONTHLY_MONTHS = [...ACADEMIC_MONTHS];
+
+// Resolve the months a head actually bills in. MONTHLY heads use
+// head.months (defaulting to all 12 if missing). Anything else → empty
+// (those are one-time, billed once on AY-start).
+function monthsForHead(h: FeeHead): string[] {
+  if (toSimple(h.frequency) !== 'MONTHLY') return [];
+  return h.months && h.months.length ? h.months : DEFAULT_MONTHLY_MONTHS;
+}
+
+// Annual total — Monthly head × (months.length) + OneTime head × 1.
+function calcAnnual(heads: FeeHead[]): number {
+  return heads.reduce((sum, h) => {
+    const times = toSimple(h.frequency) === 'MONTHLY' ? monthsForHead(h).length : 1;
+    return sum + h.amount * times;
+  }, 0);
+}
+
+// ─── Props ────────────────────────────────────────────────────────────────────
 
 interface Props {
   initialData?: FeeStructureItem;
   activeYearLabel: string;
   activeYearStartDate: string;
-  onSave: (data: FeeStructureItem) => void;
+  onSave: (data: FeeStructureItem) => void | Promise<void>;
   onBack: () => void;
 }
 
-// ─── Component ─────────────────────────────────────────────────────────────────
+// ─── Component ────────────────────────────────────────────────────────────────
 
 export const FeeStructureForm: React.FC<Props> = ({
   initialData, activeYearLabel, activeYearStartDate, onSave, onBack,
 }) => {
   const isEditing = !!initialData;
+  const { showToast } = useUIStore();
+  // Guards rapid taps. Without this the Save button — which fires an
+  // async parent handler — would queue up 5-6 duplicate structures
+  // when a user double-taps before the next render disables it.
+  const [saving, setSaving] = useState(false);
 
   const [name, setName] = useState(initialData?.name ?? '');
-  const [structureType, setStructureType] = useState<'CLASS'|'VEHICLE'>(initialData?.structureType ?? 'CLASS');
-  const [className, setClassName] = useState(initialData?.className ?? 'Class 1');
+  const [structureType, setStructureType] = useState<'CLASS' | 'VEHICLE'>(initialData?.structureType ?? 'CLASS');
+  const [className, setClassName] = useState(
+    initialData?.className && initialData.className !== 'ALL_CLASSES' ? initialData.className : 'Class 1'
+  );
   const [allClasses, setAllClasses] = useState((initialData?.className ?? '') === 'ALL_CLASSES');
 
+  // Default heads: single Tuition Monthly head for a new structure.
+  // Legacy heads loaded without `months` will get the default 12
+  // months when rendered (see monthsForHead).
   const [feeHeads, setFeeHeads] = useState<FeeHead[]>(
-    initialData?.feeHeads ?? [{ id: 'h1', name: 'Tuition Fee', amount: 0, frequency: 'MONTHLY', description: 'Monthly tuition charges', transactionFee: 0 }]
+    initialData?.feeHeads?.length
+      ? initialData.feeHeads
+      : [{ id: 'h1', name: 'Tuition Fee', amount: 0, frequency: 'MONTHLY', months: DEFAULT_MONTHLY_MONTHS, description: '', transactionFee: 0 }]
   );
-
-  const [billingCycle, setBillingCycleState] = useState<BillingCycle>(
-    initialData?.billingCycle ?? 'MONTHLY'
-  );
-
-  const initialDueDates: MonthlyDueDate[] = useMemo(() => {
-    if (initialData?.monthlyDueDates?.length) return initialData.monthlyDueDates;
-    const months = monthsForCycle(initialData?.billingCycle ?? 'MONTHLY', []);
-    return buildDueDatesForMonths(activeYearStartDate, months);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
-  const [dueDates, setDueDates] = useState<MonthlyDueDate[]>(initialDueDates);
 
   const [lateFee, setLateFee] = useState<LateFeeConfig>(initialData?.lateFee ?? BLANK_LATE_FEE);
 
-  // Switching cycle rebuilds the due-dates list. We preserve user-edited dates
-  // for any month that survives the switch so a custom date isn't lost on
-  // toggle (Apr → Apr stays put).
-  const setBillingCycle = (cycle: BillingCycle) => {
-    setBillingCycleState(cycle);
-    const months = monthsForCycle(cycle, dueDates.map(d => d.month));
-    const fresh = buildDueDatesForMonths(activeYearStartDate, months);
-    setDueDates(fresh.map(f => {
-      const prior = dueDates.find(d => d.month === f.month);
-      return prior ? prior : f;
+  // Mutate one head by id.
+  const patchHead = (id: string, patch: Partial<FeeHead>) =>
+    setFeeHeads(prev => prev.map(h => (h.id === id ? { ...h, ...patch } : h)));
+  const removeHead = (id: string) =>
+    setFeeHeads(prev => prev.filter(h => h.id !== id));
+  const addHead = () =>
+    setFeeHeads(prev => [
+      ...prev,
+      { id: `h${Date.now()}`, name: '', amount: 0, frequency: 'MONTHLY', months: DEFAULT_MONTHLY_MONTHS, description: '', transactionFee: 0 },
+    ]);
+
+  // Toggle one academic month for a head. Auto-adds the months[]
+  // field on legacy heads that didn't have it.
+  const toggleHeadMonth = (id: string, month: string) =>
+    setFeeHeads(prev => prev.map(h => {
+      if (h.id !== id) return h;
+      const cur = monthsForHead(h);
+      const next = cur.includes(month) ? cur.filter(m => m !== month) : [...cur, month];
+      // Sort back into academic-year order so save / display stays canonical.
+      next.sort((a, b) => ACADEMIC_MONTHS.indexOf(a) - ACADEMIC_MONTHS.indexOf(b));
+      return { ...h, months: next };
     }));
-  };
 
-  // For CUSTOM cycle: toggle a month on/off in the schedule.
-  const toggleCustomMonth = (month: string) => {
-    setDueDates(prev => {
-      const exists = prev.some(d => d.month === month);
-      if (exists) return prev.filter(d => d.month !== month);
-      const fresh = buildDueDatesForMonths(activeYearStartDate, [month])[0];
-      const next = [...prev, fresh];
-      // Keep academic order Apr → Mar
-      next.sort((a, b) => ACADEMIC_MONTHS.indexOf(a.month) - ACADEMIC_MONTHS.indexOf(b.month));
-      return next;
-    });
-  };
+  const annualTotal = calcAnnual(feeHeads);
+  const hasMonthly = feeHeads.some(h => toSimple(h.frequency) === 'MONTHLY');
 
-  // New fee head form
-  const [newHeadName, setNewHeadName] = useState('');
-  const [newHeadAmount, setNewHeadAmount] = useState('');
-  const [newHeadFreq, setNewHeadFreq] = useState<FeeHeadFrequency>('MONTHLY');
-  const [newHeadDesc, setNewHeadDesc] = useState('');
-  const [newHeadTxFee, setNewHeadTxFee] = useState('');
-
-  const [selectedCommon, setSelectedCommon] = useState('');
-  const [expandedHead, setExpandedHead] = useState<string | null>(null);
-
-  const annualTotal = calcAnnual(feeHeads, dueDates.length);
-  const hasMonthly = feeHeads.some(h => ['MONTHLY','QUARTERLY','HALF_YEARLY'].includes(h.frequency));
-  const installmentCount = dueDates.length;
-
-  const handleAddHead = () => {
-    if (!newHeadName.trim()) return;
-    setFeeHeads(prev => [...prev, {
-      id: `h${Date.now()}`,
-      name: newHeadName.trim(),
-      amount: Number(newHeadAmount) || 0,
-      frequency: newHeadFreq,
-      description: newHeadDesc.trim(),
-      transactionFee: Number(newHeadTxFee) || 0,
-    }]);
-    setNewHeadName(''); setNewHeadAmount(''); setNewHeadDesc(''); setNewHeadTxFee('');
-  };
-
-  const handleAddCommon = (headName: string) => {
-    const template = COMMON_FEE_HEADS.find(h => h.name === headName);
-    if (!template) return;
-    setFeeHeads(prev => [...prev, {
-      id: `h${Date.now()}`,
-      name: template.name,
-      amount: 0,
-      frequency: template.frequency,
-      description: '',
-      transactionFee: 0,
-    }]);
-    setSelectedCommon('');
-  };
-
-  const handleResetDates = () => {
-    const months = monthsForCycle(billingCycle, dueDates.map(d => d.month));
-    setDueDates(buildDueDatesForMonths(activeYearStartDate, months));
-  };
-
-  const handleSave = () => {
-    const { showToast } = useUIStore.getState();
-    if (!name.trim()) { showToast('Fee structure name is required', 'error'); return; }
-    if (structureType === 'CLASS' && !allClasses && !className) { showToast('Class is required', 'error'); return; }
-    if (hasMonthly && dueDates.length === 0) {
-      showToast('Select at least one billing month for monthly fee heads', 'error');
+  const handleSave = async () => {
+    if (saving) return;
+    if (!name.trim()) { showToast('Fee structure name zaroori hai', 'error'); return; }
+    if (structureType === 'CLASS' && !allClasses && !className) {
+      showToast('Class chunein', 'error'); return;
+    }
+    const cleanedHeads = feeHeads
+      .filter(h => h.name.trim() && h.amount > 0)
+      .map(h => {
+        const simple = toSimple(h.frequency);
+        const months = simple === 'MONTHLY' ? monthsForHead(h) : undefined;
+        if (simple === 'MONTHLY' && (!months || months.length === 0)) {
+          // Caller-side guard: blocked below before reaching server.
+          return null as unknown as FeeHead;
+        }
+        return {
+          ...h,
+          name: h.name.trim(),
+          frequency: (simple === 'MONTHLY' ? 'MONTHLY' : 'ONE_TIME') as FeeHeadFrequency,
+          months,
+          description: '',
+          transactionFee: 0,
+        };
+      })
+      .filter(Boolean) as FeeHead[];
+    if (cleanedHeads.length === 0) {
+      showToast('Kam se kam ek fee head zaroori hai (naam + amount > 0)', 'error');
       return;
     }
-    onSave({
-      id: initialData?.id ?? `fs${Date.now()}`,
-      name: name.trim(),
-      className: structureType === 'VEHICLE' ? 'TRANSPORT' : (allClasses ? 'ALL_CLASSES' : className),
-      structureType,
-      billingCycle,
-      feeHeads,
-      monthlyDueDates: dueDates,
-      lateFee,
-    });
-  };
-
-  const lateFeePreview = () => {
-    if (!lateFee.enabled) return null;
-    const typeStr = lateFee.type === 'FIXED'
-      ? `Fixed ₹${lateFee.amount}`
-      : `${lateFee.amount}% of due`;
-    return `${typeStr} after ${lateFee.gracePeriodDays} days grace period (Max: ₹${lateFee.maxCap})`;
+    // Surface "Monthly head with zero months" explicitly — silent drop
+    // would let a saved structure produce no installments.
+    if (feeHeads.some(h => toSimple(h.frequency) === 'MONTHLY' && h.name.trim() && h.amount > 0 && monthsForHead(h).length === 0)) {
+      showToast('Monthly head ke liye kam se kam ek month select karein', 'error');
+      return;
+    }
+    // monthlyDueDates passed to the RPC is the UNION of every Monthly
+    // head's months — used as the fallback p_due_dates when a head
+    // doesn't carry its own months[] (legacy schedules). Once every
+    // head has months[], the RPC reads them per-head and this fallback
+    // becomes redundant but harmless.
+    const allMonthsUnion = Array.from(new Set(
+      cleanedHeads.flatMap(h => h.months ?? [])
+    )).sort((a, b) => ACADEMIC_MONTHS.indexOf(a) - ACADEMIC_MONTHS.indexOf(b));
+    setSaving(true);
+    try {
+      await onSave({
+        id: initialData?.id ?? `fs${Date.now()}`,
+        name: name.trim(),
+        className: structureType === 'VEHICLE' ? 'TRANSPORT' : allClasses ? 'ALL_CLASSES' : className,
+        structureType,
+        billingCycle: 'MONTHLY',
+        feeHeads: cleanedHeads,
+        monthlyDueDates: buildDueDatesForMonths(activeYearStartDate, allMonthsUnion.length ? allMonthsUnion : DEFAULT_MONTHLY_MONTHS),
+        lateFee,
+      });
+    } finally {
+      setSaving(false);
+    }
   };
 
   return (
@@ -273,418 +258,263 @@ export const FeeStructureForm: React.FC<Props> = ({
         <button onClick={onBack} className="p-2 -ml-2 bg-slate-100 rounded-full text-slate-600">
           <ArrowLeft size={20} />
         </button>
-        <h2 className="text-xl font-black text-slate-900 uppercase tracking-tight">
-          {isEditing ? 'Edit Fee Structure' : 'Create Fee Structure'}
-        </h2>
+        <div>
+          <h2 className="text-xl font-black text-slate-900 uppercase tracking-tight">
+            {isEditing ? 'Edit Fee Structure' : 'New Fee Structure'}
+          </h2>
+          {activeYearLabel && (
+            <p className="text-[10px] font-bold text-slate-400 mt-0.5">{activeYearLabel}</p>
+          )}
+        </div>
       </div>
 
-      <div className="flex-1 overflow-y-auto p-4  space-y-4">
+      <div className="flex-1 overflow-y-auto p-4 space-y-3">
+        {/* Name */}
+        <div className="bg-white rounded-2xl border border-slate-100 shadow-sm p-4">
+          <label className="block text-[10px] font-black uppercase tracking-widest text-slate-500 mb-1.5">
+            Structure name *
+          </label>
+          <input
+            value={name}
+            onChange={e => setName(e.target.value)}
+            placeholder="e.g. Class 5 Standard Fees"
+            className="w-full border border-slate-200 bg-slate-50 rounded-xl px-4 py-3 font-bold text-sm outline-none focus:border-indigo-500 focus:bg-white"
+          />
+        </div>
 
-        {/* ── Name ── */}
+        {/* Class / Section */}
         <div className="bg-white rounded-2xl border border-slate-100 shadow-sm p-4 space-y-3">
           <div>
-            <label className="block text-[10px] font-black uppercase tracking-widest text-slate-500 mb-1.5">Fee Structure Name *</label>
-            <input
-              value={name}
-              onChange={e => setName(e.target.value)}
-              placeholder="e.g., Standard Academic Fees - Class 5"
-              className="w-full border border-slate-200 bg-slate-50 rounded-xl px-4 py-3 font-bold text-sm outline-none focus:border-indigo-500 focus:bg-white"
-            />
+            <label className="block text-[10px] font-black uppercase tracking-widest text-slate-500 mb-1.5">Type</label>
+            <div className="grid grid-cols-2 gap-2">
+              {(['CLASS', 'VEHICLE'] as const).map(t => (
+                <button
+                  key={t}
+                  type="button"
+                  onClick={() => setStructureType(t)}
+                  className={`py-2.5 rounded-xl text-xs font-black uppercase tracking-widest border-2 transition-colors ${
+                    structureType === t
+                      ? 'bg-indigo-600 text-white border-indigo-600'
+                      : 'bg-slate-50 text-slate-600 border-slate-200'
+                  }`}>
+                  {t === 'CLASS' ? 'Class fee' : 'Vehicle fee'}
+                </button>
+              ))}
+            </div>
           </div>
 
-          <div>
-            <label className="block text-[10px] font-black uppercase tracking-widest text-slate-500 mb-1.5">Type *</label>
-            <select value={structureType} onChange={e => setStructureType(e.target.value as 'CLASS'|'VEHICLE')} className="w-full border border-slate-200 bg-slate-50 rounded-xl px-4 py-3 font-bold text-sm mb-2">
-              <option value="CLASS">Class Fee Structure</option>
-              <option value="VEHICLE">Vehicle/Transport Fee Structure</option>
-            </select>
-            {structureType === 'CLASS' && (
-              <>
-                <label className="block text-[10px] font-black uppercase tracking-widest text-slate-500 mb-1.5">Class</label>
-                <label className="flex items-center gap-2 text-[11px] font-bold text-slate-600 mb-2">
-                  <input type="checkbox" checked={allClasses} onChange={e => setAllClasses(e.target.checked)} />
-                  Sabhi classes ke liye apply karein
-                </label>
-                {!allClasses && (
+          {structureType === 'CLASS' && (
+            <>
+              <label className="flex items-center gap-2 cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={allClasses}
+                  onChange={e => setAllClasses(e.target.checked)}
+                  className="w-4 h-4 accent-indigo-600"
+                />
+                <span className="text-[11px] font-black uppercase tracking-widest text-slate-700">All classes</span>
+              </label>
+
+              {!allClasses && (
+                <div>
+                  <label className="block text-[10px] font-black uppercase tracking-widest text-slate-500 mb-1.5">Class</label>
                   <select
                     value={className}
                     onChange={e => setClassName(e.target.value)}
-                    className="w-full border border-slate-200 bg-slate-50 rounded-xl px-3 py-3 font-bold text-sm outline-none focus:border-indigo-500"
-                  >
+                    className="w-full border border-slate-200 bg-slate-50 rounded-xl px-3 py-3 font-bold text-sm outline-none focus:border-indigo-500 focus:bg-white">
                     {CLASS_OPTIONS.map(c => <option key={c}>{c}</option>)}
                   </select>
-                )}
-              </>
-            )}
-          </div>
-
-          {activeYearLabel && (
-            <div className="flex items-center gap-2 bg-blue-50 rounded-xl px-3 py-2">
-              <span className="text-[10px] font-black text-blue-700">📅 Showing classes for academic year: {activeYearLabel}</span>
-            </div>
-          )}
-        </div>
-
-        {/* ── Billing Cycle ── */}
-        <div className="bg-white rounded-2xl border border-slate-100 shadow-sm p-4 space-y-3">
-          <div className="flex items-center gap-2">
-            <Calendar size={14} className="text-indigo-600" />
-            <span className="text-[10px] font-black uppercase tracking-widest text-slate-500">Billing Cycle *</span>
-          </div>
-          <p className="text-[10px] font-bold text-slate-400 -mt-1">
-            How often monthly fee heads are billed during the academic year.
-          </p>
-
-          <div className="grid grid-cols-5 gap-1.5">
-            {(['MONTHLY','QUARTERLY','HALF_YEARLY','ANNUALLY','CUSTOM'] as BillingCycle[]).map(c => (
-              <button key={c} type="button"
-                onClick={() => setBillingCycle(c)}
-                className={`py-2 rounded-xl text-[10px] font-black border transition-all leading-tight ${billingCycle === c ? 'bg-indigo-600 text-white border-indigo-600' : 'bg-slate-50 text-slate-600 border-slate-200'}`}>
-                {CYCLE_LABEL[c]}
-              </button>
-            ))}
-          </div>
-
-          {billingCycle === 'CUSTOM' && (
-            <div className="bg-slate-50 rounded-xl p-3 space-y-2">
-              <p className="text-[10px] font-black uppercase tracking-widest text-slate-500">
-                Pick billing months ({dueDates.length} selected)
-              </p>
-              <div className="grid grid-cols-6 gap-1.5">
-                {ACADEMIC_MONTHS.map(m => {
-                  const active = dueDates.some(d => d.month === m);
-                  return (
-                    <button key={m} type="button"
-                      onClick={() => toggleCustomMonth(m)}
-                      className={`py-2 rounded-lg text-[10px] font-black border transition-all ${active ? 'bg-emerald-600 text-white border-emerald-600' : 'bg-white text-slate-500 border-slate-200'}`}>
-                      {m}
-                    </button>
-                  );
-                })}
-              </div>
-            </div>
-          )}
-
-          <div className="bg-indigo-50 rounded-xl px-3 py-2">
-            <p className="text-[10px] font-bold text-indigo-700">
-              {hasMonthly
-                ? `Monthly heads will bill ${installmentCount}× per year (${dueDates.map(d => d.month).join(', ') || 'no months selected'}).`
-                : 'No monthly heads — billing cycle does not affect annual / one-time heads.'}
-            </p>
-          </div>
-        </div>
-
-        {/* ── Common Fee Heads Quick-add ── */}
-        <div className="bg-white rounded-2xl border border-slate-100 shadow-sm p-4 space-y-2">
-          <div className="flex items-center gap-2 mb-1">
-            <span className="text-[10px] font-black uppercase tracking-widest text-slate-400">📦 Copy From Common Fee Heads</span>
-          </div>
-          <select
-            value={selectedCommon}
-            onChange={e => { if (e.target.value) handleAddCommon(e.target.value); setSelectedCommon(''); }}
-            className="w-full border border-slate-200 bg-slate-50 rounded-xl px-3 py-3 font-bold text-sm outline-none focus:border-indigo-500"
-          >
-            <option value="">Select an option…</option>
-            {COMMON_FEE_HEADS.map(h => (
-              <option key={h.name} value={h.name}>{h.name} ({FREQ_LABEL[h.frequency]})</option>
-            ))}
-          </select>
-          <p className="text-[9px] font-bold text-slate-400">⚙️ Select a component from the dropdown to instantly add it to your fee structure</p>
-        </div>
-
-        {/* ── Fee Heads ── */}
-        <div className="bg-white rounded-2xl border border-slate-100 shadow-sm overflow-hidden">
-          <div className="px-4 py-3 border-b border-slate-100">
-            <span className="text-[10px] font-black uppercase tracking-widest text-slate-400">Fee Heads *</span>
-          </div>
-
-          {feeHeads.map((head, idx) => (
-            <div key={head.id} className="border-b border-slate-50 last:border-0">
-              <button
-                onClick={() => setExpandedHead(expandedHead === head.id ? null : head.id)}
-                className="w-full flex items-center gap-3 px-4 py-3 text-left"
-              >
-                <div className="flex-1">
-                  <div className="font-bold text-slate-800 text-sm">{head.name || 'Fee Name'}</div>
-                  <div className="text-[10px] font-bold text-slate-400 mt-0.5">
-                    ₹{head.amount.toLocaleString('en-IN')} · {FREQ_LABEL[head.frequency]}
-                    {head.description && <span className="ml-1 opacity-70">· {head.description}</span>}
-                  </div>
-                </div>
-                <button
-                  onClick={e => { e.stopPropagation(); setFeeHeads(prev => prev.filter(h => h.id !== head.id)); }}
-                  className="p-1.5 text-rose-400 hover:bg-rose-50 rounded-lg transition-colors"
-                >
-                  <Trash2 size={13} />
-                </button>
-                <ChevronDown size={14} className={`text-slate-300 transition-transform ${expandedHead === head.id ? 'rotate-180' : ''}`} />
-              </button>
-
-              {expandedHead === head.id && (
-                <div className="px-4 pb-4 space-y-3 bg-slate-50">
-                  <div>
-                    <label className="block text-[9px] font-black uppercase tracking-widest text-slate-400 mb-1">Fee Name</label>
-                    <input
-                      value={head.name}
-                      onChange={e => setFeeHeads(prev => prev.map(h => h.id === head.id ? { ...h, name: e.target.value } : h))}
-                      className="w-full border border-slate-200 bg-white rounded-xl px-3 py-2.5 font-bold text-sm outline-none focus:border-indigo-500"
-                    />
-                  </div>
-                  <div className="grid grid-cols-2 gap-2">
-                    <div>
-                      <label className="block text-[9px] font-black uppercase tracking-widest text-slate-400 mb-1">Amount (₹)</label>
-                      <input
-                        type="number"
-                        value={head.amount || ''}
-                        onChange={e => setFeeHeads(prev => prev.map(h => h.id === head.id ? { ...h, amount: Number(e.target.value) } : h))}
-                        className="w-full border border-slate-200 bg-white rounded-xl px-3 py-2.5 font-bold text-sm outline-none focus:border-indigo-500"
-                      />
-                    </div>
-                    <div>
-                      <label className="block text-[9px] font-black uppercase tracking-widest text-slate-400 mb-1">Frequency</label>
-                      <select
-                        value={head.frequency}
-                        onChange={e => setFeeHeads(prev => prev.map(h => h.id === head.id ? { ...h, frequency: e.target.value as FeeHeadFrequency } : h))}
-                        className="w-full border border-slate-200 bg-white rounded-xl px-2 py-2.5 font-bold text-xs outline-none focus:border-indigo-500"
-                      >
-                        <option value="MONTHLY">Monthly</option>
-                        <option value="QUARTERLY">Quarterly</option>
-                        <option value="HALF_YEARLY">Half-Yearly</option>
-                        <option value="ANNUAL">Annual</option>
-                        <option value="ONE_TIME">One-time</option>
-                      </select>
-                    </div>
-                  </div>
-                  <div className="grid grid-cols-2 gap-2">
-                    <div>
-                      <label className="block text-[9px] font-black uppercase tracking-widest text-slate-400 mb-1">Transaction Fee (₹)</label>
-                      <input
-                        type="number"
-                        value={head.transactionFee || ''}
-                        onChange={e => setFeeHeads(prev => prev.map(h => h.id === head.id ? { ...h, transactionFee: Number(e.target.value) } : h))}
-                        placeholder="0"
-                        className="w-full border border-slate-200 bg-white rounded-xl px-3 py-2.5 font-bold text-sm outline-none focus:border-indigo-500"
-                      />
-                      <p className="text-[9px] font-bold text-slate-400 mt-0.5">Har payment pe flat charge</p>
-                    </div>
-                    <div>
-                      <label className="block text-[9px] font-black uppercase tracking-widest text-slate-400 mb-1">Description (optional)</label>
-                      <input
-                        value={head.description}
-                        onChange={e => setFeeHeads(prev => prev.map(h => h.id === head.id ? { ...h, description: e.target.value } : h))}
-                        placeholder="e.g. Monthly tuition charges"
-                        className="w-full border border-slate-200 bg-white rounded-xl px-3 py-2.5 font-bold text-sm outline-none focus:border-indigo-500"
-                      />
-                    </div>
-                  </div>
                 </div>
               )}
-            </div>
-          ))}
-
-          {/* Add Fee Head */}
-          <div className="p-4 bg-slate-50 border-t border-slate-100 space-y-2">
-            <p className="text-[9px] font-black uppercase tracking-widest text-slate-400">+ Add Fee Head</p>
-            <input
-              value={newHeadName}
-              onChange={e => setNewHeadName(e.target.value)}
-              placeholder="Fee Name"
-              className="w-full border border-slate-200 bg-white rounded-xl px-3 py-2.5 font-bold text-sm outline-none focus:border-indigo-500"
-            />
-            <div className="grid grid-cols-2 gap-2">
-              <input
-                type="number"
-                value={newHeadAmount}
-                onChange={e => setNewHeadAmount(e.target.value)}
-                placeholder="Amount (₹)"
-                className="w-full border border-slate-200 bg-white rounded-xl px-3 py-2.5 font-bold text-sm outline-none focus:border-indigo-500"
-              />
-              <select
-                value={newHeadFreq}
-                onChange={e => setNewHeadFreq(e.target.value as FeeHeadFrequency)}
-                className="w-full border border-slate-200 bg-white rounded-xl px-2 py-2.5 font-bold text-xs outline-none focus:border-indigo-500"
-              >
-                <option value="MONTHLY">Monthly</option>
-                <option value="QUARTERLY">Quarterly</option>
-                <option value="HALF_YEARLY">Half-Yearly</option>
-                <option value="ANNUAL">Annual</option>
-                <option value="ONE_TIME">One-time</option>
-              </select>
-            </div>
-            <div className="grid grid-cols-2 gap-2">
-              <input
-                type="number"
-                value={newHeadTxFee}
-                onChange={e => setNewHeadTxFee(e.target.value)}
-                placeholder="Transaction fee ₹ (optional)"
-                className="w-full border border-slate-200 bg-white rounded-xl px-3 py-2.5 font-bold text-sm outline-none focus:border-indigo-500"
-              />
-              <input
-                value={newHeadDesc}
-                onChange={e => setNewHeadDesc(e.target.value)}
-                placeholder="Description (optional)"
-                className="w-full border border-slate-200 bg-white rounded-xl px-3 py-2.5 font-bold text-sm outline-none focus:border-indigo-500"
-              />
-            </div>
-            <button
-              onClick={handleAddHead}
-              disabled={!newHeadName.trim()}
-              className="w-full flex items-center justify-center gap-2 bg-indigo-600 text-white font-black text-xs uppercase tracking-widest py-2.5 rounded-xl active:scale-95 transition-transform disabled:opacity-40"
-            >
-              <Plus size={13} /> Add Fee Head
-            </button>
-          </div>
+            </>
+          )}
         </div>
 
-        {/* ── Monthly Due Dates ── */}
-        {hasMonthly && (
-          <div className="bg-white rounded-2xl border border-slate-100 shadow-sm overflow-hidden">
-            <div className="flex items-center justify-between px-4 py-3 border-b border-slate-100">
-              <span className="text-[10px] font-black uppercase tracking-widest text-slate-400">Due Dates · {CYCLE_LABEL[billingCycle]}</span>
-              <button onClick={handleResetDates} className="flex items-center gap-1 text-[10px] font-black text-indigo-600">
-                <RotateCcw size={11} /> Reset All
-              </button>
-            </div>
-
-            <div className="divide-y divide-slate-50">
-              {dueDates.map(({ month, date }) => (
-                <div key={month} className="flex items-center gap-3 px-4 py-2.5">
-                  <span className="w-10 text-xs font-black text-slate-500 shrink-0">{month}:</span>
-                  <input
-                    type="date"
-                    value={date}
-                    onChange={e => setDueDates(prev => prev.map(d => d.month === month ? { ...d, date: e.target.value } : d))}
-                    className="flex-1 border border-slate-200 bg-slate-50 rounded-xl px-3 py-1.5 font-bold text-xs outline-none focus:border-indigo-500"
-                  />
-                  <span className="text-[9px] font-black text-slate-300">Custom</span>
-                </div>
-              ))}
-            </div>
-
-            <div className="p-4 bg-blue-50 border-t border-blue-100">
-              <p className="text-[9px] font-bold text-blue-600">💡 <strong>Quick Tips:</strong></p>
-              <ul className="text-[9px] font-bold text-blue-500 mt-1 space-y-0.5 list-none">
-                <li>• All months are pre-filled with proper academic year dates</li>
-                <li>• Jan–Mar use next year (e.g., {activeYearStartDate ? parseInt(activeYearStartDate.slice(0,4)) + 1 : '2027'} for {activeYearLabel || '2026-27'})</li>
-                <li>• Apr–Dec use current year (e.g., {activeYearStartDate ? activeYearStartDate.slice(0,4) : '2026'} for {activeYearLabel || '2026-27'})</li>
-                <li>• Change any date to customize that month</li>
-              </ul>
-            </div>
-          </div>
-        )}
-
-        {/* ── Late Fee ── */}
-        <div className="bg-white rounded-2xl border border-slate-100 shadow-sm overflow-hidden">
-          <div className="flex items-center justify-between px-4 py-4 border-b border-slate-100">
-            <div>
-              <p className="font-black text-slate-900 text-sm">Enable Late Fee for this Fee Structure</p>
-              <p className="text-[9px] font-bold text-slate-400 mt-0.5">⚠️ Late fees will be automatically calculated when students pay after the due date</p>
-            </div>
+        {/* Fee Heads */}
+        <div className="bg-white rounded-2xl border border-slate-100 shadow-sm p-4 space-y-3">
+          <div className="flex items-center justify-between">
+            <p className="text-[10px] font-black uppercase tracking-widest text-slate-500">Fee Heads</p>
             <button
-              onClick={() => setLateFee(prev => ({ ...prev, enabled: !prev.enabled }))}
-              className={`relative w-12 h-6 rounded-full transition-colors shrink-0 ${lateFee.enabled ? 'bg-indigo-600' : 'bg-slate-200'}`}
-            >
-              <div className={`absolute top-0.5 w-5 h-5 rounded-full bg-white shadow transition-transform ${lateFee.enabled ? 'translate-x-6' : 'translate-x-0.5'}`} />
+              onClick={addHead}
+              className="flex items-center gap-1 px-3 py-1.5 bg-indigo-50 hover:bg-indigo-100 text-indigo-700 font-black text-[10px] uppercase tracking-widest rounded-lg active:scale-95 transition-all">
+              <Plus size={11} /> Add
             </button>
           </div>
 
-          {lateFee.enabled && (
-            <div className="p-4 space-y-4">
-              <div>
-                <label className="block text-[10px] font-black uppercase tracking-widest text-slate-500 mb-1.5">Grace Period (Days)</label>
+          {feeHeads.map(head => {
+            const simple = toSimple(head.frequency);
+            return (
+              <div key={head.id} className="border border-slate-100 rounded-2xl p-3 bg-slate-50/40 space-y-2">
+                {/* Row 1: name + delete */}
                 <div className="flex items-center gap-2">
                   <input
-                    type="number"
-                    value={lateFee.gracePeriodDays}
-                    onChange={e => setLateFee(prev => ({ ...prev, gracePeriodDays: Number(e.target.value) }))}
-                    className="w-24 border border-slate-200 bg-slate-50 rounded-xl px-3 py-2.5 font-bold text-sm outline-none focus:border-indigo-500"
+                    value={head.name}
+                    onChange={e => patchHead(head.id, { name: e.target.value })}
+                    placeholder="e.g. Tuition Fee / Admission / Library"
+                    className="flex-1 border border-slate-200 bg-white rounded-xl px-3 py-2.5 font-bold text-sm outline-none focus:border-indigo-500"
                   />
-                  <span className="text-xs font-bold text-slate-400">Days after due date before late fee applies</span>
+                  <button
+                    onClick={() => removeHead(head.id)}
+                    className="p-2 rounded-lg text-rose-500 hover:bg-rose-50 active:scale-95 transition-all"
+                    aria-label="Remove head">
+                    <Trash2 size={14} />
+                  </button>
                 </div>
-              </div>
 
-              <div>
-                <label className="block text-[10px] font-black uppercase tracking-widest text-slate-500 mb-2">Late Fee Calculation Type</label>
+                {/* Row 2: amount + Monthly|OneTime toggle */}
                 <div className="grid grid-cols-2 gap-2">
-                  {[
-                    { val: 'FIXED', label: 'Fixed Amount' },
-                    { val: 'PERCENTAGE', label: 'Percentage' },
-                  ].map(({ val, label }) => (
-                    <button key={val} type="button"
-                      onClick={() => setLateFee(prev => ({ ...prev, type: val as LateFeeConfig['type'] }))}
-                      className={`py-2.5 rounded-xl text-xs font-black border transition-all ${lateFee.type === val ? 'bg-indigo-600 text-white border-indigo-600' : 'bg-slate-50 text-slate-600 border-slate-200'}`}>
-                      {label}
-                    </button>
-                  ))}
+                  <div>
+                    <label className="text-[9px] font-black uppercase tracking-widest text-slate-400 mb-1 block">Amount (₹)</label>
+                    <input
+                      type="number"
+                      inputMode="numeric"
+                      value={head.amount || ''}
+                      onChange={e => patchHead(head.id, { amount: Number(e.target.value) || 0 })}
+                      placeholder="0"
+                      className="w-full border border-slate-200 bg-white rounded-xl px-3 py-2.5 font-bold text-sm outline-none focus:border-indigo-500 tabular-nums"
+                    />
+                  </div>
+                  <div>
+                    <label className="text-[9px] font-black uppercase tracking-widest text-slate-400 mb-1 block">Frequency</label>
+                    <div className="grid grid-cols-2 gap-1 p-1 bg-slate-100 rounded-xl">
+                      <button
+                        type="button"
+                        onClick={() => patchHead(head.id, { frequency: 'MONTHLY' })}
+                        className={`py-1.5 rounded-lg text-[10px] font-black uppercase tracking-widest transition-colors ${
+                          simple === 'MONTHLY' ? 'bg-blue-600 text-white shadow-sm' : 'text-slate-500'
+                        }`}>
+                        Monthly
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => patchHead(head.id, { frequency: 'ONE_TIME' })}
+                        className={`py-1.5 rounded-lg text-[10px] font-black uppercase tracking-widest transition-colors ${
+                          simple === 'ONE_TIME' ? 'bg-amber-500 text-white shadow-sm' : 'text-slate-500'
+                        }`}>
+                        OneTime
+                      </button>
+                    </div>
+                  </div>
                 </div>
+
+                {/* Month picker — visible only for Monthly heads.
+                    Principal taps chips to include/exclude months.
+                    Different heads can have different month sets
+                    (e.g. Tuition all 12, Library only Apr+Oct, etc.).
+                    1st of selected month is the auto-due date. */}
+                {simple === 'MONTHLY' && (() => {
+                  const picked = monthsForHead(head);
+                  return (
+                    <div>
+                      <label className="text-[9px] font-black uppercase tracking-widest text-slate-400 mb-1 block">
+                        Months ({picked.length})
+                      </label>
+                      <div className="grid grid-cols-6 gap-1">
+                        {ACADEMIC_MONTHS.map(m => {
+                          const on = picked.includes(m);
+                          return (
+                            <button
+                              key={m}
+                              type="button"
+                              onClick={() => toggleHeadMonth(head.id, m)}
+                              className={`py-1.5 rounded-lg text-[10px] font-black border transition-colors ${
+                                on
+                                  ? 'bg-blue-600 text-white border-blue-600'
+                                  : 'bg-white text-slate-500 border-slate-200 hover:border-slate-300'
+                              }`}>
+                              {m}
+                            </button>
+                          );
+                        })}
+                      </div>
+                    </div>
+                  );
+                })()}
+
+                {/* Sub-line: what this head bills */}
+                <p className="text-[10px] font-bold text-slate-500">
+                  {simple === 'MONTHLY'
+                    ? `${monthsForHead(head).length} installments · ₹${head.amount.toLocaleString('en-IN')} on 1st`
+                    : `One-time · ₹${head.amount.toLocaleString('en-IN')} on AY start`}
+                </p>
               </div>
+            );
+          })}
 
-              <div className="grid grid-cols-2 gap-3">
-                <div>
-                  <label className="block text-[10px] font-black uppercase tracking-widest text-slate-500 mb-1.5">
-                    {lateFee.type === 'FIXED' ? 'Fixed Late Fee Amount (₹)' : 'Percentage (%)'}
-                  </label>
-                  <input
-                    type="number"
-                    value={lateFee.amount}
-                    onChange={e => setLateFee(prev => ({ ...prev, amount: Number(e.target.value) }))}
-                    className="w-full border border-slate-200 bg-slate-50 rounded-xl px-3 py-2.5 font-bold text-sm outline-none focus:border-indigo-500"
-                  />
-                </div>
-                <div>
-                  <label className="block text-[10px] font-black uppercase tracking-widest text-slate-500 mb-1.5">Maximum Late Fee Cap (₹)</label>
-                  <input
-                    type="number"
-                    value={lateFee.maxCap}
-                    onChange={e => setLateFee(prev => ({ ...prev, maxCap: Number(e.target.value) }))}
-                    className="w-full border border-slate-200 bg-slate-50 rounded-xl px-3 py-2.5 font-bold text-sm outline-none focus:border-indigo-500"
-                  />
-                  <p className="text-[9px] font-bold text-slate-400 mt-1">Maximum late fee that can be charged</p>
-                </div>
-              </div>
-
-              {lateFeePreview() && (
-                <div className="bg-amber-50 border border-amber-200 rounded-xl p-3">
-                  <p className="text-[10px] font-black text-amber-700">Late Fee Preview:</p>
-                  <p className="text-xs font-bold text-amber-600 mt-1">{lateFeePreview()}</p>
-                </div>
-              )}
-            </div>
-          )}
-        </div>
-
-        {/* ── Annual Total ── */}
-        <div className="bg-indigo-600 rounded-2xl p-4">
-          <div className="flex items-center justify-between">
-            <span className="font-black text-white text-sm">Total Annual Fee:</span>
-            <span className="font-black text-white text-xl">₹{annualTotal.toLocaleString('en-IN')}</span>
-          </div>
-          {hasMonthly && (
-            <p className="text-[10px] font-bold text-indigo-200 mt-1">
-              Across {installmentCount} {CYCLE_LABEL[billingCycle].toLowerCase()} installment{installmentCount === 1 ? '' : 's'}
+          {feeHeads.length === 0 && (
+            <p className="text-[11px] font-bold text-slate-400 text-center py-3">
+              Koi fee head nahi. <strong>Add</strong> dabakar pehla head banayein.
             </p>
           )}
+        </div>
+
+        {/* Late Fee — kept lightweight; toggle + 1 amount field */}
+        <div className="bg-white rounded-2xl border border-slate-100 shadow-sm p-4 space-y-3">
+          <div className="flex items-center justify-between">
+            <div>
+              <p className="text-[10px] font-black uppercase tracking-widest text-slate-500">Late Fee</p>
+              <p className="text-[10px] font-bold text-slate-400 mt-0.5">Due date ke baad late charge auto-apply</p>
+            </div>
+            <button
+              type="button"
+              onClick={() => setLateFee(prev => ({ ...prev, enabled: !prev.enabled }))}
+              className={`relative w-11 h-6 rounded-full transition-colors shrink-0 ${
+                lateFee.enabled ? 'bg-indigo-600' : 'bg-slate-200'
+              }`}>
+              <div
+                className={`absolute top-0.5 w-5 h-5 rounded-full bg-white shadow transition-transform ${
+                  lateFee.enabled ? 'translate-x-5' : 'translate-x-0.5'
+                }`}
+              />
+            </button>
+          </div>
           {lateFee.enabled && (
-            <div className="flex items-center gap-1.5 mt-2">
-              <Zap size={12} className="text-yellow-300" />
-              <span className="text-[10px] font-bold text-indigo-200">Late fees will be automatically calculated during payment</span>
+            <div className="grid grid-cols-2 gap-2">
+              <div>
+                <label className="text-[9px] font-black uppercase tracking-widest text-slate-400 mb-1 block">Grace days</label>
+                <input
+                  type="number"
+                  value={lateFee.gracePeriodDays}
+                  onChange={e => setLateFee(prev => ({ ...prev, gracePeriodDays: Number(e.target.value) || 0 }))}
+                  className="w-full border border-slate-200 bg-slate-50 rounded-xl px-3 py-2.5 font-bold text-sm outline-none focus:border-indigo-500 tabular-nums"
+                />
+              </div>
+              <div>
+                <label className="text-[9px] font-black uppercase tracking-widest text-slate-400 mb-1 block">Fixed late ₹</label>
+                <input
+                  type="number"
+                  value={lateFee.amount}
+                  onChange={e => setLateFee(prev => ({ ...prev, amount: Number(e.target.value) || 0, type: 'FIXED' }))}
+                  className="w-full border border-slate-200 bg-slate-50 rounded-xl px-3 py-2.5 font-bold text-sm outline-none focus:border-indigo-500 tabular-nums"
+                />
+              </div>
             </div>
           )}
         </div>
 
-        {/* ── Actions ── */}
-        <div className="flex gap-3">
+        {/* Annual total */}
+        <div className="bg-slate-900 rounded-2xl p-4 text-white flex items-center justify-between">
+          <div>
+            <p className="text-[10px] font-black uppercase tracking-widest text-slate-400">Annual total</p>
+            <p className="text-[10px] font-bold text-slate-400 mt-0.5">
+              {hasMonthly ? 'Sum of (amount × months) for each head' : 'One-time fees only'}
+            </p>
+          </div>
+          <span className="text-2xl font-black tabular-nums">₹{annualTotal.toLocaleString('en-IN')}</span>
+        </div>
+
+        {/* Save */}
+        <div className="flex gap-2 pt-1 pb-6">
           <button
             onClick={onBack}
-            className="flex-1 py-3.5 border-2 border-slate-200 text-slate-600 font-black text-xs uppercase tracking-widest rounded-2xl active:scale-95 transition-transform"
-          >
+            className="px-4 py-3.5 bg-white border border-slate-200 text-slate-600 font-black text-xs uppercase tracking-widest rounded-2xl active:scale-95 transition-transform">
             Cancel
           </button>
           <button
             onClick={handleSave}
-            className="flex-1 flex items-center justify-center gap-2 bg-emerald-600 text-white font-black text-xs uppercase tracking-widest py-3.5 rounded-2xl active:scale-95 transition-transform shadow-lg"
-          >
-            <Plus size={15} /> {isEditing ? 'Save Changes' : 'Create Fee'}
+            disabled={saving}
+            className="flex-1 flex items-center justify-center gap-2 bg-emerald-600 hover:bg-emerald-700 text-white font-black text-xs uppercase tracking-widest py-3.5 rounded-2xl active:scale-95 transition-transform shadow-md disabled:opacity-60 disabled:cursor-not-allowed">
+            {saving ? 'Saving…' : isEditing ? 'Save Changes' : 'Create Structure'}
           </button>
         </div>
       </div>

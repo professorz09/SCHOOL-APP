@@ -6,7 +6,7 @@ import {
   Bus, Briefcase, Droplets, GraduationCap, Shield,
   CreditCard, TrendingUp, Home as HomeIcon,
   UserCheck, AlertTriangle, Trash2,
-  Lock, Edit2, History, Download,
+  Lock, Edit2, History, Download, ChevronDown, ChevronUp,
   UserPlus, BookmarkCheck, Banknote, Truck, TruckIcon, FileX, RotateCcw, ArrowUpCircle, Eye,
   LogOut, X,
 } from 'lucide-react';
@@ -217,6 +217,13 @@ export const StudentProfilePanel: React.FC<Props> = ({ student, onBack, onStuden
   const [feePayDate, setFeePayDate] = useState('');
   const [feePayNote, setFeePayNote] = useState('');
   const [feePayBusy, setFeePayBusy] = useState(false);
+  // Fee-tab UI: collapse + pagination state so a 15-installment year
+  // doesn't push the History card off-screen and the principal can
+  // shrink already-reviewed sections.
+  const [feeCurrentCollapsed, setFeeCurrentCollapsed] = useState(false);
+  const [feeMonthsShown, setFeeMonthsShown] = useState(6);
+  const [feeHistoryCollapsed, setFeeHistoryCollapsed] = useState(true);
+  const [feeHistoryShown, setFeeHistoryShown] = useState(5);
 
   // Change transport modal
   const [changeModalOpen, setChangeModalOpen] = useState(false);
@@ -254,8 +261,12 @@ export const StudentProfilePanel: React.FC<Props> = ({ student, onBack, onStuden
   // ── Core load: only what the hero card needs (runs on student open) ─────────
   const loadCore = async (s: Student) => {
     const hasYear = !!s.academicYearId;
+    // Fetch ALL years' installments — past-year dues need to be visible
+    // in the profile so a principal can see e.g. "Class 5 (last year):
+    // ₹2,000 still owed" alongside this year's schedule. Earlier this
+    // was filtered to s.academicYearId only and past dues were invisible.
     const [feesRes, recordRes] = await Promise.allSettled([
-      feeService.getStudentInstallmentsDirect(s.id, hasYear ? s.academicYearId : undefined),
+      feeService.getStudentInstallmentsDirect(s.id),
       hasYear ? studentService.getAcademicRecord(s.id, s.academicYearId) : Promise.resolve(null),
     ]);
     setFeeInstallments(feesRes.status === 'fulfilled' ? feesRes.value : []);
@@ -615,6 +626,16 @@ export const StudentProfilePanel: React.FC<Props> = ({ student, onBack, onStuden
     : '—';
   const attGood = currentStudent.attendancePercent >= 75;
 
+  // Overdue (currently due) computed from live installments. The smaller
+  // top-strip and the Fee Allotment block both used to show
+  // (totalFee - paidFee) which counts the entire yearly schedule as due
+  // on day 1. We now isolate the past-due unpaid balance so a fresh
+  // student shows ₹0 due while still showing the lifetime Total.
+  const _todayIST = new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Kolkata' });
+  const overdueNow = feeInstallments
+    .filter(i => i.dueDate <= _todayIST && i.status !== 'PAID')
+    .reduce((s, i) => s + Math.max(0, i.amount - i.paidAmount - i.writeOffAmount), 0);
+
   const ProfileField = ({ label, value, icon: Icon }: { label: string; value: string | React.ReactNode; icon?: React.ElementType }) => (
     <div className="flex items-start justify-between gap-3 py-2.5 border-b border-slate-50 last:border-0 last:pb-0">
       <div className="flex items-center gap-1.5 shrink-0">
@@ -730,8 +751,8 @@ export const StudentProfilePanel: React.FC<Props> = ({ student, onBack, onStuden
                 <div className="text-[9px] font-black text-slate-400 uppercase tracking-wider mt-0.5">Paid</div>
               </div>
               <div className="text-center">
-                <div className={`text-lg font-black tabular-nums ${currentStudent.totalFee - currentStudent.paidFee > 0 ? 'text-rose-600' : 'text-slate-300'}`}>
-                  ₹{((currentStudent.totalFee - currentStudent.paidFee) / 1000).toFixed(0)}K
+                <div className={`text-lg font-black tabular-nums ${overdueNow > 0 ? 'text-rose-600' : 'text-slate-300'}`}>
+                  ₹{(overdueNow / 1000).toFixed(0)}K
                 </div>
                 <div className="text-[9px] font-black text-slate-400 uppercase tracking-wider mt-0.5">Due</div>
               </div>
@@ -923,7 +944,7 @@ export const StudentProfilePanel: React.FC<Props> = ({ student, onBack, onStuden
                     <div className="text-[9px] font-bold text-emerald-400 mt-0.5">Paid</div>
                   </div>
                   <div className="bg-rose-50 rounded-xl p-3 text-center">
-                    <div className="text-sm font-black text-rose-600">₹{((currentStudent.totalFee - currentStudent.paidFee) / 1000).toFixed(0)}K</div>
+                    <div className="text-sm font-black text-rose-600">₹{(overdueNow / 1000).toFixed(0)}K</div>
                     <div className="text-[9px] font-bold text-rose-400 mt-0.5">Due</div>
                   </div>
                 </div>
@@ -1111,7 +1132,30 @@ export const StudentProfilePanel: React.FC<Props> = ({ student, onBack, onStuden
 
           {/* ── FEES TAB ─────────────────────────────── */}
           {activeProfileTab === 'FEES' && (() => {
-            const instByMonth = feeInstallments.reduce<Record<string, FeeInstallment[]>>(
+            // Split into current-year vs past-year so the existing
+            // monthly groupBy doesn't collapse April-2024 and April-2025
+            // into one row. Past years are rendered in their own
+            // collapsible card below the current-year view.
+            const currentYearId = currentStudent.academicYearId ?? '';
+            const currentInsts = currentYearId
+              ? feeInstallments.filter(i => i.academicYearId === currentYearId)
+              : feeInstallments;
+            const pastInsts = currentYearId
+              ? feeInstallments.filter(i => i.academicYearId && i.academicYearId !== currentYearId)
+              : [];
+            // Group past-year installments by year so each appears as
+            // its own card, e.g. "2024-25 (last year) — ₹2,000 due".
+            const pastByYear = pastInsts.reduce<Record<string, FeeInstallment[]>>(
+              (acc, inst) => {
+                const k = inst.academicYearId ?? 'unknown';
+                if (!acc[k]) acc[k] = [];
+                acc[k].push(inst);
+                return acc;
+              }, {},
+            );
+            const pastYearKeys = Object.keys(pastByYear).sort(); // stable order
+
+            const instByMonth = currentInsts.reduce<Record<string, FeeInstallment[]>>(
               (acc, inst) => {
                 const key = inst.month;
                 if (!acc[key]) acc[key] = [];
@@ -1122,9 +1166,19 @@ export const StudentProfilePanel: React.FC<Props> = ({ student, onBack, onStuden
             const monthEntries = (Object.entries(instByMonth) as [string, FeeInstallment[]][]).sort(
               ([, a], [, b]) => new Date(a[0].dueDate).getTime() - new Date(b[0].dueDate).getTime(),
             );
-            const totalFee  = feeInstallments.reduce((s, i) => s + i.amount, 0);
-            const totalPaid = feeInstallments.reduce((s, i) => s + i.paidAmount + i.writeOffAmount, 0);
-            const totalDue  = Math.max(0, totalFee - totalPaid);
+            const totalFee  = currentInsts.reduce((s, i) => s + i.amount, 0);
+            const totalPaid = currentInsts.reduce((s, i) => s + i.paidAmount + i.writeOffAmount, 0);
+            // "Due" = currently OVERDUE only (due_date <= today, not paid).
+            // Upcoming months are shown separately so a fresh-year student
+            // doesn't look like a defaulter. totalFee - totalPaid is the
+            // *lifetime* outstanding which lives on the Total card already.
+            const todayStr = new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Kolkata' });
+            const totalDue = currentInsts
+              .filter(i => i.dueDate <= todayStr && i.status !== 'PAID')
+              .reduce((s, i) => s + Math.max(0, i.amount - i.paidAmount - i.writeOffAmount), 0);
+            const totalUpcoming = currentInsts
+              .filter(i => i.dueDate > todayStr && i.status !== 'PAID')
+              .reduce((s, i) => s + Math.max(0, i.amount - i.paidAmount - i.writeOffAmount), 0);
             const pct       = totalFee > 0 ? Math.round((totalPaid / totalFee) * 100) : 0;
 
             const statusBadge = (status: string) => {
@@ -1149,22 +1203,54 @@ export const StudentProfilePanel: React.FC<Props> = ({ student, onBack, onStuden
                   </div>
                 )}
 
+                {/* Zero-installments CTA. If the student has a class but
+                    no fees were generated (e.g. promoted earlier without
+                    a structure picked, or a class swap that didn't
+                    cascade), parents land on a ₹0 ledger and don't pay.
+                    Surface a loud "Assign Fee" prompt that reopens the
+                    class allotment modal where structure is mandatory. */}
+                {currentStudent.className && currentInsts.length === 0 && (
+                  <div className="bg-amber-50 border-2 border-amber-300 rounded-2xl p-4 flex flex-col gap-3">
+                    <div className="flex items-start gap-2">
+                      <AlertTriangle size={18} className="text-amber-600 mt-0.5 shrink-0" />
+                      <div>
+                        <p className="font-black text-sm text-amber-900">No fee schedule yet</p>
+                        <p className="text-[11px] font-bold text-amber-700 mt-0.5 leading-snug">
+                          Class allot hai par fee structure assign nahi —
+                          parent ko ₹0 ledger dikhega. Allot karein.
+                        </p>
+                      </div>
+                    </div>
+                    <button onClick={() => setAssignTarget(currentStudent)}
+                      className="w-full py-2.5 bg-amber-600 hover:bg-amber-700 text-white font-black text-xs uppercase rounded-xl active:scale-95">
+                      Assign Fee Structure
+                    </button>
+                  </div>
+                )}
+
                 <div className="bg-gradient-to-br from-slate-800 to-slate-900 rounded-2xl p-5 text-white">
                   <p className="text-[9px] font-black uppercase tracking-widest text-white/50 mb-3">
                     Fee Overview · {currentStudent.className || 'Unassigned'}
                   </p>
-                  <div className="grid grid-cols-3 gap-3 text-center">
+                  {/* 4-up stat strip — Total (lifetime), Paid, Overdue
+                      (now), Upcoming (future). "Due" used to collapse the
+                      latter two into one alarming lifetime figure. */}
+                  <div className="grid grid-cols-4 gap-2 text-center">
                     <div>
-                      <div className="text-xl font-black text-white">₹{(totalFee / 1000).toFixed(1)}K</div>
+                      <div className="text-lg font-black text-white tabular-nums">₹{(totalFee / 1000).toFixed(1)}K</div>
                       <div className="text-[8px] font-bold text-white/40 uppercase mt-0.5">Total</div>
                     </div>
                     <div>
-                      <div className="text-xl font-black text-emerald-400">₹{(totalPaid / 1000).toFixed(1)}K</div>
+                      <div className="text-lg font-black text-emerald-400 tabular-nums">₹{(totalPaid / 1000).toFixed(1)}K</div>
                       <div className="text-[8px] font-bold text-white/40 uppercase mt-0.5">Paid</div>
                     </div>
                     <div>
-                      <div className="text-xl font-black text-rose-400">₹{(totalDue / 1000).toFixed(1)}K</div>
-                      <div className="text-[8px] font-bold text-white/40 uppercase mt-0.5">Due</div>
+                      <div className="text-lg font-black text-rose-400 tabular-nums">₹{(totalDue / 1000).toFixed(1)}K</div>
+                      <div className="text-[8px] font-bold text-white/40 uppercase mt-0.5">Overdue</div>
+                    </div>
+                    <div>
+                      <div className="text-lg font-black text-slate-300 tabular-nums">₹{(totalUpcoming / 1000).toFixed(1)}K</div>
+                      <div className="text-[8px] font-bold text-white/40 uppercase mt-0.5">Upcoming</div>
                     </div>
                   </div>
                   <div className="mt-4 bg-white/10 rounded-full h-2">
@@ -1177,36 +1263,39 @@ export const StudentProfilePanel: React.FC<Props> = ({ student, onBack, onStuden
                   </div>
                 </div>
 
-                <div className="bg-white rounded-2xl border border-slate-100 shadow-sm p-4">
-                  <SectionTitle icon={History} title="Fee Payment History" />
-                  {feePaymentHistory.length === 0 ? (
-                    <p className="text-xs font-bold text-slate-400">No payment entries yet</p>
-                  ) : (
-                    <div className="space-y-2">
-                      {feePaymentHistory.slice(0, 20).map(p => (
-                        <div key={p.id} className="rounded-xl border border-slate-100 bg-slate-50 px-3 py-2">
-                          <div className="flex items-center justify-between gap-2">
-                            <div>
-                              <p className="text-xs font-black text-slate-800">₹{p.amount.toLocaleString('en-IN')} · {p.method}</p>
-                              <p className="text-[10px] font-bold text-slate-500">{p.date} · Receipt {p.receiptNo}</p>
-                            </div>
-                            {p.advanceAmount > 0 && (
-                              <span className="text-[9px] font-black bg-indigo-100 text-indigo-700 px-2 py-0.5 rounded-full">
-                                Advance ₹{p.advanceAmount.toLocaleString('en-IN')}
-                              </span>
-                            )}
-                          </div>
-                          {p.installmentDetails.length > 0 && (
-                            <p className="text-[10px] font-bold text-slate-500 mt-1">
-                              {p.installmentDetails.map(d => `${d.month} ${d.feeType}`).join(' · ')}
-                            </p>
-                          )}
-                        </div>
-                      ))}
-                    </div>
-                  )}
-                </div>
+                {/* Prominent Collect Payment CTA — direct entry point
+                    without scanning through 12 month cards. Opens the
+                    pay modal pre-loaded with student-wide total
+                    outstanding; oldest-first FIFO allocation walks
+                    forward through unpaid installments. */}
+                {(() => {
+                  const overallDue = feeInstallments.reduce(
+                    (s, i) => s + Math.max(0, i.amount - i.paidAmount - i.writeOffAmount),
+                    0,
+                  );
+                  if (overallDue <= 0) return null;
+                  const oldestUnpaid = feeInstallments
+                    .filter(i => Math.max(0, i.amount - i.paidAmount - i.writeOffAmount) > 0)
+                    .sort((a, b) => new Date(a.dueDate).getTime() - new Date(b.dueDate).getTime())[0];
+                  if (!oldestUnpaid) return null;
+                  return (
+                    <button
+                      onClick={() => {
+                        openFeePayModal(oldestUnpaid);
+                        setFeePayAmount(String(overallDue));
+                      }}
+                      className="w-full py-3 bg-emerald-600 hover:bg-emerald-700 text-white font-black text-sm rounded-2xl shadow-md active:scale-[0.98] transition-all flex items-center justify-center gap-2">
+                      <IndianRupee size={16} />
+                      Collect Payment · ₹{overallDue.toLocaleString('en-IN')} outstanding
+                    </button>
+                  );
+                })()}
 
+                {/* Current-year monthly cards — collapsible. Header
+                    always visible; tap to expand the schedule. Inside,
+                    months are paginated (default 6, "Show more" expands
+                    by 6) so a 15-installment year doesn't push History
+                    off-screen on a small device. */}
                 {feeInstallments.length === 0 ? (
                   <div className="bg-white rounded-2xl border border-slate-100 shadow-sm flex flex-col items-center py-10 text-slate-400">
                     <IndianRupee size={28} className="mb-2 opacity-40" />
@@ -1221,8 +1310,30 @@ export const StudentProfilePanel: React.FC<Props> = ({ student, onBack, onStuden
                     )}
                   </div>
                 ) : (
-                  <div className="space-y-3">
-                    {monthEntries.map(([month, insts]) => {
+                  <div className="bg-white rounded-2xl border border-slate-100 shadow-sm overflow-hidden">
+                    <button
+                      onClick={() => setFeeCurrentCollapsed(c => !c)}
+                      className="w-full flex items-center justify-between px-4 py-3 active:bg-slate-50 transition-colors">
+                      <div className="flex items-center gap-2">
+                        <Calendar size={14} className="text-indigo-600" />
+                        <span className="font-black text-slate-800 text-sm">Current Year Schedule</span>
+                        <span className="text-[10px] font-black text-slate-500 bg-slate-100 px-1.5 py-0.5 rounded">
+                          {monthEntries.length} months
+                        </span>
+                        {totalDue > 0 && (
+                          <span className="text-[10px] font-black text-rose-700 bg-rose-100 px-1.5 py-0.5 rounded">
+                            ₹{totalDue.toLocaleString('en-IN')} overdue
+                          </span>
+                        )}
+                      </div>
+                      {feeCurrentCollapsed
+                        ? <ChevronDown size={18} className="text-slate-400" />
+                        : <ChevronUp size={18} className="text-indigo-600" />
+                      }
+                    </button>
+                    {!feeCurrentCollapsed && (
+                  <div className="space-y-3 px-3 pb-3 pt-1 bg-slate-50/40">
+                    {monthEntries.slice(0, feeMonthsShown).map(([month, insts]) => {
                       const monthTotal = insts.reduce((s, i) => s + i.amount, 0);
                       const monthPaid  = insts.reduce((s, i) => s + i.paidAmount + i.writeOffAmount, 0);
                       const monthDue   = Math.max(0, monthTotal - monthPaid);
@@ -1249,9 +1360,16 @@ export const StudentProfilePanel: React.FC<Props> = ({ student, onBack, onStuden
                               return (
                                 <div key={inst.id} className="flex items-center justify-between py-2.5 gap-3">
                                   <div className="flex-1 min-w-0">
+                                    {/* Headline shows the fee_type bucket (Other / Tuition / etc) —
+                                        the original head name (e.g. "Library Fees") lives in the
+                                        smaller subtitle so it's discoverable without crowding the
+                                        row. Falls back to just the bucket on legacy rows. */}
                                     <div className="font-bold text-slate-700 text-sm capitalize">
                                       {inst.feeType.replace('_', ' ').toLowerCase().replace(/\b\w/g, c => c.toUpperCase())}
                                     </div>
+                                    {inst.headName?.trim() && (
+                                      <div className="text-[10px] font-bold text-slate-500 truncate">{inst.headName}</div>
+                                    )}
                                     <div className="text-[10px] font-bold text-slate-400">Due: {inst.dueDate}</div>
                                   </div>
                                   <div className="flex flex-col items-end gap-1 shrink-0">
@@ -1277,8 +1395,197 @@ export const StudentProfilePanel: React.FC<Props> = ({ student, onBack, onStuden
                         </div>
                       );
                     })}
+                    {monthEntries.length > feeMonthsShown && (
+                      <div className="flex justify-center pt-1">
+                        <button
+                          onClick={() => setFeeMonthsShown(n => n + 6)}
+                          className="px-4 py-2 bg-white border border-indigo-200 text-indigo-600 font-black text-[10px] uppercase tracking-widest rounded-xl active:scale-95">
+                          Show {Math.min(6, monthEntries.length - feeMonthsShown)} more · {monthEntries.length - feeMonthsShown} pending
+                        </button>
+                      </div>
+                    )}
+                    {feeMonthsShown > 6 && monthEntries.length > 6 && (
+                      <div className="flex justify-center">
+                        <button
+                          onClick={() => setFeeMonthsShown(6)}
+                          className="px-3 py-1.5 text-slate-500 font-bold text-[10px] uppercase tracking-widest">
+                          Collapse to 6
+                        </button>
+                      </div>
+                    )}
+                  </div>
+                    )}
                   </div>
                 )}
+
+                {/* Past-year fee cards. Lists each prior academic year
+                    with its outstanding amount + a collapsible list of
+                    individual unpaid installments. Year names resolve
+                    via AcademicYearContext so the card title reads
+                    "2025-2026" instead of a raw UUID prefix. */}
+                {pastYearKeys.length > 0 && (
+                  <div className="space-y-2">
+                    <p className="text-[10px] font-black uppercase tracking-widest text-slate-500 mt-1">
+                      Previous Years
+                    </p>
+                    {pastYearKeys.map(yearId => {
+                      const ylist = pastByYear[yearId];
+                      const ytotal = ylist.reduce((s, i) => s + i.amount, 0);
+                      const ypaid  = ylist.reduce((s, i) => s + i.paidAmount + i.writeOffAmount, 0);
+                      const ydue   = Math.max(0, ytotal - ypaid);
+                      const allClear = ydue === 0;
+                      const yearName = academicYears.find(y => y.id === yearId)?.name || 'Past Year';
+                      // Oldest unpaid installment in this year — used as
+                      // the "anchor" when the principal taps Collect All
+                      // (oldest-first RPC walks forward from here).
+                      const oldestUnpaid = ylist
+                        .filter(i => Math.max(0, i.amount - i.paidAmount - i.writeOffAmount) > 0)
+                        .sort((a, b) => new Date(a.dueDate).getTime() - new Date(b.dueDate).getTime())[0];
+                      return (
+                        <div key={yearId}
+                          className={`rounded-2xl border shadow-sm overflow-hidden ${
+                            allClear ? 'bg-emerald-50/40 border-emerald-100' : 'bg-amber-50/40 border-amber-200'
+                          }`}>
+                          <div className="flex items-center justify-between px-4 py-3 gap-3">
+                            <div className="flex items-center gap-2 min-w-0">
+                              <Calendar size={13} className={`shrink-0 ${allClear ? 'text-emerald-600' : 'text-amber-600'}`} />
+                              <span className="font-black text-slate-800 text-sm truncate">{yearName}</span>
+                              <span className="text-[9px] font-black text-slate-500 bg-white px-1.5 py-0.5 rounded shrink-0">
+                                {ylist.length} inst
+                              </span>
+                            </div>
+                            <div className="text-right shrink-0">
+                              <div className="text-[10px] font-bold text-slate-500">
+                                ₹{ypaid.toLocaleString('en-IN')} paid
+                              </div>
+                              {ydue > 0 && (
+                                <div className="text-xs font-black text-rose-700">
+                                  ₹{ydue.toLocaleString('en-IN')} due
+                                </div>
+                              )}
+                              {allClear && (
+                                <div className="text-[10px] font-black text-emerald-700">All cleared</div>
+                              )}
+                            </div>
+                          </div>
+                          {ydue > 0 && oldestUnpaid && (
+                            <div className="px-4 pb-3">
+                              <button
+                                onClick={() => {
+                                  // Bulk-collect the year's outstanding.
+                                  // record_fee_payment is oldest-first
+                                  // FIFO, so opening with the oldest
+                                  // unpaid as the modal "anchor" and
+                                  // prefilling the year-total amount
+                                  // makes the allocation natural — the
+                                  // money walks forward through unpaid
+                                  // installments until it's exhausted.
+                                  openFeePayModal(oldestUnpaid);
+                                  setFeePayAmount(String(ydue));
+                                }}
+                                className="w-full py-2 bg-emerald-600 hover:bg-emerald-700 text-white font-black text-xs uppercase tracking-widest rounded-xl active:scale-95">
+                                Collect All · ₹{ydue.toLocaleString('en-IN')}
+                              </button>
+                            </div>
+                          )}
+                          {ydue > 0 && (
+                            <div className="border-t border-amber-200 px-4 py-2 space-y-1.5">
+                              {ylist.filter(i => Math.max(0, i.amount - i.paidAmount - i.writeOffAmount) > 0).map(inst => {
+                                const instDue = Math.max(0, inst.amount - inst.paidAmount - inst.writeOffAmount);
+                                return (
+                                  <div key={inst.id} className="flex items-center justify-between text-xs bg-white border border-amber-100 rounded-lg px-3 py-2">
+                                    <div className="flex-1 min-w-0">
+                                      <div className="font-bold text-slate-700 truncate">{inst.headName || inst.feeType} · {inst.month}</div>
+                                      <div className="text-[10px] text-slate-400">Due: {inst.dueDate}</div>
+                                    </div>
+                                    <div className="flex items-center gap-2 shrink-0">
+                                      <span className="font-black text-rose-700">₹{instDue.toLocaleString('en-IN')}</span>
+                                      <button onClick={() => openFeePayModal(inst)}
+                                        className="text-[9px] font-black text-emerald-700 bg-emerald-50 border border-emerald-200 px-2 py-1 rounded-lg active:scale-95">
+                                        Collect
+                                      </button>
+                                    </div>
+                                  </div>
+                                );
+                              })}
+                            </div>
+                          )}
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+
+                {/* Payment History — moved to the bottom of the tab.
+                    Collapsed by default (most principals open the fees
+                    tab to act on dues, not audit past payments).
+                    Paginated by 5 with "Show more" so a school year of
+                    20+ payments doesn't bloat the page. */}
+                <div className="bg-white rounded-2xl border border-slate-100 shadow-sm overflow-hidden">
+                  <button
+                    onClick={() => setFeeHistoryCollapsed(c => !c)}
+                    className="w-full flex items-center justify-between px-4 py-3 active:bg-slate-50 transition-colors">
+                    <div className="flex items-center gap-2">
+                      <History size={14} className="text-slate-500" />
+                      <span className="font-black text-slate-800 text-sm">Payment History</span>
+                      <span className="text-[10px] font-black text-slate-500 bg-slate-100 px-1.5 py-0.5 rounded">
+                        {feePaymentHistory.length}
+                      </span>
+                    </div>
+                    {feeHistoryCollapsed
+                      ? <ChevronDown size={18} className="text-slate-400" />
+                      : <ChevronUp size={18} className="text-slate-600" />
+                    }
+                  </button>
+                  {!feeHistoryCollapsed && (
+                    <div className="px-4 pb-3 pt-1 space-y-2 border-t border-slate-100 bg-slate-50/40">
+                      {feePaymentHistory.length === 0 ? (
+                        <p className="text-xs font-bold text-slate-400 py-4 text-center">No payment entries yet</p>
+                      ) : (
+                        <>
+                          {feePaymentHistory.slice(0, feeHistoryShown).map(p => (
+                            <div key={p.id} className="rounded-xl border border-slate-100 bg-white px-3 py-2">
+                              <div className="flex items-center justify-between gap-2">
+                                <div>
+                                  <p className="text-xs font-black text-slate-800">₹{p.amount.toLocaleString('en-IN')} · {p.method}</p>
+                                  <p className="text-[10px] font-bold text-slate-500">{p.date} · Receipt {p.receiptNo}</p>
+                                </div>
+                                {p.advanceAmount > 0 && (
+                                  <span className="text-[9px] font-black bg-indigo-100 text-indigo-700 px-2 py-0.5 rounded-full">
+                                    Advance ₹{p.advanceAmount.toLocaleString('en-IN')}
+                                  </span>
+                                )}
+                              </div>
+                              {p.installmentDetails.length > 0 && (
+                                <p className="text-[10px] font-bold text-slate-500 mt-1">
+                                  {p.installmentDetails.map(d => `${d.month} ${d.feeType}`).join(' · ')}
+                                </p>
+                              )}
+                            </div>
+                          ))}
+                          {feePaymentHistory.length > feeHistoryShown && (
+                            <div className="flex justify-center pt-1">
+                              <button
+                                onClick={() => setFeeHistoryShown(n => n + 10)}
+                                className="px-4 py-2 bg-white border border-indigo-200 text-indigo-600 font-black text-[10px] uppercase tracking-widest rounded-xl active:scale-95">
+                                Show {Math.min(10, feePaymentHistory.length - feeHistoryShown)} more · {feePaymentHistory.length - feeHistoryShown} pending
+                              </button>
+                            </div>
+                          )}
+                          {feeHistoryShown > 5 && feePaymentHistory.length > 5 && (
+                            <div className="flex justify-center">
+                              <button
+                                onClick={() => setFeeHistoryShown(5)}
+                                className="px-3 py-1.5 text-slate-500 font-bold text-[10px] uppercase tracking-widest">
+                                Collapse to 5
+                              </button>
+                            </div>
+                          )}
+                        </>
+                      )}
+                    </div>
+                  )}
+                </div>
               </>
             );
           })()}
@@ -1708,7 +2015,19 @@ export const StudentProfilePanel: React.FC<Props> = ({ student, onBack, onStuden
       </div>
 
       {/* ── Fee Payment Modal ─────────────────────────────────────── */}
-      {feePayModal && (
+      {feePayModal && (() => {
+        // Student-wide total outstanding — sums every installment across
+        // every academic year. Shown alongside this installment's due so
+        // the principal sees the bigger picture: "collecting ₹5,000 here
+        // — student still owes ₹65,348 across all years".
+        const thisInstDue = Math.max(0,
+          feePayModal.amount - feePayModal.paidAmount - feePayModal.writeOffAmount,
+        );
+        const studentTotalDue = feeInstallments.reduce(
+          (s, i) => s + Math.max(0, i.amount - i.paidAmount - i.writeOffAmount),
+          0,
+        );
+        return (
         <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-50 flex items-end sm:items-center justify-center p-4"
              onClick={() => !feePayBusy && setFeePayModal(null)}>
           <div className="bg-white rounded-2xl border border-slate-200 shadow-2xl w-full max-w-md"
@@ -1725,11 +2044,33 @@ export const StudentProfilePanel: React.FC<Props> = ({ student, onBack, onStuden
                 className="p-1.5 hover:bg-slate-100 rounded-lg text-slate-400 disabled:opacity-50 text-base leading-none">✕</button>
             </div>
             <div className="p-4 space-y-4">
-              <div className="bg-rose-50 border border-rose-100 rounded-xl px-4 py-3 flex items-center justify-between">
-                <span className="text-[10px] font-black uppercase tracking-widest text-rose-500">Outstanding Due</span>
-                <span className="text-lg font-black text-rose-600">
-                  ₹{(feePayModal.amount - feePayModal.paidAmount - feePayModal.writeOffAmount).toLocaleString('en-IN')}
-                </span>
+              {/* Two-up summary: this installment vs student-wide total.
+                  Pre-rewrite this only showed the single-installment due
+                  and a principal collecting one row would forget the
+                  larger backlog. Total tile lets them quick-tap "Collect
+                  All" without leaving the modal. */}
+              <div className="grid grid-cols-2 gap-2">
+                <div className="bg-rose-50 border border-rose-100 rounded-xl px-3 py-2.5">
+                  <p className="text-[9px] font-black uppercase tracking-widest text-rose-500">This Installment</p>
+                  <p className="text-base font-black text-rose-600 mt-0.5 tabular-nums">
+                    ₹{thisInstDue.toLocaleString('en-IN')}
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setFeePayAmount(String(studentTotalDue))}
+                  disabled={feePayBusy || studentTotalDue <= 0 || studentTotalDue === thisInstDue}
+                  title={studentTotalDue > thisInstDue ? 'Tap to fill amount with total outstanding' : ''}
+                  className={`text-left bg-slate-50 border border-slate-200 rounded-xl px-3 py-2.5 transition-colors ${
+                    studentTotalDue > thisInstDue && !feePayBusy ? 'hover:bg-slate-100 cursor-pointer' : 'cursor-default'
+                  }`}>
+                  <p className="text-[9px] font-black uppercase tracking-widest text-slate-500">
+                    Total Outstanding{studentTotalDue > thisInstDue ? ' · tap' : ''}
+                  </p>
+                  <p className="text-base font-black text-slate-800 mt-0.5 tabular-nums">
+                    ₹{studentTotalDue.toLocaleString('en-IN')}
+                  </p>
+                </button>
               </div>
               <div>
                 <label className="text-[9px] font-black uppercase tracking-widest text-slate-500 block mb-1.5">
@@ -1759,10 +2100,14 @@ export const StudentProfilePanel: React.FC<Props> = ({ student, onBack, onStuden
               </div>
               <div>
                 <label className="text-[9px] font-black uppercase tracking-widest text-slate-500 block mb-1.5">Payment Date</label>
+                {/* `appearance-none` strips the iOS/Safari native date
+                    spinner — without it, the picker button rendered
+                    outside the input's right edge on iPad and looked
+                    like a stray chip floating in the modal. */}
                 <input type="date" value={feePayDate}
                   onChange={e => setFeePayDate(e.target.value)}
                   disabled={feePayBusy}
-                  className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3 py-2.5 font-bold text-slate-800 text-sm outline-none focus:border-emerald-500 focus:bg-white transition-colors disabled:opacity-50" />
+                  className="w-full appearance-none bg-slate-50 border border-slate-200 rounded-xl px-3 py-2.5 font-bold text-slate-800 text-sm outline-none focus:border-emerald-500 focus:bg-white transition-colors disabled:opacity-50" />
               </div>
               <div>
                 <label className="text-[9px] font-black uppercase tracking-widest text-slate-500 block mb-1.5">Remark (Optional)</label>
@@ -1782,7 +2127,8 @@ export const StudentProfilePanel: React.FC<Props> = ({ student, onBack, onStuden
             </div>
           </div>
         </div>
-      )}
+      );
+      })()}
 
       {/* ── Change Transport Modal ─────────────────────────────────── */}
       {changeModalOpen && (() => {

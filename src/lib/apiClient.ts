@@ -192,7 +192,8 @@ export const apiStaff = {
   create: (body: {
     userId: string | null; name: string; role: string; salary: number;
     subject?: string; phone?: string; email?: string; aadhaarNo?: string;
-    joiningDate?: string; status?: string; address?: string; photo?: string;
+    joiningDate?: string; salaryStartDate?: string;
+    status?: string; address?: string; photo?: string;
     assignedClasses?: string[];
   }) => post<any>('/staff/create', body),
   update: (body: {
@@ -238,6 +239,33 @@ export const apiTimetable = {
     teacherId?: string | null; teacherName: string; room: string;
   }) => post<any>('/timetable/save', body),
   deleteEntry: (id: string) => post<any>('/timetable/delete', { id }),
+  /** Replace the school's period definitions for the active year. */
+  savePeriods: (body: {
+    academicYearId: string;
+    periods: Array<{
+      name: string; startTime: string; endTime: string;
+      periodType: string;
+    }>;
+  }) => post<{ count: number }>('/timetable/periods/save', body),
+  /** Add a single custom slot (one row). className is null for the
+   *  school default; non-null for a class-specific schedule. */
+  addPeriod: (body: {
+    academicYearId: string;
+    className: string | null;
+    name: string;
+    startTime: string;
+    endTime: string;
+    periodType: string;
+    sortOrder: number;
+  }) => post<{ id: string }>('/timetable/periods/add', body),
+  /** Patch a slot's name / time / type. */
+  updatePeriod: (body: {
+    slotId: string;
+    name?: string; startTime?: string; endTime?: string; type?: string;
+  }) => post<{ id: string }>('/timetable/periods/update', body),
+  /** Delete one slot. Fails if any timetable_entries still reference it. */
+  deletePeriod: (slotId: string) =>
+    post<{ id: string }>('/timetable/periods/delete', { slotId }),
 };
 
 // ─── Attendance ───────────────────────────────────────────────────────────────
@@ -579,34 +607,14 @@ export const apiPrincipal = {
     get<DashboardStats>(`/principal/dashboard-stats?yearId=${yearId}`),
 };
 
-// ─── Admin — School Billing ────────────────────────────────────────────────────
-
-export interface SchoolFeePayment {
-  id: string;
-  school_id: string;
-  amount: number;
-  paid_on: string;
-  note: string | null;
-  created_by: string | null;
-  created_at: string;
-}
-
-export interface SchoolBillingInfo {
-  fixedAmount: number;
-  monthsElapsed: number;
-  totalExpected: number;
-  totalPaid: number;
-  outstanding: number;
-  payments: SchoolFeePayment[];
-}
+// ─── Admin — Schools ──────────────────────────────────────────────────────────
+//
+// The legacy /billing + /payments endpoints (fixed-amount + payment ledger)
+// were dropped along with school_fee_payments / schools.billing_fixed_amount
+// in migration 0104. All super-admin billing now flows through
+// school_billing_installments (handled by routes in admin-schools.ts).
 
 export const apiAdminSchools = {
-  setBillingAmount: (schoolId: string, fixedAmount: number) =>
-    put<{ schoolId: string; fixedAmount: number }>(`/admin/schools/${schoolId}/billing`, { fixedAmount }),
-  addPayment: (schoolId: string, body: { amount: number; paidOn: string; note?: string }) =>
-    post<SchoolFeePayment>(`/admin/schools/${schoolId}/payments`, body),
-  getPayments: (schoolId: string) =>
-    get<SchoolBillingInfo>(`/admin/schools/${schoolId}/payments`),
   setAiLimit: (schoolId: string, monthlyLimit: number) =>
     put<{ schoolId: string; monthlyLimit: number; unlimited: boolean }>(
       `/admin/schools/${schoolId}/ai-limit`, { monthlyLimit },

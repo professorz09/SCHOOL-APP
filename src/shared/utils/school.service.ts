@@ -203,6 +203,39 @@ export const schoolService = {
     await adminApi.deleteSchool(id);
   },
 
+  // Super-admin: full student profile for the detail sheet. Pulls every
+  // column on the students row + the latest academic record (class /
+  // section / roll / fee status) so the sheet can render without
+  // chasing additional queries.
+  async getStudentFullProfile(studentId: string): Promise<{
+    student: Record<string, unknown> | null;
+    academicRecord: Record<string, unknown> | null;
+  }> {
+    const [{ data: stu, error: e1 }, { data: arRows, error: e2 }] = await Promise.all([
+      supabase.from('students').select('*').eq('id', studentId).maybeSingle(),
+      // is_rte / discount live on the students table (and on installments)
+      // not on student_academic_records — selecting them here used to throw
+      // "column student_academic_records.is_rte does not exist".
+      supabase.from('student_academic_records')
+        .select('class_name, section, roll_no, fee_status, total_fee, paid_fee, attendance_percent, status, academic_year_id')
+        .eq('student_id', studentId).order('academic_year_id', { ascending: false }).limit(1),
+    ]);
+    if (e1) throw new Error(e1.message);
+    if (e2) throw new Error(e2.message);
+    const ar = ((arRows ?? []) as Record<string, unknown>[])[0] ?? null;
+    return { student: stu as Record<string, unknown> | null, academicRecord: ar };
+  },
+
+  // Super-admin: full staff profile.
+  async getStaffFullProfile(staffId: string): Promise<{
+    staff: Record<string, unknown> | null;
+  }> {
+    const { data, error } = await supabase
+      .from('staff').select('*').eq('id', staffId).maybeSingle();
+    if (error) throw new Error(error.message);
+    return { staff: data as Record<string, unknown> | null };
+  },
+
   // Super-admin views — query any school directly, bypassing the per-session
   // school_id restriction used by principal-facing services.
   async getSchoolStaff(schoolId: string): Promise<Array<{

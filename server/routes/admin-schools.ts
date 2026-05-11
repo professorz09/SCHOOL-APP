@@ -34,36 +34,6 @@ adminSchoolsRouter.get('/:id/backup', requireAuth, SA, async (req, res) => {
   } catch (err) { fail(res, err); }
 });
 
-// ─── PUT /api/admin/schools/:id/billing ──────────────────────────────────────
-// Set / update the fixed monthly billing amount for a school.
-adminSchoolsRouter.put('/:id/billing', requireAuth, SA, async (req, res) => {
-  try {
-    const schoolId = req.params.id;
-    const body = requireBody<{ fixedAmount: number }>(req, ['fixedAmount']);
-
-    const amount = Math.round(Number(body.fixedAmount));
-    if (!Number.isFinite(amount) || amount < 0) {
-      throw new ApiError(400, 'fixedAmount must be a non-negative number');
-    }
-
-    // Verify school exists first
-    const { data: school, error: se } = await adminDb
-      .from('schools')
-      .select('id')
-      .eq('id', schoolId)
-      .single();
-    if (se || !school) throw new ApiError(404, 'School not found');
-
-    const { error } = await adminDb
-      .from('schools')
-      .update({ billing_fixed_amount: amount, updated_at: new Date().toISOString() })
-      .eq('id', schoolId);
-    if (error) throw new ApiError(500, error.message);
-
-    ok(res, { schoolId, fixedAmount: amount });
-  } catch (err) { fail(res, err); }
-});
-
 // PUT /api/admin/schools/:id/ai-limit
 // Super-admin sets the per-school monthly AI paper generation cap.
 // 0 = unlimited (paid tier / boarding schools). Counts are taken
@@ -83,92 +53,6 @@ adminSchoolsRouter.put('/:id/ai-limit', requireAuth, SA, async (req, res) => {
       .eq('id', schoolId);
     if (error) throw new ApiError(500, error.message);
     ok(res, { schoolId, monthlyLimit: limit, unlimited: limit === 0 });
-  } catch (err) { fail(res, err); }
-});
-
-// ─── POST /api/admin/schools/:id/payments ────────────────────────────────────
-// Record a payment for a school.
-adminSchoolsRouter.post('/:id/payments', requireAuth, SA, async (req, res) => {
-  try {
-    const schoolId = req.params.id;
-    const body = requireBody<{ amount: number; paidOn: string }>(req, ['amount', 'paidOn']);
-
-    const amount = Math.round(Number(body.amount));
-    if (!Number.isFinite(amount) || amount <= 0) {
-      throw new ApiError(400, 'amount must be a positive number');
-    }
-    if (!body.paidOn) throw new ApiError(400, 'paidOn date is required');
-
-    // Verify school exists before inserting payment
-    const { data: schoolCheck, error: sce } = await adminDb
-      .from('schools')
-      .select('id')
-      .eq('id', schoolId)
-      .single();
-    if (sce || !schoolCheck) throw new ApiError(404, 'School not found');
-
-    const { data, error } = await adminDb
-      .from('school_fee_payments')
-      .insert({
-        school_id:  schoolId,
-        amount,
-        paid_on:    body.paidOn,
-        note:       (req.body.note as string | undefined) ?? null,
-        created_by: req.user.id,
-      })
-      .select('id, school_id, amount, paid_on, note, created_by, created_at')
-      .single();
-    if (error) {
-      // FK violation or check constraint → 400, anything else → 500
-      const is4xx = error.code === '23503' || error.code === '23514';
-      throw new ApiError(is4xx ? 400 : 500, error.message);
-    }
-
-    ok(res, data, 201);
-  } catch (err) { fail(res, err); }
-});
-
-// ─── GET /api/admin/schools/:id/payments ─────────────────────────────────────
-// List all payments for a school, newest first.
-adminSchoolsRouter.get('/:id/payments', requireAuth, SA, async (req, res) => {
-  try {
-    const schoolId = req.params.id;
-
-    const { data: school, error: se } = await adminDb
-      .from('schools')
-      .select('id, billing_fixed_amount, created_at')
-      .eq('id', schoolId)
-      .single();
-    if (se || !school) throw new ApiError(404, 'School not found');
-
-    const { data: payments, error: pe } = await adminDb
-      .from('school_fee_payments')
-      .select('id, school_id, amount, paid_on, note, created_by, created_at')
-      .eq('school_id', schoolId)
-      .order('paid_on', { ascending: false });
-    if (pe) throw new ApiError(500, pe.message);
-
-    // Calculate outstanding balance
-    const fixedAmount: number = Number(school.billing_fixed_amount ?? 0);
-    const schoolCreatedAt = new Date(school.created_at);
-    const now = new Date();
-    const monthsElapsed = Math.max(
-      0,
-      (now.getFullYear() - schoolCreatedAt.getFullYear()) * 12 +
-      (now.getMonth() - schoolCreatedAt.getMonth()) + 1,
-    );
-    const totalExpected  = fixedAmount * monthsElapsed;
-    const totalPaid      = (payments ?? []).reduce((s, p) => s + Number(p.amount), 0);
-    const outstanding    = Math.max(0, totalExpected - totalPaid);
-
-    ok(res, {
-      fixedAmount,
-      monthsElapsed,
-      totalExpected,
-      totalPaid,
-      outstanding,
-      payments: payments ?? [],
-    });
   } catch (err) { fail(res, err); }
 });
 
@@ -360,5 +244,123 @@ adminSchoolsRouter.post('/:id/update-principal-mobile', requireAuth, SA, async (
     });
 
     ok(res, { ok: true, mobile: newPhone, principalName: t.name });
+  } catch (err) { fail(res, err); }
+});
+
+// ─── NEW SIMPLE BILLING: per-AY installments ─────────────────────────────────
+// Replaces the legacy school_billings / billing_years system. Super-admin
+// adds installments (name + amount + due_date) under each academic year of
+// a school. Each row gets its own Pay button on the UI; payment is recorded
+// in-place (paid_amount, paid_at). All endpoints SUPER_ADMIN-only.
+
+// GET /api/admin/schools/:id/billing-installments
+//   Returns: AY list (active first) + installments grouped by AY.
+adminSchoolsRouter.get('/:id/billing-installments', requireAuth, SA, async (req, res) => {
+  try {
+    const schoolId = req.params.id;
+    const [ayRes, instRes] = await Promise.all([
+      adminDb.from('academic_years')
+        .select('id, label, start_date, end_date, is_active, is_closed')
+        .eq('school_id', schoolId)
+        .order('start_date', { ascending: false }),
+      adminDb.from('school_billing_installments')
+        .select('id, academic_year_id, name, description, amount, due_date, paid_amount, paid_at, paid_method, paid_note, created_at')
+        .eq('school_id', schoolId)
+        .order('due_date', { ascending: true }),
+    ]);
+    if (ayRes.error)   throw new ApiError(500, ayRes.error.message);
+    if (instRes.error) throw new ApiError(500, instRes.error.message);
+    ok(res, {
+      academicYears: ayRes.data ?? [],
+      installments: instRes.data ?? [],
+    });
+  } catch (err) { fail(res, err); }
+});
+
+// POST /api/admin/schools/:id/billing-installments
+//   Body: { academicYearId, name, amount, dueDate }
+adminSchoolsRouter.post('/:id/billing-installments', requireAuth, SA, async (req, res) => {
+  try {
+    const schoolId = req.params.id;
+    const body = requireBody<{
+      academicYearId: string; name: string; amount: number; dueDate: string;
+      description?: string;
+    }>(req, ['academicYearId', 'name', 'amount', 'dueDate']);
+
+    if (typeof body.amount !== 'number' || body.amount < 0) {
+      throw new ApiError(400, 'amount must be a non-negative number');
+    }
+
+    // Verify AY belongs to this school (cheap defence against cross-school
+    // ID swap from a hijacked browser).
+    const { data: ay } = await adminDb.from('academic_years')
+      .select('id').eq('id', body.academicYearId).eq('school_id', schoolId).maybeSingle();
+    if (!ay) throw new ApiError(404, 'Academic year not found for this school');
+
+    const { data, error } = await adminDb.from('school_billing_installments')
+      .insert({
+        school_id:        schoolId,
+        academic_year_id: body.academicYearId,
+        name:             body.name.trim(),
+        description:      body.description?.trim() || null,
+        amount:           Math.round(body.amount),
+        due_date:         body.dueDate,
+        created_by:       req.user.id,
+      })
+      .select('id, academic_year_id, name, description, amount, due_date, paid_amount, paid_at, paid_method, paid_note, created_at')
+      .single();
+    if (error) throw new ApiError(500, error.message);
+    ok(res, data, 201);
+  } catch (err) { fail(res, err); }
+});
+
+// POST /api/admin/schools/:id/billing-installments/:instId/pay
+//   Body: { amount, method?, note? }   (amount = how much was just received)
+adminSchoolsRouter.post('/:id/billing-installments/:instId/pay', requireAuth, SA, async (req, res) => {
+  try {
+    const schoolId = req.params.id;
+    const instId = req.params.instId;
+    const body = requireBody<{ amount: number; method?: string; note?: string }>(req, ['amount']);
+    if (typeof body.amount !== 'number' || body.amount <= 0) {
+      throw new ApiError(400, 'amount must be > 0');
+    }
+
+    const { data: row, error: rowErr } = await adminDb.from('school_billing_installments')
+      .select('id, amount, paid_amount').eq('id', instId).eq('school_id', schoolId).maybeSingle();
+    if (rowErr) throw new ApiError(500, rowErr.message);
+    if (!row) throw new ApiError(404, 'Installment not found');
+    const r = row as { id: string; amount: number; paid_amount: number };
+    const outstanding = r.amount - r.paid_amount;
+    if (outstanding <= 0) throw new ApiError(409, 'Already paid in full');
+    const cap = Math.round(body.amount);
+    if (cap > outstanding) throw new ApiError(400, `Amount exceeds outstanding (₹${outstanding})`);
+
+    const newPaid = r.paid_amount + cap;
+    const fullyPaid = newPaid >= r.amount;
+
+    const { data, error } = await adminDb.from('school_billing_installments')
+      .update({
+        paid_amount: newPaid,
+        paid_at:     fullyPaid ? new Date().toISOString() : null,
+        paid_method: body.method ?? null,
+        paid_note:   body.note ?? null,
+      })
+      .eq('id', instId).eq('school_id', schoolId)
+      .select('id, academic_year_id, name, description, amount, due_date, paid_amount, paid_at, paid_method, paid_note, created_at')
+      .single();
+    if (error) throw new ApiError(500, error.message);
+    ok(res, data);
+  } catch (err) { fail(res, err); }
+});
+
+// DELETE /api/admin/schools/:id/billing-installments/:instId
+adminSchoolsRouter.delete('/:id/billing-installments/:instId', requireAuth, SA, async (req, res) => {
+  try {
+    const schoolId = req.params.id;
+    const instId = req.params.instId;
+    const { error } = await adminDb.from('school_billing_installments')
+      .delete().eq('id', instId).eq('school_id', schoolId);
+    if (error) throw new ApiError(500, error.message);
+    ok(res, { ok: true });
   } catch (err) { fail(res, err); }
 });

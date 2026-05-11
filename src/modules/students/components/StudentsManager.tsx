@@ -146,6 +146,12 @@ export const StudentsManager: React.FC<Props> = ({
   // Photo. Everything else is one tap away.
   const [showMoreInfo, setShowMoreInfo] = useState(false);
   const [students, setStudents] = useState<Student[]>([]);
+  // Inactive students (TC issued + suspended/failed/etc) — fetched lazily
+  // when the user picks the "Inactive" filter chip. studentService.getAll()
+  // hard-filters to is_active=true so they're never in `students`.
+  const [inactiveStudents, setInactiveStudents] = useState<Student[]>([]);
+  const [inactiveLoading,  setInactiveLoading]  = useState(false);
+  const [inactiveLoaded,   setInactiveLoaded]   = useState(false);
   // Track whether the initial student fetch has completed. Without
   // this, the class card briefly renders "0" (empty array) before
   // the real count arrives ~1-2s later — which reads as a real
@@ -160,8 +166,10 @@ export const StudentsManager: React.FC<Props> = ({
   // 'ALL' is the default no-op; UI pills toggle this state.
   const [admFilter, setAdmFilter] = useState<
     | { type: 'ALL' }
+    | { type: 'ASSIGNED' }
     | { type: 'CLASS'; value: string }
     | { type: 'UNASSIGNED' }
+    | { type: 'INACTIVE' }
     | { type: 'FEE'; value: string }
     // 'REVIEW' shows pending teacher-submitted admission drafts. Sits
     // alongside the other filters but draws from the approvals queue,
@@ -186,10 +194,26 @@ export const StudentsManager: React.FC<Props> = ({
   // to ALL — otherwise they stare at an empty list with the chip
   // already hidden and no obvious way out.
   useEffect(() => {
+    // Lazy-fetch inactive students the first time the Inactive chip is
+    // selected. Cached after that — switching back to the chip is free.
+    if (admFilter.type === 'INACTIVE' && !inactiveLoaded && !inactiveLoading) {
+      setInactiveLoading(true);
+      void Promise.all([
+        studentService.getStudentsByArchiveStatus('TC_ISSUED'),
+        studentService.getStudentsByArchiveStatus('INACTIVE'),
+      ])
+        .then(([tc, inact]) => {
+          setInactiveStudents([...tc, ...inact]);
+          setInactiveLoaded(true);
+        })
+        .catch(e => showToast(e instanceof Error ? e.message : 'Failed to load inactive list', 'error'))
+        .finally(() => setInactiveLoading(false));
+    }
     if (admFilter.type === 'REVIEW' && pendingDrafts.length === 0) {
       setAdmFilter({ type: 'ALL' });
     }
-  }, [pendingDrafts.length, admFilter.type]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pendingDrafts.length, admFilter.type, inactiveLoaded, inactiveLoading]);
 
   // Reject-draft modal state. Captured at the row level so the principal
   // can reject without opening the full form.
@@ -371,6 +395,25 @@ export const StudentsManager: React.FC<Props> = ({
     if (!form.fatherName?.trim() && !form.motherName?.trim()) {
       showToast('At least one parent name is required', 'error');
       return;
+    }
+    // Admission date sanity. Backdate allowed (paperwork delays
+    // happen), but tomorrow's date is rejected — admission is an event
+    // that has already occurred. Empty input falls back to today via
+    // the onChange handler on the input, but guard here too in case
+    // the form state is mutated elsewhere.
+    if (form.admissionDate) {
+      const adm = new Date(form.admissionDate);
+      const today = new Date(todayIST());
+      if (Number.isNaN(adm.getTime())) {
+        showToast('Invalid admission date', 'error'); return;
+      }
+      if (adm > today) {
+        showToast('Admission date future me nahi ho sakti (aaj ya backdate)', 'error');
+        return;
+      }
+    } else {
+      // Keep payload consistent — empty admission date never reaches the server.
+      setForm(f => ({ ...f, admissionDate: todayIST() }));
     }
     // DOB sanity: reject future / unrealistically old dates and a sane age band.
     if (form.dob) {
@@ -714,13 +757,21 @@ export const StudentsManager: React.FC<Props> = ({
     const passesFilter = (s: Student): boolean => {
       switch (admFilter.type) {
         case 'ALL':        return true;
+        case 'ASSIGNED':   return !!s.className;
         case 'UNASSIGNED': return !s.className;
         case 'CLASS':      return s.className === admFilter.value;
         case 'FEE':        return String(s.feeStatus) === admFilter.value;
+        // Inactive list comes from a separate state — this branch should
+        // never run, but a defensive `false` keeps the type-narrowing
+        // exhaustive without leaking active rows.
+        case 'INACTIVE':   return false;
       }
     };
-    const filteredStudents = students
-      .filter(passesFilter)
+    // INACTIVE tab uses its own pre-fetched list (TC'd / failed / etc).
+    // Everyone else uses the in-memory active-only `students` array.
+    const sourceList: Student[] = admFilter.type === 'INACTIVE' ? inactiveStudents : students;
+    const filteredStudents = sourceList
+      .filter(s => admFilter.type === 'INACTIVE' ? true : passesFilter(s))
       .filter(s => {
         if (!q) return true;
         if (s.name.toLowerCase().includes(q)) return true;
@@ -1025,7 +1076,7 @@ export const StudentsManager: React.FC<Props> = ({
                   max={new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Kolkata' })}
                   min="1950-01-01"
                   onChange={e => setForm(f => ({ ...f, dob: e.target.value }))}
-                  className="w-full border border-slate-200 bg-slate-50 rounded-xl px-3 py-3 font-bold text-sm outline-none focus:border-indigo-500" />
+                  className="w-full appearance-none border border-slate-200 bg-slate-50 rounded-xl px-3 py-3 font-bold text-sm outline-none focus:border-indigo-500" />
               </div>
               <div>
                 <label className="block text-[10px] font-black uppercase tracking-widest text-slate-500 mb-1.5">Blood Group</label>
@@ -1034,6 +1085,21 @@ export const StudentsManager: React.FC<Props> = ({
                   {BLOOD_GROUPS.map(bg => <option key={bg}>{bg}</option>)}
                 </select>
               </div>
+            </div>
+            {/* Admission date — optional, backdate-only. Empty defaults
+                to today (IST). Useful for entering a student whose
+                paperwork was completed last week but data entry happens
+                today. Future dates rejected — admission can't be
+                scheduled into tomorrow. */}
+            <div>
+              <label className="block text-[10px] font-black uppercase tracking-widest text-slate-500 mb-1.5">
+                Admission Date <span className="text-slate-400 normal-case tracking-normal">(optional — khaali = aaj)</span>
+              </label>
+              <input type="date"
+                value={form.admissionDate ?? ''}
+                max={todayIST()}
+                onChange={e => setForm(f => ({ ...f, admissionDate: e.target.value || todayIST() }))}
+                className="w-full appearance-none border border-slate-200 bg-slate-50 rounded-xl px-3 py-3 font-bold text-sm outline-none focus:border-indigo-500" />
             </div>
             {[
               { label: 'Phone', key: 'phone', placeholder: '+91 XXXXX XXXXX' },
@@ -1303,65 +1369,55 @@ export const StudentsManager: React.FC<Props> = ({
               <input value={search} onChange={e => setSearch(e.target.value)} placeholder="Search by name, roll, admission or mobile…"
                 className="w-full bg-slate-50 border border-slate-200 rounded-xl pl-10 pr-4 py-2.5 font-bold text-sm outline-none focus:border-indigo-500 focus:bg-white transition-colors" />
             </div>
-            {/* Filter pills row — All · Unassigned · classes · fee statuses */}
-            <div className="flex gap-1.5 overflow-x-auto hide-scrollbar -mx-1 px-1">
-              <button onClick={() => setAdmFilter({ type: 'ALL' })}
-                className={`shrink-0 px-3 py-1.5 rounded-full text-[10px] font-black uppercase tracking-widest border transition-colors ${
-                  admFilter.type === 'ALL'
-                    ? 'bg-slate-900 text-white border-slate-900'
-                    : 'bg-white text-slate-500 border-slate-200 hover:border-slate-300'
-                }`}>
-                All ({students.length})
-              </button>
-              {unassignedCount > 0 && (
-                <button onClick={() => setAdmFilter({ type: 'UNASSIGNED' })}
-                  className={`shrink-0 px-3 py-1.5 rounded-full text-[10px] font-black uppercase tracking-widest border transition-colors ${
-                    admFilter.type === 'UNASSIGNED'
-                      ? 'bg-amber-500 text-white border-amber-500'
-                      : 'bg-amber-50 text-amber-700 border-amber-200 hover:border-amber-300'
-                  }`}>
-                  Unassigned ({unassignedCount})
-                </button>
-              )}
-              {distinctClasses.map(c => {
-                const count = students.filter(s => s.className === c).length;
-                const active = admFilter.type === 'CLASS' && admFilter.value === c;
+            {/* Filter row — refactored to a segmented control pattern.
+                Earlier: tinted-background pills with ALL-CAPS labels and
+                inconsistent active tones looked like a row of alerts,
+                not filters. Now: single rounded container with subtle
+                separators, mixed-case labels, count badges instead of
+                inline parens. Mobile: horizontal scroll; desktop:
+                wraps to single line. Active state = solid pill inside
+                the container. */}
+            <div className="flex gap-1 p-1 bg-slate-100 rounded-2xl overflow-x-auto hide-scrollbar -mx-1">
+              {([
+                { key: 'ALL',        label: 'All',        count: students.length,                       active: 'bg-slate-900 text-white',   countActive: 'bg-white/20 text-white', countIdle: 'bg-slate-200 text-slate-600' },
+                { key: 'ASSIGNED',   label: 'Assigned',   count: students.length - unassignedCount,     active: 'bg-emerald-600 text-white', countActive: 'bg-white/20 text-white', countIdle: 'bg-emerald-100 text-emerald-700' },
+                { key: 'UNASSIGNED', label: 'Unassigned', count: unassignedCount,                       active: 'bg-amber-500 text-white',   countActive: 'bg-white/20 text-white', countIdle: 'bg-amber-100 text-amber-700' },
+                { key: 'INACTIVE',   label: 'Inactive',   count: inactiveLoaded ? inactiveStudents.length : null, active: 'bg-rose-600 text-white', countActive: 'bg-white/20 text-white', countIdle: 'bg-rose-100 text-rose-700' },
+              ] as const).map(f => {
+                const isActive = admFilter.type === f.key;
                 return (
-                  <button key={c} onClick={() => setAdmFilter({ type: 'CLASS', value: c })}
-                    className={`shrink-0 px-3 py-1.5 rounded-full text-[10px] font-black uppercase tracking-widest border transition-colors ${
-                      active
-                        ? 'bg-indigo-600 text-white border-indigo-600'
-                        : 'bg-white text-slate-500 border-slate-200 hover:border-slate-300'
+                  <button key={f.key}
+                    onClick={() => setAdmFilter({ type: f.key })}
+                    className={`shrink-0 flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-bold transition-colors ${
+                      isActive ? f.active : 'text-slate-600 hover:bg-white'
                     }`}>
-                    {c.replace(/^Class\s*/i, '')} ({count})
+                    <span>{f.label}</span>
+                    {f.count !== null && (
+                      <span className={`text-[10px] font-black px-1.5 py-0.5 rounded-full tabular-nums ${
+                        isActive ? f.countActive : f.countIdle
+                      }`}>
+                        {f.count}
+                      </span>
+                    )}
+                    {f.key === 'INACTIVE' && !inactiveLoaded && inactiveLoading && (
+                      <span className="text-[10px] font-bold text-slate-400">…</span>
+                    )}
                   </button>
                 );
               })}
-              {feeStatusOptions.map(opt => {
-                const count = students.filter(s => String(s.feeStatus) === opt.key).length;
-                if (count === 0) return null;
-                const active = admFilter.type === 'FEE' && admFilter.value === opt.key;
-                return (
-                  <button key={opt.key} onClick={() => setAdmFilter({ type: 'FEE', value: opt.key })}
-                    className={`shrink-0 px-3 py-1.5 rounded-full text-[10px] font-black uppercase tracking-widest border transition-colors ${
-                      active ? 'bg-slate-900 text-white border-slate-900' : `${opt.cls} hover:opacity-90`
-                    }`}>
-                    {opt.label} ({count})
-                  </button>
-                );
-              })}
-              {/* Pending teacher-submitted admission drafts. Sits at the
-                  end of the filter row so the count is visible without
-                  scrolling on mobile. Distinct violet chip so it can't
-                  be confused with the green/red fee chips. */}
               {pendingDrafts.length > 0 && (
                 <button onClick={() => setAdmFilter({ type: 'REVIEW' })}
-                  className={`shrink-0 px-3 py-1.5 rounded-full text-[10px] font-black uppercase tracking-widest border transition-colors ${
+                  className={`shrink-0 flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-bold transition-colors ${
                     admFilter.type === 'REVIEW'
-                      ? 'bg-violet-600 text-white border-violet-600'
-                      : 'bg-violet-50 text-violet-700 border-violet-200 hover:border-violet-300'
+                      ? 'bg-violet-600 text-white'
+                      : 'text-violet-700 hover:bg-white'
                   }`}>
-                  Review ({pendingDrafts.length})
+                  <span>Review</span>
+                  <span className={`text-[10px] font-black px-1.5 py-0.5 rounded-full tabular-nums ${
+                    admFilter.type === 'REVIEW' ? 'bg-white/20 text-white' : 'bg-violet-100 text-violet-700'
+                  }`}>
+                    {pendingDrafts.length}
+                  </span>
                 </button>
               )}
             </div>
@@ -1442,7 +1498,7 @@ export const StudentsManager: React.FC<Props> = ({
                     <div className="flex flex-col items-end gap-1">
                       <span className={`text-[9px] font-black px-2 py-0.5 rounded-full uppercase ${
                         student.feeStatus === PaymentStatus.PAID ? 'bg-emerald-100 text-emerald-700' :
-                        student.feeStatus === 'PARTIAL' ? 'bg-amber-100 text-amber-700' :
+                        String(student.feeStatus) === 'PARTIAL' ? 'bg-amber-100 text-amber-700' :
                         'bg-rose-100 text-rose-600'
                       }`}>
                         {student.feeStatus}
@@ -2049,11 +2105,14 @@ export const StudentsManager: React.FC<Props> = ({
                   <button key={sec.id}
                     onClick={() => { setSelectedSection(sec.section); setSearch(''); }}
                     className={`w-full flex items-center gap-4 px-4 py-4 text-left active:bg-slate-50 transition-colors ${idx < classSections.length - 1 ? 'border-b border-slate-100' : ''}`}>
-                    <div className="w-11 h-11 rounded-xl bg-indigo-100 text-indigo-700 flex items-center justify-center font-black text-lg shrink-0">
-                      {sec.section}
+                    {/* Avatar shows first 2 chars only — section names like
+                        "BIO-CHEMISTRY-PHYCIS" used to overflow the 44px box
+                        and crash into the title. */}
+                    <div className="w-11 h-11 rounded-xl bg-indigo-100 text-indigo-700 flex items-center justify-center font-black text-lg shrink-0 overflow-hidden">
+                      {sec.section.replace(/[^A-Za-z0-9]/g, '').slice(0, 2).toUpperCase() || '–'}
                     </div>
                     <div className="flex-1 min-w-0">
-                      <div className="font-extrabold text-slate-900 text-sm">{clsNum}-{sec.section}</div>
+                      <div className="font-extrabold text-slate-900 text-sm truncate">{clsNum}-{sec.section}</div>
                       <div className="flex flex-wrap items-center gap-x-1.5 mt-0.5">
                         <span className="text-[10px] font-bold text-slate-400">
                           {liveCount}{sec.capacity > 0 ? `/${sec.capacity}` : ''} enrolled
@@ -2115,14 +2174,16 @@ export const StudentsManager: React.FC<Props> = ({
                     <span className="font-black text-slate-900 text-base leading-tight">{clsNum}</span>
                     <ChevronRight size={18} className="text-slate-300 mt-0.5" />
                   </div>
-                  {studentsLoading ? (
-                    // Skeleton — pulsing block in the same footprint as the
-                    // count digit so the card doesn't reflow when real data
-                    // arrives.
-                    <div className="h-8 w-12 rounded-md bg-slate-200 animate-pulse mb-1" />
-                  ) : (
-                    <div className="text-3xl font-black text-indigo-600 leading-none mb-1">{count}</div>
-                  )}
+                  {/* Reserve the same footprint as the loaded count so the
+                      card doesn't reflow when data arrives. While loading
+                      we show a faint dash instead of a pulsing block —
+                      the block mid-card with no caption looked like a
+                      broken image placeholder. */}
+                  <div className="text-3xl font-black leading-none mb-1 tabular-nums">
+                    {studentsLoading
+                      ? <span className="text-slate-200">—</span>
+                      : <span className="text-indigo-600">{count}</span>}
+                  </div>
                   <div className="text-[10px] font-black uppercase tracking-widest text-slate-400">
                     {numSections} section{numSections !== 1 ? 's' : ''}
                   </div>

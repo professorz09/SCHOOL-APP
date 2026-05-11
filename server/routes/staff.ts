@@ -6,6 +6,18 @@ import { requireAuth, requireRole } from '../middleware/auth';
 
 export const staffRouter = Router();
 
+/** First-of-next-month ISO from a YYYY-MM-DD joining date. Used as the
+ *  default salary_start_date when the client doesn't pass one — schools
+ *  pay from the month *after* joining, not the partial join month. */
+function firstOfNextMonthIso(iso: string): string | null {
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return null;
+  const next = new Date(d.getUTCFullYear(), d.getUTCMonth() + 1, 1);
+  const yyyy = next.getUTCFullYear();
+  const mm = String(next.getUTCMonth() + 1).padStart(2, '0');
+  return `${yyyy}-${mm}-01`;
+}
+
 // Each /staff/create call provisions a Supabase auth.users + public.users +
 // staff row. Schools typically add staff a handful of times a year — 20/hour
 // is generous for legitimate bulk-onboarding while still blocking automated
@@ -262,7 +274,8 @@ staffRouter.post('/create', requireAuth, requireRole('PRINCIPAL'), staffCreateLi
       userId: string | null;
       name: string; role: string; salary: number;
       subject?: string; phone?: string; email?: string; aadhaarNo?: string;
-      joiningDate?: string; status?: string; address?: string; photo?: string;
+      joiningDate?: string; salaryStartDate?: string;
+      status?: string; address?: string; photo?: string;
       assignedClasses?: string[];
     }>(req, ['name', 'role', 'salary']);
 
@@ -280,6 +293,10 @@ staffRouter.post('/create', requireAuth, requireRole('PRINCIPAL'), staffCreateLi
       aadhaar_no:   body.aadhaarNo ?? null,
       salary:       body.salary,
       joining_date: body.joiningDate ?? null,
+      // First-paid-month — defaults to first-of-month-after-joining when
+      // omitted so the salary ledger doesn't include a half-month phantom.
+      salary_start_date: body.salaryStartDate
+        ?? (body.joiningDate ? firstOfNextMonthIso(body.joiningDate) : null),
       status:       body.status ?? 'ACTIVE',
       address:      body.address ?? null,
       photo:        body.photo ?? null,
@@ -294,7 +311,11 @@ staffRouter.post('/create', requireAuth, requireRole('PRINCIPAL'), staffCreateLi
       const { error: seedErr } = await db.rpc('update_staff_salary', {
         p_staff_id:       row.id,
         p_new_amount:     body.salary,
-        p_effective_from: body.joiningDate ?? new Date().toISOString().slice(0, 10),
+        // Seed salary history at salary_start_date so the per-month
+        // ledger derives the correct "due" amount from month one.
+        p_effective_from: body.salaryStartDate
+          ?? (body.joiningDate ? firstOfNextMonthIso(body.joiningDate) : null)
+          ?? new Date().toISOString().slice(0, 10),
         p_reason:         'Initial',
       });
       if (seedErr) {
@@ -331,7 +352,7 @@ staffRouter.post('/update', requireAuth, requireRole('PRINCIPAL'), async (req, r
 
     const safe: Record<string, unknown> = { updated_at: new Date().toISOString() };
     const allowed = ['name','role','subject','phone','email','aadhaar_no','salary',
-                     'joining_date','status','address','photo'];
+                     'joining_date','salary_start_date','status','address','photo'];
     for (const k of allowed) if (body.patch[k] !== undefined) safe[k] = body.patch[k];
 
     const { error } = await adminDb.from('staff').update(safe)

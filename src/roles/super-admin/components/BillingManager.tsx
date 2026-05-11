@@ -1,802 +1,562 @@
-import React, { useEffect, useState, useMemo, useCallback } from 'react';
+// Super-admin billing — the simple version.
+//
+// Old version had plans (BASIC/STANDARD/PREMIUM), pre-stamped annual
+// totals, billing years, and a multi-screen flow. Replaced with a flat
+// model: pick a school → see its academic years → add installments
+// (name + amount + due date) under each AY → mark each one paid as it
+// comes in. History below.
+//
+// Backed by school_billing_installments (migration 0098). All data
+// flows through admin-only endpoints under /api/admin/schools/:id/.
+
+import React, { useEffect, useMemo, useState } from 'react';
 import {
-  ArrowLeft, IndianRupee, CheckCircle2, AlertCircle, Plus, CreditCard, Clock, CalendarPlus, Settings,
+  ArrowLeft, Building2, Search, Plus, IndianRupee, Calendar,
+  CheckCircle2, Trash2, X, Receipt, RefreshCw,
 } from 'lucide-react';
-import { useBillingStore } from '@/roles/super-admin/billingStore';
 import { useUIStore } from '@/store/uiStore';
-import {
-  Payment, SchoolBillingBreakdown, PaymentAllocationPreview,
-} from '@/roles/super-admin/billing.types';
-import { PLAN_COLORS, PLAN_PRICES, BillingPlan } from '@/shared/config/constants';
+import { useSchoolStore } from '@/roles/super-admin/schoolStore';
+import { adminApi } from '@/lib/adminApi';
 
-type View = 'LIST' | 'SCHOOL_DETAIL' | 'RECORD_PAYMENT' | 'SETUP_BILLING';
-type PayMethod = Payment['method'];
+interface Props { onBack: () => void }
 
-interface Props { onBack: () => void; }
+interface AY {
+  id: string; label: string; start_date: string; end_date: string;
+  is_active: boolean; is_closed: boolean;
+}
+interface Installment {
+  id: string; academic_year_id: string; name: string;
+  description: string | null;
+  amount: number; due_date: string;
+  paid_amount: number; paid_at: string | null;
+  paid_method: string | null; paid_note: string | null;
+  created_at: string;
+}
 
-const fmt = (n: number) =>
-  n >= 1_00_000 ? `₹${(n / 1_00_000).toFixed(1)}L`
-  : n >= 1000   ? `₹${(n / 1000).toFixed(0)}K`
-  : `₹${n}`;
-
-const fmtFull = (n: number) => `₹${Math.abs(n).toLocaleString('en-IN')}`;
-
+const fmt = (n: number) => `₹${n.toLocaleString('en-IN')}`;
 const fmtDate = (d: string) => {
-  const dt = new Date(d);
+  const dt = new Date(d.length <= 10 ? d + 'T00:00:00' : d);
   return dt.toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' });
 };
-
-const METHOD_COLORS: Record<PayMethod, string> = {
-  UPI:    'bg-violet-50 text-violet-700',
-  NEFT:   'bg-blue-50 text-blue-700',
-  CHEQUE: 'bg-amber-50 text-amber-700',
-  CASH:   'bg-emerald-50 text-emerald-700',
+const fmtDateTime = (d: string) => {
+  const dt = new Date(d);
+  return dt.toLocaleString('en-IN', {
+    day: '2-digit', month: 'short', year: 'numeric',
+    hour: 'numeric', minute: '2-digit', hour12: true,
+  });
 };
 
 export const BillingManager: React.FC<Props> = ({ onBack }) => {
-  const {
-    schoolBillings, billingYears,
-    fetchAll, recordPayment, getSchoolPayments,
-    getBillingBreakdown, previewAllocation, createNextYear,
-  } = useBillingStore();
   const { showToast } = useUIStore();
-
-  const [view, setView]                       = useState<View>('LIST');
-  const [selectedId, setSelectedId]           = useState<string | null>(null);
-  const [breakdown, setBreakdown]             = useState<SchoolBillingBreakdown | null>(null);
-  const [breakdownLoading, setBreakdownLoading] = useState(false);
-  const [breakdownError, setBreakdownError]   = useState<string | null>(null);
-  const [schoolPayments, setSchoolPayments]   = useState<Payment[]>([]);
-  const [creatingNextYear, setCreatingNextYear] = useState(false);
-
-  const [setupPlan, setSetupPlan]             = useState<BillingPlan>(BillingPlan.STANDARD);
-  const [setupStartDate, setSetupStartDate]   = useState(() => new Date().toISOString().split('T')[0]);
-  const [setupAmount, setSetupAmount]         = useState('');
-  const [settingUp, setSettingUp]             = useState(false);
-
-  const [amount, setAmount]                   = useState('');
-  const [txnId, setTxnId]                     = useState('');
-  const [method, setMethod]                   = useState<PayMethod>('NEFT');
-  const [notes, setNotes]                     = useState('');
-  const [submitting, setSubmitting]           = useState(false);
-  const [allocPreview, setAllocPreview]       = useState<PaymentAllocationPreview | null>(null);
-  const [previewLoading, setPreviewLoading]   = useState(false);
+  const { schools, fetchSchools } = useSchoolStore();
+  const [search, setSearch] = useState('');
+  const [selectedSchoolId, setSelectedSchoolId] = useState<string | null>(null);
 
   useEffect(() => {
-    fetchAll().catch(e => showToast(e instanceof Error ? e.message : 'Failed to load billing data', 'error'));
+    fetchSchools().catch(e => showToast(e instanceof Error ? e.message : 'Failed to load schools', 'error'));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // Aggregate every billing year per school so the list-view "Outstanding"
-  // pill matches the per-school detail breakdown.
-  const perSchoolAgg = useMemo(() => {
-    const map = new Map<string, { paid: number; due: number; outstanding: number; latestYearLabel: string | null; latestStartDate: string | null }>();
-    for (const y of billingYears) {
-      const cur = map.get(y.schoolId) ?? { paid: 0, due: 0, outstanding: 0, latestYearLabel: null, latestStartDate: null };
-      cur.paid += y.totalPaid;
-      cur.due  += y.totalDue;
-      cur.outstanding += Math.max(0, y.outstanding);
-      if (!cur.latestStartDate || y.startDate > cur.latestStartDate) {
-        cur.latestStartDate = y.startDate;
-        cur.latestYearLabel = y.yearLabel;
-      }
-      map.set(y.schoolId, cur);
-    }
-    return map;
-  }, [billingYears]);
+  const filtered = useMemo(() => {
+    const q = search.trim().toLowerCase();
+    if (!q) return schools;
+    return schools.filter(s =>
+      s.name.toLowerCase().includes(q) ||
+      s.code.toLowerCase().includes(q) ||
+      (s.location ?? '').toLowerCase().includes(q),
+    );
+  }, [schools, search]);
 
-  const schoolList = schoolBillings.map(sb => {
-    const agg = perSchoolAgg.get(sb.schoolId);
-    // `outstanding` is the gross sum of year-row outstanding. Schedule-level
-    // `advance_balance` is shown separately as a credit pill, not netted in.
-    return {
-      billing: sb,
-      paid: agg?.paid ?? 0,
-      due:  agg?.due  ?? sb.annualAmount,
-      outstanding: agg?.outstanding ?? sb.annualAmount,
-      latestYearLabel: agg?.latestYearLabel ?? null,
-    };
-  });
+  const selected = schools.find(s => s.id === selectedSchoolId) ?? null;
 
-  const totalCollected   = billingYears.reduce((s, y) => s + y.totalPaid, 0);
-  const totalOutstanding = schoolList.reduce((s, x) => s + x.outstanding, 0);
-  const overdueCount     = schoolList.filter(x => x.outstanding > 0).length;
+  // ── DETAIL ────────────────────────────────────────────────────────────────
+  if (selected) {
+    return <SchoolBilling school={selected} onBack={() => setSelectedSchoolId(null)} />;
+  }
 
-  // ── Selected school ──────────────────────────────────────────────────────
-  const selectedRow = selectedId ? schoolList.find(s => s.billing.schoolId === selectedId) : null;
-
-  const loadSchoolDetail = useCallback(async (schoolId: string) => {
-    setBreakdownLoading(true);
-    setBreakdownError(null);
-    try {
-      const [bd, payments] = await Promise.all([
-        getBillingBreakdown(schoolId),
-        getSchoolPayments(schoolId),
-      ]);
-      setBreakdown(bd);
-      setSchoolPayments(payments);
-    } catch (e) {
-      const msg = e instanceof Error ? e.message : 'Failed to load school billing';
-      setBreakdownError(msg);
-      showToast(msg, 'error');
-    } finally {
-      setBreakdownLoading(false);
-    }
-  }, [getBillingBreakdown, getSchoolPayments, showToast]);
-
-  const openSchool = async (schoolId: string) => {
-    setSelectedId(schoolId);
-    setBreakdown(null);
-    setSchoolPayments([]);
-    setBreakdownError(null);
-    setView('SCHOOL_DETAIL');
-    await loadSchoolDetail(schoolId);
-  };
-
-  // Latest year is the LAST one in breakdown.years (sorted ASC by start_date).
-  const latestYear = breakdown && breakdown.years.length > 0
-    ? breakdown.years[breakdown.years.length - 1]
-    : null;
-  // Allowed whenever a schedule exists — `create_next_billing_year` carries
-  // the latest year's outstanding (arrears or advance) into the new year, so
-  // gating on a clean balance would block legitimate annual rollovers.
-  const canCreateNextYear = !!breakdown;
-  const carryForwardHint = breakdown && latestYear && latestYear.outstanding !== 0
-    ? latestYear.outstanding > 0
-      ? `Arrears of ${fmtFull(latestYear.outstanding)} from ${latestYear.yearLabel} will be carried forward.`
-      : `Advance of ${fmtFull(latestYear.outstanding)} from ${latestYear.yearLabel} will be carried forward as credit.`
-    : null;
-
-  const handleCreateNextYear = async () => {
-    if (!selectedId) return;
-    setCreatingNextYear(true);
-    try {
-      const y = await createNextYear(selectedId, 0);
-      showToast(`Created billing year ${y.yearLabel}`);
-      await loadSchoolDetail(selectedId);
-    } catch (e) {
-      showToast(e instanceof Error ? e.message : 'Could not create next year', 'error');
-    } finally {
-      setCreatingNextYear(false);
-    }
-  };
-
-  const openSetupBilling = (sb: { schoolId: string; annualAmount: number; plan: BillingPlan }) => {
-    setSelectedId(sb.schoolId);
-    setSetupPlan(sb.plan ?? BillingPlan.STANDARD);
-    setSetupStartDate(new Date().toISOString().split('T')[0]);
-    setSetupAmount('');
-    setView('SETUP_BILLING');
-  };
-
-  const handleSetupBilling = async () => {
-    if (!selectedRow || !selectedId) return;
-    const customAmount = setupAmount.trim()
-      ? parseInt(setupAmount.replace(/,/g, ''), 10)
-      : undefined;
-    if (customAmount !== undefined && (Number.isNaN(customAmount) || customAmount <= 0)) {
-      showToast('Annual amount must be a positive number', 'error');
-      return;
-    }
-    setSettingUp(true);
-    try {
-      await useBillingStore.getState().setupSchoolBilling(
-        selectedId,
-        selectedRow.billing.schoolName,
-        setupPlan,
-        setupStartDate,
-        customAmount,
-      );
-      await fetchAll();
-      await loadSchoolDetail(selectedId);
-      showToast('Billing schedule created');
-      setView('SCHOOL_DETAIL');
-    } catch (e) {
-      showToast(e instanceof Error ? e.message : 'Could not create billing schedule', 'error');
-    } finally {
-      setSettingUp(false);
-    }
-  };
-
-  // ── Record-payment view ──────────────────────────────────────────────────
-  // Re-compute the allocation preview whenever the amount changes (debounced
-  // through a tiny 200ms timer to avoid hammering the DB on every keystroke).
-  useEffect(() => {
-    if (view !== 'RECORD_PAYMENT' || !selectedId) return;
-    const num = parseInt(amount.replace(/,/g, ''), 10);
-    if (!Number.isFinite(num) || num <= 0) {
-      setAllocPreview(null);
-      return;
-    }
-    let cancelled = false;
-    setPreviewLoading(true);
-    const t = window.setTimeout(async () => {
-      try {
-        const p = await previewAllocation(selectedId, num);
-        if (!cancelled) setAllocPreview(p);
-      } catch (e) {
-        if (!cancelled) {
-          setAllocPreview(null);
-          showToast(e instanceof Error ? e.message : 'Preview failed', 'error');
-        }
-      } finally {
-        if (!cancelled) setPreviewLoading(false);
-      }
-    }, 200);
-    return () => { cancelled = true; window.clearTimeout(t); };
-  }, [amount, view, selectedId, previewAllocation, showToast]);
-
-  const handlePay = async () => {
-    if (!selectedId || !latestYear) {
-      showToast('No billing year for this school', 'error');
-      return;
-    }
-    const num = parseInt(amount.replace(/,/g, ''), 10);
-    if (!num || num <= 0) { showToast('Enter a valid amount', 'error'); return; }
-    if (!txnId.trim())    { showToast('Enter transaction ID', 'error'); return; }
-
-    setSubmitting(true);
-    try {
-      // The yearId arg is back-compat noise — the RPC walks oldest-first
-      // regardless. Pass latestYear.id so the response can resolve a year
-      // for any legacy callers that still inspect the return value.
-      await recordPayment(selectedId, latestYear.id, num, txnId.trim(), method, notes.trim());
-      showToast(`${fmtFull(num)} recorded for ${selectedRow?.billing.schoolName ?? 'school'}`);
-      setAmount(''); setTxnId(''); setNotes('');
-      setAllocPreview(null);
-      setView('SCHOOL_DETAIL');
-      await loadSchoolDetail(selectedId);
-    } catch (e) {
-      showToast(e instanceof Error ? e.message : 'Payment failed', 'error');
-    } finally {
-      setSubmitting(false);
-    }
-  };
-
-  // ── Shared header ────────────────────────────────────────────────────────
-  const Header = ({ title, back, right }: { title: string; back: () => void; right?: React.ReactNode }) => (
-    <div className="bg-white border-b border-slate-100 px-4 pt-4 pb-4 flex items-center justify-between sticky top-0 z-10 shadow-sm">
-      <div className="flex items-center gap-3 min-w-0">
-        <button onClick={back} className="p-2 -ml-2 bg-slate-100 rounded-full text-slate-600 shrink-0">
-          <ArrowLeft size={20} />
-        </button>
-        <h2 className="text-xl font-black text-slate-900 uppercase tracking-tight truncate">{title}</h2>
+  // ── LIST ──────────────────────────────────────────────────────────────────
+  return (
+    <div className="w-full bg-slate-50 flex flex-col animate-in slide-in-from-right-8 duration-300">
+      <div className="bg-white border-b border-slate-100 px-4 pt-4 pb-4 sticky top-0 z-10 shadow-sm">
+        <div className="flex items-center gap-3 mb-3">
+          <button onClick={onBack} className="p-2 -ml-2 bg-slate-100 rounded-full text-slate-600 hover:bg-slate-200 transition-colors">
+            <ArrowLeft size={20} />
+          </button>
+          <div>
+            <h2 className="text-xl font-black text-slate-900 uppercase tracking-tight leading-none">Billing</h2>
+            <p className="text-[10px] font-bold text-slate-400 mt-0.5">School chunein → AY → installments add karein</p>
+          </div>
+        </div>
+        <div className="relative">
+          <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
+          <input
+            value={search}
+            onChange={e => setSearch(e.target.value)}
+            placeholder="Search by name, code, city…"
+            className="w-full bg-slate-100 rounded-xl pl-9 pr-3 py-2.5 font-bold text-sm outline-none border border-transparent focus:border-blue-400 focus:bg-white transition-colors"
+          />
+        </div>
       </div>
-      {right}
+
+      <div className="flex-1 overflow-y-auto p-4 space-y-2">
+        {filtered.length === 0 && (
+          <div className="text-center py-16 text-slate-400">
+            <Building2 size={32} className="mx-auto mb-2 opacity-40" />
+            <p className="text-sm font-bold">Koi school nahi mila</p>
+          </div>
+        )}
+        {filtered.map(s => (
+          <button key={s.id}
+            onClick={() => setSelectedSchoolId(s.id)}
+            className="w-full bg-white rounded-2xl border border-slate-100 shadow-sm p-4 flex items-center gap-3 active:scale-[0.99] transition-transform">
+            <div className="w-11 h-11 rounded-xl bg-blue-50 text-blue-600 flex items-center justify-center font-black shrink-0">
+              {s.name.split(' ').map(w => w[0]).join('').slice(0, 2).toUpperCase()}
+            </div>
+            <div className="flex-1 min-w-0 text-left">
+              <p className="font-extrabold text-slate-900 text-sm truncate">{s.name}</p>
+              <p className="text-[10px] font-bold text-slate-400 mt-0.5">{s.code} · {s.location}</p>
+            </div>
+            <ArrowLeft size={16} className="text-slate-300 rotate-180 shrink-0" />
+          </button>
+        ))}
+      </div>
     </div>
   );
+};
 
-  // ── LIST view ────────────────────────────────────────────────────────────
-  if (view === 'LIST') return (
+// ─── School billing detail ─────────────────────────────────────────────────
+const SchoolBilling: React.FC<{
+  school: { id: string; name: string; code: string };
+  onBack: () => void;
+}> = ({ school, onBack }) => {
+  const { showToast } = useUIStore();
+  const [loading, setLoading] = useState(true);
+  const [academicYears, setAcademicYears] = useState<AY[]>([]);
+  const [installments, setInstallments] = useState<Installment[]>([]);
+  const [openAyId, setOpenAyId] = useState<string | null>(null);
+  const [addingForAyId, setAddingForAyId] = useState<string | null>(null);
+  const [payingId, setPayingId] = useState<string | null>(null);
+
+  const refresh = async () => {
+    setLoading(true);
+    try {
+      const data = await adminApi.listBillingInstallments(school.id);
+      setAcademicYears(data.academicYears);
+      setInstallments(data.installments);
+      const activeAy = data.academicYears.find(a => a.is_active);
+      setOpenAyId(prev => prev ?? activeAy?.id ?? data.academicYears[0]?.id ?? null);
+    } catch (e) {
+      showToast(e instanceof Error ? e.message : 'Failed to load', 'error');
+    } finally { setLoading(false); }
+  };
+
+  useEffect(() => { void refresh(); /* eslint-disable-next-line react-hooks/exhaustive-deps */ }, [school.id]);
+
+  const installmentsByAy = useMemo(() => {
+    const m = new Map<string, Installment[]>();
+    for (const i of installments) {
+      if (!m.has(i.academic_year_id)) m.set(i.academic_year_id, []);
+      m.get(i.academic_year_id)!.push(i);
+    }
+    return m;
+  }, [installments]);
+
+  return (
     <div className="w-full bg-slate-50 flex flex-col animate-in slide-in-from-right-8 duration-300">
-      <Header title="Billing" back={onBack} />
-      <div className="flex-1 overflow-y-auto ">
-        <div className="grid grid-cols-3 gap-2 px-4 pt-3 pb-2">
-          {[
-            { label: 'Collected', value: fmt(totalCollected),   color: 'text-emerald-600', bg: 'bg-emerald-50' },
-            { label: 'Outstanding', value: fmt(totalOutstanding), color: 'text-rose-600',    bg: 'bg-rose-50'    },
-            { label: 'Schools',    value: String(schoolList.length), color: 'text-blue-600', bg: 'bg-blue-50'    },
-          ].map(({ label, value, color, bg }) => (
-            <div key={label} className={`rounded-2xl px-2 py-3 text-center shadow-sm ${bg}`}>
-              <div className={`text-lg font-black leading-none ${color}`}>{value}</div>
-              <div className="text-[9px] font-black text-slate-400 uppercase tracking-wide mt-1">{label}</div>
-            </div>
-          ))}
+      <div className="bg-white border-b border-slate-100 px-4 pt-4 pb-4 flex items-center justify-between sticky top-0 z-10 shadow-sm">
+        <div className="flex items-center gap-3 min-w-0">
+          <button onClick={onBack} className="p-2 -ml-2 bg-slate-100 rounded-full text-slate-600 hover:bg-slate-200 transition-colors shrink-0">
+            <ArrowLeft size={20} />
+          </button>
+          <div className="min-w-0">
+            <h2 className="text-base font-black text-slate-900 uppercase tracking-tight truncate">{school.name}</h2>
+            <p className="text-[10px] font-bold text-slate-400">Billing · {school.code}</p>
+          </div>
         </div>
+        <button onClick={() => void refresh()} disabled={loading}
+          className="p-2 bg-slate-100 text-slate-600 rounded-full hover:bg-slate-200 transition-colors disabled:opacity-50">
+          <RefreshCw size={16} className={loading ? 'animate-spin' : ''} />
+        </button>
+      </div>
 
-        {overdueCount > 0 && (
-          <div className="mx-4 mb-2 flex items-center gap-2 bg-rose-50 border border-rose-200 rounded-2xl px-4 py-3">
-            <AlertCircle size={16} className="text-rose-500 shrink-0" />
-            <p className="text-xs font-black text-rose-700">{overdueCount} school{overdueCount > 1 ? 's' : ''} with outstanding balance</p>
+      <div className="flex-1 overflow-y-auto p-4 space-y-3">
+        {loading && (
+          <div className="text-center py-12 text-slate-400">
+            <div className="w-8 h-8 border-2 border-slate-200 border-t-slate-700 rounded-full animate-spin mx-auto mb-2" />
+            <p className="text-xs font-bold">Loading…</p>
           </div>
         )}
 
-        <div className="px-4 space-y-2 pt-1">
-          {schoolList.map(({ billing, paid, due, outstanding, latestYearLabel }) => {
-            const settled = outstanding === 0;
-            const pct = due > 0 ? Math.min(100, Math.round((paid / due) * 100)) : 0;
-            return (
-              <button key={billing.schoolId}
-                onClick={() => openSchool(billing.schoolId)}
-                className="w-full bg-white rounded-2xl border border-slate-100 shadow-sm px-4 py-4 text-left active:scale-[0.98] transition-transform">
-                <div className="flex items-start gap-3">
-                  <div className="w-11 h-11 rounded-2xl bg-slate-100 text-slate-700 flex items-center justify-center font-black text-sm shrink-0">
-                    {billing.schoolName.split(' ').map(w => w[0]).join('').slice(0, 2).toUpperCase()}
+        {!loading && academicYears.length === 0 && (
+          <div className="bg-amber-50 border border-amber-200 rounded-2xl p-4 text-center">
+            <p className="text-sm font-black text-amber-800">Koi academic year nahi hai</p>
+            <p className="text-[11px] font-bold text-amber-700 mt-1">
+              School ka principal jab AY banayega tab yaha installments add kar sakte ho.
+            </p>
+          </div>
+        )}
+
+        {!loading && academicYears.map(ay => {
+          const items = installmentsByAy.get(ay.id) ?? [];
+          const total = items.reduce((t, i) => t + i.amount, 0);
+          const paid  = items.reduce((t, i) => t + i.paid_amount, 0);
+          const pending = total - paid;
+          const isOpen = openAyId === ay.id;
+          return (
+            <div key={ay.id} className="bg-white rounded-2xl border border-slate-100 shadow-sm overflow-hidden">
+              <button
+                onClick={() => setOpenAyId(isOpen ? null : ay.id)}
+                className="w-full px-4 py-3 flex items-center justify-between gap-3 active:bg-slate-50 transition-colors">
+                <div className="text-left min-w-0">
+                  <div className="flex items-center gap-2">
+                    <p className="font-black text-slate-900 text-sm">{ay.label}</p>
+                    {ay.is_active && (
+                      <span className="text-[9px] font-black uppercase tracking-widest text-emerald-700 bg-emerald-50 border border-emerald-200 rounded px-1.5 py-0.5">Active</span>
+                    )}
+                    {ay.is_closed && (
+                      <span className="text-[9px] font-black uppercase tracking-widest text-slate-500 bg-slate-100 rounded px-1.5 py-0.5">Closed</span>
+                    )}
                   </div>
-                  <div className="flex-1 min-w-0">
-                    <div className="flex items-center justify-between gap-2">
-                      <span className="font-extrabold text-slate-900 text-sm truncate">{billing.schoolName}</span>
-                      {settled
-                        ? <span className="text-[10px] font-black text-emerald-600 bg-emerald-50 px-2 py-0.5 rounded-full shrink-0">PAID</span>
-                        : <span className="text-sm font-black text-rose-600 shrink-0">{fmt(outstanding)}</span>
-                      }
-                    </div>
-                    <div className="flex items-center gap-2 mt-1">
-                      <span className={`text-[10px] font-black px-2 py-0.5 rounded-full ${PLAN_COLORS[billing.plan]}`}>{billing.plan}</span>
-                      <span className="text-[10px] font-bold text-slate-400">{latestYearLabel ?? '—'}</span>
-                      {billing.advanceBalance > 0 && (
-                        <span className="text-[10px] font-black text-violet-700 bg-violet-50 px-2 py-0.5 rounded-full">
-                          +{fmt(billing.advanceBalance)} credit
-                        </span>
-                      )}
-                    </div>
-                    <div className="mt-2 h-1.5 bg-slate-100 rounded-full overflow-hidden">
-                      <div className={`h-full rounded-full transition-all ${settled ? 'bg-emerald-500' : 'bg-blue-500'}`}
-                        style={{ width: `${pct}%` }} />
-                    </div>
-                    <div className="flex justify-between mt-1">
-                      <span className="text-[9px] font-bold text-slate-400">Paid {fmtFull(paid)}</span>
-                      <span className="text-[9px] font-bold text-slate-400">{pct}%</span>
-                    </div>
-                  </div>
+                  <p className="text-[10px] font-bold text-slate-400 mt-0.5">
+                    {fmtDate(ay.start_date)} → {fmtDate(ay.end_date)} · {items.length} installment{items.length === 1 ? '' : 's'}
+                  </p>
+                </div>
+                <div className="text-right shrink-0">
+                  <p className="text-[10px] font-black uppercase tracking-widest text-slate-400">
+                    {pending > 0 ? `Pending ${fmt(pending)}` : 'All paid'}
+                  </p>
+                  <p className="text-xs font-black text-slate-900 mt-0.5">{fmt(paid)} / {fmt(total)}</p>
                 </div>
               </button>
-            );
-          })}
 
-          {schoolList.length === 0 && (
-            <div className="flex flex-col items-center py-16 text-slate-400">
-              <IndianRupee size={32} className="mb-3 opacity-40" />
-              <p className="font-bold text-sm">No schools with billing</p>
+              {isOpen && (
+                <div className="border-t border-slate-100 bg-slate-50/40 px-3 py-3 space-y-2">
+                  {items.length === 0 && (
+                    <p className="text-[11px] font-bold text-slate-400 text-center py-2">
+                      Koi installment nahi. Add karne ke liye niche dabaye.
+                    </p>
+                  )}
+                  {items.map(i => {
+                    const fullyPaid = i.paid_amount >= i.amount;
+                    const partial = i.paid_amount > 0 && !fullyPaid;
+                    const overdue = !fullyPaid && new Date(i.due_date) < new Date(new Date().toDateString());
+                    return (
+                      <div key={i.id} className={`bg-white border rounded-xl px-3 py-3 ${
+                        fullyPaid ? 'border-emerald-100'
+                        : partial ? 'border-amber-200'
+                        : overdue ? 'border-rose-200'
+                        : 'border-slate-100'
+                      }`}>
+                        <div className="flex items-start gap-2">
+                          <div className={`w-9 h-9 rounded-lg flex items-center justify-center shrink-0 mt-0.5 ${
+                            fullyPaid ? 'bg-emerald-50 text-emerald-600'
+                            : partial ? 'bg-amber-50 text-amber-600'
+                            : overdue ? 'bg-rose-50 text-rose-600'
+                            : 'bg-slate-50 text-slate-400'
+                          }`}>
+                            {fullyPaid ? <CheckCircle2 size={18} /> : <Receipt size={15} />}
+                          </div>
+                          <div className="flex-1 min-w-0">
+                            <div className="flex items-center gap-2 flex-wrap">
+                              <p className="font-extrabold text-slate-900 text-sm truncate">{i.name}</p>
+                              {fullyPaid && (
+                                <span className="text-[9px] font-black uppercase tracking-widest text-emerald-700 bg-emerald-50 border border-emerald-200 rounded px-1.5 py-0.5">Paid</span>
+                              )}
+                              {partial && (
+                                <span className="text-[9px] font-black uppercase tracking-widest text-amber-700 bg-amber-50 border border-amber-200 rounded px-1.5 py-0.5">Partial</span>
+                              )}
+                              {!fullyPaid && !partial && overdue && (
+                                <span className="text-[9px] font-black uppercase tracking-widest text-rose-700 bg-rose-50 border border-rose-200 rounded px-1.5 py-0.5">Overdue</span>
+                              )}
+                            </div>
+                            {i.description && (
+                              <p className="text-[11px] font-bold text-slate-500 mt-0.5 leading-relaxed">{i.description}</p>
+                            )}
+                            <div className="flex flex-wrap gap-x-3 gap-y-0.5 text-[10px] font-bold text-slate-400 mt-1">
+                              <span>Due <span className="text-slate-600">{fmtDate(i.due_date)}</span></span>
+                              <span>Amount <span className="text-slate-700 font-black">{fmt(i.amount)}</span></span>
+                              {partial && <span className="text-amber-600">Paid {fmt(i.paid_amount)}</span>}
+                              {fullyPaid && i.paid_at && <span className="text-emerald-600">Paid on {fmtDate(i.paid_at)}</span>}
+                              <span className="text-slate-300">· Added {fmtDateTime(i.created_at)}</span>
+                            </div>
+                          </div>
+                          <div className="flex flex-col items-end gap-1.5 shrink-0">
+                            {!fullyPaid && (
+                              <button
+                                onClick={() => setPayingId(i.id)}
+                                className="text-[10px] font-black bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg px-3 py-1.5 active:scale-95 transition-transform">
+                                Pay
+                              </button>
+                            )}
+                            {i.paid_amount === 0 && (
+                              <button
+                                onClick={async () => {
+                                  if (!confirm(`Delete "${i.name}"?`)) return;
+                                  try {
+                                    await adminApi.deleteBillingInstallment(school.id, i.id);
+                                    setInstallments(prev => prev.filter(x => x.id !== i.id));
+                                    showToast('Installment deleted');
+                                  } catch (e) {
+                                    showToast(e instanceof Error ? e.message : 'Delete failed', 'error');
+                                  }
+                                }}
+                                className="p-1 text-slate-300 hover:text-rose-500 transition-colors"
+                                title="Delete">
+                                <Trash2 size={12} />
+                              </button>
+                            )}
+                          </div>
+                        </div>
+                      </div>
+                    );
+                  })}
+
+                  <button
+                    onClick={() => setAddingForAyId(ay.id)}
+                    className="w-full flex items-center justify-center gap-1.5 py-2 border-2 border-dashed border-slate-200 hover:border-blue-300 rounded-xl text-[11px] font-black text-slate-500 hover:text-blue-600 transition-colors">
+                    <Plus size={13} /> Installment add karein
+                  </button>
+
+                  {/* History — paid items, latest first */}
+                  {items.some(i => i.paid_amount > 0) && (
+                    <div className="mt-3 pt-3 border-t border-slate-200">
+                      <p className="text-[10px] font-black uppercase tracking-widest text-slate-500 mb-2">Payment History</p>
+                      <ul className="space-y-1.5">
+                        {items
+                          .filter(i => i.paid_amount > 0)
+                          .sort((a, b) => (b.paid_at ?? b.created_at).localeCompare(a.paid_at ?? a.created_at))
+                          .map(i => (
+                            <li key={'h-' + i.id} className="flex items-center gap-2 bg-white border border-slate-100 rounded-lg px-2.5 py-2">
+                              <CheckCircle2 size={12} className="text-emerald-600 shrink-0" />
+                              <div className="flex-1 min-w-0">
+                                <p className="text-[11px] font-black text-slate-700 truncate">{i.name}</p>
+                                <p className="text-[9px] font-bold text-slate-400">
+                                  {i.paid_at ? fmtDateTime(i.paid_at) : 'pending paid_at'}
+                                  {i.paid_method && ` · ${i.paid_method}`}
+                                  {i.paid_note && ` · ${i.paid_note}`}
+                                </p>
+                              </div>
+                              <span className="text-[11px] font-black text-emerald-700 tabular-nums shrink-0">{fmt(i.paid_amount)}</span>
+                            </li>
+                          ))}
+                      </ul>
+                    </div>
+                  )}
+                </div>
+              )}
             </div>
-          )}
+          );
+        })}
+      </div>
+
+      {/* Add installment modal */}
+      {addingForAyId && (
+        <AddInstallmentModal
+          schoolId={school.id}
+          ayId={addingForAyId}
+          ayLabel={academicYears.find(a => a.id === addingForAyId)?.label ?? ''}
+          onClose={() => setAddingForAyId(null)}
+          onCreated={(row) => {
+            setInstallments(prev => [...prev, row]);
+            setAddingForAyId(null);
+          }}
+        />
+      )}
+
+      {/* Pay modal */}
+      {payingId && (
+        <PayInstallmentModal
+          schoolId={school.id}
+          installment={installments.find(i => i.id === payingId)!}
+          onClose={() => setPayingId(null)}
+          onPaid={(row) => {
+            setInstallments(prev => prev.map(x => x.id === row.id ? row : x));
+            setPayingId(null);
+          }}
+        />
+      )}
+    </div>
+  );
+};
+
+// ─── Add installment modal ─────────────────────────────────────────────────
+const AddInstallmentModal: React.FC<{
+  schoolId: string; ayId: string; ayLabel: string;
+  onClose: () => void;
+  onCreated: (row: Installment) => void;
+}> = ({ schoolId, ayId, ayLabel, onClose, onCreated }) => {
+  const { showToast } = useUIStore();
+  const [name, setName] = useState('');
+  const [description, setDescription] = useState('');
+  const [amount, setAmount] = useState('');
+  const [dueDate, setDueDate] = useState('');
+  const [saving, setSaving] = useState(false);
+
+  const submit = async () => {
+    const amt = parseInt(amount.replace(/[^\d]/g, ''), 10);
+    if (!name.trim()) { showToast('Name daalein', 'error'); return; }
+    if (!Number.isFinite(amt) || amt <= 0) { showToast('Amount > 0 hona chahiye', 'error'); return; }
+    if (!dueDate) { showToast('Due date daalein', 'error'); return; }
+    setSaving(true);
+    try {
+      const row = await adminApi.createBillingInstallment(schoolId, {
+        academicYearId: ayId, name: name.trim(), amount: amt, dueDate,
+        description: description.trim() || undefined,
+      });
+      showToast('Installment added');
+      onCreated(row);
+    } catch (e) {
+      showToast(e instanceof Error ? e.message : 'Save failed', 'error');
+    } finally { setSaving(false); }
+  };
+
+  return (
+    <div className="fixed inset-0 z-[100] bg-black/60 backdrop-blur-sm flex items-end sm:items-center justify-center p-4 animate-in fade-in duration-150"
+      onClick={saving ? undefined : onClose}>
+      <div className="bg-white w-full sm:max-w-md rounded-3xl p-6 shadow-2xl animate-in slide-in-from-bottom-4"
+        onClick={e => e.stopPropagation()}>
+        <div className="flex items-center justify-between mb-3">
+          <div>
+            <p className="text-base font-black text-slate-900">Naya Installment</p>
+            <p className="text-[11px] font-bold text-slate-400">{ayLabel}</p>
+          </div>
+          <button onClick={onClose} className="w-8 h-8 bg-slate-100 rounded-full flex items-center justify-center"><X size={16} /></button>
+        </div>
+
+        <div className="space-y-3">
+          <div>
+            <label className="block text-[10px] font-black uppercase tracking-widest text-slate-500 mb-1.5">Name *</label>
+            <input value={name} onChange={e => setName(e.target.value)}
+              placeholder="e.g. Q1 Subscription"
+              className="w-full border border-slate-200 bg-slate-50 rounded-xl px-3 py-3 font-bold text-sm outline-none focus:border-blue-500 focus:bg-white transition-colors" />
+          </div>
+          <div>
+            <label className="block text-[10px] font-black uppercase tracking-widest text-slate-500 mb-1.5">Description (optional)</label>
+            <textarea value={description} onChange={e => setDescription(e.target.value)}
+              placeholder="Kya cover ho raha hai is installment me…"
+              rows={2}
+              className="w-full border border-slate-200 bg-slate-50 rounded-xl px-3 py-2.5 font-bold text-sm outline-none focus:border-blue-500 focus:bg-white transition-colors resize-none" />
+          </div>
+          <div>
+            <label className="block text-[10px] font-black uppercase tracking-widest text-slate-500 mb-1.5">Amount *</label>
+            <div className="relative">
+              <IndianRupee size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
+              <input value={amount} onChange={e => setAmount(e.target.value.replace(/[^\d]/g, ''))}
+                inputMode="numeric"
+                placeholder="0"
+                className="w-full border border-slate-200 bg-slate-50 rounded-xl pl-9 pr-3 py-3 font-black text-sm outline-none focus:border-blue-500 focus:bg-white transition-colors" />
+            </div>
+          </div>
+          <div>
+            <label className="block text-[10px] font-black uppercase tracking-widest text-slate-500 mb-1.5">Due date *</label>
+            <div className="relative">
+              <Calendar size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
+              <input type="date" value={dueDate} onChange={e => setDueDate(e.target.value)}
+                className="w-full border border-slate-200 bg-slate-50 rounded-xl pl-9 pr-3 py-3 font-bold text-sm outline-none focus:border-blue-500 focus:bg-white transition-colors" />
+            </div>
+          </div>
+        </div>
+
+        <div className="flex gap-3 mt-5">
+          <button onClick={onClose} disabled={saving}
+            className="flex-1 py-3 bg-slate-100 text-slate-700 font-black rounded-2xl text-sm uppercase tracking-widest active:scale-95 transition-transform">
+            Cancel
+          </button>
+          <button onClick={submit} disabled={saving}
+            className="flex-1 py-3 bg-blue-600 hover:bg-blue-700 text-white font-black rounded-2xl text-sm uppercase tracking-widest active:scale-95 transition-transform disabled:opacity-50">
+            {saving ? 'Saving…' : 'Add'}
+          </button>
         </div>
       </div>
     </div>
   );
+};
 
-  // ── SCHOOL DETAIL view ──────────────────────────────────────────────────
-  if (view === 'SCHOOL_DETAIL' && selectedRow) {
-    const { billing } = selectedRow;
-    const years = breakdown?.years ?? [];
-    const totalPaidAcrossYears = years.reduce((s, y) => s + y.totalPaid, 0);
-    const totalDueAcrossYears  = years.reduce((s, y) => s + y.totalDue,  0);
+// ─── Pay installment modal ─────────────────────────────────────────────────
+const PayInstallmentModal: React.FC<{
+  schoolId: string;
+  installment: Installment;
+  onClose: () => void;
+  onPaid: (row: Installment) => void;
+}> = ({ schoolId, installment, onClose, onPaid }) => {
+  const { showToast } = useUIStore();
+  const outstanding = installment.amount - installment.paid_amount;
+  const [amount, setAmount] = useState(String(outstanding));
+  const [method, setMethod] = useState('CASH');
+  const [note, setNote] = useState('');
+  const [saving, setSaving] = useState(false);
 
-    return (
-      <div className="w-full bg-slate-50 flex flex-col animate-in slide-in-from-right-8 duration-300">
-        <Header title={billing.schoolName}
-          back={() => { setView('LIST'); setSelectedId(null); setBreakdown(null); }}
-          right={
-            years.length > 0 ? (
-              <button onClick={() => setView('RECORD_PAYMENT')}
-                className="flex items-center gap-1.5 bg-blue-600 text-white text-[11px] font-black px-3 py-2 rounded-full active:scale-90 transition-transform">
-                <Plus size={13} /> Add Payment
-              </button>
-            ) : null
-          }
-        />
+  const submit = async () => {
+    const amt = parseInt(amount.replace(/[^\d]/g, ''), 10);
+    if (!Number.isFinite(amt) || amt <= 0) { showToast('Amount > 0 hona chahiye', 'error'); return; }
+    if (amt > outstanding) { showToast(`Outstanding sirf ${fmt(outstanding)} hai`, 'error'); return; }
+    setSaving(true);
+    try {
+      const row = await adminApi.payBillingInstallment(schoolId, installment.id, {
+        amount: amt, method, note: note.trim() || undefined,
+      });
+      showToast('Payment recorded');
+      onPaid(row);
+    } catch (e) {
+      showToast(e instanceof Error ? e.message : 'Payment failed', 'error');
+    } finally { setSaving(false); }
+  };
 
-        <div className="flex-1 overflow-y-auto space-y-3 px-4 pt-3 pb-6">
-
-          {/* Plan info card */}
-          <div className="bg-white rounded-2xl border border-slate-100 shadow-sm p-4">
-            <div className="flex items-center justify-between mb-3">
-              <span className="text-[10px] font-black uppercase tracking-widest text-slate-400">Plan Details</span>
-              <span className={`text-[10px] font-black px-2 py-0.5 rounded-full ${PLAN_COLORS[billing.plan]}`}>{billing.plan}</span>
-            </div>
-            <div className="grid grid-cols-2 gap-3">
-              <div>
-                <div className="text-[9px] font-black uppercase text-slate-400 mb-0.5">Annual Amount</div>
-                <div className="font-black text-slate-900">{fmtFull(billing.annualAmount)}</div>
-              </div>
-              <div>
-                <div className="text-[9px] font-black uppercase text-slate-400 mb-0.5">Billing Since</div>
-                <div className="font-black text-slate-900">{fmtDate(billing.billingStartDate)}</div>
-              </div>
-            </div>
-            {billing.advanceBalance > 0 && (
-              <div className="mt-3 flex items-center justify-between gap-2 bg-violet-50 border border-violet-100 rounded-xl px-3 py-2">
-                <span className="text-[10px] font-black uppercase tracking-widest text-violet-600">Advance Credit</span>
-                <span className="font-black text-violet-700 text-sm">+{fmtFull(billing.advanceBalance)}</span>
-              </div>
-            )}
-          </div>
-
-          {/* Per-year breakdown table */}
-          <div className="bg-white rounded-2xl border border-slate-100 shadow-sm overflow-hidden">
-            <div className="flex items-center justify-between px-4 pt-4 pb-2">
-              <span className="text-[10px] font-black uppercase tracking-widest text-slate-400">
-                Billing Years ({years.length})
-              </span>
-              {breakdown && (
-                <span className="text-[10px] font-black text-slate-500">
-                  {fmtFull(totalPaidAcrossYears)} / {fmtFull(totalDueAcrossYears)}
-                </span>
-              )}
-            </div>
-
-            {breakdownLoading ? (
-              <div className="px-4 py-8 text-center text-xs font-bold text-slate-400">Loading…</div>
-            ) : breakdownError ? (
-              <div className="px-4 py-8 text-center">
-                <AlertCircle size={24} className="mx-auto mb-2 text-rose-400" />
-                <p className="text-xs font-bold text-rose-600">{breakdownError}</p>
-                <button onClick={() => selectedId && loadSchoolDetail(selectedId)}
-                  className="mt-2 text-[10px] font-black text-blue-600 underline">
-                  Retry
-                </button>
-              </div>
-            ) : years.length === 0 ? (
-              <div className="px-4 py-8 text-center">
-                <IndianRupee size={24} className="mx-auto mb-2 text-slate-300" />
-                {breakdown ? (
-                  <p className="text-xs font-bold text-slate-400">
-                    No billing years yet — create the first one below.
-                  </p>
-                ) : (
-                  <>
-                    <p className="text-xs font-bold text-slate-500">
-                      No billing schedule yet for this school.
-                    </p>
-                    <p className="text-[10px] font-bold text-slate-400 mt-1 mb-3">
-                      Pick a plan and start date to begin charging fees.
-                    </p>
-                    <button
-                      onClick={() => openSetupBilling(selectedRow.billing)}
-                      className="inline-flex items-center gap-1.5 bg-emerald-600 text-white text-[11px] font-black px-3 py-2 rounded-full active:scale-95 transition-transform"
-                    >
-                      <Settings size={13} />
-                      Set Up Billing
-                    </button>
-                  </>
-                )}
-              </div>
-            ) : (
-              <div className="overflow-x-auto">
-                <table className="w-full text-xs">
-                  <thead className="bg-slate-50">
-                    <tr className="text-left text-[9px] font-black uppercase tracking-widest text-slate-500">
-                      <th className="px-4 py-2">Year</th>
-                      <th className="px-3 py-2 text-right">Annual</th>
-                      <th className="px-3 py-2 text-right">Paid</th>
-                      <th className="px-3 py-2 text-right">Outstanding</th>
-                      <th className="px-3 py-2 text-right">Status</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {years.map((y, idx) => {
-                      const settled = y.outstanding <= 0;
-                      const isLatest = idx === years.length - 1;
-                      return (
-                        <tr key={y.id}
-                          className={`border-t border-slate-100 ${isLatest ? 'bg-blue-50/40' : ''}`}>
-                          <td className="px-4 py-3">
-                            <div className="font-black text-slate-900">{y.yearLabel}</div>
-                            <div className="text-[9px] font-bold text-slate-400">
-                              {fmtDate(y.startDate)} – {fmtDate(y.endDate)}
-                            </div>
-                            {y.carriedForward !== 0 && (
-                              <div className={`text-[9px] font-black mt-0.5 ${y.carriedForward > 0 ? 'text-amber-600' : 'text-emerald-600'}`}>
-                                {y.carriedForward > 0 ? '+' : ''}{fmtFull(y.carriedForward)} c/f
-                              </div>
-                            )}
-                          </td>
-                          <td className="px-3 py-3 text-right font-bold text-slate-700">{fmtFull(y.annualAmount)}</td>
-                          <td className="px-3 py-3 text-right font-bold text-emerald-700">{fmtFull(y.totalPaid)}</td>
-                          <td className={`px-3 py-3 text-right font-black ${settled ? 'text-slate-400' : 'text-rose-600'}`}>
-                            {settled ? '—' : fmtFull(y.outstanding)}
-                          </td>
-                          <td className="px-3 py-3 text-right">
-                            {settled
-                              ? <span className="inline-flex items-center gap-1 text-[10px] font-black text-emerald-600 bg-emerald-50 px-2 py-0.5 rounded-full"><CheckCircle2 size={10} /> Paid</span>
-                              : <span className="inline-flex items-center gap-1 text-[10px] font-black text-rose-600 bg-rose-50 px-2 py-0.5 rounded-full"><Clock size={10} /> Due</span>
-                            }
-                          </td>
-                        </tr>
-                      );
-                    })}
-                  </tbody>
-                </table>
-              </div>
-            )}
-          </div>
-
-          {/* Create-next-year action */}
-          {breakdown && !breakdownError && (
-            <div className="bg-white rounded-2xl border border-slate-100 shadow-sm p-4">
-              <div className="flex items-start gap-3">
-                <div className="w-10 h-10 rounded-xl bg-emerald-50 text-emerald-600 flex items-center justify-center shrink-0">
-                  <CalendarPlus size={18} />
-                </div>
-                <div className="flex-1">
-                  <div className="font-black text-slate-900 text-sm">Next Billing Year</div>
-                  <div className="text-[10px] font-bold text-slate-500 mt-0.5">
-                    {years.length === 0
-                      ? `Open the first billing year for this school (${fmtFull(billing.annualAmount)} annual).`
-                      : `Roll over to a new ${billing.plan.toLowerCase()} year (${fmtFull(billing.annualAmount)} annual).`}
-                  </div>
-                  {carryForwardHint && (
-                    <div className={`text-[10px] font-black mt-1 ${
-                      latestYear && latestYear.outstanding > 0 ? 'text-amber-600' : 'text-violet-600'
-                    }`}>
-                      {carryForwardHint}
-                    </div>
-                  )}
-                  <button onClick={handleCreateNextYear}
-                    disabled={creatingNextYear || !canCreateNextYear}
-                    className="mt-2 inline-flex items-center gap-1.5 bg-emerald-600 text-white text-[11px] font-black px-3 py-2 rounded-full active:scale-95 transition-transform disabled:opacity-40 disabled:cursor-not-allowed">
-                    <CalendarPlus size={13} />
-                    {creatingNextYear ? 'Creating…' : years.length === 0 ? 'Create First Year' : 'Create Next Year'}
-                  </button>
-                </div>
-              </div>
-            </div>
-          )}
-
-          {/* Payment history */}
+  return (
+    <div className="fixed inset-0 z-[100] bg-black/60 backdrop-blur-sm flex items-end sm:items-center justify-center p-4 animate-in fade-in duration-150"
+      onClick={saving ? undefined : onClose}>
+      <div className="bg-white w-full sm:max-w-md rounded-3xl p-6 shadow-2xl animate-in slide-in-from-bottom-4"
+        onClick={e => e.stopPropagation()}>
+        <div className="flex items-center justify-between mb-3">
           <div>
-            <p className="text-[10px] font-black uppercase tracking-widest text-slate-400 mb-2 px-1">
-              Payment History ({schoolPayments.length})
+            <p className="text-base font-black text-slate-900">Pay {installment.name}</p>
+            <p className="text-[11px] font-bold text-slate-400">
+              Total {fmt(installment.amount)} · Paid {fmt(installment.paid_amount)} · Outstanding {fmt(outstanding)}
             </p>
-            {schoolPayments.length === 0 ? (
-              <div className="bg-white rounded-2xl border border-slate-100 shadow-sm p-8 text-center text-slate-400">
-                <IndianRupee size={28} className="mx-auto mb-2 opacity-30" />
-                <p className="text-xs font-bold">No payments yet</p>
-              </div>
-            ) : (
-              <div className="space-y-2">
-                {schoolPayments.map(p => (
-                  <div key={p.id} className="bg-white rounded-2xl border border-slate-100 shadow-sm px-4 py-3">
-                    <div className="flex items-center gap-3">
-                      <div className="w-9 h-9 rounded-xl bg-emerald-50 text-emerald-600 flex items-center justify-center shrink-0">
-                        <CheckCircle2 size={16} />
-                      </div>
-                      <div className="flex-1 min-w-0">
-                        <div className="font-extrabold text-slate-900 text-sm">{fmtFull(p.amount)}</div>
-                        <div className="flex items-center gap-1.5 mt-0.5">
-                          <span className={`text-[9px] font-black px-1.5 py-0.5 rounded-full ${METHOD_COLORS[p.method]}`}>{p.method}</span>
-                          <span className="text-[9px] font-bold text-slate-400 truncate">{p.txnId}</span>
-                        </div>
-                        {p.notes && <div className="text-[9px] text-slate-400 mt-0.5">{p.notes}</div>}
-                      </div>
-                      <div className="text-[10px] font-bold text-slate-400 shrink-0">{fmtDate(p.paidAt)}</div>
-                    </div>
+          </div>
+          <button onClick={onClose} className="w-8 h-8 bg-slate-100 rounded-full flex items-center justify-center"><X size={16} /></button>
+        </div>
 
-                    {/* Per-payment allocation breakdown (oldest-first) */}
-                    {(p.allocations.length > 0 || p.parkedAdvance > 0) && (
-                      <div className="mt-2 ml-12 pt-2 border-t border-slate-100">
-                        <div className="text-[9px] font-black uppercase tracking-wider text-slate-400 mb-1">
-                          Applied to
-                        </div>
-                        <div className="space-y-0.5">
-                          {p.allocations.map((a, i) => (
-                            <div key={`${a.yearId}-${i}`} className="flex items-center justify-between text-[10px] font-bold">
-                              <span className="text-slate-600 truncate">{a.yearLabel || 'Year'}</span>
-                              <span className="text-emerald-700 shrink-0 ml-2">{fmtFull(a.amountApplied)}</span>
-                            </div>
-                          ))}
-                          {p.parkedAdvance > 0 && (
-                            <div className="flex items-center justify-between text-[10px] font-bold">
-                              <span className="text-violet-600 truncate">Advance credit (parked)</span>
-                              <span className="text-violet-600 shrink-0 ml-2">{fmtFull(p.parkedAdvance)}</span>
-                            </div>
-                          )}
-                        </div>
-                      </div>
-                    )}
-                  </div>
-                ))}
-              </div>
-            )}
+        <div className="space-y-3">
+          <div>
+            <label className="block text-[10px] font-black uppercase tracking-widest text-slate-500 mb-1.5">Amount received</label>
+            <div className="relative">
+              <IndianRupee size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
+              <input value={amount} onChange={e => setAmount(e.target.value.replace(/[^\d]/g, ''))}
+                inputMode="numeric"
+                className="w-full border border-slate-200 bg-slate-50 rounded-xl pl-9 pr-3 py-3 font-black text-sm outline-none focus:border-emerald-500 focus:bg-white transition-colors" />
+            </div>
+          </div>
+          <div>
+            <label className="block text-[10px] font-black uppercase tracking-widest text-slate-500 mb-1.5">Method</label>
+            <div className="grid grid-cols-3 gap-2">
+              {['CASH', 'UPI', 'BANK'].map(m => (
+                <button key={m} onClick={() => setMethod(m)}
+                  className={`py-2 rounded-xl text-[11px] font-black uppercase tracking-widest border-2 transition-colors ${
+                    method === m ? 'border-emerald-500 bg-emerald-50 text-emerald-700' : 'border-slate-200 text-slate-500'
+                  }`}>{m}</button>
+              ))}
+            </div>
+          </div>
+          <div>
+            <label className="block text-[10px] font-black uppercase tracking-widest text-slate-500 mb-1.5">Note (optional)</label>
+            <input value={note} onChange={e => setNote(e.target.value)}
+              placeholder="Txn ID / reference"
+              className="w-full border border-slate-200 bg-slate-50 rounded-xl px-3 py-3 font-bold text-sm outline-none focus:border-emerald-500 focus:bg-white transition-colors" />
           </div>
         </div>
-      </div>
-    );
-  }
 
-  // ── SETUP BILLING view (legacy schools without a schedule) ──────────────
-  if (view === 'SETUP_BILLING' && selectedRow) {
-    const { billing } = selectedRow;
-    const planAmount = setupAmount.trim()
-      ? parseInt(setupAmount.replace(/,/g, ''), 10) || 0
-      : PLAN_PRICES[setupPlan];
-
-    return (
-      <div className="w-full bg-slate-50 flex flex-col animate-in slide-in-from-right-8 duration-300">
-        <Header title="Set Up Billing" back={() => setView('SCHOOL_DETAIL')} />
-        <div className="flex-1 overflow-y-auto px-4 pt-4 space-y-4 pb-6">
-
-          <div className="bg-white rounded-2xl border border-slate-100 shadow-sm p-4">
-            <div className="font-extrabold text-slate-900 truncate">{billing.schoolName}</div>
-            <div className="text-[11px] font-bold text-slate-500 mt-0.5">
-              First-time billing setup
-            </div>
-          </div>
-
-          <div className="bg-white rounded-2xl border border-slate-100 shadow-sm p-4 space-y-3">
-            <div>
-              <label className="text-[10px] font-black uppercase tracking-widest text-slate-500">
-                Plan
-              </label>
-              <div className="grid grid-cols-3 gap-2 mt-2">
-                {(Object.values(BillingPlan) as BillingPlan[]).map((p) => (
-                  <button key={p} onClick={() => setSetupPlan(p)}
-                    className={`px-2 py-2 rounded-xl text-[11px] font-black transition-colors ${
-                      setupPlan === p
-                        ? 'bg-emerald-600 text-white'
-                        : 'bg-slate-100 text-slate-600'
-                    }`}>
-                    {p}
-                    <div className={`text-[9px] font-bold mt-0.5 ${
-                      setupPlan === p ? 'text-emerald-100' : 'text-slate-400'
-                    }`}>
-                      {fmt(PLAN_PRICES[p])}/yr
-                    </div>
-                  </button>
-                ))}
-              </div>
-            </div>
-
-            <div>
-              <label className="text-[10px] font-black uppercase tracking-widest text-slate-500">
-                Billing Start Date
-              </label>
-              <input type="date" value={setupStartDate}
-                onChange={(e) => setSetupStartDate(e.target.value)}
-                className="w-full mt-1.5 px-3 py-2 rounded-xl border border-slate-200 text-sm font-bold text-slate-900" />
-            </div>
-
-            <div>
-              <label className="text-[10px] font-black uppercase tracking-widest text-slate-500">
-                Annual Amount (optional)
-              </label>
-              <input type="text" inputMode="numeric" value={setupAmount}
-                onChange={(e) => setSetupAmount(e.target.value.replace(/[^\d]/g, ''))}
-                placeholder={`Default: ${fmtFull(PLAN_PRICES[setupPlan])}`}
-                className="w-full mt-1.5 px-3 py-2 rounded-xl border border-slate-200 text-sm font-bold text-slate-900 placeholder:text-slate-400 placeholder:font-normal" />
-              <p className="text-[10px] font-bold text-slate-400 mt-1">
-                Leave blank to use the standard plan price.
-              </p>
-            </div>
-          </div>
-
-          <div className="bg-emerald-50 border border-emerald-100 rounded-2xl p-3">
-            <div className="text-[10px] font-black uppercase tracking-widest text-emerald-700">
-              First Year Will Be Created
-            </div>
-            <div className="text-sm font-extrabold text-emerald-900 mt-1">
-              {fmtFull(planAmount)} due — starting {fmtDate(setupStartDate)}
-            </div>
-          </div>
-
-          <button onClick={handleSetupBilling}
-            disabled={settingUp || !setupStartDate}
-            className="w-full bg-emerald-600 text-white font-black py-3 rounded-2xl active:scale-95 transition-transform disabled:opacity-40 disabled:cursor-not-allowed">
-            {settingUp ? 'Creating…' : 'Create Billing Schedule'}
+        <div className="flex gap-3 mt-5">
+          <button onClick={onClose} disabled={saving}
+            className="flex-1 py-3 bg-slate-100 text-slate-700 font-black rounded-2xl text-sm uppercase tracking-widest active:scale-95 transition-transform">
+            Cancel
+          </button>
+          <button onClick={submit} disabled={saving}
+            className="flex-1 py-3 bg-emerald-600 hover:bg-emerald-700 text-white font-black rounded-2xl text-sm uppercase tracking-widest active:scale-95 transition-transform disabled:opacity-50">
+            {saving ? 'Recording…' : 'Pay'}
           </button>
         </div>
       </div>
-    );
-  }
-
-  // ── RECORD PAYMENT view ─────────────────────────────────────────────────
-  if (view === 'RECORD_PAYMENT' && selectedRow && breakdown) {
-    const { billing } = selectedRow;
-    const totalOut = breakdown.totalOutstanding;
-
-    return (
-      <div className="w-full bg-slate-50 flex flex-col animate-in slide-in-from-right-8 duration-300">
-        <Header title="Add Payment" back={() => setView('SCHOOL_DETAIL')} />
-        <div className="flex-1 overflow-y-auto px-4 pt-4 space-y-4 pb-6">
-
-          <div className="bg-white rounded-2xl border border-slate-100 shadow-sm p-4 flex items-center gap-3">
-            <div className="w-11 h-11 rounded-2xl bg-slate-100 flex items-center justify-center font-black text-sm text-slate-700">
-              {billing.schoolName.split(' ').map(w => w[0]).join('').slice(0, 2).toUpperCase()}
-            </div>
-            <div className="flex-1 min-w-0">
-              <div className="font-extrabold text-slate-900 truncate">{billing.schoolName}</div>
-              <div className="text-xs font-bold text-rose-600 mt-0.5">
-                Outstanding: {fmtFull(totalOut)}
-              </div>
-              {billing.advanceBalance > 0 && (
-                <div className="text-[10px] font-black text-violet-700 mt-0.5">
-                  Existing advance credit: {fmtFull(billing.advanceBalance)}
-                </div>
-              )}
-            </div>
-          </div>
-
-          <div className="bg-white rounded-2xl border border-slate-100 shadow-sm p-4 space-y-4">
-            <div>
-              <label className="block text-[10px] font-black uppercase tracking-widest text-slate-500 mb-1.5">
-                Amount (₹) *
-              </label>
-              <div className="relative">
-                <span className="absolute left-4 top-1/2 -translate-y-1/2 font-black text-slate-400">₹</span>
-                <input
-                  type="number" value={amount} onChange={e => setAmount(e.target.value)}
-                  placeholder="Enter amount"
-                  className="w-full border border-slate-200 bg-slate-50 rounded-xl pl-8 pr-4 py-3 font-black text-sm outline-none focus:border-blue-500 focus:bg-white transition-colors"
-                />
-              </div>
-              {totalOut > 0 && (
-                <button onClick={() => setAmount(String(totalOut))}
-                  className="mt-1.5 text-[10px] font-black text-blue-600 underline">
-                  Pay full balance ({fmtFull(totalOut)})
-                </button>
-              )}
-            </div>
-
-            {/* Allocation preview — read-only mirror of the RPC's oldest-first walk */}
-            {allocPreview && allocPreview.totalAmount > 0 && (
-              <div className="bg-blue-50 border border-blue-100 rounded-xl p-3 space-y-2">
-                <div className="flex items-center justify-between">
-                  <span className="text-[10px] font-black uppercase tracking-widest text-blue-700">
-                    How this payment will be applied
-                  </span>
-                  {previewLoading && <span className="text-[9px] font-bold text-blue-400">Updating…</span>}
-                </div>
-                {allocPreview.allocations.length === 0 && allocPreview.advanceCredit > 0 && (
-                  <p className="text-xs font-bold text-violet-700">
-                    All years are settled — entire {fmtFull(allocPreview.totalAmount)} will be parked as advance credit.
-                  </p>
-                )}
-                {allocPreview.allocations.map((a) => (
-                  <div key={a.yearId} className="flex items-center justify-between text-xs">
-                    <span className="font-black text-slate-700">
-                      {a.yearLabel}
-                      {a.willClose
-                        ? <span className="ml-1.5 text-[9px] font-black text-emerald-600 bg-emerald-100 px-1.5 py-0.5 rounded-full">closes</span>
-                        : <span className="ml-1.5 text-[9px] font-black text-amber-700 bg-amber-100 px-1.5 py-0.5 rounded-full">partial</span>
-                      }
-                    </span>
-                    <span className="font-black text-slate-900">{fmtFull(a.amountApplied)}</span>
-                  </div>
-                ))}
-                {allocPreview.advanceCredit > 0 && allocPreview.allocations.length > 0 && (
-                  <div className="flex items-center justify-between text-xs pt-1 border-t border-blue-200">
-                    <span className="font-black text-violet-700">Parked as advance credit</span>
-                    <span className="font-black text-violet-700">{fmtFull(allocPreview.advanceCredit)}</span>
-                  </div>
-                )}
-              </div>
-            )}
-
-            <div>
-              <label className="block text-[10px] font-black uppercase tracking-widest text-slate-500 mb-1.5">
-                Transaction ID *
-              </label>
-              <input value={txnId} onChange={e => setTxnId(e.target.value)}
-                placeholder="e.g. TXN-2504-XXX-001"
-                className="w-full border border-slate-200 bg-slate-50 rounded-xl px-4 py-3 font-bold text-sm outline-none focus:border-blue-500 focus:bg-white transition-colors"
-              />
-            </div>
-
-            <div>
-              <label className="block text-[10px] font-black uppercase tracking-widest text-slate-500 mb-2">
-                Payment Method
-              </label>
-              <div className="grid grid-cols-4 gap-2">
-                {(['UPI', 'NEFT', 'CHEQUE', 'CASH'] as PayMethod[]).map(m => (
-                  <button key={m} onClick={() => setMethod(m)}
-                    className={`py-2 rounded-xl text-[11px] font-black uppercase transition-all ${
-                      method === m ? 'bg-blue-600 text-white' : 'bg-slate-100 text-slate-600'
-                    }`}>
-                    {m}
-                  </button>
-                ))}
-              </div>
-            </div>
-
-            <div>
-              <label className="block text-[10px] font-black uppercase tracking-widest text-slate-500 mb-1.5">
-                Notes (optional)
-              </label>
-              <input value={notes} onChange={e => setNotes(e.target.value)}
-                placeholder="e.g. Q1 installment"
-                className="w-full border border-slate-200 bg-slate-50 rounded-xl px-4 py-3 font-bold text-sm outline-none focus:border-blue-500 focus:bg-white transition-colors"
-              />
-            </div>
-          </div>
-
-          <button onClick={handlePay} disabled={submitting}
-            className="w-full flex items-center justify-center gap-2 bg-emerald-600 text-white font-black text-xs uppercase tracking-widest py-4 rounded-2xl active:scale-95 transition-transform shadow-lg disabled:opacity-60">
-            <CreditCard size={16} />
-            {submitting ? 'Saving…' : 'Confirm Payment'}
-          </button>
-        </div>
-      </div>
-    );
-  }
-
-  return null;
+    </div>
+  );
 };

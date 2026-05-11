@@ -398,12 +398,30 @@ export const FeesView: React.FC<Props> = ({ onBack }) => {
               const yearTotal = group.installments.reduce((a, i) => a + i.amount, 0);
               const yearPaid  = group.installments.reduce((a, i) => a + i.paidAmount, 0);
               const yearDue   = group.installments.reduce((a, i) => a + Math.max(0, i.amount - i.paidAmount - i.writeOffAmount), 0);
-              // Bucket the year's installments by fee type, then sort each
-              // bucket by due date so months render chronologically.
-              const buckets: Record<FeeType, FeeInstallment[]> = { TUITION: [], TRANSPORT: [], EXAM: [], OTHER: [] };
-              group.installments.forEach(i => { buckets[i.feeType].push(i); });
-              const orderedTypes: FeeType[] = (['TUITION', 'TRANSPORT', 'EXAM', 'OTHER'] as FeeType[])
-                .filter(t => buckets[t] && buckets[t].length > 0);
+              // Group by parent-facing urgency: Overdue (must pay now) →
+              // Upcoming (future schedule) → Paid (cleared). Earlier this
+              // was bucketed by fee_type which scattered overdue rows
+              // among future ones and forced parents to hunt for what
+              // they actually owed.
+              type StatusBucket = 'OVERDUE' | 'UPCOMING' | 'PAID';
+              const STATUS_LABEL: Record<StatusBucket, string> = {
+                OVERDUE:  'Pay Now',
+                UPCOMING: 'Upcoming',
+                PAID:     'Paid',
+              };
+              const STATUS_COLOR: Record<StatusBucket, string> = {
+                OVERDUE:  'bg-rose-100 text-rose-700',
+                UPCOMING: 'bg-slate-100 text-slate-500',
+                PAID:     'bg-emerald-100 text-emerald-700',
+              };
+              const bucketOf = (s: string): StatusBucket =>
+                s === 'PAID' ? 'PAID' :
+                (s === 'DUE' || s === 'OVERDUE' || s === 'PARTIAL_DUE') ? 'OVERDUE' :
+                'UPCOMING';
+              const buckets: Record<StatusBucket, FeeInstallment[]> = { OVERDUE: [], UPCOMING: [], PAID: [] };
+              group.installments.forEach(i => { buckets[bucketOf(i.status as string)].push(i); });
+              const orderedBuckets: StatusBucket[] = (['OVERDUE', 'UPCOMING', 'PAID'] as StatusBucket[])
+                .filter(b => buckets[b].length > 0);
 
               return (
                 <div key={group.academicYearId}
@@ -429,15 +447,15 @@ export const FeesView: React.FC<Props> = ({ onBack }) => {
 
                   {!collapsed && (
                     <div className="border-t border-slate-100">
-                      {orderedTypes.map(t => {
-                        const items = buckets[t]
+                      {orderedBuckets.map(b => {
+                        const items = buckets[b]
                           .slice()
                           .sort((a, b) => new Date(a.dueDate).getTime() - new Date(b.dueDate).getTime());
                         return (
-                          <div key={t} className="border-b border-slate-100 last:border-0">
+                          <div key={b} className="border-b border-slate-100 last:border-0">
                             <div className="px-4 pt-3 pb-1 flex items-center gap-1.5">
-                              <span className={`flex items-center gap-1 text-[9px] font-black px-2 py-0.5 rounded-full ${FEE_TYPE_COLOR[t]}`}>
-                                {FEE_TYPE_ICON[t]} {FEE_TYPE_LABEL[t]}
+                              <span className={`text-[9px] font-black px-2 py-0.5 rounded-full uppercase tracking-widest ${STATUS_COLOR[b]}`}>
+                                {STATUS_LABEL[b]}
                               </span>
                               <span className="text-[9px] font-bold text-slate-400">· {items.length} installment{items.length !== 1 ? 's' : ''}</span>
                             </div>

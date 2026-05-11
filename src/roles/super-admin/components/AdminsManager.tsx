@@ -168,45 +168,19 @@ export const AdminsManager: React.FC<Props> = ({ onBack }) => {
         <div className="space-y-3">
           {filtered.map(admin => (
             <div key={admin.id} className="bg-white rounded-2xl border border-slate-100 shadow-sm overflow-hidden">
-              {/* Top strip */}
+              {/* Top strip — read-only role + status badges. Destructive
+                  actions (toggle status / reset password / delete) used to
+                  live here as one-tap icon buttons but were too easy to
+                  hit by accident. They've been removed; if needed later
+                  they can be re-added behind a detail view + type-to-confirm
+                  gate (same pattern as SchoolsManager). */}
               <div className="px-4 pt-3 pb-2 flex justify-between items-center bg-slate-50/50">
                 <span className={`text-[9px] font-black px-2 py-0.5 rounded-full uppercase tracking-widest ${roleColor(admin.role)}`}>
                   {admin.adminId}
                 </span>
-                <div className="flex items-center gap-1.5">
-                  <span className={`text-[9px] font-black px-2 py-0.5 rounded-full uppercase tracking-widest ${statusColor(admin.status)}`}>
-                    {admin.status}
-                  </span>
-                  {(() => {
-                    const isSelf = admin.id === callerId;
-                    return (
-                      <>
-                        <button
-                          onClick={() => handleToggleStatus(admin)}
-                          disabled={isSelf}
-                          title={isSelf ? 'You cannot change your own status' : (admin.status === 'ACTIVE' ? 'Deactivate' : 'Activate')}
-                          className={`p-1 rounded-full transition-colors ${isSelf ? 'opacity-40 cursor-not-allowed' : 'text-slate-400 hover:bg-slate-100'}`}
-                        >
-                          {admin.status === 'ACTIVE' ? <XCircle size={14} className="text-rose-400" /> : <CheckCircle2 size={14} className="text-emerald-400" />}
-                        </button>
-                        {admin.role === 'PRINCIPAL' ? (
-                          <button onClick={() => handleResetPassword(admin)} className="p-1 rounded-full text-amber-500 hover:bg-amber-50 transition-colors" title="Reset Password">
-                            <KeyRound size={14} />
-                          </button>
-                        ) : (
-                          <button
-                            onClick={() => setConfirmDelete(admin)}
-                            disabled={isSelf}
-                            title={isSelf ? 'You cannot remove your own account' : 'Remove'}
-                            className={`p-1 rounded-full transition-colors ${isSelf ? 'opacity-40 cursor-not-allowed' : 'text-slate-400 hover:bg-slate-100'}`}
-                          >
-                            <Trash2 size={14} className="text-rose-400" />
-                          </button>
-                        )}
-                      </>
-                    );
-                  })()}
-                </div>
+                <span className={`text-[9px] font-black px-2 py-0.5 rounded-full uppercase tracking-widest ${statusColor(admin.status)}`}>
+                  {admin.status}
+                </span>
               </div>
 
               {/* Main info */}

@@ -43,6 +43,16 @@ export interface MobileConfirmRequest {
   title: string;
   message?: string;
   expectedLast4: string;
+  /** Optional phrase that must be typed exactly (case-insensitive,
+   *  whitespace-normalized) before the mobile gate accepts. Used for
+   *  EXTRA-destructive actions like a mid-year close where mobile-only
+   *  is too thin a guard. Phrase typically embeds the school name and
+   *  year so it can't be muscle-memory-typed. */
+  requiredPhrase?: string;
+  /** Optional rendered warning text shown above the inputs (red
+   *  alert-style). Used by mid-year close to call out the unusual
+   *  timing explicitly. */
+  warningText?: string;
   resolve: (confirmed: boolean) => void;
 }
 
@@ -91,7 +101,7 @@ interface UIStore {
   /** Ask the user to type the last 4 digits of their mobile number.
    *  Caller passes the expected digits (typically `session.mobileNumber.slice(-4)`).
    *  Returns true on match, false on cancel / wrong code. */
-  askMobileConfirm: (opts: { title: string; message?: string; expectedLast4: string }) => Promise<boolean>;
+  askMobileConfirm: (opts: { title: string; message?: string; expectedLast4: string; requiredPhrase?: string; warningText?: string }) => Promise<boolean>;
   /** Internal — settle the pending promise. */
   resolveMobileConfirm: (confirmed: boolean) => void;
 }
@@ -105,7 +115,14 @@ export const useUIStore = create<UIStore>((set, get) => ({
   appReady: false,
 
   showToast: (message, type = 'success') => {
-    const id = `toast-${Date.now()}`;
+    // Dedupe — if the same (message, type) is already on screen, skip
+    // pushing a second one. Earlier double-clicks or back-to-back
+    // saves produced stacked identical toasts ("New slot added"
+    // shown twice). Soft-dedupe by message+type is enough; distinct
+    // errors / successes still surface.
+    const existing = get().toasts;
+    if (existing.some(t => t.message === message && t.type === type)) return;
+    const id = `toast-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
     set(s => ({ toasts: [...s.toasts, { id, message, type }] }));
     setTimeout(() => {
       set(s => ({ toasts: s.toasts.filter(t => t.id !== id) }));
@@ -150,11 +167,11 @@ export const useUIStore = create<UIStore>((set, get) => ({
     }
   },
 
-  askMobileConfirm: ({ title, message, expectedLast4 }) => {
+  askMobileConfirm: ({ title, message, expectedLast4, requiredPhrase, warningText }) => {
     return new Promise<boolean>(resolve => {
       const existing = get().mobileConfirmRequest;
       if (existing) existing.resolve(false);
-      set({ mobileConfirmRequest: { title, message, expectedLast4, resolve } });
+      set({ mobileConfirmRequest: { title, message, expectedLast4, requiredPhrase, warningText, resolve } });
     });
   },
 

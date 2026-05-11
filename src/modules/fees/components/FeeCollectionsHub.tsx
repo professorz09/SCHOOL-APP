@@ -81,7 +81,9 @@ export const FeeCollectionsHub: React.FC<Props> = ({ onBack }) => {
     return <FeeLedger onBack={() => setTab('DUES')} />;
   }
 
-  const pendingTotal = aggregate?.totalParentDue ?? 0;
+  const overdueTotal  = aggregate?.totalParentDue      ?? 0;
+  const upcomingTotal = aggregate?.totalParentUpcoming ?? 0;
+  const collectedTotal = aggregate?.totalCollected     ?? 0;
 
   return (
     <div className="w-full bg-slate-50 flex flex-col animate-in slide-in-from-right-8 duration-300">
@@ -94,22 +96,23 @@ export const FeeCollectionsHub: React.FC<Props> = ({ onBack }) => {
       </div>
 
       <div className="flex-1 overflow-y-auto p-4 space-y-4">
-        {/* Hero KPI cards */}
-        <div className="grid grid-cols-2 gap-3">
-          <KpiCard
-            tone="blue"
-            icon={<ArrowDownRight size={18} className="text-blue-600" />}
-            label="Today's Inflow"
-            value={fmtINR(todayInflow)}
-            loading={loading}
-          />
-          <KpiCard
-            tone="rose"
-            icon={<Clock size={18} className="text-rose-600" />}
-            label="Pending Dues"
-            value={fmtINR(pendingTotal)}
-            loading={loading}
-          />
+        {/* Today's inflow stays as a primary card. Three-up money strip
+            below splits the school's lifetime totals into Collected
+            (paid), Overdue (due today or earlier, unpaid) and Upcoming
+            (future schedule). Earlier this was a single "Pending Dues"
+            number that mashed the two together and either over-stated
+            panic or under-stated total exposure. */}
+        <KpiCard
+          tone="blue"
+          icon={<ArrowDownRight size={18} className="text-blue-600" />}
+          label="Today's Inflow"
+          value={fmtINR(todayInflow)}
+          loading={loading}
+        />
+        <div className="grid grid-cols-3 gap-2">
+          <MiniStat label="Collected" tone="emerald" value={fmtINR(collectedTotal)} loading={loading} />
+          <MiniStat label="Overdue"   tone="rose"    value={fmtINR(overdueTotal)}   loading={loading} />
+          <MiniStat label="Upcoming"  tone="slate"   value={fmtINR(upcomingTotal)}  loading={loading} />
         </div>
 
         {/* Tabs */}
@@ -133,6 +136,29 @@ export const FeeCollectionsHub: React.FC<Props> = ({ onBack }) => {
 // ───────────────────────────────────────────────────────────────────────────
 // Hero KPI card
 // ───────────────────────────────────────────────────────────────────────────
+
+// Compact stat tile for the 3-up money strip. Tone drives just the
+// value color so the cards visually group as one row without competing
+// for attention. Used for Collected / Overdue / Upcoming.
+const MiniStat: React.FC<{
+  label: string;
+  tone: 'emerald' | 'rose' | 'slate';
+  value: string;
+  loading?: boolean;
+}> = ({ label, tone, value, loading }) => {
+  const valueColor =
+    tone === 'emerald' ? 'text-emerald-700' :
+    tone === 'rose'    ? 'text-rose-700'    :
+                         'text-slate-700';
+  return (
+    <div className="bg-white rounded-2xl shadow-sm border border-slate-100 p-3">
+      <p className="text-[9px] font-black uppercase tracking-widest text-slate-400">{label}</p>
+      <p className={`text-base font-black tabular-nums mt-1 truncate ${valueColor}`}>
+        {loading ? '…' : value}
+      </p>
+    </div>
+  );
+};
 
 const KpiCard: React.FC<{
   tone: 'blue' | 'rose';
@@ -179,18 +205,19 @@ const DuesPanel: React.FC = () => {
 
   // Server-paginated fetch — pulls one page at a time so a 5000-student
   // school doesn't ship the entire roster on tab open. The defaulter
-  // filter (paidFee < totalFee) runs after the slice so each Load More
-  // appends only the dues from THIS page; we keep paging until enough
-  // dues are surfaced to fill the visible window.
+  // filter uses `currentDue` (only OVERDUE/PARTIAL installments whose
+  // due_date <= today), so upcoming months don't inflate Pending Dues.
+  // Earlier this filtered on totalFee - paidFee which counted the entire
+  // yearly schedule as "due" from April 1st.
   const appendPage = React.useCallback(async (offset: number, q: string) => {
     const page = await studentService.getList({
       offset, limit: DUE_PAGE, search: q || undefined,
     });
     const dues: DueItem[] = page.items
-      .filter(s => s.totalFee > 0 && s.paidFee < s.totalFee)
+      .filter(s => s.currentDue > 0)
       .map(s => ({
         ...s,
-        due: Math.max(0, s.totalFee - s.paidFee),
+        due: s.currentDue,
         oldestDue: null,
         fatherPhone: null,
       }));

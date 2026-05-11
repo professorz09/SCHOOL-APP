@@ -1,24 +1,58 @@
-import React, { useEffect } from 'react';
-import { ArrowLeft, TrendingUp, Users, Activity, IndianRupee, Building2, Award } from 'lucide-react';
+import React, { useEffect, useState } from 'react';
+import { ArrowLeft, TrendingUp, Users, Activity, IndianRupee, Building2 } from 'lucide-react';
 import { useSchoolStore } from '@/roles/super-admin/schoolStore';
-import { useBillingStore } from '@/roles/super-admin/billingStore';
-import { SchoolStatus, BillingPlan, PLAN_COLORS } from '@/shared/config/constants';
+import { supabase } from '@/lib/supabase';
+import { SchoolStatus } from '@/shared/config/constants';
 
 interface Props {
   onBack: () => void;
 }
 
+// Reports view — pulls live aggregate from school_billing_installments
+// (the new flat billing table). Plan-distribution / engagement panels
+// were removed when the legacy BillingPlan + billing_years stack was
+// dropped — those breakdowns no longer have meaningful inputs.
 export const ReportsView: React.FC<Props> = ({ onBack }) => {
   const { schools, fetchSchools } = useSchoolStore();
-  const { billingYears, fetchAll } = useBillingStore();
+  const [billing, setBilling] = useState<{ totalPaid: number; totalDue: number; perSchoolPct: { name: string; pct: number }[] } | null>(null);
 
   useEffect(() => {
     fetchSchools();
-    fetchAll();
+    void loadBilling();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  const totalRevenue = billingYears.reduce((a, y) => a + y.totalPaid, 0);
-  const totalOutstanding = billingYears.reduce((a, y) => a + Math.max(0, y.outstanding), 0);
+  const loadBilling = async () => {
+    const { data, error } = await supabase
+      .from('school_billing_installments')
+      .select('school_id, amount, paid_amount');
+    if (error) return;
+    type Row = { school_id: string; amount: number; paid_amount: number };
+    const rows = (data ?? []) as Row[];
+    const perSchool = new Map<string, { paid: number; due: number }>();
+    let totalPaid = 0;
+    let totalDue = 0;
+    for (const r of rows) {
+      const cur = perSchool.get(r.school_id) ?? { paid: 0, due: 0 };
+      cur.paid += r.paid_amount; cur.due += r.amount;
+      perSchool.set(r.school_id, cur);
+      totalPaid += r.paid_amount;
+      totalDue += r.amount;
+    }
+    const nameById = new Map(schools.map(s => [s.id, s.name]));
+    const perSchoolPct = [...perSchool.entries()]
+      .map(([id, { paid, due }]) => ({
+        name: nameById.get(id) ?? 'Unknown',
+        pct: due > 0 ? Math.round((paid / due) * 100) : 0,
+      }))
+      .filter(e => e.pct > 0)
+      .sort((a, b) => b.pct - a.pct)
+      .slice(0, 6);
+    setBilling({ totalPaid, totalDue, perSchoolPct });
+  };
+
+  const totalRevenue = billing?.totalPaid ?? 0;
+  const totalOutstanding = Math.max(0, (billing?.totalDue ?? 0) - (billing?.totalPaid ?? 0));
   const totalStudents = schools.reduce((a, s) => a + s.studentCount, 0);
   const totalTeachers = schools.reduce((a, s) => a + s.teacherCount, 0);
   const activeSchools = schools.filter(s => s.status === SchoolStatus.ACTIVE).length;
@@ -28,29 +62,9 @@ export const ReportsView: React.FC<Props> = ({ onBack }) => {
     ? Math.round((totalRevenue / (totalRevenue + totalOutstanding)) * 100)
     : 0;
 
-  const planBreakdown = Object.values(BillingPlan).map(plan => ({
-    plan,
-    count: schools.filter(s => s.plan === plan).length,
-    pct: schools.length ? Math.round((schools.filter(s => s.plan === plan).length / schools.length) * 100) : 0,
-  }));
-
   const topSchools = [...schools]
     .sort((a, b) => b.studentCount - a.studentCount)
     .slice(0, 5);
-
-  // "Engagement" proxy: each school's collection ratio across its billing
-  // years. Higher ratio = healthier on-platform engagement (paying customer).
-  const engagement = schools
-    .map(s => {
-      const years = billingYears.filter(y => y.schoolId === s.id);
-      const paid = years.reduce((a, y) => a + y.totalPaid, 0);
-      const due = years.reduce((a, y) => a + y.totalDue, 0);
-      const pct = due > 0 ? Math.round((paid / due) * 100) : 0;
-      return { name: s.name, pct };
-    })
-    .filter(e => e.pct > 0)
-    .sort((a, b) => b.pct - a.pct)
-    .slice(0, 6);
 
   const kpis = [
     { label: 'Active Schools', value: `${activePct}%`, sub: `${activeSchools}/${totalSchools} on platform`, color: 'from-indigo-500 to-indigo-600', icon: Activity },
@@ -83,42 +97,17 @@ export const ReportsView: React.FC<Props> = ({ onBack }) => {
           ))}
         </div>
 
-        {/* Plan distribution */}
-        <div className="bg-white rounded-2xl border border-slate-100 shadow-sm p-4">
-          <div className="flex items-center gap-2 mb-4">
-            <Award size={16} className="text-amber-600" />
-            <h3 className="text-[11px] font-black uppercase tracking-widest text-slate-500">Plan Distribution</h3>
-          </div>
-          <div className="space-y-3">
-            {planBreakdown.map(({ plan, count, pct }) => (
-              <div key={plan}>
-                <div className="flex justify-between items-center mb-1">
-                  <div className="flex items-center gap-2">
-                    <span className={`text-[9px] font-black px-2 py-0.5 rounded-full uppercase tracking-widest ${PLAN_COLORS[plan]}`}>{plan}</span>
-                    <span className="text-xs font-bold text-slate-700">{count} school{count !== 1 ? 's' : ''}</span>
-                  </div>
-                  <span className="text-[10px] font-black text-slate-500">{pct}%</span>
-                </div>
-                <div className="w-full bg-slate-100 rounded-full h-2">
-                  <div className={`h-full rounded-full ${plan === BillingPlan.PREMIUM ? 'bg-amber-400' : plan === BillingPlan.STANDARD ? 'bg-blue-500' : 'bg-slate-400'}`}
-                    style={{ width: `${pct}%` }} />
-                </div>
-              </div>
-            ))}
-          </div>
-        </div>
-
-        {/* Platform engagement */}
+        {/* Per-school collection rate */}
         <div className="bg-white rounded-2xl border border-slate-100 shadow-sm p-4">
           <div className="flex items-center gap-2 mb-4">
             <Activity size={16} className="text-indigo-600" />
-            <h3 className="text-[11px] font-black uppercase tracking-widest text-slate-500">Platform Engagement</h3>
+            <h3 className="text-[11px] font-black uppercase tracking-widest text-slate-500">Collection Rate · Per School</h3>
           </div>
           <div className="space-y-3">
-            {engagement.length === 0 && (
+            {(!billing || billing.perSchoolPct.length === 0) && (
               <div className="text-xs text-slate-400 italic">No billing data yet</div>
             )}
-            {engagement.map(({ name, pct }) => (
+            {billing?.perSchoolPct.map(({ name, pct }) => (
               <div key={name}>
                 <div className="flex justify-between items-center mb-1">
                   <span className="text-xs font-bold text-slate-700 truncate max-w-[65%]">{name}</span>

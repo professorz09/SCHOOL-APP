@@ -20,7 +20,7 @@ import { SalaryLedger } from '@/roles/principal/components/SalaryLedger';
 import { AcademicYearManager } from '@/modules/academic-year/components/AcademicYearManager';
 import { StaffAttendanceManager } from '@/modules/attendance/components/StaffAttendanceManager';
 import { TransportManager } from '@/modules/transport/components/TransportManager';
-import { AttendanceHub } from '@/modules/attendance/components/AttendanceHub';
+import { StudentAttendanceManager } from '@/modules/attendance/components/StudentAttendanceManager';
 import { ToolsManager } from '@/roles/principal/components/ToolsManager';
 import { PrincipalExamsManager } from '@/modules/exams/components/PrincipalExamsManager';
 import { PromotionWizard } from '@/modules/academic-year/components/PromotionWizard';
@@ -76,7 +76,7 @@ export const PrincipalLayout: React.FC = () => {
   useEffect(() => { if (!isSubView) setView('DASHBOARD'); }, [isSubView]);
 
   // Always allow the academic year manager so the principal can create the first year.
-  if (view === 'YEAR_CLOSING') return <AcademicYearManager onBack={goBack} onNavigateToStaff={() => goTo('STAFF')} onNavigateToPromotion={() => goTo('PROMOTION')} />;
+  if (view === 'YEAR_CLOSING') return <AcademicYearManager onBack={goBack} onNavigateToPromotion={() => goTo('PROMOTION')} />;
 
   // Lock every other feature until at least one academic year has been created.
   if (!isLoading && academicYears.length === 0) {
@@ -126,7 +126,11 @@ export const PrincipalLayout: React.FC = () => {
   if (view === 'FEE_COLLECTIONS') return <ErrorBoundary label="Fee Collections"><FeeCollectionsHub onBack={goBack} /></ErrorBoundary>;
   if (view === 'SALARY_LEDGER') return <SalaryLedger           onBack={goBack} />;
   if (view === 'STAFF_ATTENDANCE') return <StaffAttendanceManager onBack={goBack} />;
-  if (view === 'ATTENDANCE')       return <AttendanceHub          onBack={goBack} />;
+  // ATTENDANCE tile (Students hub) goes straight to the student
+  // attendance manager — earlier this routed through AttendanceHub
+  // which forced a redundant Student/Staff picker. Staff attendance
+  // has its own tile + STAFF_ATTENDANCE route.
+  if (view === 'ATTENDANCE')       return <StudentAttendanceManager onBack={goBack} />;
   if (view === 'TRANSPORT_MGMT')   return <TransportManager        onBack={goBack} />;
   if (view === 'TOOLS')            return <ToolsManager            onBack={goBack} />;
   if (view === 'EXAMS')            return <PrincipalExamsManager   onBack={goBack} />;

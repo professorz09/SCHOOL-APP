@@ -325,10 +325,13 @@ export const PrincipalDashboard: React.FC<Props> = ({ onNavigate }) => {
       gradient: 'from-violet-500 to-fuchsia-500',
       ring: 'ring-violet-300',
       items: [
-        { icon: <Users size={20}/>,       label: 'Classes',   view: 'STUDENTS',    tint: 'bg-violet-50 text-violet-600' },
-        { icon: <UserCog size={20}/>,     label: 'Admission', view: 'ADMISSION',   tint: 'bg-indigo-50 text-indigo-600' },
-        { icon: <IndianRupee size={20}/>, label: 'Fees',      view: 'FEE_LEDGER',  tint: 'bg-emerald-50 text-emerald-600' },
-        { icon: <BookOpen size={20}/>,    label: 'Management',view: 'CLASS_MGMT',  tint: 'bg-purple-50 text-purple-600' },
+        { icon: <Users size={20}/>,         label: 'Classes',    view: 'STUDENTS',    tint: 'bg-violet-50 text-violet-600' },
+        { icon: <UserCog size={20}/>,       label: 'Admission',  view: 'ADMISSION',   tint: 'bg-indigo-50 text-indigo-600' },
+        { icon: <IndianRupee size={20}/>,   label: 'Fees',       view: 'FEE_LEDGER',  tint: 'bg-emerald-50 text-emerald-600' },
+        // Attendance moved from Academics → Students. It's a per-student
+        // action (mark roll, view a child's history) and lives more
+        // naturally with the rest of the student-centric tiles.
+        { icon: <CalendarCheck size={20}/>, label: 'Attendance', view: 'ATTENDANCE',  tint: 'bg-teal-50 text-teal-600' },
       ],
     },
     {
@@ -341,11 +344,10 @@ export const PrincipalDashboard: React.FC<Props> = ({ onNavigate }) => {
         { icon: <Users size={20}/>,         label: 'Staff List',  view: 'STAFF',            tint: 'bg-blue-50 text-blue-600' },
         { icon: <CalendarCheck size={20}/>, label: 'Attendance',  view: 'STAFF_ATTENDANCE', tint: 'bg-teal-50 text-teal-600' },
         { icon: <Wallet size={20}/>,        label: 'Expenses',    view: 'EXPENSES',         tint: 'bg-red-50 text-red-500' },
-        // Assets moved here from Academics — inventory / library are
-        // custodial duties (who issued, who returned), so it sits more
-        // naturally with the people-and-admin hub. Keeps ACADEMICS at 4
-        // tiles too.
-        { icon: <Library size={20}/>,       label: 'Assets',      view: 'ASSETS',           tint: 'bg-amber-50 text-amber-600' },
+        // Management (class roster admin — teacher allotment, section
+        // edits) is fundamentally a staff-management task ("who teaches
+        // what / which section"), so it sits with the Staff hub.
+        { icon: <BookOpen size={20}/>,      label: 'Management',  view: 'CLASS_MGMT',       tint: 'bg-purple-50 text-purple-600' },
       ],
     },
     {
@@ -355,10 +357,12 @@ export const PrincipalDashboard: React.FC<Props> = ({ onNavigate }) => {
       gradient: 'from-rose-500 to-pink-500',
       ring: 'ring-rose-300',
       items: [
-        { icon: <GraduationCap size={20}/>, label: 'Exams',     view: 'EXAMS',        tint: 'bg-rose-50 text-rose-600' },
-        { icon: <Clock size={20}/>,         label: 'Timetable', view: 'TIMETABLE',    tint: 'bg-fuchsia-50 text-fuchsia-600' },
-        { icon: <CalendarCheck size={20}/>, label: 'Attendance',view: 'ATTENDANCE',   tint: 'bg-teal-50 text-teal-600' },
-        { icon: <ArrowRight size={20}/>,    label: 'Promotion', view: 'PROMOTION',    tint: 'bg-emerald-50 text-emerald-600' },
+        { icon: <GraduationCap size={20}/>, label: 'Exams',     view: 'EXAMS',     tint: 'bg-rose-50 text-rose-600' },
+        { icon: <Clock size={20}/>,         label: 'Timetable', view: 'TIMETABLE', tint: 'bg-fuchsia-50 text-fuchsia-600' },
+        // Assets (library books / lab equipment) — academic resources,
+        // belongs with Academics. Custodial workflow stays the same.
+        { icon: <Library size={20}/>,       label: 'Assets',    view: 'ASSETS',    tint: 'bg-amber-50 text-amber-600' },
+        { icon: <ArrowRight size={20}/>,    label: 'Promotion', view: 'PROMOTION', tint: 'bg-emerald-50 text-emerald-600' },
       ],
     },
     {

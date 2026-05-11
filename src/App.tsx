@@ -293,22 +293,28 @@ export default function App() {
     : (session.role as AppRole);
 
   const renderDashboard = () => {
+    // Each role's top-level layout wraps in an ErrorBoundary so a render
+    // crash in any sub-view (FeeLedger, Settings, Tools, …) shows a
+    // recoverable error card instead of a white screen across the
+    // entire app.
+    let inner: React.ReactNode;
     switch (role) {
-      case 'SUPER_ADMIN': return <SuperAdminLayout />;
-      case 'PRINCIPAL':   return <PrincipalLayout />;
-      case 'TEACHER':     return <TeacherLayout />;
+      case 'SUPER_ADMIN': inner = <SuperAdminLayout />; break;
+      case 'PRINCIPAL':   inner = <PrincipalLayout />; break;
+      case 'TEACHER':     inner = <TeacherLayout />; break;
       // For STUDENT, selectedStudentId is fixed (own row); for PARENT it
       // changes when they pick a different child. Keying on it forces a
       // clean remount of every nested view so locally-cached student data
       // (FeesView, NoticesView, etc.) reloads for the newly selected child.
-      case 'STUDENT':     return <StudentLayout key={selectedStudentId ?? 'none'} />;
-      case 'DRIVER':      return <DriverLayout />;
+      case 'STUDENT':     inner = <StudentLayout key={selectedStudentId ?? 'none'} />; break;
+      case 'DRIVER':      inner = <DriverLayout />; break;
       // Any role outside the 5 supported logins (e.g., a future
       // non-teaching STAFF / PEON / ACCOUNTANT account) lands on a
       // Coming Soon placeholder instead of a blank screen so the user
       // knows the login worked but their dashboard isn't built yet.
-      default:            return <ComingSoonView role={session.role} onLogout={() => logout()} />;
+      default:            inner = <ComingSoonView role={session.role} onLogout={() => logout()} />;
     }
+    return <ErrorBoundary label={`${role} dashboard`}>{inner}</ErrorBoundary>;
   };
 
   const goHome = () => { setTab('HOME'); setSubView(false); };
@@ -399,6 +405,13 @@ export default function App() {
         </div>
       </div>
       <ToastContainer />
+      {/* These modals were only mounted in the desktop branch above —
+          mobile users (which is most of the app) silently lost every
+          confirmation prompt. Mount them here too so askConfirm /
+          askMobileConfirm / askReason actually render. */}
+      <ReasonPromptModal />
+      <ConfirmModal />
+      <MobileConfirmModal />
     </>
   );
 }

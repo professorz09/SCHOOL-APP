@@ -51,6 +51,16 @@ export interface StudentListItem {
   feeStatus: string;
   totalFee: number;
   paidFee: number;
+  /** Outstanding amount from installments whose due_date is on/before
+   *  today (OVERDUE + PARTIAL). Excludes future UPCOMING installments —
+   *  use this for "what does the school owe right now" KPIs. */
+  currentDue: number;
+  /** Future-schedule outstanding (lifetime exposure beyond today). */
+  upcomingTotal: number;
+  /** Earliest unpaid installment's due_date in the future (YYYY-MM-DD),
+   *  or null if no upcoming installment exists. Drives the "due in N
+   *  days" sort + label in the Upcoming filter tab. */
+  nextDueDate: string | null;
 }
 
 export interface StudentListPage {
@@ -323,6 +333,43 @@ export const studentService = {
       ((arData ?? []) as AcademicRecordRow[]).forEach(r => arMap.set(r.student_id, r));
     }
 
+    // ── Currently-due amount + next upcoming due date per student ──────
+    // total_fee / paid_fee aggregates include UPCOMING installments, so
+    // (total - paid) shows the *full* yearly schedule outstanding even on
+    // April 1st. We split into:
+    //   currentDue    — sum of (amount - paid - write_off) for installments
+    //                   whose due_date <= today (OVERDUE / PARTIAL_DUE)
+    //   nextDueDate   — earliest unpaid installment in the FUTURE for the
+    //                   "Upcoming" filter ("due in N days" sort)
+    //   upcomingTotal — sum of future unpaid balances (lifetime exposure)
+    // All three derive from a SINGLE fee_installments query so no N+1.
+    const currentDueMap     = new Map<string, number>();
+    const upcomingTotalMap  = new Map<string, number>();
+    const nextDueDateMap    = new Map<string, string>();
+    if (items.length > 0) {
+      const todayStr = new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Kolkata' });
+      const { data: instData } = await supabase
+        .from('fee_installments')
+        .select('student_id, amount, paid_amount, write_off_amount, due_date')
+        .in('student_id', items.map(s => s.id))
+        .neq('status', 'PAID');
+      type InstRow = {
+        student_id: string; amount: number; paid_amount: number;
+        write_off_amount: number; due_date: string;
+      };
+      for (const r of ((instData ?? []) as InstRow[])) {
+        const outstanding = Math.max(0, Number(r.amount) - Number(r.paid_amount) - Number(r.write_off_amount));
+        if (outstanding <= 0) continue;
+        if (r.due_date <= todayStr) {
+          currentDueMap.set(r.student_id, (currentDueMap.get(r.student_id) ?? 0) + outstanding);
+        } else {
+          upcomingTotalMap.set(r.student_id, (upcomingTotalMap.get(r.student_id) ?? 0) + outstanding);
+          const existing = nextDueDateMap.get(r.student_id);
+          if (!existing || r.due_date < existing) nextDueDateMap.set(r.student_id, r.due_date);
+        }
+      }
+    }
+
     if (opts.classFilter) {
       const [cls, sec] = opts.classFilter.split('-');
       items = items.filter(s => {
@@ -350,6 +397,11 @@ export const studentService = {
         feeStatus: life?.feeStatus ?? ar?.fee_status ?? 'PENDING',
         totalFee:  life?.totalFee  ?? Number(ar?.total_fee ?? 0),
         paidFee:   life?.paidFee   ?? Number(ar?.paid_fee  ?? 0),
+        // currentDue: only the past-due unpaid balance — drives the
+        // "Pending Dues" KPI and the defaulter filter in FeeCollectionsHub.
+        currentDue:    currentDueMap.get(s.id) ?? 0,
+        upcomingTotal: upcomingTotalMap.get(s.id) ?? 0,
+        nextDueDate:   nextDueDateMap.get(s.id) ?? null,
       };
     });
 
@@ -537,6 +589,60 @@ export const studentService = {
         { field: 'section', oldValue: oldSection, newValue: newSection },
       ],
     });
+  },
+
+  /**
+   * Returns true if the student has any non-zero payment on any
+   * installment in the given academic year. Used to gate mid-session
+   * class change — once a parent has paid even one rupee in the CURRENT
+   * year, the class is financially "anchored" and a reshuffle would
+   * orphan that payment's link to the original class structure.
+   *
+   * Scoped per-year on purpose:
+   *   • Past-year paid history is irrelevant — promotion flow rolls
+   *     students into a new academic_year_id with fresh installments,
+   *     so a fully-paid Class 5 student promoting to Class 6 must not
+   *     be blocked.
+   *   • Reassignment after grace + paid in current year routes through
+   *     TC, not this modal.
+   */
+  /**
+   * Batch: for the given student ids in the given academic year, returns
+   * the subset that has any outstanding (un-paid + un-written-off) amount.
+   * Used by the Promotion Wizard to red-tint rows where parents haven't
+   * fully cleared the source-year fees — flags collection follow-up
+   * before bumping the student to the next class. Single round-trip.
+   */
+  async unpaidStudentsInYear(
+    studentIds: string[], academicYearId: string,
+  ): Promise<Set<string>> {
+    if (studentIds.length === 0) return new Set();
+    const { data, error } = await supabase
+      .from('fee_installments')
+      .select('student_id, amount, paid_amount, write_off_amount')
+      .in('student_id', studentIds)
+      .eq('academic_year_id', academicYearId);
+    if (error) throw new Error(error.message);
+    const out = new Set<string>();
+    for (const r of (data ?? []) as {
+      student_id: string; amount: number; paid_amount: number; write_off_amount: number;
+    }[]) {
+      const balance = Number(r.amount) - Number(r.paid_amount) - Number(r.write_off_amount);
+      if (balance > 0) out.add(r.student_id);
+    }
+    return out;
+  },
+
+  async hasAnyPayment(studentId: string, academicYearId?: string): Promise<boolean> {
+    let q = supabase
+      .from('fee_installments')
+      .select('id', { count: 'exact', head: true })
+      .eq('student_id', studentId)
+      .gt('paid_amount', 0);
+    if (academicYearId) q = q.eq('academic_year_id', academicYearId);
+    const { count, error } = await q;
+    if (error) throw new Error(error.message);
+    return (count ?? 0) > 0;
   },
 
   /**

@@ -53,6 +53,7 @@ interface StaffRow {
   aadhaar_no: string | null;
   salary: number;
   joining_date: string | null;
+  salary_start_date: string | null;
   status: string;
   address: string | null;
   photo: string | null;
@@ -61,7 +62,7 @@ interface StaffRow {
   relieving_reason?: string | null;
 }
 
-const STAFF_FIELDS = 'id, user_id, name, role, subject, phone, email, aadhaar_no, salary, joining_date, status, address, photo, is_active, relieving_date, relieving_reason';
+const STAFF_FIELDS = 'id, user_id, name, role, subject, phone, email, aadhaar_no, salary, joining_date, salary_start_date, status, address, photo, is_active, relieving_date, relieving_reason';
 
 interface SalaryRow {
   id: string;
@@ -108,6 +109,7 @@ function rowToStaff(r: StaffRow, assignedClasses: string[] = [], salaryHistory?:
     aadhaarNo: r.aadhaar_no ?? '',
     salary: Number(r.salary),
     joiningDate: r.joining_date ?? '',
+    salaryStartDate: r.salary_start_date ?? '',
     status: (r.status as StaffStatus) ?? 'ACTIVE',
     assignedClasses,
     address: r.address ?? '',
@@ -212,6 +214,7 @@ export const staffService = {
       email:          input.email   || undefined,
       aadhaarNo:      input.aadhaarNo || undefined,
       joiningDate:    input.joiningDate || undefined,
+      salaryStartDate: input.salaryStartDate || undefined,
       status:         input.status,
       address:        input.address || undefined,
       photo:          input.photo   || undefined,
@@ -232,6 +235,7 @@ export const staffService = {
     if (input.aadhaarNo !== undefined) patch.aadhaar_no   = input.aadhaarNo;
     if (input.salary !== undefined)    patch.salary       = input.salary;
     if (input.joiningDate !== undefined) patch.joining_date = input.joiningDate;
+    if (input.salaryStartDate !== undefined) patch.salary_start_date = input.salaryStartDate;
     if (input.status !== undefined)    patch.status       = input.status;
     if (input.address !== undefined)   patch.address      = input.address;
     if (input.photo !== undefined)     patch.photo        = input.photo;
@@ -561,9 +565,13 @@ export const staffService = {
     // relievingDate). Clamping at relievingDate keeps ledger totals
     // semantically clean for relieved staff (no phantom months after exit).
     const fmt = (d: Date) => d.toLocaleString('en-IN', { month: 'long', year: 'numeric' });
-    const buildMonths = (joinIso: string, relieveIso: string | null): string[] => {
-      const join = joinIso ? new Date(joinIso) : start;
-      const from = join > start ? join : start;
+    // Lower bound is salary_start_date (when configured) — this is when
+    // the school *starts paying*, separate from joining_date. If the
+    // salary_start_date column is missing for legacy rows, we fall back
+    // to joining_date so behaviour matches the pre-0102 ledger.
+    const buildMonths = (salaryStartIso: string, joinIso: string, relieveIso: string | null): string[] => {
+      const lower = (salaryStartIso || joinIso) ? new Date(salaryStartIso || joinIso) : start;
+      const from = lower > start ? lower : start;
       const ceiling = today < end ? today : end;
       const relieve = relieveIso ? new Date(relieveIso) : null;
       const to = relieve && relieve < ceiling ? relieve : ceiling;
@@ -609,7 +617,7 @@ export const staffService = {
     };
 
     return staff.map(s => {
-      const months = buildMonths(s.joiningDate ?? '', s.relievingDate ?? null);
+      const months = buildMonths(s.salaryStartDate ?? '', s.joiningDate ?? '', s.relievingDate ?? null);
       const sHist = histByStaff.get(s.id) ?? [];
       return {
         staff: s,
