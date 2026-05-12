@@ -3,7 +3,7 @@ import { adminDb } from '../lib/db';
 import { ok, fail, ApiError, requireBody } from '../lib/helpers';
 import { requireAuth, requireRole } from '../middleware/auth';
 import {
-  generateSchoolBackup, assertBackupAllowed, logBackupSuccess,
+  generateSchoolBackup, logBackupSuccess,
   type BackupKind,
 } from '../lib/backup';
 
@@ -13,7 +13,11 @@ const SA = requireRole('SUPER_ADMIN');
 
 // ─── GET /api/admin/schools/:id/backup?kind=quick|full ───────────────────────
 // Per-school ZIP backup. Streamed to the caller (not stored on Supabase).
-// Rate-limited via audit_logs: QUICK = 1 / 24h, FULL = 1 / 7d.
+// Super-admin path is intentionally UNRATE-LIMITED — the platform owner
+// may legitimately need to pull fresh backups of any tenant on demand
+// (support escalation, migration, dispute resolution). The same util
+// is also exposed to principals via /api/principal/backup where the
+// 1-per-24h (quick) / 1-per-7d (full) cap is enforced.
 adminSchoolsRouter.get('/:id/backup', requireAuth, SA, async (req, res) => {
   try {
     const schoolId = String(req.params.id ?? '');
@@ -23,7 +27,6 @@ adminSchoolsRouter.get('/:id/backup', requireAuth, SA, async (req, res) => {
       throw new ApiError(400, 'kind must be "quick" or "full"');
     }
 
-    await assertBackupAllowed(schoolId, rawKind);
     const result = await generateSchoolBackup(schoolId, rawKind);
     await logBackupSuccess(schoolId, req.user.id, rawKind, result.zipBytes.length);
 
