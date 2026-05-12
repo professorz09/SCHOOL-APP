@@ -183,15 +183,10 @@ class AuthService {
       throw new Error('Account is deactivated.');
     }
 
-    // Best-effort: audit trail + last_login update. Failures must not block login.
-    try {
-      await supabase.rpc('log_audit', {
-        p_action: 'login',
-        p_entity_type: 'user',
-        p_entity_id: profile.id,
-        p_details: { role: profile.role, mobile_number: profile.mobile_number },
-      });
-    } catch { /* ignore */ }
+    // last_login is enough for "when did this user last access" — we don't
+    // need an audit_logs row per login. Supabase Auth (auth.audit_log_entries)
+    // already records every sign-in internally; duplicating into our
+    // audit_logs added thousands of rows/month with no incremental value.
     try {
       await supabase.from('users').update({ last_login: new Date().toISOString() }).eq('id', profile.id);
     } catch { /* ignore */ }

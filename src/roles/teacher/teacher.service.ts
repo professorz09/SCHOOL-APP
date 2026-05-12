@@ -602,9 +602,8 @@ export const teacherService = {
       })),
     });
 
-    await logAudit('attendance_submitted', 'attendance_records', res.attendanceId, {
-      sectionId, date, present: res.present, absent: res.absent, total: res.total,
-    });
+    // attendance_submitted audit removed — high-volume, low-signal. See
+    // attendance.service.ts for the same change rationale.
     return { id: res.attendanceId };
   },
 

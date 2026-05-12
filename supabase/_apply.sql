@@ -13172,3 +13172,33 @@ DROP POLICY IF EXISTS students_driver_select ON public.students;
 CREATE POLICY students_driver_select ON public.students
   FOR SELECT
   USING (id = ANY(public.driver_student_ids()));
+
+
+-- =============================================================
+-- 0121_audit_logs_retention.sql
+-- =============================================================
+-- 90-day retention cleanup for audit_logs. Function returns INT (deleted
+-- row count) so the weekly Vercel cron can log a metric line.
+
+CREATE OR REPLACE FUNCTION public.cleanup_old_audit_logs(p_days INT DEFAULT 90)
+RETURNS INT
+LANGUAGE plpgsql SECURITY DEFINER SET search_path = public AS $$
+DECLARE
+  v_deleted INT;
+BEGIN
+  IF p_days IS NULL OR p_days < 1 THEN
+    RAISE EXCEPTION 'cleanup_old_audit_logs: p_days must be >= 1';
+  END IF;
+
+  WITH del AS (
+    DELETE FROM public.audit_logs
+     WHERE created_at < NOW() - (p_days || ' days')::INTERVAL
+    RETURNING id
+  )
+  SELECT count(*)::INT INTO v_deleted FROM del;
+
+  RETURN COALESCE(v_deleted, 0);
+END $$;
+
+REVOKE EXECUTE ON FUNCTION public.cleanup_old_audit_logs(INT) FROM PUBLIC;
+GRANT  EXECUTE ON FUNCTION public.cleanup_old_audit_logs(INT) TO service_role;

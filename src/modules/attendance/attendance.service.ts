@@ -286,11 +286,10 @@ export const sharedAttendance = {
       date,
       records: students.map(s => ({ studentId: s.id, status: s.status })),
     });
-    await logAudit('attendance_submitted', 'attendance_records', res.attendanceId, {
-      sectionId, date,
-      present: res.present, absent: res.absent,
-      holiday: res.holiday ?? 0, half: res.half ?? 0, total: res.total,
-    });
+    // attendance_submitted audit removed — fires per class per day (20+
+    // rows/day per school). The attendance_records row itself + the
+    // approval_status flow already capture who/when/what; an extra
+    // audit_logs entry duplicated that data and dominated total storage.
     // Returning a value (instead of void) so callers' `if (result ===
     // undefined) return;` guards (used for editGuard.gate's "user
     // cancelled" sentinel) don't false-positive on a successful save.
