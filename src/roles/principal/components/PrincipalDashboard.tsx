@@ -104,7 +104,7 @@ export const PrincipalDashboard: React.FC<Props> = ({ onNavigate }) => {
   // complaints, etc.
   const [attentionItems, setAttentionItems] = useState<Array<{
     id: string;
-    kind: 'APPROVAL' | 'COMPLAINT';
+    kind: 'APPROVAL' | 'COMPLAINT' | 'FEE_UPLOAD';
     title: string;
     sub: string;
     createdAt: string;
@@ -220,11 +220,15 @@ export const PrincipalDashboard: React.FC<Props> = ({ onNavigate }) => {
       const monthStart = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-01`;
       const monthEnd   = today;
       await transportService.refreshAll();
-      const [students, staff, complaints, approvals, allVehicles, attRes, dashStats, monthPayRes] = await Promise.all([
+      const [students, staff, complaints, approvals, feeUploads, allVehicles, attRes, dashStats, monthPayRes] = await Promise.all([
         studentService.getAll(),
         staffService.getAll(),
         principalService.getComplaints(),
         principalService.getApprovals(),
+        // Pending parent-submitted fee uploads — these block fee allocation
+        // until the principal approves/rejects. Pulled with status filter so
+        // we never read more than the queue we actually need to surface.
+        principalService.getFeePaymentUploads('PENDING').catch(() => []),
         transportService.getVehicles(),
         supabase
           .from('attendance_records')
@@ -300,7 +304,14 @@ export const PrincipalDashboard: React.FC<Props> = ({ onNavigate }) => {
           sub: `${c.isAnonymous ? 'Anonymous' : c.fromName}${c.fromClass ? ` · ${c.fromClass}` : ''} · ${c.from}`,
           createdAt: c.createdAt,
         }));
-      const merged = [...attApprovals, ...attComplaints]
+      const attFeeUploads = feeUploads.map(f => ({
+        id: f.id,
+        kind: 'FEE_UPLOAD' as const,
+        title: `Fee payment · ₹${Number(f.amount).toLocaleString('en-IN')}`,
+        sub: `${f.studentName}${f.admissionNo ? ` · ${f.admissionNo}` : ''} · ${f.description || 'Fee Payment'} · ${f.transactionId}`,
+        createdAt: f.submittedAt,
+      }));
+      const merged = [...attApprovals, ...attComplaints, ...attFeeUploads]
         .sort((a, b) => (b.createdAt ?? '').localeCompare(a.createdAt ?? ''))
         .slice(0, 6);
       setAttentionItems(merged);
@@ -620,7 +631,7 @@ export const PrincipalDashboard: React.FC<Props> = ({ onNavigate }) => {
               </div>
               <div>
                 <h2 className="text-sm lg:text-base font-black text-slate-900 uppercase tracking-tight">Needs Attention</h2>
-                <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">Pending approvals & complaints</p>
+                <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">Approvals · complaints · fee uploads</p>
               </div>
             </div>
             <span className="text-[10px] font-black text-rose-700 bg-rose-50 px-2 py-1 rounded-full uppercase tracking-widest">
@@ -629,25 +640,40 @@ export const PrincipalDashboard: React.FC<Props> = ({ onNavigate }) => {
           </div>
           <div className="space-y-1.5">
             {attentionItems.map(item => {
-              const isApproval = item.kind === 'APPROVAL';
+              const target =
+                item.kind === 'APPROVAL'   ? 'APPROVALS' :
+                item.kind === 'COMPLAINT'  ? 'COMPLAINTS' :
+                'FEE_COLLECTIONS';
+              const iconClass =
+                item.kind === 'APPROVAL'   ? 'bg-indigo-50 text-indigo-600' :
+                item.kind === 'COMPLAINT'  ? 'bg-rose-50 text-rose-500' :
+                'bg-emerald-50 text-emerald-600';
+              const pillClass =
+                item.kind === 'APPROVAL'   ? 'bg-white text-indigo-600 border-indigo-200' :
+                item.kind === 'COMPLAINT'  ? 'bg-white text-rose-600 border-rose-200' :
+                'bg-white text-emerald-600 border-emerald-200';
+              const pillText =
+                item.kind === 'APPROVAL'   ? 'Approve' :
+                item.kind === 'COMPLAINT'  ? 'Open' :
+                'Review';
+              const Icon =
+                item.kind === 'APPROVAL'   ? ClipboardCheck :
+                item.kind === 'COMPLAINT'  ? CircleAlert :
+                IndianRupee;
               return (
                 <button
                   key={`${item.kind}:${item.id}`}
-                  onClick={() => onNavigate(isApproval ? 'APPROVALS' : 'COMPLAINTS')}
+                  onClick={() => onNavigate(target)}
                   className="w-full flex items-center gap-3 px-3 py-2.5 rounded-xl border border-slate-100 bg-slate-50 hover:bg-slate-100 text-left transition-colors">
-                  <div className={`w-9 h-9 rounded-xl flex items-center justify-center shrink-0 ${
-                    isApproval ? 'bg-indigo-50 text-indigo-600' : 'bg-rose-50 text-rose-500'
-                  }`}>
-                    {isApproval ? <ClipboardCheck size={14}/> : <CircleAlert size={14}/>}
+                  <div className={`w-9 h-9 rounded-xl flex items-center justify-center shrink-0 ${iconClass}`}>
+                    <Icon size={14}/>
                   </div>
                   <div className="flex-1 min-w-0">
                     <p className="text-xs font-black text-slate-900 truncate">{item.title}</p>
                     <p className="text-[10px] font-bold text-slate-500 truncate">{item.sub}</p>
                   </div>
-                  <span className={`text-[9px] font-black px-2 py-1 rounded-full uppercase tracking-widest shrink-0 border ${
-                    isApproval ? 'bg-white text-indigo-600 border-indigo-200' : 'bg-white text-rose-600 border-rose-200'
-                  }`}>
-                    {isApproval ? 'Approve' : 'Open'}
+                  <span className={`text-[9px] font-black px-2 py-1 rounded-full uppercase tracking-widest shrink-0 border ${pillClass}`}>
+                    {pillText}
                   </span>
                 </button>
               );
