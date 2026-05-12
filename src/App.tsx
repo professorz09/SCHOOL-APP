@@ -400,7 +400,18 @@ export default function App() {
           {/* Roles whose dashboard renders its own greeting block (with extra
               context like school name or active-year chip) should suppress the
               generic Header so the two don't stack. */}
-          {tab === 'HOME' && !isSubView && role !== 'STUDENT' && role !== 'PRINCIPAL' && role !== 'TEACHER' && <Header role={role} />}
+          {/* SUPER_ADMIN renders its own greeting inside SADashboard; DRIVER's
+              layout owns the status hero. STUDENT / PRINCIPAL / TEACHER also
+              ship their own headers. Keeping the generic sticky Header for
+              none of them — it was adding a redundant, rigid bar above each
+              page's own visual header. */}
+          {tab === 'HOME' && !isSubView
+            && role !== 'STUDENT'
+            && role !== 'PRINCIPAL'
+            && role !== 'TEACHER'
+            && role !== 'SUPER_ADMIN'
+            && role !== 'DRIVER'
+            && <Header role={role} />}
 
           <main className="flex-1 overflow-y-auto hide-scrollbar">
             <Suspense fallback={<ChunkLoading />}>
