@@ -126,18 +126,24 @@ export const TransportView: React.FC<Props> = ({ onBack }) => {
             </div>
             <div>
               <div className="text-[9px] font-black uppercase tracking-widest text-slate-400">Driver</div>
-              <div className="font-black text-sm text-white mt-0.5">{data.vehicle.driverName}</div>
+              <div className="font-black text-sm text-white mt-0.5">
+                {data.vehicle.driverName && data.vehicle.driverName !== '—' ? data.vehicle.driverName : 'Not assigned'}
+              </div>
+              {/* Tap-to-call driver phone right here so parents don't have
+                  to scroll to a separate "Call Driver" button when the bus
+                  is running late. Only rendered when a phone is actually
+                  set; falls back to '—' otherwise. */}
+              {data.vehicle.driverPhone && data.vehicle.driverPhone !== '—' ? (
+                <a href={`tel:${data.vehicle.driverPhone}`}
+                  className="inline-flex items-center gap-1.5 mt-1.5 text-[11px] font-black text-emerald-300 hover:text-emerald-200">
+                  <Phone size={12} /> {data.vehicle.driverPhone}
+                </a>
+              ) : (
+                <div className="text-[11px] font-bold text-slate-500 mt-1">No phone on file</div>
+              )}
             </div>
           </div>
         </div>
-
-        {/* Call driver */}
-        {data.vehicle.driverId && (
-          <a href={`tel:${data.vehicle.driverPhone}`}
-            className="flex items-center justify-center gap-2 bg-white border border-slate-200 rounded-2xl py-3 text-sm font-black text-slate-700 active:scale-95 transition-transform shadow-sm">
-            <Phone size={16} className="text-emerald-500" /> Call Driver: {data.vehicle.driverPhone}
-          </a>
-        )}
 
         {/* Route stops */}
         <div className="bg-white rounded-2xl border border-slate-100 shadow-sm p-4">
