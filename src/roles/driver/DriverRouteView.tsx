@@ -7,7 +7,7 @@ import { supabase } from '@/lib/supabase';
 
 export const DriverRouteView: React.FC = () => {
   const session = useAuthStore(s => s.session);
-  const { showToast } = useUIStore();
+  const { showToast, askConfirm } = useUIStore();
   const [vehicle, setVehicle] = useState<TransportVehicle | null>(null);
   const [stops, setStops] = useState<RouteStop[]>([]);
   const [editingStopId, setEditingStopId] = useState<string | null>(null);
@@ -28,17 +28,6 @@ export const DriverRouteView: React.FC = () => {
   // edit/delete/reorder controls on each stop. Default OFF so the route
   // can't be mutated accidentally during a trip.
   const [editMode, setEditMode] = useState(false);
-  // Quick-add inline form — when the big "Add at Current Location" button
-  // is tapped we set this to a pending object, fire the GPS request in the
-  // background, and only ask the driver for a stop name. Save resolves the
-  // captured coords + the typed name into a real stop.
-  const [pendingAdd, setPendingAdd] = useState<{
-    name: string;
-    capturedLat: number | null;
-    capturedLng: number | null;
-    capturing: boolean;
-    error: string | null;
-  } | null>(null);
   // localStops is the optimistic source of truth for the UI. Every
   // mutation (add / delete / reorder) updates this list synchronously so
   // the driver sees the change instantly; the server call runs in the
@@ -126,75 +115,63 @@ export const DriverRouteView: React.FC = () => {
     );
   };
 
-  // One-tap quick add — the dominant flow for drivers physically at a
-  // new stop. Tap the big button → inline form opens with a single name
-  // input; GPS fires in the background. The driver types the stop name
-  // and saves. Coords are auto-filled from the captured position.
-  const handleQuickAddHere = () => {
-    if (!vehicle) return;
+  // Single-tap quick add — captures GPS, drops an optimistic "Stop N" row
+  // into the list as soon as coords arrive, then writes to the server in
+  // the background. No inline form, no name prompt. Driver renames later
+  // via the pencil if they want a friendlier label. Button stays disabled
+  // for the entire request so a frustrated double-tap can't fire twice.
+  const handleQuickAddHere = async () => {
+    if (!vehicle || savingAdd) return;
     if (!navigator.geolocation) {
       showToast('GPS not supported on this device', 'error');
       return;
     }
-    setPendingAdd({ name: '', capturedLat: null, capturedLng: null, capturing: true, error: null });
-    navigator.geolocation.getCurrentPosition(
-      (pos) => {
-        setPendingAdd(prev => prev ? {
-          ...prev,
-          capturedLat: +pos.coords.latitude.toFixed(6),
-          capturedLng: +pos.coords.longitude.toFixed(6),
-          capturing: false,
-          error: null,
-        } : prev);
-      },
-      (err) => {
-        const msg = err.code === err.PERMISSION_DENIED
-          ? 'Location permission denied — enable in browser settings'
-          : 'Could not get location. Try again.';
-        setPendingAdd(prev => prev ? { ...prev, capturing: false, error: msg } : prev);
-      },
-      { enableHighAccuracy: true, timeout: 8000 },
-    );
-  };
+    setSavingAdd(true);
 
-  const savePendingAdd = async () => {
-    if (!vehicle || !pendingAdd || savingAdd) return;
-    if (!pendingAdd.name.trim()) {
-      showToast('Stop ka naam likhna zaroori hai', 'error');
-      return;
-    }
-    if (pendingAdd.capturedLat === null || pendingAdd.capturedLng === null) {
-      showToast('GPS capture nahi hua — Cancel karke phir try karo', 'error');
-      return;
-    }
+    // Wrap geolocation in a promise so we can use try/finally cleanly.
+    const pos = await new Promise<GeolocationPosition | null>((resolve) => {
+      navigator.geolocation.getCurrentPosition(
+        (p) => resolve(p),
+        (err) => {
+          showToast(
+            err.code === err.PERMISSION_DENIED
+              ? 'Location permission denied — enable in browser settings'
+              : 'Could not get GPS. Try again.',
+            'error',
+          );
+          resolve(null);
+        },
+        { enableHighAccuracy: true, timeout: 8000 },
+      );
+    });
+    if (!pos) { setSavingAdd(false); return; }
+
+    const lat = +pos.coords.latitude.toFixed(6);
+    const lng = +pos.coords.longitude.toFixed(6);
     const now = new Date();
     const hh = String(now.getHours()).padStart(2, '0');
     const mm = String(now.getMinutes()).padStart(2, '0');
-
-    // Optimistic add — render the new stop instantly with a temp id, close
-    // the form, fire the server call. On success the reload() swap pulls
-    // the real row in; on error we yank the placeholder out and toast.
     const tempId = `temp-${Date.now()}`;
+    const autoName = `Stop ${localStops.length + 1}`;
     const placeholder: RouteStop = {
       id: tempId,
-      name: pendingAdd.name.trim(),
+      name: autoName,
       estimatedTime: `${hh}:${mm}`,
-      lat: pendingAdd.capturedLat,
-      lng: pendingAdd.capturedLng,
+      lat, lng,
     };
+    // Optimistic insert — driver sees the row appear immediately.
     setLocalStops(prev => [...prev, placeholder]);
-    const stopName = pendingAdd.name.trim();
-    setPendingAdd(null);
-    setSavingAdd(true);
+
     try {
       await transportService.addStop(vehicle.id, {
-        name: stopName,
+        name: autoName,
         estimatedTime: `${hh}:${mm}`,
-        lat: placeholder.lat,
-        lng: placeholder.lng,
+        lat, lng,
       });
       reload();
+      showToast(`${autoName} added — pencil tap karke rename kar sakte ho`, 'success');
     } catch (e) {
+      // Rollback the placeholder if the server didn't accept it.
       setLocalStops(prev => prev.filter(s => s.id !== tempId));
       showToast(e instanceof Error ? e.message : 'Failed to add stop', 'error');
     } finally {
@@ -277,10 +254,20 @@ export const DriverRouteView: React.FC = () => {
     </div>
   );
 
-  // No confirm on delete — driver wants smooth no-friction UX. The
-  // optimistic remove is instant and a rollback toast covers errors;
-  // re-adding by mistake is still cheap (Add at Current Location).
-  const confirmDelete = (stop: RouteStop) => {
+  // Custom in-app confirm via the shared ConfirmModal (replaces the ugly
+  // browser-native window.confirm which on mobile Codespaces showed the
+  // hostname as the dialog title). Double-trigger is prevented because
+  // handleDeleteStop short-circuits when the row is already in deletingIds.
+  const confirmDelete = async (stop: RouteStop) => {
+    if (deletingIds.has(stop.id)) return;
+    const ok = await askConfirm({
+      title: `Delete "${stop.name}"?`,
+      message: 'Ye stop route se hat jayega. Phir se chahiye to GPS se add karna padega.',
+      confirmLabel: 'Delete',
+      cancelLabel: 'Keep',
+      destructive: true,
+    });
+    if (!ok) return;
     void handleDeleteStop(stop.id);
   };
 
@@ -290,7 +277,7 @@ export const DriverRouteView: React.FC = () => {
       {/* Edit Mode toggle — prominent banner at the top. OFF = clean
           read-only timeline (default during trips). ON = adds the big
           GPS-add button + per-stop edit/delete/reorder controls. */}
-      <button onClick={() => { setEditMode(m => !m); setPendingAdd(null); setEditingStopId(null); }}
+      <button onClick={() => { setEditMode(m => !m); setEditingStopId(null); }}
         className={`w-full flex items-center justify-between px-5 py-4 rounded-2xl shadow-sm transition-all active:scale-[0.99] ${
           editMode
             ? 'bg-amber-50 border-2 border-amber-300 text-amber-800'
@@ -343,66 +330,21 @@ export const DriverRouteView: React.FC = () => {
         )}
       </div>
 
-      {/* Primary CTA — only visible in edit mode. Tap captures GPS in the
-          background and opens the inline name-only form below. Disabled
-          while an earlier add is still in flight so a rage-tap doesn't
-          stack two pending forms. */}
-      {editMode && !pendingAdd && (
+      {/* Primary CTA — one tap captures GPS, auto-inserts "Stop N" into
+          the list, and writes to server in the background. Stays disabled
+          throughout the request so a second tap can't fire a duplicate. */}
+      {editMode && (
         <>
           <button onClick={handleQuickAddHere}
             disabled={savingAdd}
-            className="w-full flex items-center justify-center gap-3 py-5 rounded-2xl font-black text-sm uppercase tracking-widest text-white shadow-lg shadow-emerald-500/30 active:scale-[0.98] transition-all bg-gradient-to-br from-emerald-500 to-emerald-700 disabled:opacity-60 disabled:cursor-not-allowed">
-            <MapPin size={20} />
-            {savingAdd ? 'Saving previous stop…' : 'Add Stop at Current Location'}
+            className="w-full flex items-center justify-center gap-3 py-5 rounded-2xl font-black text-sm uppercase tracking-widest text-white shadow-lg shadow-emerald-500/30 active:scale-[0.98] transition-all bg-gradient-to-br from-emerald-500 to-emerald-700 disabled:opacity-60 disabled:cursor-not-allowed disabled:shadow-none">
+            <MapPin size={20} className={savingAdd ? 'animate-pulse' : ''}/>
+            {savingAdd ? 'Adding stop…' : 'Add Stop at Current Location'}
           </button>
           <p className="text-[10px] font-bold text-slate-400 -mt-2 text-center leading-relaxed">
-            GPS apne aap capture hoga — sirf stop ka naam likhna hai.
+            Ek baar tap karo — GPS apne aap capture hoga, "Stop N" naam se add ho jayega. Pencil tap karke rename kar lena.
           </p>
         </>
-      )}
-
-      {/* Inline quick-add form — appears the moment the big button is tapped.
-          GPS capture runs in the background and the driver only fills the
-          stop name. Coords show as a tiny status line so they know GPS
-          locked. */}
-      {pendingAdd && (
-        <div className="bg-emerald-50/70 border-2 border-emerald-200 rounded-2xl p-4 space-y-3">
-          <div className="flex items-center justify-between">
-            <p className="text-[10px] font-black uppercase tracking-widest text-emerald-700">New Stop</p>
-            <button onClick={() => setPendingAdd(null)} className="text-emerald-700 p-1">
-              <X size={16} />
-            </button>
-          </div>
-          <input
-            value={pendingAdd.name}
-            onChange={e => setPendingAdd(prev => prev ? { ...prev, name: e.target.value } : prev)}
-            placeholder="Stop ka naam (e.g. Hariomnagar)"
-            autoFocus
-            className="w-full border border-emerald-200 bg-white rounded-xl px-4 py-3 text-sm font-bold outline-none focus:border-emerald-500" />
-          <div className={`flex items-center gap-2 text-[11px] font-bold ${
-            pendingAdd.error ? 'text-rose-600' :
-            pendingAdd.capturing ? 'text-amber-700' :
-            'text-emerald-700'
-          }`}>
-            <MapPin size={13} />
-            {pendingAdd.error
-              ? pendingAdd.error
-              : pendingAdd.capturing
-                ? 'GPS capture ho raha hai…'
-                : `GPS captured · ${pendingAdd.capturedLat?.toFixed(5)}, ${pendingAdd.capturedLng?.toFixed(5)}`}
-          </div>
-          <div className="flex gap-2">
-            <button onClick={() => setPendingAdd(null)}
-              className="flex-1 py-3 bg-white border border-slate-200 text-slate-700 font-black rounded-xl">
-              Cancel
-            </button>
-            <button onClick={savePendingAdd}
-              disabled={pendingAdd.capturing || !!pendingAdd.error || !pendingAdd.name.trim() || savingAdd}
-              className="flex-1 py-3 bg-emerald-600 text-white font-black rounded-xl flex items-center justify-center gap-1.5 disabled:opacity-50 disabled:cursor-not-allowed">
-              <Check size={15} /> {savingAdd ? 'Saving…' : 'Save Stop'}
-            </button>
-          </div>
-        </div>
       )}
 
       {/* Stops List */}
