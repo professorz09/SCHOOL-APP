@@ -384,27 +384,26 @@ export const StudentsManager: React.FC<Props> = ({
   useEffect(() => { setClassRosterShown(PAGE_SIZE); }, [selectedClass, selectedSection, search]);
 
   const handleCreate = async () => {
-    if (!form.name || !form.admissionNo) {
-      showToast('Name and admission no. required', 'error');
-      return;
-    }
-    // Login Mobile is now an explicit field — separate from contact
-    // phones. Fall back to father / mother / guardian only if the
-    // user didn't fill it (gentle ramp for older muscle memory).
+    // Aggregate ALL missing-field problems first so the principal sees a
+    // single clear list instead of fixing one issue, tapping submit, and
+    // discovering the next one. Order matches form layout so the toast
+    // message reads top-to-bottom of the screen.
+    const missing: string[] = [];
+    if (!form.name?.trim())                              missing.push('Student name');
+    if (!form.admissionNo?.trim())                       missing.push('Admission no.');
     const loginRaw = (form.loginPhone || form.fatherPhone || form.motherPhone || form.guardianPhone || '').trim();
-    if (!loginRaw) {
-      showToast('Login Mobile is required (parent uses this to log in)', 'error');
+    if (!loginRaw)                                        missing.push('Login mobile');
+    if (!form.fatherName?.trim() && !form.motherName?.trim()) missing.push('Father or Mother name');
+    if (!form.dob)                                        missing.push('Date of birth');
+    if (!form.gender)                                     missing.push('Gender');
+    if (missing.length > 0) {
+      // Jump back to step 1 so all mandatory fields are visible.
+      setAdmStep(1);
+      showToast(`Yeh fields chahiye: ${missing.join(', ')}`, 'error');
       return;
     }
-    if (!form.fatherName?.trim() && !form.motherName?.trim()) {
-      showToast('At least one parent name is required', 'error');
-      return;
-    }
-    // Admission date sanity. Backdate allowed (paperwork delays
-    // happen), but tomorrow's date is rejected — admission is an event
-    // that has already occurred. Empty input falls back to today via
-    // the onChange handler on the input, but guard here too in case
-    // the form state is mutated elsewhere.
+    // Date sanity checks — these are *format* / range errors rather than
+    // "missing" so they keep their own focused toasts.
     if (form.admissionDate) {
       const adm = new Date(form.admissionDate);
       const today = new Date(todayIST());
@@ -416,24 +415,7 @@ export const StudentsManager: React.FC<Props> = ({
         return;
       }
     } else {
-      // Keep payload consistent — empty admission date never reaches the server.
       setForm(f => ({ ...f, admissionDate: todayIST() }));
-    }
-    // DOB is mandatory — without it, ID cards / TC / Bonafide all
-    // print "—" and the student record can't pass downstream age
-    // checks (RTE eligibility, exam class mapping). Reject blank +
-    // validate the entered date.
-    if (!form.dob) {
-      showToast('Date of birth is required', 'error');
-      return;
-    }
-    // Gender is mandatory — earlier defaulted to MALE silently, so
-    // skipping the dropdown saved everyone as male. Now require an
-    // explicit choice (MALE / FEMALE / OTHER) so school records are
-    // accurate from day one.
-    if (!form.gender) {
-      showToast('Gender is required', 'error');
-      return;
     }
     {
       const dob = new Date(form.dob);
@@ -1352,6 +1334,24 @@ export const StudentsManager: React.FC<Props> = ({
 
     return (
       <div className="w-full bg-slate-50 flex flex-col animate-in slide-in-from-right-8 duration-300">
+        {/* Submit overlay — covers the whole screen while the network round
+            trip is in flight. Stops the principal from tapping the button
+            twice (which used to fire two parallel creates) and gives a
+            clear visual "yes the app is working, hang tight" instead of
+            the silent "hang" feeling. Backdrop intercepts every touch. */}
+        {isSubmitting && (
+          <div className="fixed inset-0 z-50 bg-slate-900/40 backdrop-blur-sm flex items-center justify-center animate-in fade-in duration-150">
+            <div className="bg-white rounded-2xl shadow-2xl px-8 py-6 flex flex-col items-center gap-3 max-w-xs">
+              <div className="w-10 h-10 border-4 border-indigo-200 border-t-indigo-600 rounded-full animate-spin"/>
+              <p className="font-black text-slate-900 text-sm">
+                {mode === 'TEACHER_DRAFT' ? 'Submitting draft…' : 'Admitting student…'}
+              </p>
+              <p className="text-[11px] font-bold text-slate-500 text-center leading-relaxed">
+                Parent account, fee schedule, audit log set up ho rahe hain. 5–10 second lagega.
+              </p>
+            </div>
+          </div>
+        )}
         <div className="sticky top-0 z-10 bg-white border-b border-slate-100 shadow-sm">
           <div className="px-4 pt-4 pb-3 flex items-center justify-between">
             <div className="flex items-center gap-3">

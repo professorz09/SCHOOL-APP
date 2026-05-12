@@ -642,21 +642,23 @@ export const StaffManager: React.FC<Props> = ({ onBack }) => {
   const remainingStaff = filtered.length - visibleStaff.length;
 
   const handleCreate = async () => {
-    if (!form.name.trim()) { showToast('Staff name required', 'error'); return; }
-    if (form.name.trim().length < 2) {
-      showToast('Staff name kam se kam 2 letters ka ho', 'error'); return;
+    // Aggregate every missing-field check into one banner-style toast so the
+    // principal sees the full to-do list at once, not the click → fix → click
+    // → fix loop the old code created.
+    const missing: string[] = [];
+    if (!form.name?.trim() || form.name.trim().length < 2) missing.push('Staff name (min 2 letters)');
+    if (!Number.isFinite(form.salary) || form.salary <= 0) missing.push('Monthly salary');
+    if (!form.joiningDate)                                 missing.push('Joining date');
+    if (!form.salaryStartDate)                             missing.push('First salary month');
+    if (missing.length > 0) {
+      showToast(`Yeh fields chahiye: ${missing.join(', ')}`, 'error');
+      return;
     }
-    if (!Number.isFinite(form.salary) || form.salary <= 0 || form.salary > 10_000_000) {
-      showToast('Monthly salary must be between ₹1 and ₹1,00,00,000', 'error'); return;
+    if (form.salary > 10_000_000) {
+      showToast('Salary ₹1,00,00,000 se zyada nahi ho sakti', 'error'); return;
     }
     if (!Number.isInteger(form.salary)) {
-      showToast('Salary must be a whole rupee value', 'error'); return;
-    }
-    if (!form.joiningDate) {
-      showToast('Joining date required', 'error'); return;
-    }
-    if (!form.salaryStartDate) {
-      showToast('First salary month required', 'error'); return;
+      showToast('Salary whole rupee value me likhna', 'error'); return;
     }
     // Sanity: first-salary-from cannot be before joining date.
     if (form.salaryStartDate < form.joiningDate) {
@@ -1139,6 +1141,21 @@ export const StaffManager: React.FC<Props> = ({ onBack }) => {
   // ─── CREATE view ───────────────────────────────────────────────────────────
   if (view === 'CREATE') return (
     <div className="w-full bg-slate-50 flex flex-col animate-in slide-in-from-right-8 duration-300">
+      {/* Full-screen submit overlay — blocks every tap while the staff
+          create round-trip runs (auth user + staff row + salary history
+          + class assignments + document uploads). Replaces the silent
+          "is this hung?" period the principal used to stare at. */}
+      {isSubmitting && (
+        <div className="fixed inset-0 z-50 bg-slate-900/40 backdrop-blur-sm flex items-center justify-center animate-in fade-in duration-150">
+          <div className="bg-white rounded-2xl shadow-2xl px-8 py-6 flex flex-col items-center gap-3 max-w-xs">
+            <div className="w-10 h-10 border-4 border-blue-200 border-t-blue-600 rounded-full animate-spin"/>
+            <p className="font-black text-slate-900 text-sm">Adding staff…</p>
+            <p className="text-[11px] font-bold text-slate-500 text-center leading-relaxed">
+              Login account, salary history, documents set up ho rahe hain. 5–10 second lagega.
+            </p>
+          </div>
+        </div>
+      )}
       {renderHeader('Add Staff', () => setView('LIST'))}
       <div className="flex-1 overflow-y-auto p-4  space-y-4">
         <div className="bg-white rounded-2xl border border-slate-100 shadow-sm p-4 space-y-4">
