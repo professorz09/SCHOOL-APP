@@ -13085,3 +13085,28 @@ DROP POLICY IF EXISTS staff_self_select ON public.staff;
 CREATE POLICY staff_self_select ON public.staff
   FOR SELECT
   USING (user_id = auth.uid());
+
+
+-- =============================================================
+-- 0118_students_driver_read.sql
+-- =============================================================
+-- DriverStudentsView's underlying query joins student_transport_assignments
+-- to students!inner. The students-side of the join had no DRIVER policy so
+-- the inner join dropped to zero and the page rendered "No students
+-- assigned to this vehicle" despite valid assignments. Add a narrow
+-- policy: a DRIVER can read a student row only if the student has an
+-- ACTIVE assignment on a vehicle the driver owns.
+
+DROP POLICY IF EXISTS students_driver_select ON public.students;
+
+CREATE POLICY students_driver_select ON public.students
+  FOR SELECT
+  USING (
+    EXISTS (
+      SELECT 1
+        FROM public.student_transport_assignments sta
+       WHERE sta.student_id = students.id
+         AND sta.is_active = TRUE
+         AND sta.vehicle_id = ANY(public.driver_vehicle_ids())
+    )
+  );
