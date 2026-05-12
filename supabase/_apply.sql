@@ -13110,3 +13110,39 @@ CREATE POLICY students_driver_select ON public.students
          AND sta.vehicle_id = ANY(public.driver_vehicle_ids())
     )
   );
+
+
+-- =============================================================
+-- 0119_route_stops_driver_write.sql
+-- =============================================================
+-- DriverRouteView edit/delete failed silently because rs_write was
+-- PRINCIPAL-only. Expand to also permit DRIVER on vehicles they own.
+
+DROP POLICY IF EXISTS rs_write ON public.route_stops;
+
+CREATE POLICY rs_write ON public.route_stops
+  FOR ALL
+  USING (
+    public.is_super_admin()
+    OR EXISTS (
+      SELECT 1
+        FROM public.transport_vehicles v
+       WHERE v.id = route_stops.vehicle_id
+         AND (
+           (public.is_principal() AND v.school_id = public.current_user_school_id())
+           OR v.id = ANY(public.driver_vehicle_ids())
+         )
+    )
+  )
+  WITH CHECK (
+    public.is_super_admin()
+    OR EXISTS (
+      SELECT 1
+        FROM public.transport_vehicles v
+       WHERE v.id = route_stops.vehicle_id
+         AND (
+           (public.is_principal() AND v.school_id = public.current_user_school_id())
+           OR v.id = ANY(public.driver_vehicle_ids())
+         )
+    )
+  );
