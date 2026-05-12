@@ -321,17 +321,7 @@ export const sharedAttendance = {
     return mapRow(full as unknown as AttendanceRow);
   },
 
-  /** Approve a teacher-submitted record. */
-  async approve(id: string): Promise<void> {
-    await apiAttendance.approve(id);
-    await logAudit('attendance_approved', 'attendance_records', id);
-  },
-
-  /** Reject a teacher-submitted record (teacher may re-submit). */
-  async reject(id: string, reason?: string): Promise<void> {
-    await apiAttendance.reject(id, reason);
-    await logAudit('attendance_rejected', 'attendance_records', id, { reason: reason ?? null });
-  },
+  // approve() / reject() removed — teacher's submit() now auto-locks.
 
   /** Replace per-student rows + recompute totals for a record.
    *  `reason` is required by the server when the record is already approved/locked. */

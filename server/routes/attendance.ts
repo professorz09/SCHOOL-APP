@@ -17,7 +17,6 @@ interface AssignRow    { id: string }
 interface SectionRow   { id: string; class_name: string; section: string; academic_year_id: string; school_id: string }
 interface RecordRow    { id: string; date: string; approval_status: string; is_locked: boolean; total_present: number; total_absent: number; total_holiday: number; total_half: number; total_students: number }
 interface RecordMinRow { id: string; is_locked: boolean; approval_status: string }
-interface RecordSchool { id: string; school_id: string; is_locked: boolean }
 interface DetailRow    { attendance_id: string; student_id: string; is_present: boolean; status: AttendanceStatus | null }
 interface StuDetailRow { student_id: string }
 interface AcYearRow    { id: string }
@@ -605,34 +604,6 @@ attendanceRouter.post('/mark-by-principal', requireAuth, requireRole('PRINCIPAL'
   } catch (err) { fail(res, err); }
 });
 
-// ─── POST /api/attendance/reject ──────────────────────────────────────────────
-attendanceRouter.post('/reject', requireAuth, requireRole('PRINCIPAL'), async (req, res) => {
-  try {
-    const { attendanceId, reason } = requireBody<{ attendanceId: string; reason?: string }>(req, ['attendanceId']);
-
-    const { data: recData } = await adminDb.from('attendance_records')
-      .select('id, school_id').eq('id', attendanceId).maybeSingle();
-    const record = recData as Pick<RecordSchool, 'id' | 'school_id'> | null;
-    if (!record) throw new ApiError(404, 'Attendance record not found');
-    if (record.school_id !== req.user.school_id) throw new ApiError(403, 'Access denied');
-
-    const { error } = await adminDb.from('attendance_records')
-      .update({ approval_status: 'REJECTED', approved_by: req.user.id })
-      .eq('id', attendanceId);
-    if (error) throw new ApiError(500, error.message);
-
-    await adminDb.from('attendance_approvals').insert({
-      attendance_id: attendanceId,
-      school_id:     record.school_id,
-      action:        'REJECTED',
-      performed_by:  req.user.id,
-      reason:        reason ?? null,
-    });
-
-    ok(res, { attendanceId, rejected: true });
-  } catch (err) { fail(res, err); }
-});
-
 // ─── POST /api/attendance/update-students ─────────────────────────────────────
 // Principal-only: edit per-student rows for an existing record.
 // Locked (APPROVED) records may be corrected by the principal only; a reason
@@ -769,41 +740,6 @@ attendanceRouter.post('/update-students', requireAuth, requireRole('PRINCIPAL'),
   } catch (err) { fail(res, err); }
 });
 
-// ─── POST /api/attendance/approve ─────────────────────────────────────────────
-attendanceRouter.post('/approve', requireAuth, requireRole('PRINCIPAL'), async (req, res) => {
-  try {
-    const { attendanceId } = requireBody<{ attendanceId: string }>(req, ['attendanceId']);
-
-    const { data: recData } = await adminDb
-      .from('attendance_records')
-      .select('id, is_locked, school_id')
-      .eq('id', attendanceId).maybeSingle();
-    const record = recData as RecordSchool | null;
-    if (!record) throw new ApiError(404, 'Attendance record not found');
-    if (record.school_id !== req.user.school_id) throw new ApiError(403, 'Access denied');
-    if (record.is_locked) throw new ApiError(400, 'Already approved and locked');
-
-    // Conditional update: matches only when still unlocked. If two principals
-    // click approve simultaneously the second one's update returns 0 rows and
-    // we fail loud instead of double-stamping.
-    const { data: updated, error } = await adminDb.from('attendance_records')
-      .update({ is_locked: true, approval_status: 'APPROVED', approved_by: req.user.id })
-      .eq('id', attendanceId)
-      .eq('school_id', req.user.school_id!)
-      .eq('is_locked', false)
-      .select('id');
-    if (error) throw new ApiError(500, error.message);
-    if (!updated || updated.length === 0) {
-      throw new ApiError(409, 'Attendance was just approved by someone else — refresh and verify');
-    }
-
-    await adminDb.from('attendance_approvals').insert({
-      attendance_id: attendanceId,
-      school_id:     record.school_id,
-      action:        'APPROVED',
-      performed_by:  req.user.id,
-    });
-
-    ok(res, { attendanceId, approved: true });
-  } catch (err) { fail(res, err); }
-});
+// /api/attendance/approve and /api/attendance/reject removed — teacher's
+// submission now auto-locks (see /submit handler above). The two endpoints
+// were vestigial code from the old approval workflow.

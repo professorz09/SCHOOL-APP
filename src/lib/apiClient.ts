@@ -288,10 +288,7 @@ export const apiAttendance = {
     sectionId: string; date: string;
     records: { studentId: string; isPresent?: boolean; status?: AttendanceCellStatus }[];
   }) => post<any>('/attendance/submit', body),
-  approve: (attendanceId: string) =>
-    post<any>('/attendance/approve', { attendanceId }),
-  reject: (attendanceId: string, reason?: string) =>
-    post<any>('/attendance/reject', { attendanceId, reason }),
+  // approve / reject removed — teacher's /submit now auto-locks.
   updateStudents: (body: {
     attendanceId: string;
     reason?: string;
