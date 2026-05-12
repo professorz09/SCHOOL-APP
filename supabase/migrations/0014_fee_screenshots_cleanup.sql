@@ -36,11 +36,7 @@ CREATE OR REPLACE FUNCTION public.fee_payment_upload_after_delete()
 RETURNS TRIGGER
 LANGUAGE plpgsql SECURITY DEFINER SET search_path = public AS $$
 BEGIN
-  IF OLD.screenshot_url IS NOT NULL AND length(OLD.screenshot_url) > 0 THEN
-    DELETE FROM storage.objects
-     WHERE bucket_id = 'fee-screenshots'
-       AND name = OLD.screenshot_url;
-  END IF;
+  -- screenshot_url column removed in 0050; trigger kept as a no-op.
   RETURN OLD;
 END $$;
 
@@ -52,12 +48,12 @@ FOR EACH ROW EXECUTE FUNCTION public.fee_payment_upload_after_delete();
 
 
 -- B1) list_purgeable_fee_screenshots ----------------------------------------
+DROP FUNCTION IF EXISTS public.list_purgeable_fee_screenshots(INT);
 CREATE OR REPLACE FUNCTION public.list_purgeable_fee_screenshots(
   p_rejected_after_days INT DEFAULT 90
 ) RETURNS TABLE (
   id              UUID,
   school_id       UUID,
-  screenshot_url  TEXT,
   status          TEXT,
   created_at      TIMESTAMPTZ,
   reviewed_at     TIMESTAMPTZ,
@@ -69,7 +65,6 @@ LANGUAGE sql SECURITY DEFINER SET search_path = public AS $$
   )
   SELECT fpu.id,
          fpu.school_id,
-         fpu.screenshot_url,
          fpu.status,
          fpu.created_at,
          fpu.reviewed_at,

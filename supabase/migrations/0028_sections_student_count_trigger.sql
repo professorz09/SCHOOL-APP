@@ -65,7 +65,9 @@ SET student_count = (
 ALTER TABLE sections ENABLE ROW LEVEL SECURITY;
 
 -- All school members (principals, teachers, students, parents, drivers) can read
--- sections belonging to their school.
+-- sections belonging to their school. DROP IF EXISTS guards added so the
+-- migration is safe to re-run on a partially-applied DB.
+DROP POLICY IF EXISTS sections_read_own_school ON sections;
 CREATE POLICY sections_read_own_school ON sections
   FOR SELECT
   USING (
@@ -74,6 +76,7 @@ CREATE POLICY sections_read_own_school ON sections
   );
 
 -- Only the principal can insert / update / delete sections in their school.
+DROP POLICY IF EXISTS sections_principal_insert ON sections;
 CREATE POLICY sections_principal_insert ON sections
   FOR INSERT
   WITH CHECK (
@@ -81,6 +84,7 @@ CREATE POLICY sections_principal_insert ON sections
     AND (SELECT role FROM users WHERE id = auth.uid() LIMIT 1) = 'PRINCIPAL'
   );
 
+DROP POLICY IF EXISTS sections_principal_update ON sections;
 CREATE POLICY sections_principal_update ON sections
   FOR UPDATE
   USING (
@@ -88,6 +92,7 @@ CREATE POLICY sections_principal_update ON sections
     AND (SELECT role FROM users WHERE id = auth.uid() LIMIT 1) = 'PRINCIPAL'
   );
 
+DROP POLICY IF EXISTS sections_principal_delete ON sections;
 CREATE POLICY sections_principal_delete ON sections
   FOR DELETE
   USING (

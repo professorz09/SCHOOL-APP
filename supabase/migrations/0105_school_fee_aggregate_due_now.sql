@@ -14,6 +14,7 @@
 -- cleared_count uses lifetime outstanding (a student with future months
 -- still unpaid isn't "cleared" — they just owe less *right now*).
 
+DROP FUNCTION IF EXISTS public.get_school_fee_aggregate();
 CREATE OR REPLACE FUNCTION public.get_school_fee_aggregate()
 RETURNS TABLE (
   total_students          BIGINT,

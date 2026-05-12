@@ -1,6 +1,6 @@
 {
   "$schema": "https://openapi.vercel.sh/vercel.json",
-  "buildCommand": "vite build",
+  "buildCommand": "vite build && npx esbuild server/vercel-handler.ts --bundle --platform=node --target=node20 --format=esm --outfile=api/index.js --external:@vercel/node --banner:js=\"import{createRequire}from 'module';const require=createRequire(import.meta.url);\"",
   "outputDirectory": "dist",
   "framework": "vite",
   "rewrites": [
@@ -34,7 +34,7 @@
     }
   ],
   "functions": {
-    "api/index.ts": {
+    "api/index.js": {
       "maxDuration": 30
     }
   }

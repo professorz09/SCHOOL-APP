@@ -4,7 +4,18 @@
 -- student_transport_assignments to the supabase_realtime publication so
 -- TransportManager can subscribe to live changes instead of polling.
 
-ALTER PUBLICATION supabase_realtime ADD TABLE public.transport_vehicles;
-ALTER PUBLICATION supabase_realtime ADD TABLE public.route_stops;
-ALTER PUBLICATION supabase_realtime ADD TABLE public.driver_locations;
-ALTER PUBLICATION supabase_realtime ADD TABLE public.student_transport_assignments;
+DO $$
+DECLARE
+  t TEXT;
+BEGIN
+  FOR t IN SELECT unnest(ARRAY[
+    'transport_vehicles','route_stops','driver_locations','student_transport_assignments'
+  ]) LOOP
+    IF NOT EXISTS (
+      SELECT 1 FROM pg_publication_tables
+      WHERE pubname = 'supabase_realtime' AND tablename = t
+    ) THEN
+      EXECUTE format('ALTER PUBLICATION supabase_realtime ADD TABLE public.%I', t);
+    END IF;
+  END LOOP;
+END $$;

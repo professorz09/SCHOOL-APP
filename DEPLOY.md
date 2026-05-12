@@ -37,7 +37,7 @@ git push -u origin main
 ## 4. Apply the database schema
 
 1. Supabase Dashboard → **SQL Editor** → New query
-2. Open [`supabase/_apply.sql`](supabase/_apply.sql) in your editor
+2. Open [`/_apply.supabasesql`](supabase/_apply.sql) in your editor
 3. Copy the **entire file** and paste into the SQL editor
 4. Click **Run**
 

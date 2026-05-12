@@ -125,6 +125,7 @@ END $$;
 GRANT EXECUTE ON FUNCTION public.generate_student_fee_schedule(UUID, UUID, JSONB, JSONB, BOOLEAN, NUMERIC, NUMERIC) TO authenticated;
 
 -- ─── 3. Add total_parent_upcoming to school fee aggregate ─────────────
+DROP FUNCTION IF EXISTS public.get_school_fee_aggregate();
 CREATE OR REPLACE FUNCTION public.get_school_fee_aggregate()
 RETURNS TABLE (
   total_students          BIGINT,

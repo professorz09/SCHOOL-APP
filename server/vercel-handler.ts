@@ -8,7 +8,7 @@
 // Vercel project settings (Settings → Environment Variables).
 
 import type { VercelRequest, VercelResponse } from '@vercel/node';
-import { app } from '../server/app';
+import { app } from './app';
 
 // Vercel hands us req/res objects that are compatible with Node's http
 // types (which Express accepts). The double cast keeps TS happy without

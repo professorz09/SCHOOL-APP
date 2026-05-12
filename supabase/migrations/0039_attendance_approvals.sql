@@ -19,15 +19,19 @@ CREATE INDEX IF NOT EXISTS attendance_approvals_attendance_id_idx
 CREATE INDEX IF NOT EXISTS attendance_approvals_school_id_idx
   ON attendance_approvals (school_id);
 
--- RLS: school staff can read; inserts are done via service role (server-side only).
+-- RLS: same-school principals/teachers can read; inserts go through
+-- service role (server-side only). Original draft referenced a
+-- `school_admins` table that doesn't exist — replaced with the
+-- canonical helpers used by every other policy.
 ALTER TABLE attendance_approvals ENABLE ROW LEVEL SECURITY;
 
+DROP POLICY IF EXISTS "school staff can view attendance_approvals" ON attendance_approvals;
 CREATE POLICY "school staff can view attendance_approvals"
   ON attendance_approvals FOR SELECT
   USING (
-    school_id IN (
-      SELECT school_id FROM staff WHERE user_id = auth.uid()
-      UNION
-      SELECT school_id FROM school_admins WHERE user_id = auth.uid()
+    public.is_super_admin()
+    OR (
+      public.current_user_role() IN ('PRINCIPAL','TEACHER')
+      AND school_id = public.current_user_school_id()
     )
   );

@@ -3217,15 +3217,12 @@ GRANT EXECUTE ON FUNCTION public.review_fee_payment_upload(UUID, TEXT, TEXT)
 -- ---------------------------------------------------------------------------
 
 -- A) Cascade trigger ---------------------------------------------------------
+-- screenshot_url column dropped in 0050 (replaced with transaction_id).
+-- Trigger kept as a no-op so the bucket cleanup hook remains attachable.
 CREATE OR REPLACE FUNCTION public.fee_payment_upload_after_delete()
 RETURNS TRIGGER
 LANGUAGE plpgsql SECURITY DEFINER SET search_path = public AS $$
 BEGIN
-  IF OLD.screenshot_url IS NOT NULL AND length(OLD.screenshot_url) > 0 THEN
-    DELETE FROM storage.objects
-     WHERE bucket_id = 'fee-screenshots'
-       AND name = OLD.screenshot_url;
-  END IF;
   RETURN OLD;
 END $$;
 
@@ -3237,12 +3234,12 @@ FOR EACH ROW EXECUTE FUNCTION public.fee_payment_upload_after_delete();
 
 
 -- B1) list_purgeable_fee_screenshots ----------------------------------------
+DROP FUNCTION IF EXISTS public.list_purgeable_fee_screenshots(INT);
 CREATE OR REPLACE FUNCTION public.list_purgeable_fee_screenshots(
   p_rejected_after_days INT DEFAULT 90
 ) RETURNS TABLE (
   id              UUID,
   school_id       UUID,
-  screenshot_url  TEXT,
   status          TEXT,
   created_at      TIMESTAMPTZ,
   reviewed_at     TIMESTAMPTZ,
@@ -3254,7 +3251,6 @@ LANGUAGE sql SECURITY DEFINER SET search_path = public AS $$
   )
   SELECT fpu.id,
          fpu.school_id,
-         fpu.screenshot_url,
          fpu.status,
          fpu.created_at,
          fpu.reviewed_at,
@@ -5886,7 +5882,10 @@ SET student_count = (
 ALTER TABLE sections ENABLE ROW LEVEL SECURITY;
 
 -- All school members (principals, teachers, students, parents, drivers) can read
--- sections belonging to their school.
+-- sections belonging to their school. DROP IF EXISTS guards added so the
+-- consolidated _apply.sql is safe to re-run (the original draft created
+-- these policies unconditionally and crashed on the second run).
+DROP POLICY IF EXISTS sections_read_own_school ON sections;
 CREATE POLICY sections_read_own_school ON sections
   FOR SELECT
   USING (
@@ -5895,6 +5894,7 @@ CREATE POLICY sections_read_own_school ON sections
   );
 
 -- Only the principal can insert / update / delete sections in their school.
+DROP POLICY IF EXISTS sections_principal_insert ON sections;
 CREATE POLICY sections_principal_insert ON sections
   FOR INSERT
   WITH CHECK (
@@ -5902,6 +5902,7 @@ CREATE POLICY sections_principal_insert ON sections
     AND (SELECT role FROM users WHERE id = auth.uid() LIMIT 1) = 'PRINCIPAL'
   );
 
+DROP POLICY IF EXISTS sections_principal_update ON sections;
 CREATE POLICY sections_principal_update ON sections
   FOR UPDATE
   USING (
@@ -5909,6 +5910,7 @@ CREATE POLICY sections_principal_update ON sections
     AND (SELECT role FROM users WHERE id = auth.uid() LIMIT 1) = 'PRINCIPAL'
   );
 
+DROP POLICY IF EXISTS sections_principal_delete ON sections;
 CREATE POLICY sections_principal_delete ON sections
   FOR DELETE
   USING (
@@ -6429,16 +6431,22 @@ CREATE INDEX IF NOT EXISTS attendance_approvals_attendance_id_idx
 CREATE INDEX IF NOT EXISTS attendance_approvals_school_id_idx
   ON attendance_approvals (school_id);
 
--- RLS: school staff can read; inserts are done via service role (server-side only).
+-- RLS: same-school principals/teachers can read; inserts go through
+-- service role (server-side only). The original draft referenced a
+-- `school_admins` table that never existed in this schema — replaced
+-- with the canonical is_super_admin() / current_user_role() helpers
+-- used by every other policy. Safe to re-run because the policy is
+-- explicitly dropped first.
 ALTER TABLE attendance_approvals ENABLE ROW LEVEL SECURITY;
 
+DROP POLICY IF EXISTS "school staff can view attendance_approvals" ON attendance_approvals;
 CREATE POLICY "school staff can view attendance_approvals"
   ON attendance_approvals FOR SELECT
   USING (
-    school_id IN (
-      SELECT school_id FROM staff WHERE user_id = auth.uid()
-      UNION
-      SELECT school_id FROM school_admins WHERE user_id = auth.uid()
+    public.is_super_admin()
+    OR (
+      public.current_user_role() IN ('PRINCIPAL','TEACHER')
+      AND school_id = public.current_user_school_id()
     )
   );
 
@@ -6729,10 +6737,21 @@ CREATE TRIGGER staff_attendance_touch_updated_at
 -- student_transport_assignments to the supabase_realtime publication so
 -- TransportManager can subscribe to live changes instead of polling.
 
-ALTER PUBLICATION supabase_realtime ADD TABLE public.transport_vehicles;
-ALTER PUBLICATION supabase_realtime ADD TABLE public.route_stops;
-ALTER PUBLICATION supabase_realtime ADD TABLE public.driver_locations;
-ALTER PUBLICATION supabase_realtime ADD TABLE public.student_transport_assignments;
+DO $$
+DECLARE
+  t TEXT;
+BEGIN
+  FOR t IN SELECT unnest(ARRAY[
+    'transport_vehicles','route_stops','driver_locations','student_transport_assignments'
+  ]) LOOP
+    IF NOT EXISTS (
+      SELECT 1 FROM pg_publication_tables
+      WHERE pubname = 'supabase_realtime' AND tablename = t
+    ) THEN
+      EXECUTE format('ALTER PUBLICATION supabase_realtime ADD TABLE public.%I', t);
+    END IF;
+  END LOOP;
+END $$;
 
 
 -- =============================================================
@@ -8231,6 +8250,7 @@ COMMIT;
 -- start/end times and the teacher-checkin flag.
 DROP POLICY IF EXISTS school_settings_principal_rw ON public.school_settings;
 
+DROP POLICY IF EXISTS school_settings_select ON public.school_settings;
 CREATE POLICY school_settings_select ON public.school_settings
   FOR SELECT
   USING (
@@ -8238,6 +8258,7 @@ CREATE POLICY school_settings_select ON public.school_settings
     OR school_id = public.current_user_school_id()
   );
 
+DROP POLICY IF EXISTS school_settings_principal_write ON public.school_settings;
 CREATE POLICY school_settings_principal_write ON public.school_settings
   FOR INSERT
   WITH CHECK (
@@ -8245,6 +8266,7 @@ CREATE POLICY school_settings_principal_write ON public.school_settings
     OR (public.is_principal() AND school_id = public.current_user_school_id())
   );
 
+DROP POLICY IF EXISTS school_settings_principal_update ON public.school_settings;
 CREATE POLICY school_settings_principal_update ON public.school_settings
   FOR UPDATE
   USING (
@@ -8256,6 +8278,7 @@ CREATE POLICY school_settings_principal_update ON public.school_settings
     OR (public.is_principal() AND school_id = public.current_user_school_id())
   );
 
+DROP POLICY IF EXISTS school_settings_principal_delete ON public.school_settings;
 CREATE POLICY school_settings_principal_delete ON public.school_settings
   FOR DELETE
   USING (
@@ -8341,6 +8364,7 @@ CREATE POLICY psl_admin_write ON public.parent_student_links
 -- (i.e. INSERT/UPDATE/DELETE) on audit_logs in their school. A compromised
 -- principal could erase or rewrite forensic trail. Replace with INSERT-only.
 DROP POLICY IF EXISTS audit_logs_write ON public.audit_logs;
+DROP POLICY IF EXISTS audit_logs_insert ON public.audit_logs;
 
 CREATE POLICY audit_logs_insert ON public.audit_logs
   FOR INSERT
@@ -9283,6 +9307,8 @@ END $$;
 -- =============================================================
 
 DROP POLICY IF EXISTS approvals_write ON public.approvals;
+DROP POLICY IF EXISTS approvals_write_principal ON public.approvals;
+DROP POLICY IF EXISTS approvals_insert_leave ON public.approvals;
 
 -- Principal can do anything (existing behaviour).
 CREATE POLICY approvals_write_principal ON public.approvals
@@ -9513,6 +9539,7 @@ END $$;
 -- Authorisation: principal of the school (or super_admin).
 -- =============================================================
 
+DROP FUNCTION IF EXISTS public.get_school_fee_aggregate();
 CREATE OR REPLACE FUNCTION public.get_school_fee_aggregate()
 RETURNS TABLE (
   total_students          BIGINT,
@@ -11893,6 +11920,7 @@ ALTER TABLE public.schools
 -- cleared_count uses lifetime outstanding (a student with future months
 -- still unpaid isn't "cleared" — they just owe less *right now*).
 
+DROP FUNCTION IF EXISTS public.get_school_fee_aggregate();
 CREATE OR REPLACE FUNCTION public.get_school_fee_aggregate()
 RETURNS TABLE (
   total_students          BIGINT,
@@ -12092,6 +12120,7 @@ END $$;
 GRANT EXECUTE ON FUNCTION public.generate_student_fee_schedule(UUID, UUID, JSONB, JSONB, BOOLEAN, NUMERIC, NUMERIC) TO authenticated;
 
 -- ─── 3. Add total_parent_upcoming to school fee aggregate ─────────────
+DROP FUNCTION IF EXISTS public.get_school_fee_aggregate();
 CREATE OR REPLACE FUNCTION public.get_school_fee_aggregate()
 RETURNS TABLE (
   total_students          BIGINT,
