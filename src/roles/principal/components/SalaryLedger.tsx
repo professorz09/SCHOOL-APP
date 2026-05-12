@@ -6,6 +6,8 @@ import { StaffMember, SalaryPaymentMethod } from '@/modules/staff/staff.types';
 import { useUIStore } from '@/store/uiStore';
 import { supabase } from '@/lib/supabase';
 import { useAuthStore } from '@/store/authStore';
+import { useEditorModeStore } from '@/store/editorModeStore';
+import { Lock } from 'lucide-react';
 
 const PAY_METHODS: SalaryPaymentMethod[] = ['CASH', 'BANK_TRANSFER', 'UPI', 'CHEQUE', 'OTHER'];
 
@@ -70,6 +72,13 @@ export const SalaryLedger: React.FC<Props> = ({ onBack }) => {
   const [editingDay, setEditingDay] = useState(false);
   const [dayDraft, setDayDraft] = useState('');
   const [savingDay, setSavingDay] = useState(false);
+  // Salary day is a school-wide policy setting that retroactively
+  // affects every staff member's "Overdue" flag. Casual edits caused
+  // confusion — accidentally bumping the day made dozens of rows go
+  // green/red unexpectedly. Gate behind Editor Mode (same pattern as
+  // ExpensesManager + SettingsManager) so the principal has to
+  // deliberately unlock before changing it.
+  const editorModeActive = useEditorModeStore(s => s.isActive());
 
   const loadSalaryDay = async () => {
     const schoolId = useAuthStore.getState().session?.schoolId;
@@ -81,6 +90,10 @@ export const SalaryLedger: React.FC<Props> = ({ onBack }) => {
   };
 
   const saveSalaryDay = async () => {
+    if (!editorModeActive) {
+      showToast('Editor Mode chalu karein — Settings → Editor Mode', 'error');
+      return;
+    }
     const schoolId = useAuthStore.getState().session?.schoolId;
     if (!schoolId) return;
     const raw = dayDraft.trim();
@@ -432,9 +445,22 @@ export const SalaryLedger: React.FC<Props> = ({ onBack }) => {
             </div>
           ) : (
             <button
-              onClick={() => { setDayDraft(salaryPayDay !== null ? String(salaryPayDay) : ''); setEditingDay(true); }}
-              className="flex items-center gap-1 text-[10px] font-black text-blue-700 px-2 py-1 hover:bg-blue-100 rounded-md transition-colors">
-              <Pencil size={10} /> {salaryPayDay !== null ? 'Edit' : 'Set'}
+              onClick={() => {
+                if (!editorModeActive) {
+                  showToast('Editor Mode chalu karein pehle — Settings → Editor Mode', 'info');
+                  return;
+                }
+                setDayDraft(salaryPayDay !== null ? String(salaryPayDay) : '');
+                setEditingDay(true);
+              }}
+              className={`flex items-center gap-1 text-[10px] font-black px-2 py-1 rounded-md transition-colors ${
+                editorModeActive
+                  ? 'text-blue-700 hover:bg-blue-100'
+                  : 'text-slate-400 bg-slate-100 cursor-not-allowed'
+              }`}
+              title={editorModeActive ? '' : 'Editor Mode required'}>
+              {editorModeActive ? <Pencil size={10} /> : <Lock size={10} />}
+              {salaryPayDay !== null ? 'Edit' : 'Set'}
             </button>
           )}
         </div>

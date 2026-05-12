@@ -1138,6 +1138,26 @@ const inventoryAddLimiter = rateLimit({
   message: { ok: false, error: 'Too many inventory additions — slow down for a few minutes.' },
 });
 
+// Daily safety net — covers ADD + DELETE + UPDATE combined. 300/day
+// per school is generous (a busy day: 200 admissions worth of new
+// items + edits) yet still stops a runaway script from churning the
+// table thousands of times. Single shared bucket so the principal
+// can't dodge it by alternating add → delete → add.
+const inventoryDailyLimiter = rateLimit({
+  windowMs: 24 * 60 * 60_000,
+  limit: 300,
+  keyGenerator: (req: any) => `inv-day:${req.user?.school_id ?? req.user?.id ?? req.ip}`,
+  validate: { keyGeneratorIpFallback: false },
+  standardHeaders: 'draft-7',
+  legacyHeaders: false,
+  message: { ok: false, error: 'Daily inventory write limit reached for this school. Try again tomorrow.' },
+});
+
+// Hard cap on active asset rows per school. Tested at 5 000 — well
+// past any realistic school's needs (typical school: 200–1 500 items)
+// but low enough to stop accidental import loops dumping millions.
+const MAX_ASSETS_PER_SCHOOL = 5000;
+
 // GET /api/principal/inventory/list
 // Returns every asset row for the school as a flat list with the bits the
 // new UI consumes (id, category, title, description, note, quantity,
@@ -1181,7 +1201,7 @@ principalRouter.get('/inventory/list', requireAuth, PRINCIPAL, async (req, res) 
 // POST /api/principal/inventory/add
 // title + category + quantity required; description, note, addedOn optional.
 // Falls back to today for addedOn so the timeline always has a stable bucket.
-principalRouter.post('/inventory/add', requireAuth, PRINCIPAL, inventoryAddLimiter, async (req, res) => {
+principalRouter.post('/inventory/add', requireAuth, PRINCIPAL, inventoryAddLimiter, inventoryDailyLimiter, async (req, res) => {
   try {
     const body = requireBody<{
       title: string; category: 'BOOK' | 'LAB_EQUIPMENT' | 'OTHER';
@@ -1196,6 +1216,18 @@ principalRouter.post('/inventory/add', requireAuth, PRINCIPAL, inventoryAddLimit
     }
     const title = body.title.trim();
     if (!title) throw new ApiError(400, 'Title required');
+
+    // Per-school active-asset cap. A clean count() head-only query is
+    // O(rows in index) — cheap, no row payload returned.
+    const { count: activeCount } = await adminDb.from('assets')
+      .select('id', { count: 'exact', head: true })
+      .eq('school_id', req.user.school_id!)
+      .eq('is_active', true);
+    if ((activeCount ?? 0) >= MAX_ASSETS_PER_SCHOOL) {
+      throw new ApiError(409,
+        `Inventory limit reached (${MAX_ASSETS_PER_SCHOOL} items). Delete unused entries first.`,
+      );
+    }
 
     const today = new Date().toISOString().slice(0, 10);
 
@@ -1216,28 +1248,36 @@ principalRouter.post('/inventory/add', requireAuth, PRINCIPAL, inventoryAddLimit
     if (error) throw new ApiError(500, error.message);
 
     const newId = (data as { id: string }).id;
-    // Audit log entry (7-day TTL, 1000-row cap enforced by trigger). Failure
-    // here is non-fatal — the asset row is already in. The trigger handles
-    // pruning, so we don't need any further bookkeeping here.
-    await adminDb.from('inventory_history').insert({
-      school_id:    req.user.school_id,
-      asset_id:     newId,
-      action:       'ADD',
-      title,
-      category:     body.category,
-      quantity:     Math.round(body.quantity),
-      description:  body.description?.trim() || null,
-      note:         body.note?.trim() || null,
-      done_by:      req.user.id,
-      done_by_name: req.user.name ?? null,
+    // Mirror the event into the always-present audit_logs table.
+    // Previously this lived only in a separate `inventory_history`
+    // table that depended on migration 0063 being applied — when
+    // that migration was missing on a deploy, the table didn't exist
+    // and the silent insert failure left the history feed empty.
+    // audit_logs ships with the base schema, so this path is always
+    // available.
+    const { error: histErr } = await adminDb.from('audit_logs').insert({
+      user_id:     req.user.id,
+      school_id:   req.user.school_id,
+      action:      'inventory_add',
+      entity_type: 'asset',
+      entity_id:   newId,
+      details: {
+        title,
+        category:    body.category,
+        quantity:    Math.round(body.quantity),
+        description: body.description?.trim() || '',
+        note:        body.note?.trim() || '',
+        done_by_name: req.user.name ?? null,
+      },
     });
+    if (histErr) console.warn('[inventory/add] audit insert failed:', histErr.message);
 
     ok(res, { id: newId }, 201);
   } catch (err) { fail(res, err); }
 });
 
 // POST /api/principal/inventory/delete
-principalRouter.post('/inventory/delete', requireAuth, PRINCIPAL, async (req, res) => {
+principalRouter.post('/inventory/delete', requireAuth, PRINCIPAL, inventoryDailyLimiter, async (req, res) => {
   try {
     const { id } = requireBody<{ id: string }>(req, ['id']);
 
@@ -1255,35 +1295,66 @@ principalRouter.post('/inventory/delete', requireAuth, PRINCIPAL, async (req, re
 
     const s = snap as { id: string; name: string; category: string; total_count: number;
       details: { description?: string; note?: string } | null };
-    await adminDb.from('inventory_history').insert({
-      school_id:    req.user.school_id,
-      asset_id:     s.id,
-      action:       'DELETE',
-      title:        s.name,
-      category:     s.category,
-      quantity:     s.total_count,
-      description:  s.details?.description ?? null,
-      note:         s.details?.note ?? null,
-      done_by:      req.user.id,
-      done_by_name: req.user.name ?? null,
+    const { error: histErr } = await adminDb.from('audit_logs').insert({
+      user_id:     req.user.id,
+      school_id:   req.user.school_id,
+      action:      'inventory_delete',
+      entity_type: 'asset',
+      entity_id:   s.id,
+      details: {
+        title:       s.name,
+        category:    s.category,
+        quantity:    s.total_count,
+        description: s.details?.description ?? '',
+        note:        s.details?.note ?? '',
+        done_by_name: req.user.name ?? null,
+      },
     });
+    if (histErr) console.warn('[inventory/delete] audit insert failed:', histErr.message);
 
     ok(res, { id });
   } catch (err) { fail(res, err); }
 });
 
 // GET /api/principal/inventory/history
-// Read the audit log. Trigger keeps it pruned to 7 days / 1000 rows so the
-// principal sees only the recent activity window.
+// Reads inventory events from audit_logs. The frontend expects shape:
+//   { id, action, title, category, quantity, description, note,
+//     done_by_name, done_at }
+// audit_logs stores action='inventory_add'/'inventory_delete'/'inventory_update'
+// with the field payload inside `details`. We map both shapes back to
+// the legacy contract so the frontend stays untouched.
 principalRouter.get('/inventory/history', requireAuth, PRINCIPAL, async (req, res) => {
   try {
-    const { data, error } = await adminDb.from('inventory_history')
-      .select('id, action, title, category, quantity, description, note, done_by_name, done_at')
+    const { data, error } = await adminDb.from('audit_logs')
+      .select('id, action, entity_id, details, created_at')
       .eq('school_id', req.user.school_id!)
-      .order('done_at', { ascending: false })
-      .limit(1000);
+      .eq('entity_type', 'asset')
+      .in('action', ['inventory_add', 'inventory_delete', 'inventory_update'])
+      .order('created_at', { ascending: false })
+      .limit(500);
     if (error) throw new ApiError(500, error.message);
-    ok(res, data ?? []);
+
+    type Row = { id: string; action: string; entity_id: string | null;
+      details: Record<string, unknown> | null; created_at: string };
+    const mapAction = (a: string) =>
+      a === 'inventory_add' ? 'ADD'
+      : a === 'inventory_delete' ? 'DELETE'
+      : 'UPDATE';
+    const mapped = ((data ?? []) as Row[]).map(r => {
+      const d = r.details ?? {};
+      return {
+        id:           r.id,
+        action:       mapAction(r.action),
+        title:        (d.title as string) ?? '',
+        category:     (d.category as string) ?? 'OTHER',
+        quantity:     (d.quantity as number) ?? 0,
+        description:  (d.description as string) || null,
+        note:         (d.note as string) || null,
+        done_by_name: (d.done_by_name as string) ?? null,
+        done_at:      r.created_at,
+      };
+    });
+    ok(res, mapped);
   } catch (err) { fail(res, err); }
 });
 
@@ -1292,7 +1363,7 @@ principalRouter.get('/inventory/history', requireAuth, PRINCIPAL, async (req, re
 // rebuilding the row. Useful when stock changes (broken units removed,
 // donations received). addedOn intentionally NOT editable — it's the
 // "purchased on" anchor and editing it would shuffle timeline groups.
-principalRouter.post('/inventory/update', requireAuth, PRINCIPAL, async (req, res) => {
+principalRouter.post('/inventory/update', requireAuth, PRINCIPAL, inventoryDailyLimiter, async (req, res) => {
   try {
     const body = requireBody<{
       id: string; title?: string; quantity?: number;
@@ -1325,6 +1396,32 @@ principalRouter.post('/inventory/update', requireAuth, PRINCIPAL, async (req, re
     const { error } = await adminDb.from('assets').update(patch)
       .eq('id', body.id).eq('school_id', req.user.school_id!);
     if (error) throw new ApiError(500, error.message);
+
+    // Log an UPDATE event so the History timeline reflects edits, not
+    // just adds + deletes. Earlier this insert was missing → edits
+    // appeared to "vanish" from the history feed (user-reported bug).
+    // Read post-update values so the audit row carries the new state.
+    const { data: post } = await adminDb.from('assets')
+      .select('name, category, total_count, details')
+      .eq('id', body.id).maybeSingle();
+    const p = (post ?? {}) as { name?: string; category?: string; total_count?: number;
+      details?: { description?: string; note?: string } | null };
+    const { error: histErr } = await adminDb.from('audit_logs').insert({
+      user_id:     req.user.id,
+      school_id:   req.user.school_id,
+      action:      'inventory_update',
+      entity_type: 'asset',
+      entity_id:   body.id,
+      details: {
+        title:       p.name ?? '',
+        category:    p.category ?? 'OTHER',
+        quantity:    p.total_count ?? 0,
+        description: p.details?.description ?? '',
+        note:        p.details?.note ?? '',
+        done_by_name: req.user.name ?? null,
+      },
+    });
+    if (histErr) console.warn('[inventory/update] audit insert failed:', histErr.message);
     ok(res, { id: body.id });
   } catch (err) { fail(res, err); }
 });

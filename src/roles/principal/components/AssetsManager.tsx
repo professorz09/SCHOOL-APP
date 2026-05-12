@@ -71,6 +71,9 @@ export const AssetsManager: React.FC<Props> = ({ onBack }) => {
   // History view + data. Toggled on demand so we don't fetch the audit log
   // until the principal asks for it. The trigger keeps history bounded to
   // 7 days / 1000 rows per school, so this is always small.
+  // Three action types — ADD / DELETE / UPDATE — all logged by the
+  // server endpoints. UPDATE was missing in the prior backend; now
+  // every edit produces a row so the timeline reflects every change.
   type HistoryEntry = {
     id: string; action: 'ADD' | 'DELETE' | 'UPDATE';
     title: string; category: Category;
@@ -262,21 +265,22 @@ export const AssetsManager: React.FC<Props> = ({ onBack }) => {
 
   return (
     <div className="w-full lg:max-w-5xl lg:mx-auto bg-slate-50 flex flex-col animate-in slide-in-from-right-8 duration-300 min-h-screen">
-      {/* Sticky header */}
-      <div className="bg-white border-b border-slate-100 px-4 pt-4 pb-3 sticky top-0 z-10 shadow-sm">
-        <div className="flex items-center justify-between mb-3">
-          <div className="flex items-center gap-3">
-            <button onClick={onBack} className="p-2 -ml-2 bg-slate-100 rounded-full text-slate-600">
+      {/* Sticky header — top bar minimal, search + filters compact. */}
+      <div className="bg-white border-b border-slate-100 sticky top-0 z-10 shadow-sm">
+        {/* Title row */}
+        <div className="px-4 pt-4 pb-3 flex items-center justify-between">
+          <div className="flex items-center gap-3 min-w-0">
+            <button onClick={onBack} className="p-2 -ml-2 bg-slate-100 rounded-full text-slate-600 shrink-0">
               <ArrowLeft size={20} />
             </button>
-            <div>
+            <div className="min-w-0">
               <h2 className="text-xl font-black text-slate-900 uppercase tracking-tight">Inventory</h2>
-              <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">
-                {filtered.length} item{filtered.length === 1 ? '' : 's'} · {totalUnits} units
+              <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest truncate">
+                School ka register · history bhi
               </p>
             </div>
           </div>
-          <div className="flex items-center gap-2">
+          <div className="flex items-center gap-2 shrink-0">
             <button
               onClick={() => setEditMode(m => !m)}
               className={`flex items-center gap-1.5 px-3 py-2 rounded-full text-[10px] font-black uppercase tracking-widest transition-colors ${
@@ -286,56 +290,88 @@ export const AssetsManager: React.FC<Props> = ({ onBack }) => {
             </button>
             <button
               onClick={() => { setForm(blankForm()); setAddOpen(true); }}
-              className="flex items-center gap-1.5 px-3 py-2 bg-amber-500 text-white rounded-full shadow-md font-black text-[11px] uppercase tracking-widest active:scale-95 transition-transform">
+              className="flex items-center gap-1.5 px-3 py-2 bg-gradient-to-r from-amber-500 to-orange-500 text-white rounded-full shadow-md shadow-amber-200/50 font-black text-[11px] uppercase tracking-widest active:scale-95 transition-transform">
               <Plus size={14} /> Add
             </button>
           </div>
         </div>
 
+        {/* Stat hero — three coloured tiles summarising totals at a
+            glance. Replaces the tiny "X items · Y units" line which was
+            invisible on phones. Tapping a stat sets the filter. */}
+        <div className="px-4 pb-3 grid grid-cols-3 gap-2">
+          {(['BOOK', 'LAB_EQUIPMENT', 'OTHER'] as const).map(cat => {
+            const meta = CATEGORY_META[cat];
+            const Icon = meta.icon;
+            const active = filter === cat;
+            return (
+              <button key={cat}
+                onClick={() => { setView('INVENTORY'); setFilter(active ? 'ALL' : cat); }}
+                className={`text-left rounded-2xl p-3 border transition-all active:scale-[0.98] ${
+                  active
+                    ? `${meta.soft} border-current ${meta.tint} ring-2 ring-current/20`
+                    : 'bg-white border-slate-200 hover:border-slate-300'
+                }`}>
+                <div className={`w-9 h-9 rounded-xl flex items-center justify-center mb-1.5 ${meta.soft} ${meta.tint}`}>
+                  <Icon size={16} />
+                </div>
+                <div className={`text-lg font-black tabular-nums ${active ? meta.tint : 'text-slate-900'}`}>
+                  {counts[cat]}
+                </div>
+                <div className={`text-[9px] font-black uppercase tracking-widest ${active ? meta.tint : 'text-slate-400'}`}>
+                  {meta.label}
+                </div>
+              </button>
+            );
+          })}
+        </div>
+
         {/* Search */}
-        <div className="relative mb-2.5">
-          <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
-          <input value={search} onChange={e => setSearch(e.target.value)}
-            placeholder="Search inventory…"
-            className="w-full bg-slate-50 border border-slate-200 rounded-xl pl-9 pr-3 py-2 font-bold text-sm outline-none focus:border-amber-400" />
+        <div className="px-4 pb-2.5">
+          <div className="relative">
+            <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
+            <input value={search} onChange={e => setSearch(e.target.value)}
+              placeholder="Search by title, description, note…"
+              className="w-full bg-slate-50 border border-slate-200 rounded-xl pl-9 pr-3 py-2.5 font-bold text-sm outline-none focus:border-amber-400 focus:bg-white transition-colors" />
+          </div>
         </div>
 
-        {/* View switch — Inventory / History. The History tab opens the
-            7-day / 1000-row audit log of adds & deletes. Putting it next
-            to the category filter keeps the principal's hand on a single
-            switch row without nested screens. */}
-        <div className="flex bg-slate-100 rounded-xl p-1 mb-2.5">
-          <button onClick={() => setView('INVENTORY')}
-            className={`flex-1 flex items-center justify-center gap-1.5 py-1.5 rounded-lg text-[11px] font-black uppercase tracking-widest transition-colors ${
-              view === 'INVENTORY' ? 'bg-white text-amber-600 shadow-sm' : 'text-slate-500'
-            }`}>
-            <Library size={13}/> Inventory
-          </button>
-          <button onClick={() => setView('HISTORY')}
-            className={`flex-1 flex items-center justify-center gap-1.5 py-1.5 rounded-lg text-[11px] font-black uppercase tracking-widest transition-colors ${
-              view === 'HISTORY' ? 'bg-white text-emerald-600 shadow-sm' : 'text-slate-500'
-            }`}>
-            <HistoryIcon size={13}/> History
-          </button>
+        {/* View switch + All filter pill in one compact row */}
+        <div className="px-4 pb-3 flex gap-2">
+          <div className="flex bg-slate-100 rounded-xl p-1 flex-1">
+            <button onClick={() => setView('INVENTORY')}
+              className={`flex-1 flex items-center justify-center gap-1.5 py-1.5 rounded-lg text-[11px] font-black uppercase tracking-widest transition-colors ${
+                view === 'INVENTORY' ? 'bg-white text-amber-600 shadow-sm' : 'text-slate-500'
+              }`}>
+              <Library size={13}/> Inventory
+              <span className={`text-[9px] tabular-nums ${view === 'INVENTORY' ? 'text-amber-500' : 'text-slate-400'}`}>
+                {counts.ALL}
+              </span>
+            </button>
+            <button onClick={() => setView('HISTORY')}
+              className={`flex-1 flex items-center justify-center gap-1.5 py-1.5 rounded-lg text-[11px] font-black uppercase tracking-widest transition-colors ${
+                view === 'HISTORY' ? 'bg-white text-emerald-600 shadow-sm' : 'text-slate-500'
+              }`}>
+              <HistoryIcon size={13}/> History
+            </button>
+          </div>
+          {view === 'INVENTORY' && filter !== 'ALL' && (
+            <button onClick={() => setFilter('ALL')}
+              className="px-3 py-1.5 bg-slate-100 hover:bg-slate-200 text-slate-600 rounded-lg text-[10px] font-black uppercase tracking-widest transition-colors flex items-center gap-1">
+              <X size={12}/> Clear
+            </button>
+          )}
         </div>
 
-        {/* Category filter pills — only meaningful in Inventory view. */}
-        {view === 'INVENTORY' && (
-          <div className="flex bg-slate-100 rounded-xl p-1 overflow-x-auto">
-            {FILTER_TABS.map(t => {
-              const active = filter === t.key;
-              return (
-                <button key={t.key} onClick={() => setFilter(t.key)}
-                  className={`shrink-0 flex items-center gap-1.5 flex-1 min-w-fit justify-center px-3 py-1.5 rounded-lg text-[11px] font-black uppercase tracking-widest transition-colors ${
-                    active ? 'bg-white text-amber-600 shadow-sm' : 'text-slate-500'
-                  }`}>
-                  {t.label}
-                  <span className={`text-[9px] tabular-nums ${active ? 'text-amber-500' : 'text-slate-400'}`}>
-                    {counts[t.key]}
-                  </span>
-                </button>
-              );
-            })}
+        {/* Active filter strip — show only when a category is selected,
+            replaces the always-present row of 4 filter pills */}
+        {view === 'INVENTORY' && filter !== 'ALL' && (
+          <div className="px-4 pb-2 -mt-1">
+            <div className="text-[10px] font-bold text-slate-500">
+              Showing <span className={`px-1.5 py-0.5 rounded ${CATEGORY_META[filter as Category].soft} ${CATEGORY_META[filter as Category].tint} font-black uppercase tracking-widest`}>
+                {CATEGORY_META[filter as Category].label}
+              </span> · {filtered.length} item{filtered.length === 1 ? '' : 's'} · {totalUnits} units
+            </div>
           </div>
         )}
       </div>
@@ -364,77 +400,76 @@ export const AssetsManager: React.FC<Props> = ({ onBack }) => {
                   <RefreshCw size={11}/> Refresh
                 </button>
               </div>
-              <div className="space-y-5">
-                {historyGroups.map(group => (
-                  <div key={group.date}>
-                    <div className="flex items-center gap-2 mb-2">
-                      <div className="text-[10px] font-black uppercase tracking-widest text-slate-500">
+              {/* Vertical-rail timeline. A 2 px slate line runs down the
+                  left margin; every event gets a coloured dot punched
+                  through it (emerald = added, rose = removed, sky =
+                  updated). Cards float to the right of the rail. */}
+              <div className="relative pl-6">
+                <div className="absolute left-2 top-1 bottom-1 w-px bg-slate-200" aria-hidden />
+                <div className="space-y-5">
+                  {historyGroups.map(group => (
+                    <div key={group.date}>
+                      <div className="text-[10px] font-black uppercase tracking-widest text-slate-500 mb-2 -ml-6 pl-6">
                         {formatDay(group.date)}
+                        <span className="text-slate-300 font-bold mx-1.5">·</span>
+                        <span className="text-slate-400">{group.entries.length} event{group.entries.length === 1 ? '' : 's'}</span>
                       </div>
-                      <span className="text-[10px] font-bold text-slate-300">·</span>
-                      <span className="text-[10px] font-bold text-slate-400">
-                        {group.entries.length} event{group.entries.length === 1 ? '' : 's'}
-                      </span>
-                      <div className="flex-1 h-px bg-slate-100"/>
-                    </div>
-                    <div className="space-y-1.5 lg:space-y-2">
-                      {group.entries.map(h => {
-                        const isAdd = h.action === 'ADD';
-                        const meta = CATEGORY_META[h.category];
-                        const borderAccent = isAdd ? 'border-l-emerald-400' : 'border-l-rose-400';
-                        const ActionIcon = isAdd ? ArrowUpFromLine : ArrowDownToLine;
-                        return (
-                          <div key={h.id}
-                            className={`bg-white rounded-xl border border-slate-200 border-l-4 ${borderAccent} px-3.5 py-3 lg:px-4 lg:py-3.5`}>
-                            <div className="flex items-start gap-3">
-                              <div className={`w-9 h-9 lg:w-10 lg:h-10 rounded-lg flex items-center justify-center shrink-0 ${
-                                isAdd ? 'bg-emerald-50 text-emerald-700' : 'bg-rose-50 text-rose-700'
-                              }`}>
-                                <ActionIcon size={16} />
-                              </div>
-                              <div className="flex-1 min-w-0">
-                                <div className="flex items-center justify-between gap-2">
-                                  <span className="font-black text-slate-900 text-sm lg:text-[15px] truncate">{h.title}</span>
-                                  <span className={`text-[10px] font-black px-2 py-0.5 rounded-full uppercase tracking-widest shrink-0 ${
-                                    isAdd ? 'bg-emerald-50 text-emerald-700' : 'bg-rose-50 text-rose-700'
-                                  }`}>
-                                    {isAdd ? 'Added' : 'Removed'}
+                      <div className="space-y-2">
+                        {group.entries.map(h => {
+                          const meta = CATEGORY_META[h.category];
+                          const actionLabel =
+                            h.action === 'ADD' ? 'Added'
+                          : h.action === 'DELETE' ? 'Removed'
+                          : 'Updated';
+                          const dotBg =
+                            h.action === 'ADD' ? 'bg-emerald-500'
+                          : h.action === 'DELETE' ? 'bg-rose-500'
+                          : 'bg-sky-500';
+                          const actionFg =
+                            h.action === 'ADD' ? 'text-emerald-600'
+                          : h.action === 'DELETE' ? 'text-rose-600'
+                          : 'text-sky-600';
+                          return (
+                            <div key={h.id} className="relative">
+                              {/* Dot punched through the rail */}
+                              <span className={`absolute -left-[18px] top-4 w-2.5 h-2.5 rounded-full ring-2 ring-white ${dotBg}`} aria-hidden />
+                              <div className="bg-white rounded-xl border border-slate-200 hover:border-slate-300 transition-colors px-4 py-3.5">
+                                <div className="flex items-start justify-between gap-3">
+                                  <h3 className="font-semibold text-slate-900 text-[15px] leading-tight truncate">
+                                    {h.title}
+                                  </h3>
+                                  <span className={`text-[11px] font-medium uppercase tracking-wider shrink-0 ${actionFg}`}>
+                                    {actionLabel}
                                   </span>
                                 </div>
-                                <div className="flex items-center flex-wrap gap-1.5 mt-1 text-[10px] font-bold text-slate-500">
-                                  <span className={`px-1.5 py-0.5 rounded ${meta.soft} ${meta.tint} text-[9px] font-black uppercase tracking-widest`}>
-                                    {meta.label}
-                                  </span>
-                                  <span>×{h.quantity}</span>
-                                  {h.done_by_name && (
-                                    <>
-                                      <span className="text-slate-300">·</span>
-                                      <span>by {h.done_by_name}</span>
-                                    </>
-                                  )}
-                                  <span className="text-slate-300">·</span>
+                                {h.description && (
+                                  <p className="text-xs text-slate-500 mt-1 leading-snug line-clamp-2">{h.description}</p>
+                                )}
+                                <div className="flex items-center flex-wrap gap-2 mt-2 text-[11px] text-slate-400">
+                                  <span className="uppercase tracking-wider">{meta.label}</span>
+                                  <span>·</span>
+                                  <span className="tabular-nums">Qty {h.quantity}</span>
+                                  {h.done_by_name && (<><span>·</span><span>by {h.done_by_name}</span></>)}
+                                  <span>·</span>
                                   <span className="tabular-nums">
                                     {new Date(h.done_at).toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit' })}
                                   </span>
                                 </div>
-                                {h.description && (
-                                  <p className="text-[10px] font-bold text-slate-600 mt-1 line-clamp-2">{h.description}</p>
-                                )}
                               </div>
                             </div>
-                          </div>
-                        );
-                      })}
+                          );
+                        })}
+                      </div>
                     </div>
-                  </div>
-                ))}
-                {historyRemaining > 0 && (
-                  <button onClick={() => setHistoryShown(s => s + 50)}
-                    className="w-full py-3 bg-white border border-slate-200 rounded-2xl font-black text-xs text-amber-700 hover:bg-amber-50 transition-colors">
-                    Load More ({historyRemaining} remaining)
-                  </button>
-                )}
+                  ))}
+                </div>
               </div>
+              {historyRemaining > 0 && (
+                <button onClick={() => setHistoryShown(s => s + 50)}
+                  className="mt-4 w-full py-3 bg-white border border-slate-200 rounded-2xl font-black text-xs text-amber-700 hover:bg-amber-50 transition-colors">
+                  Load More ({historyRemaining} remaining)
+                </button>
+              )}
             </>
           )
         ) : loading ? (
@@ -461,78 +496,57 @@ export const AssetsManager: React.FC<Props> = ({ onBack }) => {
           // playful indicators on what's really a register, so swapped to a
           // clean section + row layout. Category is conveyed via a slim left
           // border accent + small label, not the icon size.
-          <div className="space-y-5">
-            {groups.map(group => (
-              <div key={group.date}>
-                <div className="flex items-center gap-2 mb-2">
-                  <div className="text-[10px] font-black uppercase tracking-widest text-slate-500">
-                    {formatDay(group.date)}
-                  </div>
-                  <span className="text-[10px] font-bold text-slate-300">·</span>
-                  <span className="text-[10px] font-bold text-slate-400">
-                    {group.items.length} item{group.items.length === 1 ? '' : 's'}
-                  </span>
-                  <div className="flex-1 h-px bg-slate-100"/>
-                </div>
-                <div className="space-y-1.5 lg:space-y-2">
-                  {group.items.map(item => {
-                    const meta = CATEGORY_META[item.category];
-                    const Icon = meta.icon;
-                    return (
-                      <div key={item.id}
-                        className="bg-white rounded-2xl border border-slate-100 shadow-sm hover:border-slate-200 hover:shadow-md transition-all px-4 py-4 lg:px-5 lg:py-5">
-                        <div className="flex items-start gap-3.5">
-                          {/* Larger soft-tinted tile carries the category
-                              colour (amber for books, emerald for lab,
-                              slate for other). Earlier the same colour
-                              was duplicated as a left-edge stripe AND on
-                              the icon tile — visually noisy. Just the
-                              tile now. */}
-                          <div className={`w-12 h-12 lg:w-14 lg:h-14 rounded-2xl flex items-center justify-center shrink-0 ${meta.soft} ${meta.tint}`}>
-                            <Icon size={20} />
-                          </div>
-                          <div className="flex-1 min-w-0">
-                            <div className="flex items-center justify-between gap-2">
-                              <span className="font-black text-slate-900 text-base lg:text-lg truncate">{item.title}</span>
-                              <span className="text-sm lg:text-base font-black text-slate-700 tabular-nums shrink-0 bg-slate-50 px-2 py-0.5 rounded-md">
-                                ×{item.quantity}
-                              </span>
-                            </div>
-                            <div className="flex items-center gap-2 mt-1.5 text-[11px] font-black text-slate-500">
-                              <span className={`uppercase tracking-widest px-2 py-0.5 rounded-full ${meta.soft} ${meta.tint}`}>
-                                {meta.label}
-                              </span>
-                              {item.description && (
-                                <span className="truncate text-slate-500 font-bold normal-case tracking-normal">{item.description}</span>
-                              )}
-                            </div>
-                            {item.note && (
-                              <p className="text-[11px] font-bold text-slate-600 mt-2.5 px-3 py-2 rounded-lg bg-slate-50 border border-slate-100 leading-relaxed">
-                                <span className="text-slate-400 uppercase tracking-widest mr-1.5 text-[9px]">Note:</span>{item.note}
-                              </p>
-                            )}
-                          </div>
-                          {editMode && (
-                            <div className="flex items-center gap-1 shrink-0">
-                              <button onClick={() => setEditing({ ...item })}
-                                title="Edit"
-                                className="p-2 text-blue-600 bg-blue-50 hover:bg-blue-100 rounded-lg transition-colors">
-                                <Pencil size={14} />
-                              </button>
-                              <button onClick={() => setDeleting(item)}
-                                title="Delete"
-                                className="p-2 text-rose-500 bg-rose-50 hover:bg-rose-100 rounded-lg transition-colors">
-                                <Trash2 size={14} />
-                              </button>
-                            </div>
-                          )}
-                        </div>
+          // Flat list — no date headers. Each card carries its own
+          // "Added on" date in the meta line so the principal can see
+          // when every item entered the register without scanning a
+          // separate group label.
+          <div className="space-y-2">
+            {groups.flatMap(g => g.items).map(item => {
+              const meta = CATEGORY_META[item.category];
+              return (
+                <div key={item.id}
+                  className="bg-white rounded-xl border border-slate-200 hover:border-slate-300 transition-colors px-4 py-3.5">
+                  <div className="flex items-start justify-between gap-3">
+                    <div className="flex-1 min-w-0">
+                      <h3 className="font-semibold text-slate-900 text-[15px] leading-tight truncate">
+                        {item.title}
+                      </h3>
+                      {item.description && (
+                        <p className="text-xs text-slate-500 mt-1 leading-snug line-clamp-2">
+                          {item.description}
+                        </p>
+                      )}
+                      <div className="flex items-center flex-wrap gap-2 mt-2 text-[11px] text-slate-400">
+                        <span className="uppercase tracking-wider">{meta.label}</span>
+                        <span>·</span>
+                        <span className="tabular-nums">Qty {item.quantity}</span>
+                        <span>·</span>
+                        <span className="tabular-nums">Added {formatDay(item.addedOn)}</span>
                       </div>
-                    );
-                  })}
+                      {item.note && (
+                        <p className="text-[11px] text-slate-500 mt-2 pt-2 border-t border-slate-100 leading-snug">
+                          {item.note}
+                        </p>
+                      )}
+                    </div>
+                    {editMode && (
+                      <div className="flex items-center gap-1 shrink-0">
+                        <button onClick={() => setEditing({ ...item })}
+                          title="Edit"
+                          className="p-2 text-slate-500 hover:text-slate-900 hover:bg-slate-100 rounded-lg transition-colors">
+                          <Pencil size={14} />
+                        </button>
+                        <button onClick={() => setDeleting(item)}
+                          title="Delete"
+                          className="p-2 text-slate-500 hover:text-rose-600 hover:bg-rose-50 rounded-lg transition-colors">
+                          <Trash2 size={14} />
+                        </button>
+                      </div>
+                    )}
+                  </div>
                 </div>
-              </div>
-            ))}
+              );
+            })}
           </div>
         )}
       </div>

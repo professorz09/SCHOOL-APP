@@ -69,18 +69,14 @@ export const SalaryReminderCard: React.FC<Props> = ({ onNavigate }) => {
 
   if (loading) return null;
 
-  if (loadError) return (
-    <div className="w-full bg-rose-50 border border-rose-200 rounded-2xl p-3 flex items-center gap-3">
-      <BanknoteIcon size={18} className="text-rose-500 shrink-0" />
-      <div className="flex-1 min-w-0">
-        <p className="text-[11px] font-black text-rose-800">Salary reminders unavailable</p>
-        <p className="text-[10px] font-bold text-rose-600 truncate">{loadError}</p>
-      </div>
-      <button onClick={load} className="text-[10px] font-black text-rose-700 underline shrink-0">Retry</button>
-    </div>
-  );
-
-  if (rows.length === 0) return null;
+  // Silently hide the widget on fetch failure (e.g. transient network
+  // blip, RLS check still warming up). The widget is non-essential —
+  // a noisy red "TypeError: Failed to fetch" banner on the home
+  // dashboard was alarming users without any actionable info. The
+  // widget will reappear on the next successful load. (load() is still
+  // wired to `loadError` if we ever want to re-introduce a less
+  // intrusive surfacing.)
+  if (loadError || rows.length === 0) return null;
 
   return (
     <>

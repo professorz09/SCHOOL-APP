@@ -4,7 +4,7 @@ import {
   Wallet, MapPin, ChevronRight, Bell, ClipboardCheck, Clock,
   Settings, UserCog, CalendarCheck, Sparkles,
   Calendar, GraduationCap, ArrowRight, TrendingUp, AlertCircle, BarChart3,
-  Library,
+  Library, Banknote,
 } from 'lucide-react';
 import { studentService } from '@/modules/students/student.service';
 import { staffService } from '@/modules/staff/staff.service';
@@ -29,6 +29,10 @@ type Action = {
    *  when super-admin has set max_vehicles=0 for this school. */
   disabled?: boolean;
   disabledReason?: string;
+  /** Renders as a wider full-row banner above the normal grid. Used
+   *  when a hub has an odd item count so the layout doesn't end with a
+   *  lonely single-cell row. */
+  hero?: boolean;
 };
 type Hub = {
   key: 'STUDENTS' | 'STAFF' | 'ACADEMICS' | 'OPERATIONS';
@@ -341,13 +345,17 @@ export const PrincipalDashboard: React.FC<Props> = ({ onNavigate }) => {
       gradient: 'from-sky-500 to-blue-500',
       ring: 'ring-sky-300',
       items: [
-        { icon: <Users size={20}/>,         label: 'Staff List',  view: 'STAFF',            tint: 'bg-blue-50 text-blue-600' },
-        { icon: <CalendarCheck size={20}/>, label: 'Attendance',  view: 'STAFF_ATTENDANCE', tint: 'bg-teal-50 text-teal-600' },
-        { icon: <Wallet size={20}/>,        label: 'Expenses',    view: 'EXPENSES',         tint: 'bg-red-50 text-red-500' },
+        // Primary CTA — Staff List is the main entry into the hub.
+        // Rendered as a distinct full-width hero card (blue, white
+        // text), visually separated from the small utility tiles.
+        { icon: <Users size={20}/>,         label: 'Staff List',     view: 'STAFF',            tint: 'bg-blue-50 text-blue-600', hero: true },
+        { icon: <CalendarCheck size={20}/>, label: 'Attendance',     view: 'STAFF_ATTENDANCE', tint: 'bg-teal-50 text-teal-600' },
+        { icon: <Banknote size={20}/>,      label: 'Salary Ledger',  view: 'SALARY_LEDGER',    tint: 'bg-amber-50 text-amber-600' },
+        { icon: <Wallet size={20}/>,        label: 'Expenses',       view: 'EXPENSES',         tint: 'bg-red-50 text-red-500' },
         // Management (class roster admin — teacher allotment, section
         // edits) is fundamentally a staff-management task ("who teaches
         // what / which section"), so it sits with the Staff hub.
-        { icon: <BookOpen size={20}/>,      label: 'Management',  view: 'CLASS_MGMT',       tint: 'bg-purple-50 text-purple-600' },
+        { icon: <BookOpen size={20}/>,      label: 'Management',     view: 'CLASS_MGMT',       tint: 'bg-purple-50 text-purple-600' },
       ],
     },
     {
@@ -475,44 +483,92 @@ export const PrincipalDashboard: React.FC<Props> = ({ onNavigate }) => {
 
         const actionsPanel = openHub ? (() => {
           const hub = HUBS.find(h => h.key === openHub)!;
+          const heroItems = hub.items.filter(i => i.hero);
+          const gridItems = hub.items.filter(i => !i.hero);
+          const renderTile = (item: Action) => {
+            const { icon, label, view, tint } = item;
+            const isDisabled = item.disabled === true;
+            const reason = item.disabledReason;
+            return (
+              <button
+                key={label}
+                onClick={() => {
+                  if (isDisabled) {
+                    if (reason) useUIStore.getState().showToast(reason, 'info');
+                    return;
+                  }
+                  onNavigate(view);
+                  setOpenHub(null);
+                }}
+                className={`flex flex-col items-center gap-1.5 lg:gap-2 p-2 lg:p-3 rounded-xl transition-all ${
+                  isDisabled
+                    ? 'cursor-not-allowed opacity-50'
+                    : 'active:scale-95 hover:bg-slate-50'
+                }`}>
+                <div className={`relative w-11 h-11 lg:w-14 lg:h-14 rounded-2xl flex items-center justify-center ${tint}`}>
+                  {icon}
+                  {isDisabled && (
+                    <span className="absolute -top-1 -right-1 w-4 h-4 rounded-full bg-slate-400 text-white text-[8px] font-black flex items-center justify-center" aria-hidden>
+                      🔒
+                    </span>
+                  )}
+                </div>
+                <span className="text-[9px] lg:text-[11px] font-black text-slate-600 uppercase tracking-wide text-center leading-tight">{label}</span>
+              </button>
+            );
+          };
+          // Hero CTA — bold gradient card that picks up the parent
+          // hub's accent gradient, decorative watermark icon on the
+          // right, white pill arrow. Visually leagues apart from the
+          // small utility tiles below; reads as the primary action.
+          const renderHeroCta = (item: Action) => (
+            <button key={item.label}
+              onClick={() => { onNavigate(item.view); setOpenHub(null); }}
+              className={`relative w-full overflow-hidden rounded-2xl active:scale-[0.99] transition-all shadow-lg shadow-slate-300/40 bg-gradient-to-br ${hub.gradient} text-white text-left group`}>
+              {/* Decorative watermark — large faded icon on the right */}
+              <span aria-hidden className="pointer-events-none absolute -right-4 -top-4 opacity-15">
+                {React.cloneElement(item.icon as React.ReactElement, { size: 140 })}
+              </span>
+              {/* Subtle dot pattern overlay */}
+              <span aria-hidden
+                className="pointer-events-none absolute inset-0 opacity-10"
+                style={{
+                  backgroundImage: 'radial-gradient(circle at 1px 1px, white 1px, transparent 1px)',
+                  backgroundSize: '14px 14px',
+                }} />
+              <div className="relative flex items-center gap-3 lg:gap-4 px-4 lg:px-5 py-4 lg:py-5">
+                <div className="w-12 h-12 lg:w-14 lg:h-14 rounded-2xl bg-white/25 backdrop-blur flex items-center justify-center shrink-0 ring-2 ring-white/40 shadow-sm">
+                  {item.icon}
+                </div>
+                <div className="flex-1 min-w-0">
+                  <div className="text-[10px] lg:text-xs font-black uppercase tracking-[0.2em] text-white/75 mb-0.5">
+                    {hub.label} Hub
+                  </div>
+                  <div className="text-base lg:text-lg font-black uppercase tracking-wide leading-tight">
+                    {item.label}
+                  </div>
+                  <div className="text-[10px] lg:text-xs font-bold text-white/85 mt-1">
+                    View, edit & add staff →
+                  </div>
+                </div>
+                <div className="shrink-0 w-9 h-9 lg:w-10 lg:h-10 rounded-full bg-white/25 backdrop-blur flex items-center justify-center ring-1 ring-white/30 group-active:translate-x-0.5 transition-transform">
+                  <ChevronRight size={18} />
+                </div>
+              </div>
+            </button>
+          );
           return (
             <div className="bg-white rounded-2xl border border-slate-100 shadow-sm p-3 lg:p-5 animate-in slide-in-from-top-2 duration-200">
               <div className="text-[10px] lg:text-xs font-black uppercase tracking-widest text-slate-400 mb-2 lg:mb-3 px-1">
                 {hub.label} Actions
               </div>
+              {heroItems.length > 0 && (
+                <div className="space-y-2 mb-3">
+                  {heroItems.map(renderHeroCta)}
+                </div>
+              )}
               <div className="grid grid-cols-4 lg:grid-cols-8 gap-2 lg:gap-3">
-                {hub.items.map(item => {
-                  const { icon, label, view, tint } = item;
-                  const isDisabled = (item as { disabled?: boolean }).disabled === true;
-                  const reason = (item as { disabledReason?: string }).disabledReason;
-                  return (
-                    <button
-                      key={label}
-                      onClick={() => {
-                        if (isDisabled) {
-                          if (reason) useUIStore.getState().showToast(reason, 'info');
-                          return;
-                        }
-                        onNavigate(view);
-                        setOpenHub(null);
-                      }}
-                      className={`flex flex-col items-center gap-1.5 lg:gap-2 p-2 lg:p-3 rounded-xl transition-all ${
-                        isDisabled
-                          ? 'cursor-not-allowed opacity-50'
-                          : 'active:scale-95 hover:bg-slate-50'
-                      }`}>
-                      <div className={`relative w-11 h-11 lg:w-14 lg:h-14 rounded-2xl flex items-center justify-center ${tint}`}>
-                        {icon}
-                        {isDisabled && (
-                          <span className="absolute -top-1 -right-1 w-4 h-4 rounded-full bg-slate-400 text-white text-[8px] font-black flex items-center justify-center" aria-hidden>
-                            🔒
-                          </span>
-                        )}
-                      </div>
-                      <span className="text-[9px] lg:text-[11px] font-black text-slate-600 uppercase tracking-wide text-center leading-tight">{label}</span>
-                    </button>
-                  );
-                })}
+                {gridItems.map(renderTile)}
               </div>
             </div>
           );
