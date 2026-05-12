@@ -249,19 +249,46 @@ export const ReportsSection: React.FC<Props> = ({
       icon: <AlertCircle size={16} className="text-rose-600" />,
       reports: [
         {
-          id: 'fees_due', label: 'Due Fees Students', desc: 'Pending dues — sorted by largest first', needsYear: true,
+          id: 'fees_due', label: 'Due Fees Students', desc: 'Only installments with due date today or earlier', needsYear: true,
           run: async () => {
             if (!yearId) fail('Pick an academic year first');
-            const { data, error } = await supabase.from('student_academic_records')
-              .select('total_fee, paid_fee, attendance_percent, students!inner(name, admission_no, phone, is_rte, father_name, father_phone, mother_name, mother_phone, address, admission_date, school_id, is_active), class_name, section, academic_year_id')
+            // Use fee_installments with due_date <= today (IST) so upcoming
+            // months don't inflate the "pending" figure. Earlier this report
+            // pulled student_academic_records.total_fee - paid_fee, which
+            // includes every future installment in the year — Principal
+            // wanted only currently-due rows.
+            const todayIst = new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Kolkata' });
+            const { data: instRows, error: instErr } = await supabase
+              .from('fee_installments')
+              .select('student_id, amount, paid_amount, write_off_amount')
+              .eq('school_id', schoolId)
               .eq('academic_year_id', yearId)
+              .lte('due_date', todayIst);
+            if (instErr) throw new Error(instErr.message);
+            type Inst = { student_id: string; amount: number; paid_amount: number; write_off_amount: number };
+            const pendingByStudent = new Map<string, number>();
+            for (const r of ((instRows ?? []) as Inst[])) {
+              const bal = Math.max(0, Number(r.amount ?? 0) - Number(r.paid_amount ?? 0) - Number(r.write_off_amount ?? 0));
+              if (bal <= 0) continue;
+              pendingByStudent.set(r.student_id, (pendingByStudent.get(r.student_id) ?? 0) + bal);
+            }
+            if (pendingByStudent.size === 0) {
+              return {
+                rows: [],
+                headers: ['name','admission_no','class','pending_fee','total_fee','paid_fee','father_phone','mother_phone','phone'],
+                filenamePrefix: `fee-dues_${yearName}`,
+              };
+            }
+            const { data, error } = await supabase.from('student_academic_records')
+              .select('student_id, total_fee, paid_fee, students!inner(name, admission_no, phone, father_phone, mother_phone, school_id, is_active), class_name, section')
+              .eq('academic_year_id', yearId)
+              .in('student_id', Array.from(pendingByStudent.keys()))
               .not('class_name', 'is', null);
             if (error) throw new Error(error.message);
-            type Row = { total_fee: number|null; paid_fee: number|null; attendance_percent: number|null;
+            type Row = { student_id: string; total_fee: number|null; paid_fee: number|null;
               class_name: string|null; section: string|null;
-              students: { name: string; admission_no: string; phone: string|null; is_rte: boolean|null;
-                father_name: string|null; father_phone: string|null; mother_name: string|null;
-                mother_phone: string|null; address: string|null; admission_date: string|null;
+              students: { name: string; admission_no: string; phone: string|null;
+                father_phone: string|null; mother_phone: string|null;
                 school_id: string; is_active: boolean } };
             const rows = ((data ?? []) as unknown as Row[])
               .filter(r => r.students.school_id === schoolId && r.students.is_active)
@@ -269,7 +296,7 @@ export const ReportsSection: React.FC<Props> = ({
                 name: r.students.name,
                 admission_no: r.students.admission_no,
                 class: `${r.class_name ?? ''}-${r.section ?? ''}`,
-                pending_fee: Math.max(0, Number(r.total_fee ?? 0) - Number(r.paid_fee ?? 0)),
+                pending_fee: pendingByStudent.get(r.student_id) ?? 0,
                 total_fee: Number(r.total_fee ?? 0),
                 paid_fee: Number(r.paid_fee ?? 0),
                 father_phone: r.students.father_phone ?? '',
