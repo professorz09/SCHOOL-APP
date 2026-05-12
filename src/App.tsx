@@ -33,6 +33,11 @@ const StudentsManager    = lazy(() => import('@/modules/students/components/Stud
 const FeeLedger          = lazy(() => import('@/modules/fees/components/FeeLedger').then(m => ({ default: m.FeeLedger })));
 const SchoolsManager     = lazy(() => import('@/roles/super-admin/components/SchoolsManager').then(m => ({ default: m.SchoolsManager })));
 const BillingManager     = lazy(() => import('@/roles/super-admin/components/BillingManager').then(m => ({ default: m.BillingManager })));
+const AdminsManager      = lazy(() => import('@/roles/super-admin/components/AdminsManager').then(m => ({ default: m.AdminsManager })));
+const BroadcastManager   = lazy(() => import('@/roles/super-admin/components/BroadcastManager').then(m => ({ default: m.BroadcastManager })));
+const ReportsView        = lazy(() => import('@/roles/super-admin/components/ReportsView').then(m => ({ default: m.ReportsView })));
+const LogsViewer         = lazy(() => import('@/roles/super-admin/components/LogsViewer').then(m => ({ default: m.LogsViewer })));
+const PlatformSettingsManager = lazy(() => import('@/roles/super-admin/components/PlatformSettingsManager').then(m => ({ default: m.PlatformSettingsManager })));
 const AttendanceManager  = lazy(() => import('@/modules/attendance/components/TeacherAttendanceManager').then(m => ({ default: m.AttendanceManager })));
 const TeacherNoticesView = lazy(() => import('@/modules/notices/components/TeacherNoticesView').then(m => ({ default: m.TeacherNoticesView })));
 
@@ -327,8 +332,13 @@ export default function App() {
     if (tab === 'NOTICES' && role === 'STUDENT')    return <StudentNoticesView onBack={goHome} />;
     if (tab === 'STUDENTS'    && role === 'PRINCIPAL') return <StudentsManager onBack={goHome} />;
     if (tab === 'FEE_LEDGER'  && role === 'PRINCIPAL') return <ErrorBoundary label="Fee Ledger"><FeeLedger onBack={goHome} /></ErrorBoundary>;
-    if (tab === 'SCHOOLS'  && role === 'SUPER_ADMIN') return <SchoolsManager onBack={goHome} />;
-    if (tab === 'BILLING'  && role === 'SUPER_ADMIN') return <BillingManager  onBack={goHome} />;
+    if (tab === 'SCHOOLS'           && role === 'SUPER_ADMIN') return <SchoolsManager  onBack={goHome} />;
+    if (tab === 'BILLING'           && role === 'SUPER_ADMIN') return <BillingManager  onBack={goHome} />;
+    if (tab === 'ADMINS'            && role === 'SUPER_ADMIN') return <AdminsManager   onBack={goHome} />;
+    if (tab === 'BROADCAST'         && role === 'SUPER_ADMIN') return <BroadcastManager onBack={goHome} />;
+    if (tab === 'REPORTS'           && role === 'SUPER_ADMIN') return <ReportsView     onBack={goHome} />;
+    if (tab === 'LOGS'              && role === 'SUPER_ADMIN') return <LogsViewer      onBack={goHome} />;
+    if (tab === 'PLATFORM_SETTINGS' && role === 'SUPER_ADMIN') return <PlatformSettingsManager onBack={goHome} />;
     if (tab === 'ATTENDANCE' && role === 'TEACHER') return <AttendanceManager  onBack={goHome} />;
     if (tab === 'NOTICES'    && role === 'TEACHER') return <TeacherNoticesView onBack={goHome} />;
     if (role === 'DRIVER' && tab === 'ROUTE')    return <DriverRouteView />;

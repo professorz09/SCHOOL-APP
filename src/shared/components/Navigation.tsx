@@ -3,13 +3,17 @@ import {
   Home, User, Bell, IndianRupee, Users,
   Building2, CreditCard, ClipboardList, MapPin,
   LayoutDashboard, LogOut,
+  ShieldCheck, MailPlus, BarChart3, History, Settings as SettingsIcon,
 } from 'lucide-react';
 import { AppRole, NavTab } from '@/shared/types/index';
 import { useAuthStore } from '@/store/authStore';
 
 // ─── Role-specific tab definitions ───────────────────────────────────────────
 
-type TabDef = { id: NavTab; icon: React.ElementType; label: string };
+// `desktopOnly` tabs appear in the desktop sidebar but not in the mobile
+// bottom nav (which only has room for ~4 buttons). Mobile users still reach
+// these sections via the dashboard's quick-action grid.
+type TabDef = { id: NavTab; icon: React.ElementType; label: string; desktopOnly?: boolean };
 
 const ROLE_TABS: Record<AppRole, TabDef[]> = {
   STUDENT: [
@@ -28,6 +32,11 @@ const ROLE_TABS: Record<AppRole, TabDef[]> = {
     { id: 'HOME',     icon: LayoutDashboard, label: 'Home'    },
     { id: 'SCHOOLS',  icon: Building2,       label: 'Schools' },
     { id: 'BILLING',  icon: CreditCard,      label: 'Billing' },
+    { id: 'ADMINS',            icon: ShieldCheck,  label: 'Admins',    desktopOnly: true },
+    { id: 'BROADCAST',         icon: MailPlus,     label: 'Broadcast', desktopOnly: true },
+    { id: 'REPORTS',           icon: BarChart3,    label: 'Reports',   desktopOnly: true },
+    { id: 'LOGS',              icon: History,      label: 'Logs',      desktopOnly: true },
+    { id: 'PLATFORM_SETTINGS', icon: SettingsIcon, label: 'Settings',  desktopOnly: true },
     { id: 'PROFILE',  icon: User,            label: 'Profile' },
   ],
   TEACHER: [
@@ -53,7 +62,7 @@ interface BottomNavProps {
 }
 
 export const BottomNav: React.FC<BottomNavProps> = ({ role, currentTab, setTab }) => {
-  const tabs = ROLE_TABS[role] ?? ROLE_TABS.STUDENT;
+  const tabs = (ROLE_TABS[role] ?? ROLE_TABS.STUDENT).filter(t => !t.desktopOnly);
 
   return (
     <div className="w-full bg-white border-t border-slate-100 flex justify-between items-center px-6 pt-2 pb-[max(env(safe-area-inset-bottom),16px)]">

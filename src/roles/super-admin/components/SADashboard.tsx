@@ -66,10 +66,11 @@ export const SADashboard: React.FC<SADashboardProps> = ({ onNavigate }) => {
   ];
 
   return (
-    <div className="flex flex-col gap-5 px-5 animate-in slide-in-from-bottom-4 duration-500 fade-in">
+    <div className="flex flex-col gap-5 px-5 md:px-8 md:py-6 md:max-w-6xl md:mx-auto animate-in slide-in-from-bottom-4 duration-500 fade-in">
 
-      {/* Quick actions grid */}
-      <div className="grid grid-cols-3 gap-3">
+      {/* Quick actions grid — mobile only. Desktop has the same sections in
+          the persistent SidebarNav, so this grid would be a redundant nav. */}
+      <div className="grid grid-cols-3 gap-3 md:hidden">
         {actions.map(({ label, icon: Icon, color, view }) => (
           <button
             key={view}
@@ -103,7 +104,7 @@ export const SADashboard: React.FC<SADashboardProps> = ({ onNavigate }) => {
       )}
 
       {/* Stats row */}
-      <div className="grid grid-cols-2 gap-3">
+      <div className="grid grid-cols-2 md:grid-cols-3 gap-3 md:gap-4">
         <div className="bg-white rounded-2xl border border-slate-100 shadow-sm p-5">
           <div className="flex items-center gap-2 mb-3">
             <Building2 size={16} className="text-emerald-600" />
@@ -136,6 +137,8 @@ export const SADashboard: React.FC<SADashboardProps> = ({ onNavigate }) => {
         </div>
       </div>
 
+      {/* Revenue + Recent schools — stacked on mobile, side-by-side on desktop */}
+      <div className="md:grid md:grid-cols-2 md:gap-4 flex flex-col gap-5">
       {/* Revenue card */}
       <div className="bg-gradient-to-br from-slate-900 to-slate-800 rounded-2xl p-5 text-white shadow-lg">
         <div className="flex items-center justify-between mb-4">
@@ -229,6 +232,7 @@ export const SADashboard: React.FC<SADashboardProps> = ({ onNavigate }) => {
             })
           )}
         </div>
+      </div>
       </div>
 
       <div className="h-6" />
