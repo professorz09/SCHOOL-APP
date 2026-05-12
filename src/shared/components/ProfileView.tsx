@@ -118,7 +118,11 @@ export const ProfileView: React.FC = () => {
         <div className="bg-white rounded-2xl border border-slate-100 shadow-sm overflow-hidden">
           <div className="flex items-center justify-between px-4 pt-4 pb-2">
             <p className="text-[9px] font-black uppercase tracking-widest text-slate-400">Account Info</p>
-            {session.role !== 'PRINCIPAL' && (
+            {/* Edit is intentionally hidden for PARENT (their account row
+                is created by the principal during student onboarding and
+                edited there) and PRINCIPAL (they edit via Settings ▸
+                School). Drivers / staff can still self-edit name + mobile. */}
+            {session.role !== 'PRINCIPAL' && session.role !== 'PARENT' && (
               <button onClick={() => { setEditName(session.name || ''); setEditMobile(session.mobileNumber || ''); setIsEditMode(true); }}
                 className="text-[9px] font-black text-indigo-600 hover:text-indigo-700">
                 Edit
