@@ -74,6 +74,12 @@ export const FeesView: React.FC<Props> = ({ onBack }) => {
   const [loadError, setLoadError] = useState<string | null>(null);
   const [upiId, setUpiId] = useState('');
   const [paymentQrUrl, setPaymentQrUrl] = useState<string | null>(null);
+  // When the parent taps "Pay" on a specific installment row (vs the
+  // bulk Pay button at the top), we stash that installment's outstanding
+  // amount + a human label here so QR_PAY renders just that amount and
+  // the upload's `description` carries the installment context for the
+  // principal to allocate against.
+  const [payTarget, setPayTarget] = useState<{ amount: number; label: string } | null>(null);
 
   // Compute days remaining until the next unpaid PARENT installment (NULL
   // when nothing is due — we hide the urgency badge in that case).
@@ -153,14 +159,16 @@ export const FeesView: React.FC<Props> = ({ onBack }) => {
     if (!txn) { showToast('Enter transaction ID (UTR / UPI ref)', 'error'); return; }
     if (txn.length < 4) { showToast('Transaction ID looks too short', 'error'); return; }
     if (!studentId) return;
+    const amount = payTarget?.amount ?? feeSummary.total;
+    const desc   = payTarget?.label  ?? 'Fee Payment';
+    if (amount <= 0) { showToast('Nothing to pay', 'error'); return; }
     setIsSubmitting(true);
     try {
-      const upload = await studentDashboardService.submitFeePayment(
-        feeSummary.total, txn, 'Fee Payment',
-      );
+      const upload = await studentDashboardService.submitFeePayment(amount, txn, desc);
       setUploads(prev => [upload, ...prev]);
       showToast('Submitted — waiting for principal approval');
       resetForm();
+      setPayTarget(null);
       setView('MAIN');
     } catch (err) {
       showToast((err as Error).message ?? 'Failed to submit', 'error');
@@ -191,10 +199,15 @@ export const FeesView: React.FC<Props> = ({ onBack }) => {
     <div className="w-full lg:max-w-5xl lg:mx-auto flex flex-col animate-in slide-in-from-right-8 duration-300">
       {/* Header */}
       <div className="sticky top-0 bg-white px-4 pt-4 pb-4 flex items-center gap-3 border-b border-slate-100 z-10">
-        <button onClick={() => setView('MAIN')} className="p-2 -ml-2 bg-slate-100 rounded-full">
+        <button onClick={() => { setPayTarget(null); setView('MAIN'); }} className="p-2 -ml-2 bg-slate-100 rounded-full">
           <ArrowLeft size={20} className="text-slate-600" />
         </button>
-        <h2 className="text-xl font-black text-slate-900 uppercase tracking-tight">Pay via UPI</h2>
+        <div className="min-w-0">
+          <h2 className="text-xl font-black text-slate-900 uppercase tracking-tight truncate">Pay via UPI</h2>
+          {payTarget && (
+            <p className="text-[10px] font-bold text-slate-400 mt-0.5 truncate">{payTarget.label}</p>
+          )}
+        </div>
       </div>
 
       <div className="space-y-5 p-5">
@@ -204,8 +217,10 @@ export const FeesView: React.FC<Props> = ({ onBack }) => {
           <div className="w-44 h-44 bg-white rounded-2xl p-3 mb-5 flex items-center justify-center">
             {paymentQrUrl ? <img src={paymentQrUrl} className="max-w-full max-h-full object-contain" /> : <QrCode size={52} className="text-slate-300" />}
           </div>
-          <div className="text-4xl font-black mb-1">₹{feeSummary.total.toLocaleString('en-IN')}</div>
-          <div className="text-blue-200 text-xs font-bold mb-2">Total Outstanding</div>
+          <div className="text-4xl font-black mb-1">₹{(payTarget?.amount ?? feeSummary.total).toLocaleString('en-IN')}</div>
+          <div className="text-blue-200 text-xs font-bold mb-2">
+            {payTarget ? payTarget.label : 'Total Outstanding'}
+          </div>
           <div className="flex items-center gap-2 bg-white/10 px-3 py-1.5 rounded-full">
             <QrCode size={13} className="text-blue-300" />
             <span className="text-[11px] font-black text-blue-100">{upiId || 'UPI not configured'}</span>
@@ -500,6 +515,28 @@ export const FeesView: React.FC<Props> = ({ onBack }) => {
                                       </span>
                                     )}
                                   </div>
+                                )}
+                                {/* Per-installment Pay button — lets parents
+                                    pay a specific upcoming month (e.g. Jun)
+                                    instead of being forced into the bulk
+                                    "Total Outstanding" flow. The QR_PAY
+                                    screen pre-fills this row's balance and
+                                    the upload's description carries the
+                                    month + fee-type so the principal can
+                                    allocate against the right installment. */}
+                                {b !== 'PAID' && balance > 0 && (
+                                  <button
+                                    onClick={() => {
+                                      const ft = FEE_TYPE_LABEL[inst.feeType] ?? 'Fee';
+                                      setPayTarget({
+                                        amount: balance,
+                                        label: `${ft} — ${inst.month} (${group.yearLabel})`,
+                                      });
+                                      setView('QR_PAY');
+                                    }}
+                                    className="mt-3 w-full bg-blue-600 hover:bg-blue-700 text-white font-black text-[11px] uppercase tracking-widest py-2.5 rounded-xl active:scale-[0.98] transition-all shadow-sm">
+                                    Pay ₹{balance.toLocaleString('en-IN')}
+                                  </button>
                                 )}
                               </div>
                               );
