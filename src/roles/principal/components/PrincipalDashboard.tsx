@@ -345,10 +345,11 @@ export const PrincipalDashboard: React.FC<Props> = ({ onNavigate }) => {
       gradient: 'from-sky-500 to-blue-500',
       ring: 'ring-sky-300',
       items: [
-        // Primary CTA — Staff List is the main entry into the hub.
-        // Rendered as a distinct full-width hero card (blue, white
-        // text), visually separated from the small utility tiles.
-        { icon: <Users size={20}/>,         label: 'Staff List',     view: 'STAFF',            tint: 'bg-blue-50 text-blue-600', hero: true },
+        // Staff List sits at the front of the tile row — same shape as
+        // Attendance / Salary Ledger / Expenses / Management. Earlier it
+        // rendered as a full-width hero banner which clashed visually
+        // with its peers; principal wanted a uniform grid.
+        { icon: <Users size={20}/>,         label: 'Staff List',     view: 'STAFF',            tint: 'bg-blue-50 text-blue-600' },
         { icon: <CalendarCheck size={20}/>, label: 'Attendance',     view: 'STAFF_ATTENDANCE', tint: 'bg-teal-50 text-teal-600' },
         { icon: <Banknote size={20}/>,      label: 'Salary Ledger',  view: 'SALARY_LEDGER',    tint: 'bg-amber-50 text-amber-600' },
         { icon: <Wallet size={20}/>,        label: 'Expenses',       view: 'EXPENSES',         tint: 'bg-red-50 text-red-500' },
