@@ -176,25 +176,33 @@ export const staffService = {
   },
 
   /**
-   * Create a staff member. Also provisions a Supabase Auth account via the
-   * admin-api endpoint (default password = mobile number; user must change
-   * on first login). Optional class assignments are inserted in the same call.
+   * Create a staff member. For TEACHER + DRIVER roles, also provisions a
+   * Supabase Auth account via the admin-api endpoint when `loginMobile` is
+   * given (default password = mobile; first-login change required). All
+   * other staff roles never get a login — they're records only.
+   *
+   * `phone` on the staff row is the contact/display number (printed on
+   * staff cards). `loginMobile` is what drives auth.users.email +
+   * public.users.mobile_number — kept separate so a teacher's personal
+   * mobile can differ from the number they use to log in.
    */
-  async create(input: Omit<StaffMember, 'id'>): Promise<StaffMember> {
+  async create(
+    input: Omit<StaffMember, 'id'>,
+    opts: { loginMobile?: string } = {},
+  ): Promise<StaffMember> {
     const schoolId = getSchoolId();
 
-    // Step 1: provision auth account (returns userId). The admin-api endpoint
-    // is upsert-style — if a user with this mobile already exists in *this*
-    // school it returns the existing userId (reused=true). If the user
-    // already exists in *another* school the endpoint hard-fails with 409,
-    // which we let propagate so the caller sees an actionable error. Either
-    // way userId is GUARANTEED to be non-null on success — we never insert
-    // a staff row with user_id=null when phone was provided.
+    // Only TEACHER + DRIVER can have an app login. Other staff (PEON,
+    // ACCOUNTANT, OTHER) get stored without a user_id and never see the
+    // login screen — there's no per-role UI for them.
+    const canHaveLogin = input.role === 'TEACHER' || input.role === 'DRIVER';
+    const loginMobile = (opts.loginMobile ?? '').replace(/\D/g, '').slice(-10);
+
     let userId: string | null = null;
-    if (input.phone) {
+    if (canHaveLogin && loginMobile.length === 10) {
       const apiRole = input.role === 'DRIVER' ? 'DRIVER' : 'TEACHER';
       const res = await adminApi.createSchoolUser({
-        mobile: input.phone.replace(/\D/g, '').slice(-10),
+        mobile: loginMobile,
         name: input.name,
         role: apiRole,
       });

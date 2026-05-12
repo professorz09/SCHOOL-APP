@@ -451,7 +451,10 @@ type StaffTextKey = 'name' | 'subject' | 'phone' | 'email' | 'aadhaarNo' | 'addr
 const STAFF_TEXT_FIELDS: ReadonlyArray<{ label: string; key: StaffTextKey; placeholder: string }> = [
   { label: 'Full Name *', key: 'name',      placeholder: 'Staff full name' },
   { label: 'Subject',     key: 'subject',   placeholder: 'e.g. Mathematics' },
-  { label: 'Phone',       key: 'phone',     placeholder: '+91 XXXXX XXXXX' },
+  // Contact mobile is the personal number shown on the staff card /
+  // printable sheets. Login mobile (rendered separately below for
+  // TEACHER + DRIVER only) is what provisions the EduGrow app account.
+  { label: 'Contact Mobile (display)', key: 'phone', placeholder: '+91 XXXXX XXXXX' },
   { label: 'Email',       key: 'email',     placeholder: 'staff@school.edu.in' },
   { label: 'Aadhaar No.', key: 'aadhaarNo', placeholder: 'XXXX XXXX XXXX' },
   { label: 'Address',     key: 'address',   placeholder: 'Residential address' },
@@ -516,6 +519,12 @@ export const StaffManager: React.FC<Props> = ({ onBack }) => {
   const [roleFilter, setRoleFilter] = useState<StaffRole | 'ALL'>('ALL');
   const [shown, setShown] = useState(50);
   const [form, setForm] = useState<Omit<StaffMember, 'id'>>(BLANK);
+  // Login mobile is kept outside `form` because it's not a stored field on
+  // the staff row — it's only used at create-time to provision the auth
+  // user via /api/admin/create-school-user. Only TEACHER + DRIVER roles
+  // get an account; other staff (PEON / ACCOUNTANT / OTHER) are records
+  // only, no login.
+  const [loginPhone, setLoginPhone] = useState('');
   const [editForm, setEditForm] = useState<Omit<StaffMember, 'id'>>(BLANK);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [confirmSuspend, setConfirmSuspend] = useState<StaffMember | null>(null);
@@ -661,12 +670,18 @@ export const StaffManager: React.FC<Props> = ({ onBack }) => {
       showToast('Joining date 50 saal pehle ya 1 saal aage se zyada nahi ho sakti', 'error');
       return;
     }
-    // Phone (optional) — if provided, must be 10 digits.
+    // Contact phone (optional) — if provided, must be 10 digits.
     if (form.phone && form.phone.trim()) {
       const cleaned = form.phone.replace(/\D/g, '').slice(-10);
       if (cleaned.length !== 10) {
-        showToast('Phone must be a 10-digit mobile number', 'error'); return;
+        showToast('Contact mobile 10-digit hona chahiye', 'error'); return;
       }
+    }
+    // Login mobile (TEACHER + DRIVER only, optional) — must also be 10 digits.
+    const needsLogin = form.role === 'TEACHER' || form.role === 'DRIVER';
+    const loginPhoneClean = loginPhone.replace(/\D/g, '').slice(-10);
+    if (needsLogin && loginPhone.trim() && loginPhoneClean.length !== 10) {
+      showToast('Login mobile 10-digit hona chahiye', 'error'); return;
     }
     // Email (optional) — if provided, basic shape check.
     if (form.email && form.email.trim() && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(form.email.trim())) {
@@ -685,7 +700,11 @@ export const StaffManager: React.FC<Props> = ({ onBack }) => {
       // the initial salary-history entry; if the seed fails it deletes the
       // staff row and throws, so we never end up with a salaried staff
       // member that has no salary history.
-      const member = await staffService.create(form);
+      const member = await staffService.create(form, {
+        // Only TEACHER + DRIVER get a login. Pass the explicit login mobile
+        // (separate from contact). Empty string → no auth user created.
+        loginMobile: needsLogin ? loginPhoneClean : '',
+      });
 
       // Upload any documents queued during creation — best-effort. Staff is
       // already inserted, so failed uploads don't abort the flow; we surface
@@ -712,6 +731,7 @@ export const StaffManager: React.FC<Props> = ({ onBack }) => {
 
       setStaff(prev => [...prev, member]);
       setForm(BLANK);
+      setLoginPhone('');
       setPendingDocs([]);
       setView('LIST');
     } catch (e) {
@@ -1133,9 +1153,11 @@ export const StaffManager: React.FC<Props> = ({ onBack }) => {
             </div>
           ))}
 
-          {/* Subject — dropdown of existing values + explicit "Other"
-              opt-in for a brand-new one. Replaces the datalist that kept
-              auto-popping while the user was trying to type. */}
+          {/* Subject is teacher-only. Hide it entirely for non-TEACHER
+              roles (DRIVER / PEON / ACCOUNTANT / OTHER) where it never
+              applies — the optional dropdown was just visual noise on
+              those records. */}
+          {form.role === 'TEACHER' && (
           <div>
             <label className="block text-[10px] font-black uppercase tracking-widest text-slate-500 mb-1.5">Subject</label>
             {createSubjectCustom ? (
@@ -1170,6 +1192,7 @@ export const StaffManager: React.FC<Props> = ({ onBack }) => {
               </select>
             )}
           </div>
+          )}
           <div className="grid grid-cols-2 gap-3">
             <div>
               <label className="block text-[10px] font-black uppercase tracking-widest text-slate-500 mb-1.5">Role</label>
@@ -1184,6 +1207,25 @@ export const StaffManager: React.FC<Props> = ({ onBack }) => {
                 className="w-full border border-slate-200 bg-slate-50 rounded-xl px-4 py-3 font-bold text-sm outline-none focus:border-blue-500" />
             </div>
           </div>
+          {/* Login Mobile — TEACHER + DRIVER only. Other staff (peon,
+              accountant, etc.) are records only and never log in, so this
+              field is hidden entirely for them. Leaving this empty also
+              skips user provisioning, useful when the staff member doesn't
+              have a smartphone yet — principal can add it later via edit. */}
+          {(form.role === 'TEACHER' || form.role === 'DRIVER') && (
+            <div>
+              <label className="block text-[10px] font-black uppercase tracking-widest text-slate-500 mb-1.5">
+                Login Mobile · for app access
+              </label>
+              <input value={loginPhone} onChange={e => setLoginPhone(e.target.value)}
+                placeholder="10-digit mobile used to log in"
+                inputMode="numeric"
+                className="w-full border border-slate-200 bg-slate-50 rounded-xl px-4 py-3 font-bold text-sm outline-none focus:border-blue-500 focus:bg-white" />
+              <p className="text-[10px] font-bold text-slate-400 mt-1.5 leading-relaxed">
+                {form.role === 'TEACHER' ? 'Teacher' : 'Driver'} apne mobile se login karenge. Default password = mobile (first-login pe change karna padega). Khali chhodne par koi login account nahi banega — record sirf school ke paas rahega.
+              </p>
+            </div>
+          )}
           <div className="grid grid-cols-2 gap-3">
             <div>
               <label className="block text-[10px] font-black uppercase tracking-widest text-slate-500 mb-1.5">Joining Date</label>
@@ -1304,9 +1346,10 @@ export const StaffManager: React.FC<Props> = ({ onBack }) => {
             </div>
           ))}
 
-          {/* Subject dropdown + Other (mirrors the Create form). The
-              "Other" toggle lets the principal type a brand-new subject
-              when the existing list doesn't cover it. */}
+          {/* Subject is teacher-only. Hide for non-TEACHER roles —
+              dropping the field cleans up the form for DRIVER / PEON /
+              ACCOUNTANT staff who never have a subject. */}
+          {editForm.role === 'TEACHER' && (
           <div>
             <label className="block text-[10px] font-black uppercase tracking-widest text-slate-500 mb-1.5">Subject</label>
             {(() => {
@@ -1349,6 +1392,7 @@ export const StaffManager: React.FC<Props> = ({ onBack }) => {
               );
             })()}
           </div>
+          )}
           <div className="grid grid-cols-2 gap-3">
             <div>
               <label className="block text-[10px] font-black uppercase tracking-widest text-slate-500 mb-1.5">Role</label>
