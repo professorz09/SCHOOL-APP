@@ -110,6 +110,10 @@ export const SchoolsManager: React.FC<Props> = ({ onBack }) => {
   // in this EDIT view).
   const [pendingAyToggle, setPendingAyToggle] = useState<boolean | null>(null);
   const [ayToggleSaving, setAyToggleSaving] = useState(false);
+  // Year-close one-shot toggle — same inline-confirm pattern as the AY
+  // creation toggle. Auto-resets server-side after a successful close.
+  const [pendingYearCloseToggle, setPendingYearCloseToggle] = useState<boolean | null>(null);
+  const [yearCloseToggleSaving, setYearCloseToggleSaving] = useState(false);
   // School active/inactive toggle confirm
   const [pendingStatusToggle, setPendingStatusToggle] = useState<SchoolStatus | null>(null);
   const [statusToggleSaving, setStatusToggleSaving] = useState(false);
@@ -194,6 +198,22 @@ export const SchoolsManager: React.FC<Props> = ({ onBack }) => {
       showToast(e instanceof Error ? e.message : 'Toggle failed', 'error');
     } finally {
       setAyToggleSaving(false);
+    }
+  };
+
+  const confirmYearCloseToggle = async () => {
+    if (pendingYearCloseToggle === null || !selected) return;
+    const next = pendingYearCloseToggle;
+    setYearCloseToggleSaving(true);
+    try {
+      await updateSchool(selected.id, { yearCloseEnabled: next });
+      setSelected(prev => prev ? { ...prev, yearCloseEnabled: next } : null);
+      showToast(next ? 'Year Close enabled — principal can now close this year' : 'Year Close disabled');
+      setPendingYearCloseToggle(null);
+    } catch (e) {
+      showToast(e instanceof Error ? e.message : 'Toggle failed', 'error');
+    } finally {
+      setYearCloseToggleSaving(false);
     }
   };
 
@@ -972,6 +992,34 @@ export const SchoolsManager: React.FC<Props> = ({ onBack }) => {
             </div>
           </div>
 
+          {/* Year-close one-shot toggle. Off by default; super-admin flips
+              on for a few minutes at year-end, principal closes the year,
+              the close_academic_year RPC auto-resets it to false. Visual
+              tint is amber (high-stakes / irreversible) vs the emerald of
+              the AY-creation toggle so the principal can't confuse them. */}
+          <div className="bg-white rounded-2xl border border-slate-100 shadow-sm p-4">
+            <div className="flex items-start justify-between gap-3">
+              <div className="min-w-0">
+                <p className="text-[10px] font-black uppercase tracking-widest text-slate-400">Year Close</p>
+                <div className={`text-sm font-black mt-1 ${selected.yearCloseEnabled ? 'text-amber-700' : 'text-slate-900'}`}>
+                  {selected.yearCloseEnabled ? 'Unlocked · principal can close' : 'Locked'}
+                </div>
+                <p className="text-[11px] font-bold text-slate-500 mt-1 leading-relaxed">
+                  {selected.yearCloseEnabled
+                    ? 'Principal can close the active academic year. Flag auto-resets after a successful close.'
+                    : 'Principal cannot close the active year. Flip on only when the school is ready for promotion / final salary / fee year-end.'}
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={() => setPendingYearCloseToggle(!selected.yearCloseEnabled)}
+                className={`shrink-0 w-12 h-7 rounded-full relative transition-colors active:scale-95 transition-transform ${selected.yearCloseEnabled ? 'bg-amber-500' : 'bg-slate-300'}`}
+                aria-label="Toggle year close permission">
+                <span className={`absolute top-0.5 w-6 h-6 bg-white rounded-full shadow transition-all ${selected.yearCloseEnabled ? 'left-[22px]' : 'left-0.5'}`} />
+              </button>
+            </div>
+          </div>
+
           {/* Save Changes — primary action for the school-info form. */}
           <button onClick={handleUpdate} disabled={isSubmitting}
             className="w-full flex items-center justify-center gap-2 bg-blue-600 text-white font-black text-xs uppercase tracking-widest py-4 rounded-2xl active:scale-95 transition-transform shadow-lg disabled:opacity-60">
@@ -1070,6 +1118,17 @@ export const SchoolsManager: React.FC<Props> = ({ onBack }) => {
             saving={ayToggleSaving}
             onCancel={() => setPendingAyToggle(null)}
             onConfirm={confirmAyToggle}
+          />
+        )}
+
+        {/* Year-close one-shot toggle confirm — same last-4-digit gate. */}
+        {pendingYearCloseToggle !== null && (
+          <YearCloseToggleConfirmDialog
+            school={selected}
+            next={pendingYearCloseToggle}
+            saving={yearCloseToggleSaving}
+            onCancel={() => setPendingYearCloseToggle(null)}
+            onConfirm={confirmYearCloseToggle}
           />
         )}
 
@@ -1374,6 +1433,110 @@ const AyToggleConfirmDialog: React.FC<{
           <button onClick={tryConfirm} disabled={saving}
             className={`flex-1 py-3 text-white font-black rounded-2xl text-sm uppercase tracking-widest active:scale-95 transition-transform disabled:opacity-50 ${next ? 'bg-emerald-600 hover:bg-emerald-700' : 'bg-amber-600 hover:bg-amber-700'}`}>
             {saving ? 'Saving…' : (next ? 'Enable' : 'Disable')}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+};
+
+// ─── Year-close toggle confirm dialog ────────────────────────────────────────
+// Sibling of AyToggleConfirmDialog with year-close-specific copy. Always
+// amber (high-stakes / irreversible) regardless of direction so the
+// super-admin reads the action carefully. Same last-4-digit gate as
+// elsewhere so an accidental tap can't flip the permission.
+const YearCloseToggleConfirmDialog: React.FC<{
+  school: School;
+  next: boolean;
+  saving: boolean;
+  onCancel: () => void;
+  onConfirm: () => void;
+}> = ({ school, next, saving, onCancel, onConfirm }) => {
+  const fullPhone = (school.principalPhone ?? '').replace(/\D/g, '');
+  const last4 = fullPhone.slice(-4);
+  const masked = fullPhone.length >= 4 ? `XXXXXX${last4}` : '(set nahi hai)';
+  const [text, setText] = useState('');
+  const [error, setError] = useState(false);
+
+  const tryConfirm = () => {
+    if (last4.length === 4) {
+      if (text.replace(/\D/g, '').slice(-4) !== last4) {
+        setError(true);
+        return;
+      }
+    } else if (text.trim().toUpperCase() !== (next ? 'UNLOCK' : 'LOCK')) {
+      setError(true);
+      return;
+    }
+    onConfirm();
+  };
+
+  return (
+    <div className="fixed inset-0 z-[120] bg-black/60 backdrop-blur-sm flex items-end sm:items-center justify-center p-4 animate-in fade-in duration-150"
+      onClick={saving ? undefined : onCancel}>
+      <div className="bg-white w-full sm:max-w-md rounded-3xl p-6 shadow-2xl animate-in slide-in-from-bottom-4"
+        onClick={e => e.stopPropagation()}>
+        <div className="flex items-start gap-3 mb-3">
+          <div className="w-11 h-11 rounded-2xl flex items-center justify-center shrink-0 bg-amber-50 text-amber-600">
+            <AlertCircle size={20} />
+          </div>
+          <div className="min-w-0 flex-1">
+            <p className="text-base font-black text-slate-900">
+              {next ? 'Unlock Year Close?' : 'Lock Year Close?'}
+            </p>
+            <p className="text-[12px] font-bold text-slate-500 mt-1 leading-relaxed">
+              {next
+                ? `${school.principalName || 'Principal'} active academic year close kar payenge. Year close se students promote ho jayenge, fees + salary finalize ho jayengi — irreversible-ish action. Flag close ke baad auto-reset ho jayega.`
+                : `${school.principalName || 'Principal'} ab year close nahi kar payenge jab tak aap dobara enable na karein.`}
+            </p>
+          </div>
+        </div>
+
+        <div className="bg-slate-50 border border-slate-200 rounded-xl p-3 mt-2 text-[11px] font-bold text-slate-600">
+          <span className="block text-[10px] uppercase tracking-widest text-slate-400 mb-0.5">Login mobile</span>
+          {masked}
+        </div>
+
+        <p className="text-[11px] font-black uppercase tracking-widest text-slate-500 mt-4 mb-2">
+          {last4.length === 4
+            ? 'Principal ke login mobile ke last 4 digits daalein'
+            : `Confirm karne ke liye "${next ? 'UNLOCK' : 'LOCK'}" type karein`}
+        </p>
+        <input
+          type="text"
+          inputMode={last4.length === 4 ? 'numeric' : undefined}
+          pattern={last4.length === 4 ? '[0-9]*' : undefined}
+          maxLength={last4.length === 4 ? 4 : 10}
+          autoFocus
+          autoComplete="off"
+          value={text}
+          onChange={e => {
+            const v = last4.length === 4
+              ? e.target.value.replace(/\D/g, '').slice(0, 4)
+              : e.target.value.slice(0, 10);
+            setText(v);
+            setError(false);
+          }}
+          onKeyDown={e => { if (e.key === 'Enter') tryConfirm(); }}
+          placeholder={last4.length === 4 ? '••••' : (next ? 'UNLOCK' : 'LOCK')}
+          className={`w-full px-4 py-3.5 bg-slate-50 border rounded-xl font-black text-2xl text-center tracking-[0.4em] text-slate-900 outline-none transition-colors ${
+            error ? 'border-rose-400 bg-rose-50' : 'border-slate-200 focus:border-amber-500'
+          }`}
+        />
+        {error && (
+          <p className="text-[11px] font-black text-rose-600 mt-2">
+            Galat input — phir se check karein.
+          </p>
+        )}
+
+        <div className="flex gap-3 mt-5">
+          <button onClick={onCancel} disabled={saving}
+            className="flex-1 py-3 bg-slate-100 text-slate-700 font-black rounded-2xl text-sm uppercase tracking-widest active:scale-95 transition-transform disabled:opacity-50">
+            Cancel
+          </button>
+          <button onClick={tryConfirm} disabled={saving}
+            className="flex-1 py-3 text-white font-black rounded-2xl text-sm uppercase tracking-widest active:scale-95 transition-transform disabled:opacity-50 bg-amber-600 hover:bg-amber-700">
+            {saving ? 'Saving…' : (next ? 'Unlock' : 'Lock')}
           </button>
         </div>
       </div>

@@ -13202,3 +13202,45 @@ END $$;
 
 REVOKE EXECUTE ON FUNCTION public.cleanup_old_audit_logs(INT) FROM PUBLIC;
 GRANT  EXECUTE ON FUNCTION public.cleanup_old_audit_logs(INT) TO service_role;
+
+
+-- =============================================================
+-- 0122_schools_year_close_enabled.sql
+-- =============================================================
+-- Super-admin gate on principal's Close Academic Year action. Mirrors
+-- new_year_creation_enabled. Flag is one-shot — RPC auto-resets after
+-- a successful close.
+
+ALTER TABLE public.schools
+  ADD COLUMN IF NOT EXISTS year_close_enabled BOOLEAN NOT NULL DEFAULT FALSE;
+
+CREATE OR REPLACE FUNCTION public.close_academic_year(p_year_id UUID)
+RETURNS VOID
+LANGUAGE plpgsql SECURITY DEFINER SET search_path = public AS $$
+DECLARE
+  v_school UUID := public.current_user_school_id();
+  v_enabled BOOLEAN;
+BEGIN
+  IF NOT public.is_principal() THEN RAISE EXCEPTION 'principal only'; END IF;
+  IF NOT EXISTS (SELECT 1 FROM public.academic_years WHERE id = p_year_id AND school_id = v_school) THEN
+    RAISE EXCEPTION 'year not found in school';
+  END IF;
+
+  SELECT year_close_enabled INTO v_enabled FROM public.schools WHERE id = v_school;
+  IF v_enabled IS NOT TRUE THEN
+    RAISE EXCEPTION 'Year close is locked. Ask the super-admin to enable Year Close for this school first.';
+  END IF;
+
+  UPDATE public.academic_years
+     SET is_closed = TRUE, is_active = FALSE
+   WHERE id = p_year_id;
+
+  UPDATE public.schools
+     SET year_close_enabled = FALSE
+   WHERE id = v_school;
+
+  INSERT INTO public.audit_logs (user_id, school_id, action, entity_type, entity_id, details)
+  VALUES (auth.uid(), v_school, 'close_year', 'academic_year', p_year_id, '{}'::jsonb);
+END $$;
+
+GRANT EXECUTE ON FUNCTION public.close_academic_year(UUID) TO authenticated;

@@ -26,6 +26,10 @@ interface AcademicYearContextType {
    *  RPC also rejects with a friendly error so direct API calls
    *  cannot bypass it. */
   newYearCreationEnabled: boolean;
+  /** SUPER_ADMIN-controlled one-shot toggle that gates the principal's
+   *  Close Academic Year action. Auto-resets to FALSE after a successful
+   *  close so a second close needs another approval. */
+  yearCloseEnabled: boolean;
   /**
    * The year that editing surfaces (attendance, tests, timetable, staff
    * attendance) should bind to. Equals `activeYear` by default. When
@@ -76,11 +80,13 @@ export const AcademicYearProvider: React.FC<{ children: ReactNode }> = ({ childr
   const [academicYears, setAcademicYears] = useState<AcademicYear[]>([]);
   const [isLoading, setIsLoading] = useState(false);
   const [newYearCreationEnabled, setNewYearCreationEnabled] = useState(false);
+  const [yearCloseEnabled, setYearCloseEnabled] = useState(false);
 
   const refresh = useCallback(async () => {
     if (!schoolId) {
       setAcademicYears([]);
       setNewYearCreationEnabled(false);
+      setYearCloseEnabled(false);
       return;
     }
     setIsLoading(true);
@@ -96,14 +102,18 @@ export const AcademicYearProvider: React.FC<{ children: ReactNode }> = ({ childr
           .order('start_date', { ascending: false }),
         supabase
           .from('schools')
-          .select('new_year_creation_enabled')
+          .select('new_year_creation_enabled, year_close_enabled')
           .eq('id', schoolId)
           .maybeSingle(),
       ]);
       if (yearsRes.error) throw new Error(yearsRes.error.message);
       setAcademicYears(((yearsRes.data ?? []) as AYRow[]).map(rowToYear));
-      const schoolRow = schoolRes.data as { new_year_creation_enabled: boolean | null } | null;
+      const schoolRow = schoolRes.data as {
+        new_year_creation_enabled: boolean | null;
+        year_close_enabled: boolean | null;
+      } | null;
       setNewYearCreationEnabled(!!schoolRow?.new_year_creation_enabled);
+      setYearCloseEnabled(!!schoolRow?.year_close_enabled);
     } finally {
       setIsLoading(false);
     }
@@ -188,7 +198,7 @@ export const AcademicYearProvider: React.FC<{ children: ReactNode }> = ({ childr
     <AcademicYearContext.Provider
       value={{
         academicYears, activeYear, currentYear, currentEditingYearId,
-        newYearCreationEnabled,
+        newYearCreationEnabled, yearCloseEnabled,
         setCurrentEditingYear, isLoading, refresh,
         addAcademicYear, setActiveYear, lockYear, removeAcademicYear, isYearLocked,
       }}

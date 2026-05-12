@@ -23,6 +23,10 @@ export interface School {
    *  the server RPC rejects with a friendly error. Default FALSE so
    *  schools opt-in explicitly when ready for year-end planning. */
   newYearCreationEnabled: boolean;
+  /** SUPER_ADMIN-controlled one-shot toggle that gates the principal's
+   *  Close Academic Year action. Flag auto-resets to FALSE after a
+   *  successful close so a second close requires another approval. */
+  yearCloseEnabled: boolean;
   /** Hard cap on active students. NULL = unlimited. SUPER_ADMIN only.
    *  Cannot be lowered below the school's current active count. */
   maxStudents: number | null;

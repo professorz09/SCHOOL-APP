@@ -17,7 +17,7 @@ const SCHOOL_FIELDS = [
   'principal_name', 'principal_email', 'principal_phone',
   'status', 'plan', 'student_count', 'teacher_count',
   'payment_status', 'payment_start_date', 'created_at',
-  'new_year_creation_enabled',
+  'new_year_creation_enabled', 'year_close_enabled',
   'max_students', 'max_staff', 'max_vehicles',
 ].join(', ');
 
@@ -30,6 +30,7 @@ interface SchoolRow {
   payment_status: string; payment_start_date: string | null;
   created_at: string;
   new_year_creation_enabled: boolean | null;
+  year_close_enabled: boolean | null;
   max_students: number | null;
   max_staff:    number | null;
   max_vehicles: number | null;
@@ -55,6 +56,7 @@ function rowToSchool(r: SchoolRow): School {
     createdAt: (r.created_at ?? '').slice(0, 10),
     academicYears: [],
     newYearCreationEnabled: !!r.new_year_creation_enabled,
+    yearCloseEnabled: !!r.year_close_enabled,
     maxStudents: r.max_students,
     maxStaff:    r.max_staff,
     maxVehicles: r.max_vehicles,
@@ -177,6 +179,7 @@ export const schoolService = {
     if (input.plan !== undefined) updates.plan = input.plan;
     if (input.paymentStartDate !== undefined) updates.payment_start_date = input.paymentStartDate;
     if (input.newYearCreationEnabled !== undefined) updates.new_year_creation_enabled = input.newYearCreationEnabled;
+    if (input.yearCloseEnabled !== undefined) updates.year_close_enabled = input.yearCloseEnabled;
     if (input.maxStudents !== undefined) updates.max_students = input.maxStudents;
     if (input.maxStaff    !== undefined) updates.max_staff    = input.maxStaff;
     if (input.maxVehicles !== undefined) updates.max_vehicles = input.maxVehicles;

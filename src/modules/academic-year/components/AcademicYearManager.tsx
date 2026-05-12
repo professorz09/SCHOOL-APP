@@ -19,6 +19,7 @@ export const AcademicYearManager: React.FC<Props> = ({ onBack, onNavigateToPromo
     academicYears, activeYear, isYearLocked, refresh: refreshAY, setActiveYear,
     setCurrentEditingYear,
     newYearCreationEnabled,
+    yearCloseEnabled,
   } = useAcademicYear();
   const { showToast } = useUIStore();
   const session = useAuthStore(s => s.session);
@@ -347,10 +348,22 @@ export const AcademicYearManager: React.FC<Props> = ({ onBack, onNavigateToPromo
                 {!locked && (
                   <button
                     type="button"
-                    onClick={() => setClosingYearId(year.id)}
-                    className="px-2.5 py-1.5 rounded-full bg-rose-50 hover:bg-rose-100 text-rose-700 text-[10px] font-black flex items-center gap-1"
+                    onClick={() => {
+                      if (!yearCloseEnabled) {
+                        showToast('Year Close locked — super-admin se enable karwana padega', 'error');
+                        return;
+                      }
+                      setClosingYearId(year.id);
+                    }}
+                    disabled={!yearCloseEnabled}
+                    title={!yearCloseEnabled ? 'Super-admin ne Year Close enable nahi kiya' : 'Close this academic year'}
+                    className={`px-2.5 py-1.5 rounded-full text-[10px] font-black flex items-center gap-1 ${
+                      yearCloseEnabled
+                        ? 'bg-rose-50 hover:bg-rose-100 text-rose-700'
+                        : 'bg-slate-100 text-slate-400 cursor-not-allowed'
+                    }`}
                   >
-                    <Lock size={10} /> Close Year
+                    <Lock size={10} /> {yearCloseEnabled ? 'Close Year' : 'Locked'}
                   </button>
                 )}
                 {locked && (
