@@ -13069,3 +13069,19 @@ CREATE POLICY users_insert_admin ON public.users
       AND school_id = public.current_user_school_id()
     )
   );
+
+
+-- =============================================================
+-- 0117_staff_driver_self_select.sql
+-- =============================================================
+-- DRIVER role wasn't in the generic staff_select policy, so a driver could
+-- not even read their own staff row. DriverRouteView's first query came
+-- back empty → "No Vehicle Assigned" rendered forever. Add a self-read
+-- policy so every staff member (any role) can read the row linked to
+-- their own auth user.
+
+DROP POLICY IF EXISTS staff_self_select ON public.staff;
+
+CREATE POLICY staff_self_select ON public.staff
+  FOR SELECT
+  USING (user_id = auth.uid());
