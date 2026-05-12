@@ -169,7 +169,6 @@ export const TransportView: React.FC<Props> = ({ onBack }) => {
                   }`}>{stop.name}</div>
                   <div className="flex items-center gap-3 mt-0.5">
                     <span className="text-[10px] font-bold text-slate-400">{stop.estimatedTime}</span>
-                    <span className="text-[9px] font-bold text-slate-300">{stop.lat.toFixed(4)}°N, {stop.lng.toFixed(4)}°E</span>
                   </div>
                   {stop.status === 'CURRENT' && stop.id === data.assignment.boardingStopId && (
                     <span className="text-[9px] font-black bg-emerald-500 text-white px-2 py-0.5 rounded-full uppercase mt-1 inline-block">Your boarding stop</span>
