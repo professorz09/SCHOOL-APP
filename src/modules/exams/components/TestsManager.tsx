@@ -11,6 +11,7 @@ import { useAcademicYear } from '@/shared/context/AcademicYearContext';
 import { useEditGuard } from '@/store/correctionStore';
 
 type View = 'LIST' | 'CREATE' | 'UPLOAD';
+type CreateTab = 'DETAILS' | 'SUBJECTS';
 
 interface Subject { subject: string; maxMarks: number; passMarks: number; }
 interface StudentRow { studentId: string; name: string; rollNo: string; marks: string; subjectMarks: Record<string, string>; note: string; }
@@ -93,6 +94,7 @@ export const TestsManager: React.FC<Props> = ({ onBack }) => {
   const isYearClosed = !!currentYear && currentYear.status === 'LOCKED';
   const editGuard = useEditGuard(currentYear?.id, isYearClosed);
   const [view, setView]      = useState<View>('LIST');
+  const [createTab, setCreateTab] = useState<CreateTab>('DETAILS');
   const [exams, setExams]    = useState<TestSchedule[]>([]);
   const [classes, setClasses] = useState<TeacherClass[]>([]);
   const [isBusy, setIsBusy]  = useState(false);
@@ -612,9 +614,31 @@ export const TestsManager: React.FC<Props> = ({ onBack }) => {
     );
 
     return (
-    <div className="w-full lg:max-w-5xl lg:mx-auto bg-slate-50 flex flex-col animate-in slide-in-from-right-8 duration-300">
+    <div className="w-full lg:max-w-5xl lg:mx-auto bg-slate-50 flex flex-col animate-in slide-in-from-right-8 duration-300 min-h-screen">
       {header('Create Exam', () => setView('LIST'))}
-      <div className="flex-1 overflow-y-auto p-4 space-y-3 pb-24">
+
+      {/* Tab strip — mobile-app style switch between form sections.
+          Same pattern as the principal's question-paper tool. */}
+      <div className="sticky top-[60px] z-10 bg-white border-b border-slate-100 px-3 md:px-6">
+        <div className="max-w-3xl mx-auto flex">
+          <button onClick={() => setCreateTab('DETAILS')}
+            className={`flex-1 py-3 text-[11px] md:text-xs font-bold uppercase tracking-widest border-b-2 transition-colors ${
+              createTab === 'DETAILS' ? 'border-slate-900 text-slate-900' : 'border-transparent text-slate-500'
+            }`}>
+            Details
+          </button>
+          <button onClick={() => setCreateTab('SUBJECTS')}
+            className={`flex-1 py-3 text-[11px] md:text-xs font-bold uppercase tracking-widest border-b-2 transition-colors ${
+              createTab === 'SUBJECTS' ? 'border-slate-900 text-slate-900' : 'border-transparent text-slate-500'
+            }`}>
+            Subjects & Marks
+          </button>
+        </div>
+      </div>
+
+      <div className="flex-1 overflow-y-auto p-4 space-y-3"
+        style={{ paddingBottom: 'calc(env(safe-area-inset-bottom, 0px) + 120px)' }}>
+        {createTab === 'DETAILS' && <>
         {/* Section 1: Basics */}
         <div>
           {sectionLabel('Basics')}
@@ -679,6 +703,8 @@ export const TestsManager: React.FC<Props> = ({ onBack }) => {
           </div>
         </div>
 
+        </>}
+        {createTab === 'SUBJECTS' && <>
         {/* Section 3: Marks */}
         <div>
           {sectionLabel('Subjects & Marks')}
@@ -810,14 +836,33 @@ export const TestsManager: React.FC<Props> = ({ onBack }) => {
             )}
           </div>
         </div>
+        </>}
       </div>
 
-      {/* Sticky submit bar */}
-      <div className="bg-white border-t border-slate-100 p-4">
-        <button onClick={handleCreateExam} disabled={isBusy}
-          className="w-full flex items-center justify-center gap-2 bg-indigo-600 text-white font-black text-xs uppercase tracking-widest py-4 rounded-2xl active:scale-95 transition-transform shadow-lg disabled:opacity-60">
-          {isBusy ? 'Creating…' : <><Plus size={16}/> Create Exam</>}
-        </button>
+      {/* Fixed bottom action bar — Next on Details tab, Create on
+          Subjects tab. Mirrors the principal's question-paper flow.
+          Safe-area-inset padding keeps it above Android nav. */}
+      <div className="fixed bottom-0 left-0 right-0 z-30 bg-gradient-to-t from-slate-50 via-slate-50 to-transparent pt-4 px-3 md:px-6"
+        style={{ paddingBottom: 'calc(env(safe-area-inset-bottom, 0px) + 40px)' }}>
+        <div className="max-w-3xl mx-auto">
+          {createTab === 'DETAILS' ? (
+            <button onClick={() => setCreateTab('SUBJECTS')}
+              className="w-full flex items-center justify-center gap-2 bg-slate-900 hover:bg-black text-white font-bold text-xs uppercase tracking-widest py-3.5 rounded-xl active:scale-[0.98] transition-all">
+              Next: Subjects & Marks <ChevronRight size={15} />
+            </button>
+          ) : (
+            <div className="grid grid-cols-[auto_1fr] gap-2">
+              <button onClick={() => setCreateTab('DETAILS')}
+                className="px-4 py-3.5 bg-white border border-slate-300 text-slate-900 rounded-xl font-bold text-xs uppercase tracking-widest active:scale-[0.98] transition-all">
+                Back
+              </button>
+              <button onClick={handleCreateExam} disabled={isBusy}
+                className="flex items-center justify-center gap-2 bg-slate-900 hover:bg-black text-white font-bold text-xs uppercase tracking-widest py-3.5 rounded-xl active:scale-[0.98] transition-all disabled:opacity-60">
+                {isBusy ? 'Creating…' : <><Plus size={16}/> Create Exam</>}
+              </button>
+            </div>
+          )}
+        </div>
       </div>
     </div>
     );
@@ -829,7 +874,7 @@ export const TestsManager: React.FC<Props> = ({ onBack }) => {
   return (
     <div className="w-full lg:max-w-5xl lg:mx-auto bg-slate-50 flex flex-col animate-in slide-in-from-right-8 duration-300">
       {header('Exams & Tests', onBack,
-        <button onClick={() => setView('CREATE')}
+        <button onClick={() => { setCreateTab('DETAILS'); setView('CREATE'); }}
           className="p-2 text-white bg-indigo-500 rounded-full shadow-md">
           <Plus size={18}/>
         </button>,
@@ -885,7 +930,7 @@ export const TestsManager: React.FC<Props> = ({ onBack }) => {
           <div className="flex flex-col items-center py-16 text-slate-400">
             <BookOpen size={32} className="mb-3 opacity-40"/>
             <p className="font-bold text-sm">No exams created yet</p>
-            <button onClick={() => setView('CREATE')} className="mt-3 text-[11px] font-black text-indigo-600 bg-indigo-50 border border-indigo-100 px-4 py-2 rounded-xl">
+            <button onClick={() => { setCreateTab('DETAILS'); setView('CREATE'); }} className="mt-3 text-[11px] font-black text-indigo-600 bg-indigo-50 border border-indigo-100 px-4 py-2 rounded-xl">
               + Create Exam
             </button>
           </div>

@@ -37,6 +37,12 @@ export const SettingsManager: React.FC<Props> = ({ onBack, initialView }) => {
   const [qrPreviewUrl, setQrPreviewUrl] = useState('');
   const [qrPreviewBroken, setQrPreviewBroken] = useState(false);
   const [qrUploading, setQrUploading] = useState(false);
+  // School logo + principal signature uploads — used by every printable
+  // document (ID cards, admit cards, marksheets, TC, bonafide).
+  const [logoPreview, setLogoPreview] = useState('');
+  const [logoUploading, setLogoUploading] = useState(false);
+  const [signaturePreview, setSignaturePreview] = useState('');
+  const [signatureUploading, setSignatureUploading] = useState(false);
   const [feeStructures, setFeeStructures] = useState<FeeStructureItem[]>([]);
   const [editingFs, setEditingFs] = useState<FeeStructureItem | null>(null);
   const [feeStructuresLoading, setFeeStructuresLoading] = useState(false);
@@ -50,6 +56,17 @@ export const SettingsManager: React.FC<Props> = ({ onBack, initialView }) => {
     schoolInfoService.get().then(async (info) => {
       setSchoolInfo(info);
       setUpiId(info.upiId || '');
+      // Logo + signature previews — same cache-bust pattern as payment QR
+      // so swapping the file from another device doesn't keep showing the
+      // old image.
+      if (info.logoPath) {
+        const url = schoolInfoService.getAssetUrl(info.logoPath);
+        setLogoPreview(url ? `${url}${url.includes('?') ? '&' : '?'}t=${Date.now()}` : '');
+      }
+      if (info.principalSignaturePath) {
+        const url = schoolInfoService.getAssetUrl(info.principalSignaturePath);
+        setSignaturePreview(url ? `${url}${url.includes('?') ? '&' : '?'}t=${Date.now()}` : '');
+      }
       if (info.paymentQrPath) {
         setQrFileName(info.paymentQrPath.split('/').pop() || 'payment-qr');
         const url = await schoolInfoService.getPaymentQrUrl(info.paymentQrPath);
@@ -448,6 +465,128 @@ export const SettingsManager: React.FC<Props> = ({ onBack, initialView }) => {
               <input value={schoolInfo[key]} onChange={e => setSchoolInfo(prev => ({ ...prev, [key]: e.target.value }))} className="w-full border border-slate-200 bg-slate-50 rounded-xl px-4 py-3 font-bold text-sm outline-none focus:border-indigo-500" />
             </div>
           ))}
+        </div>
+
+        {/* School logo — auto-applied to ID cards, admit cards, marksheets, TC, bonafide */}
+        <div className="bg-white rounded-2xl border border-slate-100 shadow-sm p-4 space-y-3">
+          <p className="text-[10px] font-black uppercase tracking-widest text-slate-400">School Logo</p>
+          <p className="text-[11px] font-bold text-slate-500 leading-snug">
+            Auto-applied to every printable document (ID cards, admit cards, marksheets, TC, bonafide).
+          </p>
+          <div className="flex items-center gap-4">
+            <div className="w-20 h-20 rounded-2xl bg-slate-100 border-2 border-slate-200 flex items-center justify-center overflow-hidden shrink-0">
+              {logoPreview ? (
+                <img src={logoPreview} alt="School logo" className="w-full h-full object-contain" />
+              ) : (
+                <Building2 size={28} className="text-slate-400" />
+              )}
+            </div>
+            <div className="flex-1 space-y-2">
+              <label className="block">
+                <input type="file" accept="image/*" className="hidden"
+                  onChange={async (e) => {
+                    const file = e.target.files?.[0];
+                    if (!file) return;
+                    if (!file.type.startsWith('image/')) {
+                      showToast('Please pick an image file (PNG, JPG, SVG)', 'error'); return;
+                    }
+                    if (file.size > 2 * 1024 * 1024) {
+                      showToast('Logo must be 2 MB or smaller', 'error'); return;
+                    }
+                    setLogoUploading(true);
+                    try {
+                      const path = await schoolInfoService.uploadLogo(file);
+                      await schoolInfoService.save({ logoPath: path });
+                      const url = schoolInfoService.getAssetUrl(path);
+                      setLogoPreview(url ? `${url}${url.includes('?') ? '&' : '?'}t=${Date.now()}` : '');
+                      setSchoolInfo(prev => ({ ...prev, logoPath: path }));
+                      showToast('School logo uploaded');
+                    } catch (err) {
+                      showToast(err instanceof Error ? err.message : 'Logo upload failed', 'error');
+                    } finally {
+                      setLogoUploading(false);
+                      e.target.value = '';
+                    }
+                  }} />
+                <span className={`inline-flex items-center justify-center gap-2 px-4 py-2.5 rounded-xl font-black text-[11px] uppercase tracking-widest cursor-pointer transition-colors ${
+                  logoUploading ? 'bg-slate-200 text-slate-500 cursor-wait' : 'bg-slate-900 hover:bg-black text-white'
+                }`}>
+                  {logoUploading ? 'Uploading…' : (logoPreview ? 'Replace Logo' : 'Upload Logo')}
+                </span>
+              </label>
+              {logoPreview && (
+                <button onClick={async () => {
+                  await schoolInfoService.save({ logoPath: '' });
+                  setLogoPreview('');
+                  setSchoolInfo(prev => ({ ...prev, logoPath: '' }));
+                  showToast('Logo removed');
+                }} className="text-[10px] font-bold text-rose-500 hover:text-rose-700 uppercase tracking-widest">
+                  Remove
+                </button>
+              )}
+            </div>
+          </div>
+        </div>
+
+        {/* Principal signature — used in TC / bonafide / marksheet footers */}
+        <div className="bg-white rounded-2xl border border-slate-100 shadow-sm p-4 space-y-3">
+          <p className="text-[10px] font-black uppercase tracking-widest text-slate-400">Principal Signature</p>
+          <p className="text-[11px] font-bold text-slate-500 leading-snug">
+            Printed on TC, bonafide certificates, and marksheets. Use a transparent PNG.
+          </p>
+          <div className="flex items-center gap-4">
+            <div className="w-28 h-16 rounded-xl bg-slate-50 border-2 border-slate-200 flex items-center justify-center overflow-hidden shrink-0">
+              {signaturePreview ? (
+                <img src={signaturePreview} alt="Principal signature" className="max-w-full max-h-full object-contain" />
+              ) : (
+                <span className="text-[9px] font-bold text-slate-400">No signature</span>
+              )}
+            </div>
+            <div className="flex-1 space-y-2">
+              <label className="block">
+                <input type="file" accept="image/*" className="hidden"
+                  onChange={async (e) => {
+                    const file = e.target.files?.[0];
+                    if (!file) return;
+                    if (!file.type.startsWith('image/')) {
+                      showToast('Please pick an image file (PNG, JPG)', 'error'); return;
+                    }
+                    if (file.size > 2 * 1024 * 1024) {
+                      showToast('Signature must be 2 MB or smaller', 'error'); return;
+                    }
+                    setSignatureUploading(true);
+                    try {
+                      const path = await schoolInfoService.uploadPrincipalSignature(file);
+                      await schoolInfoService.save({ principalSignaturePath: path });
+                      const url = schoolInfoService.getAssetUrl(path);
+                      setSignaturePreview(url ? `${url}${url.includes('?') ? '&' : '?'}t=${Date.now()}` : '');
+                      setSchoolInfo(prev => ({ ...prev, principalSignaturePath: path }));
+                      showToast('Signature uploaded');
+                    } catch (err) {
+                      showToast(err instanceof Error ? err.message : 'Signature upload failed', 'error');
+                    } finally {
+                      setSignatureUploading(false);
+                      e.target.value = '';
+                    }
+                  }} />
+                <span className={`inline-flex items-center justify-center gap-2 px-4 py-2.5 rounded-xl font-black text-[11px] uppercase tracking-widest cursor-pointer transition-colors ${
+                  signatureUploading ? 'bg-slate-200 text-slate-500 cursor-wait' : 'bg-slate-900 hover:bg-black text-white'
+                }`}>
+                  {signatureUploading ? 'Uploading…' : (signaturePreview ? 'Replace Signature' : 'Upload Signature')}
+                </span>
+              </label>
+              {signaturePreview && (
+                <button onClick={async () => {
+                  await schoolInfoService.save({ principalSignaturePath: '' });
+                  setSignaturePreview('');
+                  setSchoolInfo(prev => ({ ...prev, principalSignaturePath: '' }));
+                  showToast('Signature removed');
+                }} className="text-[10px] font-bold text-rose-500 hover:text-rose-700 uppercase tracking-widest">
+                  Remove
+                </button>
+              )}
+            </div>
+          </div>
         </div>
 
         <button

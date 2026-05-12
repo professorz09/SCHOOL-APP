@@ -424,6 +424,54 @@ export function printCurrentPage(): void {
   window.print();
 }
 
+/** Open a fresh tab/window containing the given self-contained HTML
+ *  string and auto-fire the native print dialog. The HTML must include
+ *  ALL its own CSS inline — we do NOT copy parent stylesheets, which
+ *  is the reliability win over the iframe approach. No Tailwind v4
+ *  oklch parsing issues, no cross-context layout shifts, no popup
+ *  blocker dance with the auth chain (this is invoked from a click
+ *  handler so popups are allowed).
+ *
+ *  Use case: principal-facing print documents (admit cards, ID cards,
+ *  bonafide, TC, marksheet) where we want the print to look IDENTICAL
+ *  across every browser / device and we control the HTML.
+ *
+ *  @param html   Self-contained <!DOCTYPE html> document string.
+ *  @param title  Browser tab/window title shown in the print dialog.
+ */
+export function printHtmlInNewWindow(html: string, title = 'Print'): void {
+  const win = window.open('', '_blank');
+  if (!win) {
+    // Popup blocked — open in same tab as fallback. The user can hit
+    // Cmd/Ctrl+P themselves from that tab.
+    const blob = new Blob([html], { type: 'text/html' });
+    location.href = URL.createObjectURL(blob);
+    return;
+  }
+  win.document.title = title;
+  win.document.open();
+  win.document.write(html);
+  win.document.close();
+  const trigger = () => {
+    try {
+      win.focus();
+      win.print();
+    } catch (e) {
+      // Don't swallow — log so the user can see the cause in console.
+      // eslint-disable-next-line no-console
+      console.error('[pdfPrint] window.print() failed in new window:', e);
+    }
+  };
+  // 300ms settle window lets images (logo, signature) decode before the
+  // browser snapshots the page for the print preview. Faster triggers
+  // were causing iOS Safari to print blank logo slots.
+  if (win.document.readyState === 'complete') {
+    setTimeout(trigger, 300);
+  } else {
+    win.addEventListener('load', () => setTimeout(trigger, 300));
+  }
+}
+
 /** Print one or more DOM nodes via the browser's native print dialog
  *  (which exposes "Save as PDF" on every modern browser). Uses a hidden
  *  same-page iframe instead of a popup window — no popup blocker, no

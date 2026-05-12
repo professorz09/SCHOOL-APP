@@ -1,40 +1,58 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
+  <!--
+    EduGrow app icon. Designed for PWA install:
+    • Maskable-safe (key elements live inside the centre 80 % so circle
+      + squircle Android masks never clip them).
+    • Single accent colour (warm amber tassel) reads well at 48 px.
+    • No embedded text — the OS already shows "EduGrow" as the label
+      under the icon, so doubling it makes the mark feel busy.
+  -->
   <defs>
     <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
-      <stop offset="0%" stop-color="#6366f1"/>
-      <stop offset="100%" stop-color="#4f46e5"/>
+      <stop offset="0%"   stop-color="#6366f1"/>
+      <stop offset="55%"  stop-color="#4f46e5"/>
+      <stop offset="100%" stop-color="#3730a3"/>
     </linearGradient>
     <linearGradient id="cap" x1="0" y1="0" x2="0" y2="1">
-      <stop offset="0%" stop-color="#ffffff"/>
-      <stop offset="100%" stop-color="#e0e7ff"/>
+      <stop offset="0%"   stop-color="#ffffff"/>
+      <stop offset="100%" stop-color="#dbeafe"/>
     </linearGradient>
+    <linearGradient id="band" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%"   stop-color="#f8fafc"/>
+      <stop offset="100%" stop-color="#cbd5e1"/>
+    </linearGradient>
+    <radialGradient id="shine" cx="0.35" cy="0.3" r="0.7">
+      <stop offset="0%"   stop-color="#ffffff" stop-opacity="0.18"/>
+      <stop offset="60%"  stop-color="#ffffff" stop-opacity="0"/>
+    </radialGradient>
   </defs>
 
-  <!-- Maskable-safe rounded square. 96px corner radius matches Material You
-       guidance and survives both circle + squircle Android masks. -->
-  <rect width="512" height="512" rx="96" fill="url(#bg)"/>
+  <!-- Rounded-square plate. 22 % corner radius = Material You / iOS
+       compatible at any rendered size. -->
+  <rect width="512" height="512" rx="112" fill="url(#bg)"/>
+  <rect width="512" height="512" rx="112" fill="url(#shine)"/>
 
-  <!-- Graduation cap mortarboard — diamond seen from above-front. -->
-  <path d="M256 140 L92 212 L256 284 L420 212 Z"
-        fill="url(#cap)" stroke="#312e81" stroke-width="6" stroke-linejoin="round"/>
+  <!-- Mortarboard top — diamond with crisp navy edge. -->
+  <path d="M256 132 L80 220 L256 308 L432 220 Z"
+        fill="url(#cap)"
+        stroke="#1e1b4b" stroke-width="8" stroke-linejoin="round"/>
 
-  <!-- Cap body / sweatband under the mortarboard. The arc fakes
-       perspective so the cap reads as 3D, not just a rhombus. -->
-  <path d="M160 246 L160 326 Q160 372 256 372 Q352 372 352 326 L352 246 L256 290 Z"
-        fill="#ffffff" opacity="0.94" stroke="#312e81" stroke-width="5" stroke-linejoin="round"/>
+  <!-- Sweatband / cap body — curved bottom to suggest depth. -->
+  <path d="M160 256 L160 348 Q160 396 256 396 Q352 396 352 348 L352 256 L256 304 Z"
+        fill="url(#band)"
+        stroke="#1e1b4b" stroke-width="7" stroke-linejoin="round"/>
 
-  <!-- Tassel — rod, knot, fringe. Right-leaning to suggest motion. -->
-  <rect x="412" y="212" width="12" height="118" rx="5" fill="#ffffff"/>
-  <circle cx="418" cy="338" r="14" fill="#fbbf24"/>
-  <path d="M412 348 L408 380 M418 350 L418 384 M424 348 L428 380"
-        stroke="#fbbf24" stroke-width="4" stroke-linecap="round"/>
+  <!-- Inner shadow under the mortarboard so the cap reads 3D. -->
+  <path d="M170 262 L256 308 L342 262 L342 274 L256 318 L170 274 Z"
+        fill="#1e1b4b" opacity="0.15"/>
 
-  <!-- EG monogram embossed under the cap — subtle, kept small so the cap
-       remains the primary identity at every icon size. -->
-  <text x="256" y="448" text-anchor="middle"
-        font-family="system-ui, -apple-system, 'Segoe UI', sans-serif"
-        font-weight="900" font-size="46" letter-spacing="4"
-        fill="#ffffff" opacity="0.95">
-    EduGrow
-  </text>
+  <!-- Tassel — amber accent that lifts the whole mark. -->
+  <rect x="418" y="220" width="14" height="118" rx="6" fill="#fbbf24"/>
+  <circle cx="425" cy="348" r="16" fill="#f59e0b"/>
+  <path d="M414 360 L408 396 M425 362 L425 400 M436 360 L442 396"
+        stroke="#fbbf24" stroke-width="6" stroke-linecap="round" fill="none"/>
+
+  <!-- Center button on the mortarboard where the tassel anchors —
+       tiny visual detail that makes the cap feel real. -->
+  <circle cx="256" cy="220" r="11" fill="#fbbf24" stroke="#1e1b4b" stroke-width="3"/>
 </svg>

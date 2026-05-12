@@ -12,6 +12,7 @@ import { exportCsv } from '@/shared/utils/csv';
 import { todayIST } from '@/shared/utils/date';
 import { stripClassPrefix } from '@/shared/utils/className';
 import { studentService } from '@/modules/students/student.service';
+import { apiStudents } from '@/lib/apiClient';
 import { storageService } from '@/shared/utils/storage.service';
 import { Student, CreateStudentInput, STREAMS, STREAM_CLASSES, StudentStream } from '@/modules/students/student.types';
 import { PaymentStatus, PAYMENT_COLORS } from '@/shared/config/constants';
@@ -87,7 +88,10 @@ const CASTE_OPTIONS    = ['General', 'OBC', 'SC', 'ST', 'EWS', 'Other'];
 // transport in one transaction.
 const BLANK_FORM: CreateStudentInput = {
   name: '', rollNo: '', admissionNo: '', className: '', section: '',
-  dob: '', gender: 'MALE', bloodGroup: 'O+', aadhaarNo: '', phone: '',
+  // Gender starts blank to force an explicit choice — handleCreate
+  // rejects the submit if it's still empty. Cast keeps the form
+  // strictly typed against the service interface.
+  dob: '', gender: '' as unknown as 'MALE', bloodGroup: 'O+', aadhaarNo: '', phone: '',
   email: '', address: '', photo: '', fatherName: '', fatherPhone: '',
   motherName: '', motherPhone: '', academicYearId: '',
   admissionDate: todayIST(), totalFee: 0,
@@ -415,8 +419,23 @@ export const StudentsManager: React.FC<Props> = ({
       // Keep payload consistent — empty admission date never reaches the server.
       setForm(f => ({ ...f, admissionDate: todayIST() }));
     }
-    // DOB sanity: reject future / unrealistically old dates and a sane age band.
-    if (form.dob) {
+    // DOB is mandatory — without it, ID cards / TC / Bonafide all
+    // print "—" and the student record can't pass downstream age
+    // checks (RTE eligibility, exam class mapping). Reject blank +
+    // validate the entered date.
+    if (!form.dob) {
+      showToast('Date of birth is required', 'error');
+      return;
+    }
+    // Gender is mandatory — earlier defaulted to MALE silently, so
+    // skipping the dropdown saved everyone as male. Now require an
+    // explicit choice (MALE / FEMALE / OTHER) so school records are
+    // accurate from day one.
+    if (!form.gender) {
+      showToast('Gender is required', 'error');
+      return;
+    }
+    {
       const dob = new Date(form.dob);
       const today = new Date();
       if (Number.isNaN(dob.getTime())) {
@@ -992,9 +1011,15 @@ export const StudentsManager: React.FC<Props> = ({
 
             {/* Gender dropdown */}
             <div>
-              <label className="block text-[10px] font-black uppercase tracking-widest text-slate-500 mb-1.5">Gender <span className="text-slate-400 normal-case font-bold text-[9px]">(optional)</span></label>
-              <select value={form.gender} onChange={e => setForm(f => ({ ...f, gender: e.target.value as any }))}
-                className="w-full border border-slate-200 bg-slate-50 rounded-xl px-4 py-3 font-bold text-sm outline-none focus:border-indigo-500 focus:bg-white transition-colors">
+              <label className="block text-[10px] font-black uppercase tracking-widest text-slate-500 mb-1.5">
+                Gender <span className="text-rose-500">*</span>
+              </label>
+              <select value={form.gender} required
+                onChange={e => setForm(f => ({ ...f, gender: e.target.value as any }))}
+                className={`w-full border rounded-xl px-4 py-3 font-bold text-sm outline-none focus:border-indigo-500 focus:bg-white transition-colors ${
+                  form.gender ? 'border-slate-200 bg-slate-50' : 'border-slate-300 bg-slate-50 text-slate-500'
+                }`}>
+                <option value="">— Select gender —</option>
                 {GENDER_OPTIONS.map(g => <option key={g.value} value={g.value}>{g.label}</option>)}
               </select>
             </div>
@@ -1071,8 +1096,11 @@ export const StudentsManager: React.FC<Props> = ({
             </div>
             <div className="grid grid-cols-2 gap-3">
               <div>
-                <label className="block text-[10px] font-black uppercase tracking-widest text-slate-500 mb-1.5">Date of Birth</label>
+                <label className="block text-[10px] font-black uppercase tracking-widest text-slate-500 mb-1.5">
+                  Date of Birth <span className="text-rose-500">*</span>
+                </label>
                 <input type="date" value={form.dob}
+                  required
                   max={new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Kolkata' })}
                   min="1950-01-01"
                   onChange={e => setForm(f => ({ ...f, dob: e.target.value }))}
@@ -1264,7 +1292,7 @@ export const StudentsManager: React.FC<Props> = ({
           {admStep < 3 ? (
             <button
               type="button"
-              onClick={() => {
+              onClick={async () => {
                 // Per-step required-field validation. Step 1 needs
                 // name + admissionNo; step 2 needs at least one
                 // parent name + a login mobile.
@@ -1279,6 +1307,23 @@ export const StudentsManager: React.FC<Props> = ({
                   const login = (form.loginPhone || form.fatherPhone || form.motherPhone || form.guardianPhone || '').replace(/\D/g, '').slice(-10);
                   if (login.length !== 10) {
                     showToast('Login Mobile (10-digit) daalein', 'error'); return;
+                  }
+                  // Cross-school active check — only block if the mobile
+                  // is currently linked to an active student elsewhere.
+                  // Generic message, no detail revealed.
+                  try {
+                    const r = await apiStudents.checkAdmissionEligibility(login);
+                    if (!r.eligible) {
+                      showToast(
+                        'Yeh mobile pehle se kisi active student se linked hai. ' +
+                        'Pichli school se TC karwana hoga ya alag mobile use karein.',
+                        'error',
+                      );
+                      return;
+                    }
+                  } catch {
+                    // Network / server hiccup — let the principal proceed;
+                    // the server-side /create endpoint will re-check.
                   }
                 }
                 setAdmStep(s => (s + 1) as 1 | 2 | 3);

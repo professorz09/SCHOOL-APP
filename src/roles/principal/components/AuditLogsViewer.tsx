@@ -1,7 +1,8 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import {
   ArrowLeft, Filter, Search, RefreshCw, ChevronDown, ChevronUp,
-  History, User, Clock, ArrowRight,
+  History, User, Clock, ArrowRight, ChevronLeft, ChevronRight,
+  ChevronsLeft, ChevronsRight,
 } from 'lucide-react';
 import {
   auditService, MODULE_LABEL, DEFAULT_MODULES,
@@ -48,7 +49,8 @@ function fmtValue(v: unknown): string {
 export const AuditLogsViewer: React.FC<Props> = ({ onBack }) => {
   const { showToast } = useUIStore();
   const [rows, setRows] = useState<AuditLogEntry[]>([]);
-  const [shown, setShown] = useState(50);
+  const [pageSize, setPageSize] = useState<25 | 50 | 100>(50);
+  const [page, setPage] = useState(0);
   const [loading, setLoading] = useState(false);
   const [expanded, setExpanded] = useState<string | null>(null);
 
@@ -85,12 +87,13 @@ export const AuditLogsViewer: React.FC<Props> = ({ onBack }) => {
     setModules(prev => prev.includes(m) ? prev.filter(x => x !== m) : [...prev, m]);
   };
 
-  // Reset pager when the filter set changes (the parent component refetches
-  // rows, so this component can't know directly — but bumping shown back to
-  // 50 whenever rows length drops keeps the pager honest).
-  useEffect(() => { setShown(50); }, [rows.length]);
-  const visibleRows = rows.slice(0, shown);
-  const remainingRows = rows.length - visibleRows.length;
+  // Reset page when rows change (filters applied → fresh page 1).
+  useEffect(() => { setPage(0); }, [rows.length]);
+  const totalPages = Math.max(1, Math.ceil(rows.length / pageSize));
+  const safePage = Math.min(page, totalPages - 1);
+  const visibleRows = rows.slice(safePage * pageSize, (safePage + 1) * pageSize);
+  const firstShown = rows.length === 0 ? 0 : safePage * pageSize + 1;
+  const lastShown = Math.min((safePage + 1) * pageSize, rows.length);
 
   // Group VISIBLE rows by date for a scannable feed.
   const grouped = useMemo(() => {
@@ -302,18 +305,57 @@ export const AuditLogsViewer: React.FC<Props> = ({ onBack }) => {
             })}
           </div>
         ))}
-        {remainingRows > 0 && (
-          <button onClick={() => setShown(s => s + 50)}
-            className="w-full py-3 bg-white border border-slate-200 rounded-2xl font-black text-xs text-slate-700 hover:bg-slate-50 transition-colors">
-            Load More ({remainingRows} remaining)
-          </button>
-        )}
-        {rows.length > 0 && (
-          <p className="text-center text-[10px] font-bold text-slate-300 pt-1">
-            Showing {visibleRows.length} of {rows.length} events
-          </p>
-        )}
       </div>
+
+      {/* Pagination bar — client-side slicing of the already-fetched
+          rows. Doesn't issue extra queries, so it doesn't increase
+          read costs. */}
+      {rows.length > 0 && (
+        <div className="bg-white border-t border-slate-100 px-3 py-3 sticky bottom-0 z-10 shadow-[0_-2px_8px_rgba(0,0,0,0.04)]"
+          style={{ paddingBottom: 'calc(env(safe-area-inset-bottom, 0px) + 12px)' }}>
+          <div className="flex items-center justify-between gap-2 mb-2">
+            <div className="text-[10px] font-bold text-slate-500">
+              <span className="text-slate-900 font-black">{firstShown}–{lastShown}</span>
+              <span className="text-slate-400"> of {rows.length}</span>
+            </div>
+            <div className="flex items-center gap-1.5">
+              <span className="text-[9px] font-black uppercase tracking-widest text-slate-400">Per page</span>
+              <select value={pageSize}
+                onChange={e => { setPageSize(Number(e.target.value) as 25 | 50 | 100); setPage(0); }}
+                className="bg-slate-100 rounded-lg px-2 py-1 text-[11px] font-bold text-slate-700 outline-none">
+                <option value={25}>25</option>
+                <option value={50}>50</option>
+                <option value={100}>100</option>
+              </select>
+            </div>
+          </div>
+          <div className="grid grid-cols-[auto_auto_1fr_auto_auto] gap-1.5 items-center">
+            <button onClick={() => setPage(0)} disabled={safePage === 0}
+              className="p-2 rounded-lg bg-slate-100 text-slate-600 disabled:opacity-40 active:scale-95 transition-all"
+              aria-label="First page">
+              <ChevronsLeft size={14} />
+            </button>
+            <button onClick={() => setPage(p => Math.max(0, p - 1))} disabled={safePage === 0}
+              className="p-2 rounded-lg bg-slate-100 text-slate-600 disabled:opacity-40 active:scale-95 transition-all"
+              aria-label="Previous page">
+              <ChevronLeft size={14} />
+            </button>
+            <div className="text-center text-[11px] font-black text-slate-900">
+              Page {safePage + 1} <span className="text-slate-400 font-bold">of {totalPages}</span>
+            </div>
+            <button onClick={() => setPage(p => Math.min(totalPages - 1, p + 1))} disabled={safePage >= totalPages - 1}
+              className="p-2 rounded-lg bg-slate-100 text-slate-600 disabled:opacity-40 active:scale-95 transition-all"
+              aria-label="Next page">
+              <ChevronRight size={14} />
+            </button>
+            <button onClick={() => setPage(totalPages - 1)} disabled={safePage >= totalPages - 1}
+              className="p-2 rounded-lg bg-slate-100 text-slate-600 disabled:opacity-40 active:scale-95 transition-all"
+              aria-label="Last page">
+              <ChevronsRight size={14} />
+            </button>
+          </div>
+        </div>
+      )}
     </div>
   );
 };

@@ -97,6 +97,11 @@ export const apiStudents = {
   },
   getById:    (id: string) => get<any>(`/students/${id}`),
   create:     (body: Record<string, unknown>) => post<any>('/students/create', body),
+  /** Pre-check used by the admission form before the principal fills
+   *  the full payload. Returns `{ eligible: boolean }` only — no
+   *  blocking school / student detail is revealed (privacy). */
+  checkAdmissionEligibility: (mobile: string) =>
+    post<{ eligible: boolean }>('/students/admission-eligibility', { mobile }),
   assign:     (body: {
     studentId: string; className: string; section: string; academicYearId: string;
     rollNo?: string; totalFee?: number; sectionId?: string;

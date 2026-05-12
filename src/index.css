@@ -54,13 +54,40 @@ body {
   margin-right: 0 !important;
 }
 
+/* Toolsedu-style print system. `.print-only` containers are hidden on
+   screen via `display:none`. The `downloadPDF` util temporarily
+   removes the class (and sets display:block + offscreen position) so
+   html-to-image can snapshot real layout boxes. `.avoid-break` marks
+   individual cards so neither browser print pagination nor the PDF
+   slicer cuts them in half across pages. */
+.print-only {
+  display: none;
+}
+
 @media print {
-  @page { margin: 12mm; }
+  @page { margin: 10mm; }
 
-  html, body, #root { height: auto; overflow: visible; background: #fff; }
+  html, body, #root { height: auto; overflow: visible; background: #fff;
+    -webkit-print-color-adjust: exact; print-color-adjust: exact; }
 
+  /* Hide everything by default; `.printable` (legacy) and `.print-only`
+     (new Toolsedu pattern) are the two visible scopes. */
   body * { visibility: hidden !important; }
-  .printable, .printable * { visibility: visible !important; }
+  .printable, .printable *,
+  .print-only, .print-only * { visibility: visible !important; }
+
+  /* Toolsedu pattern: print-only sections show during window.print(). */
+  .print-only {
+    display: block !important;
+    position: absolute !important;
+    left: 0 !important;
+    top: 0 !important;
+    width: 100% !important;
+    margin: 0 !important;
+    padding: 0 !important;
+    background: #fff !important;
+  }
+
   .printable {
     position: absolute !important;
     left: 0 !important;
@@ -69,21 +96,28 @@ body {
     background: #fff !important;
     box-shadow: none !important;
   }
-  /* Hide anything explicitly marked no-print even if it's inside .printable */
+
+  /* Hide anything explicitly marked no-print even if it's inside printable */
   .no-print, .no-print * { display: none !important; }
 
-  /* Each .print-page is one paginated unit — keep its content together and
-     force the next page to start on a fresh sheet. Used by bulk admit cards,
-     id cards, etc. so a single card never gets split across two pages. */
+  /* Card-level pagination — neither browser nor jsPDF slicer should
+     cut these in half across pages. */
+  .avoid-break,
   .print-page {
     page-break-inside: avoid !important;
     break-inside: avoid !important;
+  }
+  .print-page {
     page-break-after: always !important;
     break-after: page !important;
   }
   .print-page:last-child {
     page-break-after: auto !important;
     break-after: auto !important;
+  }
+  .page-break {
+    page-break-before: always !important;
+    break-before: page !important;
   }
 
   /* Tighten admit-card spacing for print so a single card fits on one A4

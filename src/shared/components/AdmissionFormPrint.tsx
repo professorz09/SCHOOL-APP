@@ -3,6 +3,7 @@ import { ArrowLeft, Printer, Download } from 'lucide-react';
 import { Student, STREAM_CLASSES } from '@/modules/students/student.types';
 import { SchoolInfo } from '@/shared/utils/schoolInfo.service';
 import { useUIStore } from '@/store/uiStore';
+import { downloadPDF, handlePrint as handlePrintShared } from '@/shared/utils/htmlToPdf';
 
 interface Props {
   student: Student;
@@ -78,44 +79,17 @@ export const AdmissionFormPrint: React.FC<Props> = ({ student, schoolInfo, onClo
   const printRef = useRef<HTMLDivElement>(null);
   const [downloading, setDownloading] = useState(false);
 
-  // Lazy-load jspdf + html2canvas only when the user actually clicks
-  // download. Keeps the initial bundle ~600 KB lighter for everyone who
-  // is just printing.
+  // Unified PDF pipeline — same html-to-image + jsPDF flow used by
+  // every other tool (ID cards, marksheets, TC, etc.). Replaces the
+  // previous bespoke html2canvas implementation so all downloads
+  // share one debug surface + image fallback behaviour.
   const handleDownloadPdf = async () => {
-    if (!printRef.current) return;
     setDownloading(true);
     try {
-      const [{ default: html2canvas }, { jsPDF }] = await Promise.all([
-        import('html2canvas'),
-        import('jspdf'),
-      ]);
-      const canvas = await html2canvas(printRef.current, {
-        scale: 2,
-        backgroundColor: '#ffffff',
-        useCORS: true,
-        logging: false,
-      });
-      const imgData = canvas.toDataURL('image/jpeg', 0.95);
-      const pdf = new jsPDF({ unit: 'mm', format: 'a4', orientation: 'portrait' });
-      const pageWidth = pdf.internal.pageSize.getWidth();
-      const pageHeight = pdf.internal.pageSize.getHeight();
-      const imgRatio = canvas.height / canvas.width;
-      const imgWidth = pageWidth;
-      const imgHeight = imgWidth * imgRatio;
-      let heightLeft = imgHeight;
-      let position = 0;
-      pdf.addImage(imgData, 'JPEG', 0, position, imgWidth, imgHeight, undefined, 'FAST');
-      heightLeft -= pageHeight;
-      while (heightLeft > 0) {
-        position = heightLeft - imgHeight;
-        pdf.addPage();
-        pdf.addImage(imgData, 'JPEG', 0, position, imgWidth, imgHeight, undefined, 'FAST');
-        heightLeft -= pageHeight;
-      }
       const safeName = student.name.replace(/[^a-zA-Z0-9]+/g, '_');
-      pdf.save(`Admission_${safeName}_${student.admissionNo}.pdf`);
+      await downloadPDF('print-area-admission-form',
+        `Admission_${safeName}_${student.admissionNo}.pdf`);
     } catch (e) {
-      // eslint-disable-next-line no-console
       console.error('[AdmissionForm] PDF download failed', e);
       useUIStore.getState().showToast('PDF generation failed — try Print instead', 'error');
     } finally {
@@ -123,35 +97,10 @@ export const AdmissionFormPrint: React.FC<Props> = ({ student, schoolInfo, onClo
     }
   };
 
-  const handlePrint = () => {
-    const printWindow = window.open('', '', 'height=900,width=1100');
-    if (!printWindow) return;
-    if (!printRef.current) { printWindow.close(); return; }
-
-    // Build the print document via DOM APIs rather than document.write of an
-    // interpolated HTML string. Interpolating student.name (and copying the
-    // preview's innerHTML wholesale) into a fresh same-origin window was an
-    // XSS sink — anything that landed in the DB as a stored payload would
-    // execute when a user clicked Print. textContent / cloneNode preserves
-    // structure without parsing HTML from strings we built ourselves.
-    const doc = printWindow.document;
-    doc.open();
-    doc.write('<!DOCTYPE html><html><head></head><body></body></html>');
-    doc.close();
-
-    doc.title = `Admission Form - ${student.name}`;
-
-    const styleEl = doc.createElement('style');
-    styleEl.textContent = PRINT_CSS;
-    doc.head.appendChild(styleEl);
-
-    const pageDiv = doc.createElement('div');
-    pageDiv.className = 'adm-page';
-    pageDiv.appendChild(printRef.current.cloneNode(true));
-    doc.body.appendChild(pageDiv);
-
-    setTimeout(() => printWindow.print(), 300);
-  };
+  // Browser print routes through the same @media print pipeline used
+  // by all tools — keeps behaviour consistent and avoids the popup-
+  // window XSS sink the legacy implementation used.
+  const handlePrint = () => handlePrintShared();
 
   const fmtDate = (d: string) => {
     if (!d) return '';
@@ -203,8 +152,8 @@ export const AdmissionFormPrint: React.FC<Props> = ({ student, schoolInfo, onClo
         {/* Preview Content */}
         <div className="flex-1 overflow-y-auto bg-slate-100 p-3">
           <style dangerouslySetInnerHTML={{ __html: `.adm-preview { ${PRINT_CSS.split('.adm-page')[0]} } ` + PRINT_CSS }} />
-          <div className="bg-white rounded-lg shadow-sm overflow-hidden">
-            <div ref={printRef} style={{ fontFamily: 'Arial, Helvetica, sans-serif', fontSize: '12px', color: '#222', padding: '16px 20px' }}>
+          <div className="bg-white rounded-lg shadow-sm overflow-hidden printable">
+            <div id="print-area-admission-form" ref={printRef} className="avoid-break" style={{ fontFamily: 'Arial, Helvetica, sans-serif', fontSize: '12px', color: '#222', padding: '16px 20px' }}>
 
               {/* School Box */}
               <div className="adm-school-box">

@@ -38,6 +38,20 @@ const studentCreateLimiter = rateLimit({
   message: { ok: false, error: 'Admission rate limit reached (100/hour). If genuinely admitting many students, contact support.' },
 });
 
+// Pre-check called by the admission form on mobile blur. Returns a
+// boolean only — no school name, no student name, no count. The
+// throttle blocks bulk enumeration attempts (a principal trying to
+// harvest competitor-school parent mobiles by spraying numbers).
+const eligibilityLimiter = rateLimit({
+  windowMs: 60_000,
+  limit: 20,
+  keyGenerator: (req: any) => `elig:${req.user?.id ?? req.ip}`,
+  validate: { keyGeneratorIpFallback: false },
+  standardHeaders: 'draft-7',
+  legacyHeaders: false,
+  message: { ok: false, error: 'Too many eligibility checks. Try again in a minute.' },
+});
+
 // GET /api/students?yearId=&search=&status=
 studentsRouter.get('/', requireAuth, requireRole('PRINCIPAL', 'TEACHER'), async (req, res) => {
   try {
@@ -586,6 +600,53 @@ studentsRouter.post('/readmit', requireAuth, requireRole('PRINCIPAL'), async (re
       studentId: string; className: string; section?: string; rollNo?: string;
     }>(req, ['studentId', 'className']);
 
+    // Cross-school safety: if THIS student's parent has any OTHER
+    // student currently active anywhere else, reactivation here would
+    // re-create the "same parent active in two schools" state we
+    // explicitly forbid at admission time. Block with generic message.
+    // The student's own student_id can't be flagged twice (we're about
+    // to flip it ourselves), so we exclude it from the count.
+    const { data: stuRow } = await adminDb
+      .from('students').select('id, school_id, is_active, user_id')
+      .eq('id', studentId).maybeSingle();
+    if (!stuRow) throw new ApiError(404, 'Student not found');
+    const stu = stuRow as { id: string; school_id: string; is_active: boolean; user_id: string | null };
+    if (stu.school_id !== req.user.school_id) {
+      throw new ApiError(403, 'Cross-school readmit not allowed');
+    }
+    if (stu.user_id) {
+      // Find the parent user(s) linked to this student and check whether
+      // they're tied to any OTHER active student in another school.
+      const { data: links } = await adminDb
+        .from('parent_student_links')
+        .select('parent_user_id')
+        .eq('student_id', studentId);
+      const parentIds = ((links ?? []) as { parent_user_id: string }[]).map(l => l.parent_user_id);
+      if (parentIds.length) {
+        const { data: siblings } = await adminDb
+          .from('parent_student_links')
+          .select('student_id')
+          .in('parent_user_id', parentIds);
+        const siblingIds = ((siblings ?? []) as { student_id: string }[])
+          .map(s => s.student_id).filter(id => id !== studentId);
+        if (siblingIds.length) {
+          const { count } = await adminDb
+            .from('students')
+            .select('id', { count: 'exact', head: true })
+            .in('id', siblingIds)
+            .neq('school_id', req.user.school_id!)
+            .eq('is_active', true);
+          if ((count ?? 0) > 0) {
+            throw new ApiError(409,
+              'Yeh student rejoin nahi ho sakta — same parent ke saath koi aur ' +
+              'student abhi bhi kisi aur school me active hai. Pehle un sabka ' +
+              'TC karwana hoga, ya alag mobile number use karein.',
+            );
+          }
+        }
+      }
+    }
+
     const db = userDb(req.jwt);
     const { error } = await db.rpc('rejoin_student', {
       p_student_id: studentId,
@@ -620,6 +681,52 @@ studentsRouter.post('/document/add', requireAuth, requireRole('PRINCIPAL'), asyn
     if (error) throw new ApiError(500, error.message);
 
     ok(res, data, 201);
+  } catch (err) { fail(res, err); }
+});
+
+// POST /api/students/admission-eligibility — pre-check for the
+// admission form. Lets the UI show inline validation BEFORE the
+// principal fills the full form. Returns only { eligible: boolean }
+// — never the blocking school / student / count, to prevent
+// cross-school information disclosure via mobile enumeration.
+studentsRouter.post('/admission-eligibility', requireAuth, requireRole('PRINCIPAL'), eligibilityLimiter, async (req, res) => {
+  try {
+    const { mobile } = requireBody<{ mobile: string }>(req, ['mobile']);
+    const phone = String(mobile ?? '').replace(/\D/g, '').slice(-10);
+    if (phone.length !== 10) {
+      ok(res, { eligible: true }); // can't check — let the form proceed
+      return;
+    }
+
+    const schoolId = req.user.school_id!;
+    const { data: existing } = await adminDb
+      .from('users').select('id, school_id, role')
+      .eq('mobile_number', phone).maybeSingle();
+
+    if (!existing) { ok(res, { eligible: true }); return; }
+    const ex = existing as { id: string; school_id: string | null; role: string };
+
+    // Non-parent role with this mobile → not eligible (principal/teacher)
+    if (ex.role !== 'PARENT') { ok(res, { eligible: false }); return; }
+
+    // Same school → always fine (sibling case at the same campus)
+    if (ex.school_id === schoolId) { ok(res, { eligible: true }); return; }
+
+    // Different school → eligible iff none of the linked students
+    // are active in that other school.
+    const { data: links } = await adminDb
+      .from('parent_student_links')
+      .select('student_id')
+      .eq('parent_user_id', ex.id);
+    const linkedIds = ((links ?? []) as { student_id: string }[]).map(r => r.student_id);
+    if (!linkedIds.length) { ok(res, { eligible: true }); return; }
+
+    const { count } = await adminDb
+      .from('students')
+      .select('id', { count: 'exact', head: true })
+      .in('id', linkedIds)
+      .eq('is_active', true);
+    ok(res, { eligible: (count ?? 0) === 0 });
   } catch (err) { fail(res, err); }
 });
 
@@ -719,9 +826,17 @@ studentsRouter.post('/create', requireAuth, requireRole('PRINCIPAL'), studentCre
             activeElsewhere = count ?? 0;
           }
           if (activeElsewhere > 0) {
+            // Privacy-preserving generic message: do NOT reveal the
+            // other school's name, student name, or count. Principal of
+            // the new school doesn't need that info — the parent knows
+            // where their child is studying and can resolve it. Hiding
+            // it also prevents random-mobile harvesting (a malicious
+            // principal could enumerate which mobiles belong to active
+            // students at competitor schools).
             throw new ApiError(409,
-              `Parent ${loginPhone} has ${activeElsewhere} active student${activeElsewhere === 1 ? '' : 's'} in another school. ` +
-              `Issue TC for those students first; the account will then transfer here.`,
+              'Yeh mobile number kisi active student se linked hai. ' +
+              'Parent ko pehle apni current school se TC karwana hoga, ' +
+              'ya admission alag mobile number pe karein.',
             );
           }
 
