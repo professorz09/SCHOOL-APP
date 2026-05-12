@@ -39,14 +39,16 @@ export const DriverRouteView: React.FC = () => {
     capturing: boolean;
     error: string | null;
   } | null>(null);
-  // Reorder is local-first — up/down arrows shuffle this array in memory
-  // only. The driver hits the big "Save Order" button at the bottom once
-  // they're happy with the arrangement, and only then do we batch-write
-  // sort_order updates to the server. This avoids burning through the
-  // 50/day rate limit when a driver fiddles with order during a trip.
+  // localStops is the optimistic source of truth for the UI. Every
+  // mutation (add / delete / reorder) updates this list synchronously so
+  // the driver sees the change instantly; the server call runs in the
+  // background. On error we rollback and toast — but tapping never feels
+  // stuck waiting for the network.
   const [localStops, setLocalStops] = useState<RouteStop[]>([]);
-  const [hasUnsavedOrder, setHasUnsavedOrder] = useState(false);
-  const [savingOrder, setSavingOrder] = useState(false);
+  // In-flight guards — disable the relevant tap target while a request
+  // is on the wire so a frustrated double-tap can't enqueue duplicates.
+  const [savingAdd, setSavingAdd] = useState(false);
+  const [deletingIds, setDeletingIds] = useState<Set<string>>(new Set());
 
   useEffect(() => {
     let cancelled = false;
@@ -72,18 +74,15 @@ export const DriverRouteView: React.FC = () => {
     if (v) {
       setVehicle(v);
       setStops(v.stops);
-      // Reset local reorder buffer on every reload — server-confirmed
-      // order overwrites any in-memory drag the driver hadn't saved.
       setLocalStops(v.stops);
-      setHasUnsavedOrder(false);
     }
   };
 
-  // Keep localStops in sync whenever the server-side stops change AND
-  // there's no unsaved reorder pending (preserve in-progress shuffles).
+  // Keep localStops aligned with the server-confirmed list. Optimistic
+  // mutations bypass this by directly setting localStops first.
   useEffect(() => {
-    if (!hasUnsavedOrder) setLocalStops(stops);
-  }, [stops, hasUnsavedOrder]);
+    setLocalStops(stops);
+  }, [stops]);
 
   const handleSaveRouteName = () => {
     if (!vehicle || !routeNameInput.trim()) return;
@@ -159,7 +158,7 @@ export const DriverRouteView: React.FC = () => {
   };
 
   const savePendingAdd = async () => {
-    if (!vehicle || !pendingAdd) return;
+    if (!vehicle || !pendingAdd || savingAdd) return;
     if (!pendingAdd.name.trim()) {
       showToast('Stop ka naam likhna zaroori hai', 'error');
       return;
@@ -171,63 +170,64 @@ export const DriverRouteView: React.FC = () => {
     const now = new Date();
     const hh = String(now.getHours()).padStart(2, '0');
     const mm = String(now.getMinutes()).padStart(2, '0');
+
+    // Optimistic add — render the new stop instantly with a temp id, close
+    // the form, fire the server call. On success the reload() swap pulls
+    // the real row in; on error we yank the placeholder out and toast.
+    const tempId = `temp-${Date.now()}`;
+    const placeholder: RouteStop = {
+      id: tempId,
+      name: pendingAdd.name.trim(),
+      estimatedTime: `${hh}:${mm}`,
+      lat: pendingAdd.capturedLat,
+      lng: pendingAdd.capturedLng,
+    };
+    setLocalStops(prev => [...prev, placeholder]);
+    const stopName = pendingAdd.name.trim();
+    setPendingAdd(null);
+    setSavingAdd(true);
     try {
       await transportService.addStop(vehicle.id, {
-        name: pendingAdd.name.trim(),
+        name: stopName,
         estimatedTime: `${hh}:${mm}`,
-        lat: pendingAdd.capturedLat,
-        lng: pendingAdd.capturedLng,
+        lat: placeholder.lat,
+        lng: placeholder.lng,
       });
       reload();
-      showToast(`Stop "${pendingAdd.name.trim()}" added`);
-      setPendingAdd(null);
     } catch (e) {
+      setLocalStops(prev => prev.filter(s => s.id !== tempId));
       showToast(e instanceof Error ? e.message : 'Failed to add stop', 'error');
+    } finally {
+      setSavingAdd(false);
     }
   };
 
-  // Local reorder — swap adjacent rows in memory only. Server write
-  // happens once when the driver hits Save Order below. No-op at the
-  // edges (up at 0 / down at last).
-  const handleReorder = (idx: number, direction: 'up' | 'down') => {
+  // Reorder — swap adjacent rows instantly in the UI, then write the two
+  // affected sort_orders in the background. No bottom confirm bar; the
+  // change is committed on the spot. Server failures rollback the swap
+  // and toast so the on-screen order never disagrees with the DB.
+  const handleReorder = async (idx: number, direction: 'up' | 'down') => {
+    if (!vehicle) return;
     const otherIdx = direction === 'up' ? idx - 1 : idx + 1;
     if (otherIdx < 0 || otherIdx >= localStops.length) return;
+
+    const before = localStops.slice();
     const next = localStops.slice();
     [next[idx], next[otherIdx]] = [next[otherIdx], next[idx]];
     setLocalStops(next);
-    setHasUnsavedOrder(true);
-  };
 
-  const handleSaveOrder = async () => {
-    if (!vehicle || !hasUnsavedOrder || savingOrder) return;
-    setSavingOrder(true);
     try {
-      // Write each stop's new index as sort_order. Only PATCH rows whose
-      // server-side sort_order differs from the new index to keep the
-      // rate-limit footprint minimal (50/day shared across all stop
-      // mutations).
-      const writes: Promise<void>[] = [];
-      for (let i = 0; i < localStops.length; i++) {
-        const stop = localStops[i];
-        const serverStop = stops.find(s => s.id === stop.id);
-        const serverIdx = serverStop ? stops.indexOf(serverStop) : -1;
-        if (serverIdx !== i) {
-          writes.push(transportService.updateStop(vehicle.id, stop.id, { sort_order: i } as Partial<RouteStop>));
-        }
-      }
-      await Promise.all(writes);
+      // Swap is two write rows; do them in parallel since they don't
+      // depend on each other and the order of arrival doesn't matter.
+      await Promise.all([
+        transportService.updateStop(vehicle.id, next[idx].id, { sort_order: idx } as Partial<RouteStop>),
+        transportService.updateStop(vehicle.id, next[otherIdx].id, { sort_order: otherIdx } as Partial<RouteStop>),
+      ]);
       reload();
-      showToast('Route order saved');
     } catch (e) {
-      showToast(e instanceof Error ? e.message : 'Save failed', 'error');
-    } finally {
-      setSavingOrder(false);
+      setLocalStops(before);
+      showToast(e instanceof Error ? e.message : 'Reorder failed', 'error');
     }
-  };
-
-  const cancelReorder = () => {
-    setLocalStops(stops);
-    setHasUnsavedOrder(false);
   };
 
   const handleEditStop = () => {
@@ -243,10 +243,30 @@ export const DriverRouteView: React.FC = () => {
     setEditingStopId(null);
   };
 
-  const handleDeleteStop = (stopId: string) => {
+  // Optimistic delete — strip the row from localStops immediately so the
+  // driver sees it gone; fire the server call in the background. On
+  // error we put it back and toast. In-flight guard via deletingIds so a
+  // double-tap on the same row doesn't double-fire.
+  const handleDeleteStop = async (stopId: string) => {
     if (!vehicle) return;
-    transportService.removeStop(vehicle.id, stopId);
-    reload();
+    if (deletingIds.has(stopId)) return;
+    const removed = localStops.find(s => s.id === stopId);
+    if (!removed) return;
+    setLocalStops(prev => prev.filter(s => s.id !== stopId));
+    setDeletingIds(prev => new Set(prev).add(stopId));
+    try {
+      await transportService.removeStop(vehicle.id, stopId);
+      reload();
+    } catch (e) {
+      setLocalStops(prev => prev.find(s => s.id === stopId) ? prev : [...prev, removed]);
+      showToast(e instanceof Error ? e.message : 'Delete failed', 'error');
+    } finally {
+      setDeletingIds(prev => {
+        const next = new Set(prev);
+        next.delete(stopId);
+        return next;
+      });
+    }
   };
 
   if (!vehicle) return (
@@ -257,12 +277,11 @@ export const DriverRouteView: React.FC = () => {
     </div>
   );
 
-  // Confirm before delete — one accidental tap on a stop the driver
-  // spent a minute placing shouldn't wipe it out silently.
+  // No confirm on delete — driver wants smooth no-friction UX. The
+  // optimistic remove is instant and a rollback toast covers errors;
+  // re-adding by mistake is still cheap (Add at Current Location).
   const confirmDelete = (stop: RouteStop) => {
-    if (window.confirm(`Delete stop "${stop.name}"? Ye action undo nahi hoga.`)) {
-      handleDeleteStop(stop.id);
-    }
+    void handleDeleteStop(stop.id);
   };
 
   return (
@@ -325,13 +344,16 @@ export const DriverRouteView: React.FC = () => {
       </div>
 
       {/* Primary CTA — only visible in edit mode. Tap captures GPS in the
-          background and opens the inline name-only form below. */}
+          background and opens the inline name-only form below. Disabled
+          while an earlier add is still in flight so a rage-tap doesn't
+          stack two pending forms. */}
       {editMode && !pendingAdd && (
         <>
           <button onClick={handleQuickAddHere}
-            className="w-full flex items-center justify-center gap-3 py-5 rounded-2xl font-black text-sm uppercase tracking-widest text-white shadow-lg shadow-emerald-500/30 active:scale-[0.98] transition-all bg-gradient-to-br from-emerald-500 to-emerald-700">
+            disabled={savingAdd}
+            className="w-full flex items-center justify-center gap-3 py-5 rounded-2xl font-black text-sm uppercase tracking-widest text-white shadow-lg shadow-emerald-500/30 active:scale-[0.98] transition-all bg-gradient-to-br from-emerald-500 to-emerald-700 disabled:opacity-60 disabled:cursor-not-allowed">
             <MapPin size={20} />
-            Add Stop at Current Location
+            {savingAdd ? 'Saving previous stop…' : 'Add Stop at Current Location'}
           </button>
           <p className="text-[10px] font-bold text-slate-400 -mt-2 text-center leading-relaxed">
             GPS apne aap capture hoga — sirf stop ka naam likhna hai.
@@ -375,9 +397,9 @@ export const DriverRouteView: React.FC = () => {
               Cancel
             </button>
             <button onClick={savePendingAdd}
-              disabled={pendingAdd.capturing || !!pendingAdd.error || !pendingAdd.name.trim()}
+              disabled={pendingAdd.capturing || !!pendingAdd.error || !pendingAdd.name.trim() || savingAdd}
               className="flex-1 py-3 bg-emerald-600 text-white font-black rounded-xl flex items-center justify-center gap-1.5 disabled:opacity-50 disabled:cursor-not-allowed">
-              <Check size={15} /> Save Stop
+              <Check size={15} /> {savingAdd ? 'Saving…' : 'Save Stop'}
             </button>
           </div>
         </div>
@@ -479,8 +501,9 @@ export const DriverRouteView: React.FC = () => {
                           <Pencil size={16} />
                         </button>
                         <button onClick={() => confirmDelete(stop)}
+                          disabled={deletingIds.has(stop.id)}
                           aria-label={`Delete ${stop.name}`}
-                          className="w-10 h-10 flex items-center justify-center text-rose-600 bg-rose-50 hover:bg-rose-100 rounded-xl shrink-0">
+                          className="w-10 h-10 flex items-center justify-center text-rose-600 bg-rose-50 hover:bg-rose-100 rounded-xl shrink-0 disabled:opacity-40 disabled:cursor-not-allowed">
                           <Trash2 size={16} />
                         </button>
                       </>
@@ -538,25 +561,6 @@ export const DriverRouteView: React.FC = () => {
         </div>
       )}
 
-      {/* Bottom Save bar — sticky at the bottom when the driver has
-          rearranged stops but hasn't pushed to server yet. Only one
-          server round-trip per "Save Order" click no matter how many
-          times they tapped up/down. Cancel restores the server order. */}
-      {editMode && hasUnsavedOrder && (
-        <div className="sticky bottom-4 mt-2 flex gap-2 bg-amber-50 border-2 border-amber-300 rounded-2xl p-3 shadow-lg">
-          <button onClick={cancelReorder}
-            disabled={savingOrder}
-            className="flex-1 py-3 bg-white border border-slate-200 text-slate-700 font-black rounded-xl text-sm disabled:opacity-60">
-            Cancel
-          </button>
-          <button onClick={handleSaveOrder}
-            disabled={savingOrder}
-            className="flex-[2] flex items-center justify-center gap-2 py-3 bg-emerald-600 text-white font-black rounded-xl text-sm disabled:opacity-60">
-            <Check size={16} />
-            {savingOrder ? 'Saving order…' : 'Save New Order'}
-          </button>
-        </div>
-      )}
     </div>
   );
 };
