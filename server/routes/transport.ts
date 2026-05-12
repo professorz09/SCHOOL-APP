@@ -124,7 +124,13 @@ transportRouter.get('/student/:studentId', requireAuth, requireRole('PRINCIPAL',
 });
 
 // GET /api/transport/vehicles
-transportRouter.get('/vehicles', requireAuth, requireRole('PRINCIPAL', 'DRIVER'), async (req, res) => {
+// Open to PARENT + STUDENT too — TransportView (student/parent side) loads
+// the vehicles list through this endpoint to resolve the assigned vehicle's
+// route + stops. Without this, the parent-side "No Transport Assignment"
+// screen rendered even when the assignment row existed, because the
+// vehicles cache came back empty (silent 403 from requireRole).
+// Scoping is still safe: the query filters by req.user.school_id.
+transportRouter.get('/vehicles', requireAuth, requireRole('PRINCIPAL', 'DRIVER', 'PARENT', 'STUDENT', 'TEACHER'), async (req, res) => {
   try {
     const { data, error } = await adminDb
       .from('transport_vehicles')
