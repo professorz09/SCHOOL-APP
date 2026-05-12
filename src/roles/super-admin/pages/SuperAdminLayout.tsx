@@ -15,6 +15,7 @@ type ActiveView = 'dashboard' | 'schools' | 'billing' | 'admins' | 'broadcast' |
 // need to render their own — keeping the layout focused on routing only.
 export const SuperAdminLayout: React.FC = () => {
   const [view, setView] = useState<ActiveView>('dashboard');
+  const isSubView = useUIStore(s => s.isSubView);
   const setSubView = useUIStore(s => s.setSubView);
   const setAppReady = useUIStore(s => s.setAppReady);
 
@@ -22,6 +23,12 @@ export const SuperAdminLayout: React.FC = () => {
   const onBack = () => { setView('dashboard'); setSubView(false); };
 
   useEffect(() => { setSubView(false); }, []);
+  // When the user taps HOME on BottomNav while inside a sub-view, App.tsx
+  // flips isSubView to false. SuperAdminLayout's internal `view` state was
+  // stuck on the previous section (e.g. 'schools'), so HOME kept rendering
+  // Schools instead of the dashboard. Listen for the flip and reset.
+  // Mirrors the pattern used by StudentLayout for the same problem.
+  useEffect(() => { if (!isSubView) setView('dashboard'); }, [isSubView]);
 
   // Lift the app-root splash overlay as soon as this layout mounts.
   // Super-admin's "essential data" (schools list, billing) is fetched
