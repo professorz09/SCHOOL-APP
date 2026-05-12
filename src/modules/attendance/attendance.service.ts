@@ -165,7 +165,10 @@ export const sharedAttendance = {
     } else {
       const sinceDate = new Date();
       sinceDate.setDate(sinceDate.getDate() - days);
-      const since = sinceDate.toISOString().slice(0, 10);
+      // IST-anchored YYYY-MM-DD. toISOString() converts to UTC and the
+      // resulting date can land 1 day earlier in late-evening-IST runs,
+      // making the filter pull an extra day of rows (off-by-one).
+      const since = sinceDate.toLocaleDateString('en-CA', { timeZone: 'Asia/Kolkata' });
       q = q.gte('date', since);
     }
     const { data, error } = await q;

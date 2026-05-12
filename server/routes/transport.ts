@@ -15,25 +15,40 @@ async function cancelInstallmentsAfter(
   assignmentId: string,
   fromDate: string,
 ): Promise<{ deleted: number; cancelled: number }> {
-  const { data: rows } = await adminDb
+  const { data: rows, error: selErr } = await adminDb
     .from('fee_installments')
     .select('id, paid_amount, write_off_amount')
     .eq('related_id', assignmentId)
     .eq('fee_type', 'TRANSPORT')
     .gte('due_date', fromDate);
+  if (selErr) throw new ApiError(500, `cancelInstallmentsAfter select failed: ${selErr.message}`);
 
   const all      = (rows ?? []) as InstallmentRow[];
   const fresh    = all.filter(r => Number(r.paid_amount) === 0 && Number(r.write_off_amount) === 0);
   const partial  = all.filter(r => Number(r.paid_amount) > 0  || Number(r.write_off_amount) > 0);
 
   if (fresh.length) {
-    await adminDb.from('fee_installments').delete().in('id', fresh.map(r => r.id));
+    const { error: delErr } = await adminDb
+      .from('fee_installments').delete().in('id', fresh.map(r => r.id));
+    if (delErr) throw new ApiError(500, `cancelInstallmentsAfter delete failed: ${delErr.message}`);
   }
+  // Group partial rows by their frozen amount and batch the UPDATE — the
+  // per-row loop was an N+1 and a mid-loop failure used to leave the
+  // assignment in a split half-cancelled state. Each group is one round-trip.
+  const byFrozen = new Map<number, string[]>();
   for (const r of partial) {
     const frozen = Number(r.paid_amount) + Number(r.write_off_amount);
-    await adminDb.from('fee_installments')
-      .update({ status: 'CANCELLED', amount: frozen, updated_at: new Date().toISOString() })
-      .eq('id', r.id);
+    const list = byFrozen.get(frozen) ?? [];
+    list.push(r.id);
+    byFrozen.set(frozen, list);
+  }
+  const nowIso = new Date().toISOString();
+  for (const [frozen, ids] of byFrozen.entries()) {
+    const { error: upErr } = await adminDb
+      .from('fee_installments')
+      .update({ status: 'CANCELLED', amount: frozen, updated_at: nowIso })
+      .in('id', ids);
+    if (upErr) throw new ApiError(500, `cancelInstallmentsAfter update failed: ${upErr.message}`);
   }
   return { deleted: fresh.length, cancelled: partial.length };
 }
@@ -66,6 +81,20 @@ async function addFlatTransportSchedule(
   const yearEnd   = new Date(ayRow.end_date);
   const cursor    = new Date(Math.max(start.getTime(), yearStart.getTime()));
   cursor.setDate(10);
+  // setDate(10) can rewind cursor *before* start (e.g. start=15-Apr → 10-Apr),
+  // creating a phantom installment for the pre-assignment period. Skip
+  // forward one month when that happens. Matches fee.service.ts:974.
+  if (cursor < start) cursor.setMonth(cursor.getMonth() + 1);
+
+  // Local-tz YYYY-MM-DD formatter — toISOString() converts to UTC and
+  // shifts late-month IST dates back a day (the "1st of month" can land
+  // on the last day of the previous month). Mirrors fee.service.ts:980.
+  const fmtYmd = (d: Date) => {
+    const y = d.getFullYear();
+    const m = String(d.getMonth() + 1).padStart(2, '0');
+    const day = String(d.getDate()).padStart(2, '0');
+    return `${y}-${m}-${day}`;
+  };
 
   const rows: Record<string, unknown>[] = [];
   while (cursor <= end && cursor <= yearEnd) {
@@ -74,7 +103,7 @@ async function addFlatTransportSchedule(
       school_id:        schoolId,
       academic_year_id: academicYearId,
       month:            cursor.toLocaleString('en-US', { month: 'long', year: 'numeric' }),
-      due_date:         cursor.toISOString().slice(0, 10),
+      due_date:         fmtYmd(cursor),
       fee_type:         'TRANSPORT',
       amount:           monthlyAmount,
       payer_type:       'PARENT',
