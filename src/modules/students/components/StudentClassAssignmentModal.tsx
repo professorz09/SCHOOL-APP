@@ -62,7 +62,7 @@ export const StudentClassAssignmentModal: React.FC<Props> = ({ student, onClose,
   const [transportEnabled, setTransportEnabled] = useState<boolean>(false);
   const [vehicles, setVehicles] = useState<TransportVehicle[]>([]);
   const [vehicleId, setVehicleId] = useState<string>('');
-  const [stopId, setStopId] = useState<string>('');
+  // stopId state removed in migration 0115 — student is linked to vehicle only.
   const [transportAmount, setTransportAmount] = useState<number>(500);
   const [transportStructureId, setTransportStructureId] = useState<string>('');
 
@@ -273,7 +273,7 @@ export const StudentClassAssignmentModal: React.FC<Props> = ({ student, onClose,
       showToast('Fee structure choose karna zaroori hai', 'error');
       return;
     }
-    if (transportEnabled && (!vehicleId || !stopId)) {
+    if (transportEnabled && !vehicleId) {
       showToast('Vehicle aur stop choose karein ya transport disable karein', 'error');
       return;
     }
@@ -299,7 +299,7 @@ export const StudentClassAssignmentModal: React.FC<Props> = ({ student, onClose,
           discountPct,
         },
         transport: transportEnabled && selectedTransportStructure ? {
-          vehicleId, stopId, monthlyAmount: transportAmount,
+          vehicleId, monthlyAmount: transportAmount,
           feeStructureId: selectedTransportStructure.id,
         } : undefined,
       });
@@ -617,29 +617,19 @@ export const StudentClassAssignmentModal: React.FC<Props> = ({ student, onClose,
             </label>
             {transportEnabled && (
               <>
-                <div className="grid grid-cols-2 gap-2">
-                  <select
-                    value={vehicleId}
-                    onChange={e => { setVehicleId(e.target.value); setStopId(''); }}
-                    className="w-full px-2 py-2 bg-slate-50 border border-slate-200 rounded-lg text-xs font-bold"
-                  >
-                    <option value="">— Vehicle —</option>
-                    {vehicles.map(v => (
-                      <option key={v.id} value={v.id}>{v.vehicleNo} ({v.routeName || 'Route'})</option>
-                    ))}
-                  </select>
-                  <select
-                    value={stopId}
-                    onChange={e => setStopId(e.target.value)}
-                    disabled={!selectedVehicle}
-                    className="w-full px-2 py-2 bg-slate-50 border border-slate-200 rounded-lg text-xs font-bold disabled:opacity-50"
-                  >
-                    <option value="">— Stop —</option>
-                    {selectedVehicle?.stops.map(s => (
-                      <option key={s.id} value={s.id}>{s.name}</option>
-                    ))}
-                  </select>
-                </div>
+                {/* Student is linked to a VEHICLE only. The driver manages
+                    the route's stops independently (migration 0115 — there
+                    is no longer a per-student boarding stop column). */}
+                <select
+                  value={vehicleId}
+                  onChange={e => setVehicleId(e.target.value)}
+                  className="w-full px-2 py-2 bg-slate-50 border border-slate-200 rounded-lg text-xs font-bold"
+                >
+                  <option value="">— Vehicle —</option>
+                  {vehicles.map(v => (
+                    <option key={v.id} value={v.id}>{v.vehicleNo} ({v.routeName || 'Route'})</option>
+                  ))}
+                </select>
                 <div>
                   <label className="text-[10px] font-black uppercase text-slate-500">Transport Fee Structure *</label>
                   <select
@@ -699,7 +689,7 @@ export const StudentClassAssignmentModal: React.FC<Props> = ({ student, onClose,
                 || !rollNo.trim()
                 || !sectionId
                 || !selectedStructure
-                || (transportEnabled && (!vehicleId || !stopId || !selectedTransportStructure))
+                || (transportEnabled && (!vehicleId || !selectedTransportStructure))
               }
               className="flex-1 px-4 py-3 bg-indigo-600 text-white font-black text-xs rounded-xl active:scale-95 disabled:opacity-60 flex items-center justify-center gap-1.5"
             >

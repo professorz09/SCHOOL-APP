@@ -524,12 +524,12 @@ export const studentDashboardService = {
     if (!ctx.yearId) return [];
     const { data: assign, error } = await supabase
       .from('student_transport_assignments')
-      .select('vehicle_id, stop_id, is_active')
+      .select('vehicle_id, is_active')
       .eq('student_id', ctx.studentId).eq('academic_year_id', ctx.yearId)
       .eq('is_active', true).maybeSingle();
     if (error) throw new Error(error.message);
 
-    const a = assign as { vehicle_id: string | null; stop_id: string | null } | null;
+    const a = assign as { vehicle_id: string | null } | null;
     if (!a?.vehicle_id) return [];
 
     const { data: stops } = await supabase
@@ -543,17 +543,16 @@ export const studentDashboardService = {
       lat: number | string | null; lng: number | string | null; sort_order: number;
     }>;
 
-    // Mark up to and including the student's stop as completed/current.
-    const studentIdx = a.stop_id ? list.findIndex(s => s.id === a.stop_id) : -1;
-    return list.map((s, i) => ({
+    // Student is no longer tied to a specific stop (migration 0115). Show
+    // the whole route as UPCOMING — the live "vehicle is here" marker
+    // comes from driver_locations / current_stop_idx, not from the
+    // student-assignment row.
+    return list.map((s) => ({
       name: s.name,
       lat: Number(s.lat ?? 0),
       lng: Number(s.lng ?? 0),
       estimatedTime: s.estimated_time ?? '',
-      status:
-        studentIdx >= 0 && i < studentIdx ? 'COMPLETED' :
-        studentIdx >= 0 && i === studentIdx ? 'CURRENT' :
-        'UPCOMING',
+      status: 'UPCOMING' as const,
     }));
   },
 

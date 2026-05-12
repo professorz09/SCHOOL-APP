@@ -214,7 +214,7 @@ export const apiTransport = {
   getVehicles: () => get<any[]>('/transport/vehicles'),
   getStudentAssignments: (studentId: string) => get<any[]>(`/transport/student/${studentId}`),
   assign: (body: {
-    studentId: string; vehicleId: string; stopId?: string;
+    studentId: string; vehicleId: string;
     monthlyAmount: number; startDate: string; academicYearId: string;
     endDate?: string; reason?: string; feeStructureId?: string;
   }) => post<any>('/transport/assign', body),

@@ -195,7 +195,6 @@ export interface AssignStudentInput {
   };
   transport?: {
     vehicleId: string;
-    stopId: string;
     monthlyAmount: number;
     /**
      * VEHICLE-type fee structure id that drives transport bill generation.
@@ -1029,7 +1028,6 @@ export const studentService = {
       await apiTransport.assign({
         studentId:      input.studentId,
         vehicleId:      input.transport.vehicleId,
-        stopId:         input.transport.stopId,
         monthlyAmount:  input.transport.monthlyAmount,
         startDate:      startIso,
         academicYearId: ayId,

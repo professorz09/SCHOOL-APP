@@ -131,14 +131,13 @@ interface StopRow {
 
 interface AssignmentRow {
   id: string; student_id: string; academic_year_id: string;
-  vehicle_id: string | null; stop_id: string | null;
+  vehicle_id: string | null;
   monthly_amount: number; start_date: string | null; end_date: string | null;
   is_active: boolean;
   reason: string | null;
   end_reason: string | null;
   students: { name: string } | null;
   student_academic_records: { class_name: string; section: string } | null;
-  route_stops: { name: string } | null;
   transport_vehicles: { vehicle_no: string } | null;
 }
 
@@ -216,10 +215,9 @@ async function _loadAssignments(schoolId: string): Promise<void> {
   const { data, error } = await supabase
     .from('student_transport_assignments')
     .select(`
-      id, student_id, academic_year_id, vehicle_id, stop_id,
+      id, student_id, academic_year_id, vehicle_id,
       monthly_amount, start_date, end_date, is_active, reason, end_reason,
       students!inner(name, school_id),
-      route_stops(name),
       transport_vehicles(vehicle_no)
     `)
     .eq('students.school_id', schoolId)
@@ -253,8 +251,12 @@ async function _loadAssignments(schoolId: string): Promise<void> {
       studentName: a.students?.name ?? '',
       className: ar ? `${ar.class_name}-${ar.section}` : '',
       vehicleId: a.vehicle_id ?? '',
-      boardingStopId: a.stop_id ?? '',
-      boardingStopName: a.route_stops?.name ?? '—',
+      // Boarding-stop linkage was dropped in migration 0115 — students are
+      // now only tied to a vehicle, not to a specific stop. Keep the fields
+      // on the type as empty defaults to avoid touching every UI consumer
+      // in this commit; new UI suppresses them.
+      boardingStopId: '',
+      boardingStopName: '',
       academicYearId: a.academic_year_id,
       monthlyAmount: Number(a.monthly_amount),
       startDate: a.start_date ?? '',
@@ -426,10 +428,12 @@ export const transportService = {
 
     const startIso = startDate ?? new Date().toISOString().slice(0, 10);
 
+    // stopId param is accepted for backwards-compat but no longer sent to
+    // the server (migration 0115 dropped student_transport_assignments.stop_id).
+    void stopId;
     await apiTransport.assign({
       studentId,
       vehicleId,
-      stopId: stopId ?? undefined,
       monthlyAmount,
       startDate: startIso,
       academicYearId: ayId,
@@ -439,7 +443,7 @@ export const transportService = {
     });
 
     await logAudit('transport_assigned', 'student_transport_assignment', studentId, {
-      studentId, vehicleId, stopId, monthlyAmount, startDate: startIso, endDate, reason,
+      studentId, vehicleId, monthlyAmount, startDate: startIso, endDate, reason,
     });
     await this.refreshAll();
     return this.getAssignmentForStudent(studentId)!;
@@ -520,10 +524,9 @@ export const transportService = {
     let q = supabase
       .from('student_transport_assignments')
       .select(`
-        id, student_id, academic_year_id, vehicle_id, stop_id,
+        id, student_id, academic_year_id, vehicle_id,
         monthly_amount, start_date, end_date, is_active, reason, end_reason,
         students!inner(name, school_id),
-        route_stops(name),
         transport_vehicles(vehicle_no)
       `)
       .eq('student_id', studentId)
@@ -554,8 +557,8 @@ export const transportService = {
         studentName: a.students?.name ?? '',
         className: ar ? `${ar.class_name}-${ar.section}` : '',
         vehicleId: a.vehicle_id ?? '',
-        boardingStopId: a.stop_id ?? '',
-        boardingStopName: a.route_stops?.name ?? '—',
+        boardingStopId: '',
+        boardingStopName: '',
         academicYearId: a.academic_year_id,
         monthlyAmount: Number(a.monthly_amount),
         startDate: a.start_date ?? '',
@@ -595,7 +598,7 @@ export const transportService = {
 
     type Closed = {
       assignment_id: string; student_id: string;
-      stop_id: string | null; monthly_amount: number; academic_year_id: string;
+      monthly_amount: number; academic_year_id: string;
     };
     const closed = (data ?? []) as Closed[];
 

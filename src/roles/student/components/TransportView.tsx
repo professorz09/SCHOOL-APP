@@ -128,10 +128,6 @@ export const TransportView: React.FC<Props> = ({ onBack }) => {
               <div className="text-[9px] font-black uppercase tracking-widest text-slate-400">Driver</div>
               <div className="font-black text-sm text-white mt-0.5">{data.vehicle.driverName}</div>
             </div>
-            <div>
-              <div className="text-[9px] font-black uppercase tracking-widest text-slate-400">Your Stop</div>
-              <div className="font-black text-sm text-emerald-300 mt-0.5">{data.assignment.boardingStopName}</div>
-            </div>
           </div>
         </div>
 
@@ -170,9 +166,6 @@ export const TransportView: React.FC<Props> = ({ onBack }) => {
                   <div className="flex items-center gap-3 mt-0.5">
                     <span className="text-[10px] font-bold text-slate-400">{stop.estimatedTime}</span>
                   </div>
-                  {stop.status === 'CURRENT' && stop.id === data.assignment.boardingStopId && (
-                    <span className="text-[9px] font-black bg-emerald-500 text-white px-2 py-0.5 rounded-full uppercase mt-1 inline-block">Your boarding stop</span>
-                  )}
                   {stop.status === 'CURRENT' && (
                     <span className="text-[9px] font-black bg-blue-500 text-white px-2 py-0.5 rounded-full uppercase mt-1 inline-block">Vehicle is here</span>
                   )}
