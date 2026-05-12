@@ -43,6 +43,11 @@ export const DriverLayout: React.FC = () => {
   const [autoArrive, setAutoArrive] = useState(false);
   const [showEmergencyConfirm, setShowEmergencyConfirm] = useState(false);
   const [emergencySent, setEmergencySent] = useState(false);
+  // In-flight guard for the alert POST. Without this, an anxious driver
+  // tapping the button repeatedly fires multiple alerts to the principal
+  // (one per tap until the first response lands). Lock the button from
+  // the moment they confirm until either success or error returns.
+  const [emergencySending, setEmergencySending] = useState(false);
   const [vehicle, setVehicle] = useState<TransportVehicle | null>(null);
   const [stops, setStops] = useState<RouteStop[]>([]);
   const [tripComplete, setTripComplete] = useState(false);
@@ -291,7 +296,9 @@ export const DriverLayout: React.FC = () => {
   };
 
   const handleEmergency = async () => {
+    if (emergencySending || emergencySent) return; // belt-and-braces double-tap guard
     setShowEmergencyConfirm(false);
+    setEmergencySending(true);
     try {
       const sess = await supabase.auth.getSession();
       const token = sess.data.session?.access_token;
@@ -317,6 +324,8 @@ export const DriverLayout: React.FC = () => {
         e instanceof Error ? e.message : 'Could not send alert. Call school directly if real emergency.',
         'error',
       );
+    } finally {
+      setEmergencySending(false);
     }
   };
 
@@ -346,8 +355,11 @@ export const DriverLayout: React.FC = () => {
   return (
     <div className="flex flex-col gap-4 animate-in slide-in-from-bottom-4 duration-500 fade-in pt-4 px-5">
 
-      {/* Status card */}
-      <div className={`rounded-3xl p-6 transition-colors duration-300 ${isTracking ? 'bg-blue-600' : 'bg-slate-900'}`}>
+      {/* Status card — emerald when actively tracking (matches the LIVE
+          green badge styling used elsewhere in the app), slate-900 when
+          offline. Previously was blue-600 which read more "info" than
+          "vehicle is live & moving". */}
+      <div className={`rounded-3xl p-6 transition-colors duration-300 ${isTracking ? 'bg-gradient-to-br from-emerald-500 to-emerald-700' : 'bg-slate-900'}`}>
         <div className="flex justify-between items-start text-white">
           <div>
             <p className="font-bold text-[10px] uppercase tracking-widest text-white/70">Vehicle Status</p>
@@ -370,12 +382,24 @@ export const DriverLayout: React.FC = () => {
         </div>
       </div>
 
-      {/* Emergency button */}
+      {/* Emergency button — compact, right-aligned pill. Sized small on
+          purpose so the driver doesn't fat-finger it while driving, and
+          disabled while a request is in flight so a panicked double-tap
+          doesn't fire two alerts to the principal. */}
       {isTracking && !emergencySent && (
-        <button onClick={() => setShowEmergencyConfirm(true)}
-          className="w-full flex items-center justify-center gap-2 bg-rose-50 border-2 border-rose-300 text-rose-700 py-3 rounded-2xl font-black text-sm active:scale-95 transition-transform">
-          <AlertTriangle size={18} /> Emergency Alert
-        </button>
+        <div className="flex justify-end">
+          <button
+            onClick={() => !emergencySending && setShowEmergencyConfirm(true)}
+            disabled={emergencySending}
+            className={`inline-flex items-center gap-1.5 px-3.5 py-2 rounded-full border-2 font-black text-[11px] uppercase tracking-widest transition-all active:scale-95 ${
+              emergencySending
+                ? 'bg-rose-100 border-rose-200 text-rose-400 cursor-not-allowed'
+                : 'bg-rose-50 border-rose-300 text-rose-700 hover:bg-rose-100'
+            }`}>
+            <AlertTriangle size={14} />
+            {emergencySending ? 'Sending…' : 'SOS'}
+          </button>
+        </div>
       )}
 
       {emergencySent && (
@@ -396,7 +420,7 @@ export const DriverLayout: React.FC = () => {
             <span className="text-sm font-extrabold text-slate-900">Auto GPS Mode</span>
           </div>
           <button onClick={() => setAutoArrive(!autoArrive)}
-            className={`w-12 h-6 rounded-full transition-colors relative ${autoArrive ? 'bg-blue-500' : 'bg-slate-200'}`}>
+            className={`w-12 h-6 rounded-full transition-colors relative ${autoArrive ? 'bg-emerald-500' : 'bg-slate-200'}`}>
             <div className={`w-5 h-5 bg-white rounded-full shadow absolute top-0.5 transition-transform ${autoArrive ? 'translate-x-6' : 'translate-x-0.5'}`} />
           </button>
         </div>
