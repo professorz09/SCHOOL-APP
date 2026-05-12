@@ -16,6 +16,7 @@ import { staffRouter }        from './routes/staff';
 import { timetableRouter }    from './routes/timetable';
 import { principalRouter }    from './routes/principal';
 import { adminSchoolsRouter } from './routes/admin-schools';
+import { adminRouter }        from './routes/admin';
 import { aiRouter }           from './routes/ai';
 
 export const app = express();
@@ -118,6 +119,7 @@ app.use('/api/staff',         staffRouter);
 app.use('/api/timetable',     timetableRouter);
 app.use('/api/principal',     principalRouter);
 app.use('/api/admin/schools', adminSchoolsRouter);
+app.use('/api/admin',         adminRouter);
 app.use('/api/ai',            aiRouter);
 
 app.use((_req, res) => {
