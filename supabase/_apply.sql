@@ -13146,3 +13146,29 @@ CREATE POLICY rs_write ON public.route_stops
          )
     )
   );
+
+
+-- =============================================================
+-- 0120_students_driver_select_via_func.sql
+-- =============================================================
+-- 0118's inline EXISTS over student_transport_assignments interacted badly
+-- with PostgREST query planning when the driver's home page joined through
+-- transport_vehicles + assignments. Wrap the check in a SECURITY DEFINER
+-- helper so the students policy is a flat array-membership test with no
+-- nested RLS evaluation.
+
+CREATE OR REPLACE FUNCTION public.driver_student_ids() RETURNS UUID[]
+LANGUAGE SQL STABLE SECURITY DEFINER SET search_path = public AS $$
+  SELECT COALESCE(array_agg(DISTINCT sta.student_id), ARRAY[]::UUID[])
+    FROM public.student_transport_assignments sta
+   WHERE sta.is_active = TRUE
+     AND sta.vehicle_id = ANY(public.driver_vehicle_ids())
+$$;
+
+GRANT EXECUTE ON FUNCTION public.driver_student_ids() TO authenticated;
+
+DROP POLICY IF EXISTS students_driver_select ON public.students;
+
+CREATE POLICY students_driver_select ON public.students
+  FOR SELECT
+  USING (id = ANY(public.driver_student_ids()));
