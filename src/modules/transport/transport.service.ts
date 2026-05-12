@@ -197,11 +197,16 @@ async function _loadVehicles(_schoolId: string): Promise<void> {
 }
 
 async function _loadAssignments(schoolId: string): Promise<void> {
-  // Active year only.
+  // Resolve the active academic year, but DO NOT use it as a hard filter —
+  // earlier we restricted assignment rows to academic_year_id = ayId, which
+  // caused student/parent transport pages to render "No Transport Assignment"
+  // whenever the row was tagged with a different (e.g. previously-active)
+  // year_id than the school's currently-active one. is_active = TRUE alone
+  // identifies the live assignment; the AY tag is just metadata used for
+  // reporting. We keep ayId around for principal-side filtering downstream.
   const { data: ay } = await supabase
     .from('academic_years').select('id').eq('school_id', schoolId).eq('is_active', true).maybeSingle();
-  const ayId = (ay as { id: string } | null)?.id;
-  if (!ayId) { _assignmentsCache = []; return; }
+  const ayId = (ay as { id: string } | null)?.id ?? null;
 
   // No direct FK between student_transport_assignments and
   // student_academic_records (both share student_id), so the nested embed
@@ -218,7 +223,6 @@ async function _loadAssignments(schoolId: string): Promise<void> {
       transport_vehicles(vehicle_no)
     `)
     .eq('students.school_id', schoolId)
-    .eq('academic_year_id', ayId)
     .eq('is_active', true);
   if (error) throw new Error(error.message);
   const rows = (data ?? []) as unknown as Array<Omit<AssignmentRow, 'student_academic_records'>>;
@@ -228,11 +232,14 @@ async function _loadAssignments(schoolId: string): Promise<void> {
   const studentIds = Array.from(new Set(rows.map(r => r.student_id)));
   const arMap = new Map<string, { class_name: string; section: string }>();
   if (studentIds.length > 0) {
-    const { data: arData } = await supabase
+    // Class/section labels: prefer the active AY, but if the school has no
+    // active AY set we still want to surface *some* class for the row.
+    let q = supabase
       .from('student_academic_records')
       .select('student_id, class_name, section, academic_year_id')
-      .in('student_id', studentIds)
-      .eq('academic_year_id', ayId);
+      .in('student_id', studentIds);
+    if (ayId) q = q.eq('academic_year_id', ayId);
+    const { data: arData } = await q;
     for (const r of ((arData ?? []) as Array<{ student_id: string; class_name: string; section: string }>)) {
       arMap.set(r.student_id, { class_name: r.class_name, section: r.section });
     }
