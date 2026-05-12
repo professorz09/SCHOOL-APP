@@ -177,16 +177,9 @@ export const ProfileView: React.FC = () => {
       {/* Settings Links */}
       <div className="bg-white rounded-2xl border border-slate-100 shadow-sm overflow-hidden">
         <p className="text-[9px] font-black uppercase tracking-widest text-slate-400 px-4 pt-4 pb-2">Settings</p>
-        <button disabled className="w-full flex items-center gap-3 px-4 py-3.5 border-b border-slate-50 active:bg-slate-50 transition-colors opacity-50 cursor-not-allowed">
-          <div className="w-8 h-8 rounded-xl bg-blue-50 flex items-center justify-center shrink-0">
-            <Bell size={15} className="text-blue-600" />
-          </div>
-          <div className="flex-1 text-left">
-            <div className="font-bold text-slate-900 text-sm">Notifications</div>
-            <div className="text-[9px] font-bold text-slate-400">Coming soon</div>
-          </div>
-          <ChevronRight size={16} className="text-slate-300" />
-        </button>
+        {/* Notifications row removed — it sat as a permanent "Coming soon"
+            placeholder with no path to enable. Bringing it back is a single
+            re-add once the feed actually exists. */}
         <button onClick={() => setShowChangePassword(true)} className="w-full flex items-center gap-3 px-4 py-3.5 active:bg-slate-50 transition-colors hover:bg-slate-50">
           <div className="w-8 h-8 rounded-xl bg-violet-50 flex items-center justify-center shrink-0">
             <Lock size={15} className="text-violet-600" />
