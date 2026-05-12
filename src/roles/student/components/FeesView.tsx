@@ -558,20 +558,38 @@ export const FeesView: React.FC<Props> = ({ onBack }) => {
             <h3 className="text-sm font-black text-slate-900 uppercase tracking-wide mb-3">SUBMITTED PAYMENTS</h3>
             <div className="space-y-2">
               {uploads.map(u => (
-                <div key={u.id} className="bg-white rounded-2xl border border-slate-100 shadow-sm p-4 flex items-center justify-between">
-                  <div className="min-w-0 pr-3">
-                    <div className="font-extrabold text-slate-900 text-sm truncate">{u.description}</div>
-                    <div className="flex items-center gap-1.5 text-[10px] font-bold text-slate-400 mt-0.5 truncate">
-                      <Hash size={10} className="shrink-0"/>
-                      <span className="font-mono tracking-wide truncate">{u.transactionId}</span>
-                      <span>·</span>
-                      <span>{u.submittedAt}</span>
+                <div key={u.id} className="bg-white rounded-2xl border border-slate-100 shadow-sm p-4">
+                  <div className="flex items-center justify-between">
+                    <div className="min-w-0 pr-3">
+                      <div className="font-extrabold text-slate-900 text-sm truncate">{u.description}</div>
+                      <div className="flex items-center gap-1.5 text-[10px] font-bold text-slate-400 mt-0.5 truncate">
+                        <Hash size={10} className="shrink-0"/>
+                        <span className="font-mono tracking-wide truncate">{u.transactionId}</span>
+                        <span>·</span>
+                        <span>{u.submittedAt}</span>
+                      </div>
+                    </div>
+                    <div className="flex flex-col items-end gap-1 shrink-0">
+                      <span className={`text-[9px] font-black px-2 py-0.5 rounded-full uppercase ${statusBadge(u.status)}`}>{u.status}</span>
+                      <span className="font-black text-slate-900 text-sm">₹{u.amount.toLocaleString('en-IN')}</span>
                     </div>
                   </div>
-                  <div className="flex flex-col items-end gap-1 shrink-0">
-                    <span className={`text-[9px] font-black px-2 py-0.5 rounded-full uppercase ${statusBadge(u.status)}`}>{u.status}</span>
-                    <span className="font-black text-slate-900 text-sm">₹{u.amount.toLocaleString('en-IN')}</span>
-                  </div>
+                  {/* Principal's note — surface for REJECTED so the parent
+                      knows the reason + can contact the school. APPROVED
+                      notes (rare, optional) also surface so any context
+                      from the principal isn't lost. */}
+                  {u.reviewerNote && u.reviewerNote.trim() && (
+                    <div className={`mt-3 px-3 py-2 rounded-xl border text-[11px] font-bold leading-relaxed ${
+                      u.status === 'REJECTED'
+                        ? 'bg-rose-50 border-rose-200 text-rose-700'
+                        : 'bg-slate-50 border-slate-200 text-slate-600'
+                    }`}>
+                      <span className="text-[9px] font-black uppercase tracking-widest opacity-75 block mb-0.5">
+                        {u.status === 'REJECTED' ? 'Reason for rejection' : 'Note from school'}
+                      </span>
+                      {u.reviewerNote}
+                    </div>
+                  )}
                 </div>
               ))}
             </div>

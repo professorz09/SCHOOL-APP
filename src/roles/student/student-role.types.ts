@@ -47,6 +47,14 @@ export interface FeePaymentUpload {
   transactionId: string;
   submittedAt: string;
   status: 'PENDING' | 'APPROVED' | 'REJECTED';
+  /**
+   * Principal's note attached on review — usually empty for APPROVED rows,
+   * but for REJECTED ones it carries the reason (e.g. "Wrong UTR" /
+   * "Amount mismatch") + a contact phone the parent should reach out to.
+   * Surface this to the parent so they know *why* the payment was rejected
+   * instead of just seeing a red badge with no recourse.
+   */
+  reviewerNote: string | null;
 }
 
 export interface TransportStop {

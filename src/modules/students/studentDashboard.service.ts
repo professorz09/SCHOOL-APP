@@ -812,14 +812,14 @@ export const studentDashboardService = {
     const ctx = await getStudentContext();
     const { data, error } = await supabase
       .from('fee_payment_uploads')
-      .select('id, amount, description, transaction_id, status, created_at')
+      .select('id, amount, description, transaction_id, status, reviewer_note, created_at')
       .eq('student_id', ctx.studentId)
       .order('created_at', { ascending: false });
     if (error) throw new Error(error.message);
     return ((data ?? []) as Array<{
       id: string; amount: number; description: string | null;
       transaction_id: string;
-      status: string; created_at: string;
+      status: string; reviewer_note: string | null; created_at: string;
     }>).map(r => ({
       id: r.id,
       amount: Number(r.amount),
@@ -827,6 +827,7 @@ export const studentDashboardService = {
       transactionId: r.transaction_id,
       submittedAt: r.created_at.slice(0, 10),
       status: (r.status as FeePaymentUpload['status']) ?? 'PENDING',
+      reviewerNote: r.reviewer_note ?? null,
     }));
   },
 
@@ -917,6 +918,7 @@ export const studentDashboardService = {
       transactionId: r.transaction_id,
       submittedAt: r.created_at.slice(0, 10),
       status: (r.status as FeePaymentUpload['status']) ?? 'PENDING',
+      reviewerNote: null,
     };
   },
 };

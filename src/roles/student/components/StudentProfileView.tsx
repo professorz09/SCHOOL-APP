@@ -2,6 +2,7 @@ import React, { useEffect, useState } from 'react';
 import {
   ArrowLeft, User, Phone, Mail, MapPin, Calendar, Droplet,
   GraduationCap, IdCard, Lock, LogOut, X, Eye, EyeOff, Fingerprint,
+  Building2, ShieldCheck,
 } from 'lucide-react';
 import { supabase } from '@/lib/supabase';
 import { useAuthStore } from '@/store/authStore';
@@ -62,6 +63,10 @@ export const StudentProfileView: React.FC<Props> = ({ onBack }) => {
   const { showToast } = useUIStore();
   const [ctx, setCtx] = useState<ActiveStudentContext | null>(null);
   const [profile, setProfile] = useState<ProfileRow | null>(null);
+  const [school, setSchool] = useState<{
+    name: string; address: string | null; phone: string | null;
+    email: string | null; principalName: string | null; principalPhone: string | null;
+  } | null>(null);
   const [loading, setLoading] = useState(true);
 
   // Change-password modal state (mirrors src/views/ProfileView.tsx).
@@ -93,6 +98,31 @@ export const StudentProfileView: React.FC<Props> = ({ onBack }) => {
           .maybeSingle();
         if (error) throw new Error(error.message);
         if (!cancelled) setProfile((data as unknown as ProfileRow | null) ?? null);
+
+        // Pull the school's contact details + principal's name & phone so
+        // the parent can reach out (especially after a REJECTED fee
+        // submission — the rejection note tells them WHY, this card tells
+        // them WHO to call). RLS allows any user with school_id = this
+        // school to read the row, which covers students + parents.
+        if (c.schoolId) {
+          const { data: sch } = await supabase
+            .from('schools')
+            .select('name, address, phone, email, principal_name, principal_phone')
+            .eq('id', c.schoolId)
+            .maybeSingle();
+          if (!cancelled && sch) {
+            const s = sch as { name: string; address: string | null; phone: string | null;
+              email: string | null; principal_name: string | null; principal_phone: string | null };
+            setSchool({
+              name: s.name,
+              address: s.address,
+              phone: s.phone,
+              email: s.email,
+              principalName: s.principal_name,
+              principalPhone: s.principal_phone,
+            });
+          }
+        }
       } catch (err) {
         console.error('[student-profile] load failed', err);
         if (!cancelled) showToast('Could not load profile', 'error');
@@ -339,6 +369,62 @@ export const StudentProfileView: React.FC<Props> = ({ onBack }) => {
                 </div>
               ))}
             </div>
+
+            {/* School / Principal contact — surface here so the parent has
+                an obvious place to find the school's number (especially
+                after a REJECTED fee upload where the rejection note tells
+                them WHY, and this card tells them WHO to call). */}
+            {school && (
+              <div className="bg-white rounded-2xl border border-slate-100 shadow-sm overflow-hidden">
+                <p className="text-[9px] font-black uppercase tracking-widest text-slate-400 px-4 pt-4 pb-2">School &amp; Principal</p>
+                <div className="flex items-start gap-3 px-4 py-3.5 border-b border-slate-50">
+                  <div className="w-8 h-8 rounded-xl bg-blue-50 flex items-center justify-center shrink-0">
+                    <Building2 size={15} className="text-blue-600" />
+                  </div>
+                  <div className="flex-1 min-w-0">
+                    <div className="text-[9px] font-black uppercase tracking-widest text-slate-400">School</div>
+                    <div className="font-bold text-slate-900 text-sm mt-0.5 break-words">{school.name}</div>
+                    {school.address && (
+                      <div className="text-[11px] font-bold text-slate-500 mt-1 break-words">{school.address}</div>
+                    )}
+                  </div>
+                </div>
+                {school.phone && (
+                  <div className="flex items-center gap-3 px-4 py-3.5 border-b border-slate-50">
+                    <div className="w-8 h-8 rounded-xl bg-emerald-50 flex items-center justify-center shrink-0">
+                      <Phone size={15} className="text-emerald-600" />
+                    </div>
+                    <div className="flex-1 min-w-0">
+                      <div className="text-[9px] font-black uppercase tracking-widest text-slate-400">School Phone</div>
+                      <a href={`tel:${school.phone}`} className="font-bold text-emerald-600 text-sm mt-0.5 inline-block">{school.phone}</a>
+                    </div>
+                  </div>
+                )}
+                {school.email && (
+                  <div className="flex items-center gap-3 px-4 py-3.5 border-b border-slate-50">
+                    <div className="w-8 h-8 rounded-xl bg-slate-50 flex items-center justify-center shrink-0">
+                      <Mail size={15} className="text-slate-500" />
+                    </div>
+                    <div className="flex-1 min-w-0">
+                      <div className="text-[9px] font-black uppercase tracking-widest text-slate-400">School Email</div>
+                      <a href={`mailto:${school.email}`} className="font-bold text-slate-900 text-sm mt-0.5 break-all">{school.email}</a>
+                    </div>
+                  </div>
+                )}
+                <div className="flex items-start gap-3 px-4 py-3.5">
+                  <div className="w-8 h-8 rounded-xl bg-violet-50 flex items-center justify-center shrink-0">
+                    <ShieldCheck size={15} className="text-violet-600" />
+                  </div>
+                  <div className="flex-1 min-w-0">
+                    <div className="text-[9px] font-black uppercase tracking-widest text-slate-400">Principal</div>
+                    <div className="font-bold text-slate-900 text-sm mt-0.5 truncate">{school.principalName || '—'}</div>
+                    {school.principalPhone && (
+                      <a href={`tel:${school.principalPhone}`} className="text-[11px] font-bold text-emerald-600 mt-0.5 inline-block">{school.principalPhone}</a>
+                    )}
+                  </div>
+                </div>
+              </div>
+            )}
 
             {/* Settings */}
             <div className="bg-white rounded-2xl border border-slate-100 shadow-sm overflow-hidden">
