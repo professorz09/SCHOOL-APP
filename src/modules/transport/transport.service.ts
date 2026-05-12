@@ -375,12 +375,15 @@ export const transportService = {
     return { id: r.id, name: r.name, estimatedTime: r.estimated_time, lat: Number(r.lat), lng: Number(r.lng) };
   },
 
-  async updateStop(_vehicleId: string, stopId: string, data: Partial<RouteStop>): Promise<void> {
+  async updateStop(_vehicleId: string, stopId: string, data: Partial<RouteStop> & { sort_order?: number }): Promise<void> {
     const patch: Record<string, unknown> = {};
     if (data.name !== undefined)          patch.name           = data.name;
     if (data.estimatedTime !== undefined) patch.estimatedTime  = data.estimatedTime;
     if (data.lat !== undefined)           patch.lat            = data.lat;
     if (data.lng !== undefined)           patch.lng            = data.lng;
+    // sort_order is server-whitelisted (server expects camelCase sortOrder
+    // in the patch envelope — see /api/transport/stops/update).
+    if (data.sort_order !== undefined)    patch.sortOrder      = data.sort_order;
     await apiTransport.updateStop(stopId, patch);
     await this.refreshAll();
   },

@@ -259,14 +259,69 @@ async function assertStopInSchool(stopId: string, schoolId: string): Promise<voi
   if (!data) throw new ApiError(404, 'Stop not found');
 }
 
+// Helper: when the caller is a DRIVER, also assert the vehicle is the
+// one assigned to *their* staff row. Principals can touch any vehicle in
+// the school; drivers only their own. Returns silently when allowed.
+async function assertCallerOwnsVehicle(
+  vehicleId: string,
+  user: { id: string; role: string; school_id: string | null },
+): Promise<void> {
+  await assertVehicleInSchool(vehicleId, user.school_id!);
+  if (user.role === 'PRINCIPAL' || user.role === 'SUPER_ADMIN') return;
+  if (user.role !== 'DRIVER') throw new ApiError(403, 'Only the assigned driver or the principal can edit this route');
+  const { data: staff } = await adminDb.from('staff').select('id').eq('user_id', user.id).maybeSingle();
+  const staffId = (staff as { id: string } | null)?.id;
+  if (!staffId) throw new ApiError(403, 'Driver staff record not found');
+  const { data: v } = await adminDb
+    .from('transport_vehicles')
+    .select('id')
+    .eq('id', vehicleId)
+    .eq('driver_id', staffId)
+    .maybeSingle();
+  if (!v) throw new ApiError(403, 'You are not the assigned driver for this vehicle');
+}
+
+async function assertCallerOwnsStop(
+  stopId: string,
+  user: { id: string; role: string; school_id: string | null },
+): Promise<void> {
+  if (user.role === 'PRINCIPAL' || user.role === 'SUPER_ADMIN') {
+    await assertStopInSchool(stopId, user.school_id!);
+    return;
+  }
+  // For DRIVER, look up the stop's vehicle and verify ownership.
+  const { data: row } = await adminDb
+    .from('route_stops').select('vehicle_id').eq('id', stopId).maybeSingle();
+  const vehicleId = (row as { vehicle_id: string } | null)?.vehicle_id;
+  if (!vehicleId) throw new ApiError(404, 'Stop not found');
+  await assertCallerOwnsVehicle(vehicleId, user);
+}
+
+// 50 writes per 24h per user across add + update + remove combined. Keeps
+// a panicked / confused driver from flooding the route with adds and a
+// compromised account from grinding through edits. Principal has the
+// same cap — they shouldn't legitimately need more than 50 stop tweaks
+// in a single day across the whole fleet.
+const stopMutationLimiter = rateLimit({
+  windowMs: 24 * 60 * 60_000,
+  limit: 50,
+  keyGenerator: (req: any) => `route-stops:${req.user?.id ?? req.ip}`,
+  validate: { keyGeneratorIpFallback: false },
+  standardHeaders: 'draft-7',
+  legacyHeaders: false,
+  message: { ok: false, error: 'Route edit limit reached (50/day). Try again tomorrow.' },
+});
+
 // POST /api/transport/stops/add
-transportRouter.post('/stops/add', requireAuth, requireRole('PRINCIPAL'), async (req, res) => {
+// Principal can manage any school vehicle's stops; DRIVER can only edit
+// the vehicle they're assigned to. assertCallerOwnsVehicle enforces both.
+transportRouter.post('/stops/add', requireAuth, requireRole('PRINCIPAL', 'DRIVER'), stopMutationLimiter, async (req, res) => {
   try {
     const body = requireBody<{
       vehicleId: string; name: string; estimatedTime: string;
       lat?: number; lng?: number; sortOrder?: number;
     }>(req, ['vehicleId', 'name', 'estimatedTime']);
-    await assertVehicleInSchool(body.vehicleId, req.user.school_id!);
+    await assertCallerOwnsVehicle(body.vehicleId, req.user);
     const { data, error } = await adminDb.from('route_stops').insert({
       vehicle_id:     body.vehicleId,
       name:           body.name,
@@ -281,17 +336,20 @@ transportRouter.post('/stops/add', requireAuth, requireRole('PRINCIPAL'), async 
 });
 
 // POST /api/transport/stops/update
-transportRouter.post('/stops/update', requireAuth, requireRole('PRINCIPAL'), async (req, res) => {
+transportRouter.post('/stops/update', requireAuth, requireRole('PRINCIPAL', 'DRIVER'), stopMutationLimiter, async (req, res) => {
   try {
     const body = requireBody<{
       stopId: string; patch: Record<string, unknown>;
     }>(req, ['stopId', 'patch']);
-    await assertStopInSchool(body.stopId, req.user.school_id!);
+    await assertCallerOwnsStop(body.stopId, req.user);
     const safe: Record<string, unknown> = {};
     if (body.patch.name !== undefined)          safe.name           = body.patch.name;
     if (body.patch.estimatedTime !== undefined) safe.estimated_time = body.patch.estimatedTime;
     if (body.patch.lat !== undefined)           safe.lat            = body.patch.lat;
     if (body.patch.lng !== undefined)           safe.lng            = body.patch.lng;
+    // sort_order is whitelisted so drivers can reorder stops via the
+    // up/down arrows on the Route page.
+    if (body.patch.sortOrder !== undefined)     safe.sort_order     = body.patch.sortOrder;
     const { error } = await adminDb.from('route_stops').update(safe).eq('id', body.stopId);
     if (error) throw new ApiError(500, error.message);
     ok(res, { stopId: body.stopId });
@@ -299,10 +357,10 @@ transportRouter.post('/stops/update', requireAuth, requireRole('PRINCIPAL'), asy
 });
 
 // POST /api/transport/stops/remove
-transportRouter.post('/stops/remove', requireAuth, requireRole('PRINCIPAL'), async (req, res) => {
+transportRouter.post('/stops/remove', requireAuth, requireRole('PRINCIPAL', 'DRIVER'), stopMutationLimiter, async (req, res) => {
   try {
     const { stopId } = requireBody<{ stopId: string }>(req, ['stopId']);
-    await assertStopInSchool(stopId, req.user.school_id!);
+    await assertCallerOwnsStop(stopId, req.user);
     const { error } = await adminDb.from('route_stops').delete().eq('id', stopId);
     if (error) throw new ApiError(500, error.message);
     ok(res, { stopId });
