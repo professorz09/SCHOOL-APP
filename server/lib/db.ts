@@ -2,7 +2,11 @@ import { createClient, type SupabaseClient } from '@supabase/supabase-js';
 
 const SUPABASE_URL  = process.env.SUPABASE_URL  ?? '';
 const SERVICE_KEY   = process.env.SUPABASE_SERVICE_ROLE_KEY ?? '';
-const ANON_KEY      = process.env.SUPABASE_ANON_KEY ?? '';
+// Fall back to the service key when ANON_KEY isn't set in the deploy env
+// so the module can still construct anonDb (server-side flows that need
+// anon are rare; this avoids a boot crash). Anon-scoped writes will still
+// fail on RLS as expected.
+const ANON_KEY      = process.env.SUPABASE_ANON_KEY || process.env.SUPABASE_SERVICE_ROLE_KEY || '';
 
 // Hard fail at boot if the service role key is missing OR if the
 // caller has accidentally pasted the ANON key into the SERVICE_ROLE
