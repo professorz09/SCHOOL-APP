@@ -113,9 +113,12 @@ transportRouter.get('/student/:studentId', requireAuth, requireRole('PRINCIPAL',
   try {
     const studentId = String(req.params.studentId);
     await assertStudentInSchool(studentId, req.user.school_id!);
+    // route_stops embed removed — student_transport_assignments.stop_id was
+    // dropped in migration 0115, so the PostgREST relationship no longer
+    // exists. Drivers manage stops on transport_vehicles independently.
     const { data, error } = await adminDb
       .from('student_transport_assignments')
-      .select('*, transport_vehicles(id, vehicle_no, route_name), route_stops(id, name, estimated_time)')
+      .select('*, transport_vehicles(id, vehicle_no, route_name)')
       .eq('student_id', studentId)
       .order('start_date', { ascending: false });
     if (error) throw new ApiError(500, error.message);

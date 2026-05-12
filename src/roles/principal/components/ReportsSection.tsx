@@ -908,7 +908,7 @@ export const ReportsSection: React.FC<Props> = ({
           run: async () => {
             if (!yearId) fail('Pick an academic year first');
             const { data, error } = await supabase.from('student_transport_assignments')
-              .select('monthly_amount, start_date, students!inner(name, admission_no, father_phone, school_id, is_active), transport_vehicles(vehicle_no, route_name), route_stops(name)')
+              .select('monthly_amount, start_date, students!inner(name, admission_no, father_phone, school_id, is_active), transport_vehicles(vehicle_no, route_name)')
               .eq('academic_year_id', yearId).eq('is_active', true);
             if (error) throw new Error(error.message);
             const rows = ((data ?? []) as any[])
@@ -918,12 +918,11 @@ export const ReportsSection: React.FC<Props> = ({
                 admission_no: r.students.admission_no,
                 vehicle: r.transport_vehicles?.vehicle_no ?? '',
                 route: r.transport_vehicles?.route_name ?? '',
-                stop: r.route_stops?.name ?? '',
                 monthly: Number(r.monthly_amount ?? 0),
                 start_date: r.start_date ?? '',
                 father_phone: r.students.father_phone ?? '',
               }));
-            return { rows, headers: ['name','admission_no','vehicle','route','stop','monthly','start_date','father_phone'], filenamePrefix: 'active-transport' };
+            return { rows, headers: ['name','admission_no','vehicle','route','monthly','start_date','father_phone'], filenamePrefix: 'active-transport' };
           },
         },
         {
@@ -932,7 +931,7 @@ export const ReportsSection: React.FC<Props> = ({
           run: async () => {
             if (!yearId) fail('Pick an academic year first');
             const { data, error } = await supabase.from('student_transport_assignments')
-              .select('students!inner(name, admission_no, school_id, is_active), transport_vehicles!inner(vehicle_no, route_name), route_stops(name)')
+              .select('students!inner(name, admission_no, school_id, is_active), transport_vehicles!inner(vehicle_no, route_name)')
               .eq('academic_year_id', yearId).eq('is_active', true);
             if (error) throw new Error(error.message);
             const rows = ((data ?? []) as any[])
@@ -940,12 +939,11 @@ export const ReportsSection: React.FC<Props> = ({
               .map(r => ({
                 route: r.transport_vehicles?.route_name ?? '',
                 vehicle: r.transport_vehicles?.vehicle_no ?? '',
-                stop: r.route_stops?.name ?? '',
                 name: r.students.name,
                 admission_no: r.students.admission_no,
               }))
               .sort((a, b) => a.route.localeCompare(b.route) || a.vehicle.localeCompare(b.vehicle));
-            return { rows, headers: ['route','vehicle','stop','name','admission_no'], filenamePrefix: 'route-wise-students' };
+            return { rows, headers: ['route','vehicle','name','admission_no'], filenamePrefix: 'route-wise-students' };
           },
         },
         {
@@ -976,7 +974,7 @@ export const ReportsSection: React.FC<Props> = ({
           run: async () => {
             if (!yearId) fail('Pick an academic year first');
             const { data, error } = await supabase.from('student_transport_assignments')
-              .select('start_date, end_date, is_active, monthly_amount, end_reason, students!inner(name, admission_no, school_id), transport_vehicles(vehicle_no, route_name), route_stops(name)')
+              .select('start_date, end_date, is_active, monthly_amount, end_reason, students!inner(name, admission_no, school_id), transport_vehicles(vehicle_no, route_name)')
               .eq('academic_year_id', yearId)
               .order('start_date', { ascending: false });
             if (error) throw new Error(error.message);
@@ -987,14 +985,13 @@ export const ReportsSection: React.FC<Props> = ({
                 admission_no: r.students.admission_no,
                 vehicle: r.transport_vehicles?.vehicle_no ?? '',
                 route: r.transport_vehicles?.route_name ?? '',
-                stop: r.route_stops?.name ?? '',
                 monthly: Number(r.monthly_amount ?? 0),
                 start_date: r.start_date ?? '',
                 end_date: r.end_date ?? '',
                 status: r.is_active ? 'ACTIVE' : 'ENDED',
                 end_reason: r.end_reason ?? '',
               }));
-            return { rows, headers: ['name','admission_no','vehicle','route','stop','monthly','start_date','end_date','status','end_reason'], filenamePrefix: 'transport-history' };
+            return { rows, headers: ['name','admission_no','vehicle','route','monthly','start_date','end_date','status','end_reason'], filenamePrefix: 'transport-history' };
           },
         },
       ],
