@@ -13044,3 +13044,28 @@ GRANT EXECUTE ON FUNCTION public.bulk_close_transport_assignments(UUID, DATE, TE
 
 ALTER TABLE public.student_transport_assignments
   DROP COLUMN IF EXISTS stop_id CASCADE;
+
+
+-- =============================================================
+-- 0116_users_insert_policy.sql
+-- =============================================================
+-- public.users had SELECT + UPDATE policies but NO INSERT policy. Service-role
+-- normally bypasses RLS, but Supabase's new sb_secret_* keys don't always
+-- carry the BYPASSRLS attribute through PostgREST, so server endpoints
+-- inserting into public.users fail with
+--   new row violates row-level security policy for table "users".
+-- Add an explicit INSERT policy permitting service_role, super_admin, and
+-- same-school principal writes.
+
+DROP POLICY IF EXISTS users_insert_admin ON public.users;
+
+CREATE POLICY users_insert_admin ON public.users
+  FOR INSERT
+  WITH CHECK (
+    (auth.jwt() ->> 'role') = 'service_role'
+    OR public.is_super_admin()
+    OR (
+      public.is_principal()
+      AND school_id = public.current_user_school_id()
+    )
+  );
