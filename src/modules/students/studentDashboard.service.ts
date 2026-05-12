@@ -762,10 +762,18 @@ export const studentDashboardService = {
     const dayLabels = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
     const weekDays: AttendanceWeekDay[] = dayLabels.map((label, i) => {
       const dt = new Date(monday); dt.setDate(monday.getDate() + i);
-      const dateStr = dt.toISOString().split('T')[0];
+      // IST-anchored YYYY-MM-DD. toISOString() shifts to UTC which makes
+      // 00:00 IST land on the previous calendar day, so the lookup key was
+      // always 1 day behind in DB-date terms — today never matched.
+      const dateStr = dt.toLocaleDateString('en-CA', { timeZone: 'Asia/Kolkata' });
       const isFuture = dt.getTime() > today.getTime();
-      const status: DayStatus =
-        i === 6 || isFuture ? 'HOLIDAY' : (dateStatus.get(dateStr) ?? 'HOLIDAY');
+      // Honour what the school actually recorded: if Sunday was marked
+      // PRESENT/ABSENT (some schools hold Saturday tests / makeup classes),
+      // surface it. Default Sunday to HOLIDAY only if no row exists.
+      const recorded = dateStatus.get(dateStr);
+      const status: DayStatus = isFuture
+        ? 'HOLIDAY'
+        : recorded ?? 'HOLIDAY';
       return { date: dateStr, day: label, status };
     });
 

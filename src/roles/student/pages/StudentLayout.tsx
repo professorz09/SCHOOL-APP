@@ -40,8 +40,9 @@ export const StudentLayout: React.FC = () => {
   // student endpoint as the full Timetable view, so a student/parent always
   // sees real data here even though the principal/teacher cache is empty.
   const [todaySchedule, setTodaySchedule] = useState<(TimetablePeriod & { isLive: boolean })[]>([]);
-  // Hero-card stats: overall attendance % + next upcoming exam.
+  // Hero-card stats: overall attendance % + next upcoming exam + today's mark.
   const [attendancePct, setAttendancePct] = useState<number | null>(null);
+  const [todayStatus,   setTodayStatus]   = useState<'PRESENT' | 'ABSENT' | 'HOLIDAY' | null>(null);
   const [nextExam, setNextExam] = useState<UpcomingExam | null>(null);
   // Newest notice that landed *today* (IST). Cleared on the next IST
   // calendar day so the dashboard doesn't keep yesterday's announcement
@@ -109,8 +110,17 @@ export const StudentLayout: React.FC = () => {
         const totalPresent  = d.months.reduce((a, m) => a + m.present, 0);
         const totalWorkDays = d.months.reduce((a, m) => a + m.present + m.absent, 0);
         setAttendancePct(totalWorkDays > 0 ? Math.round((totalPresent / totalWorkDays) * 100) : null);
+        // Today's mark for the hero badge. weekDays carries IST-anchored
+        // YYYY-MM-DD; match against the same IST today string we render in
+        // the attendance grid.
+        const istToday = new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Kolkata' });
+        const todayRow = d.weekDays.find(w => w.date === istToday);
+        if (!todayRow) setTodayStatus(null);
+        else if (todayRow.status === 'PRESENT' || todayRow.status === 'ABSENT' || todayRow.status === 'HOLIDAY') {
+          setTodayStatus(todayRow.status);
+        } else setTodayStatus(null);
       })
-      .catch(() => { if (!cancelled) setAttendancePct(null); });
+      .catch(() => { if (!cancelled) { setAttendancePct(null); setTodayStatus(null); } });
     studentDashboardService.getScheduledExams()
       .then(list => { if (!cancelled) setNextExam(list[0] ?? null); })
       .catch(() => { if (!cancelled) setNextExam(null); });
@@ -194,17 +204,31 @@ export const StudentLayout: React.FC = () => {
           </button>
         </div>
 
-        {/* Stats row — Attendance + Next Exam (when there is one) */}
-        <div className="grid grid-cols-2 gap-3 mt-5">
+        {/* Stats row — Today's mark + Overall % + Next Exam */}
+        <div className="grid grid-cols-3 gap-2 lg:gap-3 mt-5">
           <button onClick={() => goTo('ATTENDANCE')}
-            className="bg-white/10 rounded-xl px-4 py-3 text-left hover:bg-white/15 transition-colors">
-            <div className="text-[9px] font-black uppercase tracking-widest text-white/60">Attendance</div>
+            className="bg-white/10 rounded-xl px-3 py-3 text-left hover:bg-white/15 transition-colors">
+            <div className="text-[9px] font-black uppercase tracking-widest text-white/60">Today</div>
+            <div className={`text-sm lg:text-base font-black mt-1 ${
+              todayStatus === 'PRESENT' ? 'text-emerald-300' :
+              todayStatus === 'ABSENT'  ? 'text-rose-300' :
+              todayStatus === 'HOLIDAY' ? 'text-slate-300' :
+              'text-white/70'
+            }`}>
+              {todayStatus === 'PRESENT' ? 'Present' :
+               todayStatus === 'ABSENT'  ? 'Absent'  :
+               todayStatus === 'HOLIDAY' ? 'Holiday' : 'Not marked'}
+            </div>
+          </button>
+          <button onClick={() => goTo('ATTENDANCE')}
+            className="bg-white/10 rounded-xl px-3 py-3 text-left hover:bg-white/15 transition-colors">
+            <div className="text-[9px] font-black uppercase tracking-widest text-white/60">Overall</div>
             <div className="text-2xl font-black mt-1">
               {attendancePct === null ? '—' : `${attendancePct}%`}
             </div>
           </button>
           <button onClick={() => goTo('RESULTS')}
-            className="bg-white/10 rounded-xl px-4 py-3 text-left hover:bg-white/15 transition-colors">
+            className="bg-white/10 rounded-xl px-3 py-3 text-left hover:bg-white/15 transition-colors">
             <div className="text-[9px] font-black uppercase tracking-widest text-white/60">Next Exam</div>
             <div className="text-sm font-black mt-1 truncate">
               {nextExam
