@@ -118,11 +118,15 @@ export const ProfileView: React.FC = () => {
         <div className="bg-white rounded-2xl border border-slate-100 shadow-sm overflow-hidden">
           <div className="flex items-center justify-between px-4 pt-4 pb-2">
             <p className="text-[9px] font-black uppercase tracking-widest text-slate-400">Account Info</p>
-            {/* Edit is intentionally hidden for PARENT (their account row
-                is created by the principal during student onboarding and
-                edited there) and PRINCIPAL (they edit via Settings ▸
-                School). Drivers / staff can still self-edit name + mobile. */}
-            {session.role !== 'PRINCIPAL' && session.role !== 'PARENT' && (
+            {/* Edit is intentionally hidden for PARENT, PRINCIPAL, and
+                DRIVER. PARENT rows are provisioned during student
+                onboarding; PRINCIPAL edits via Settings ▸ School;
+                DRIVER rows are created by the principal alongside the
+                staff record + vehicle assignment and edited there.
+                STUDENT / TEACHER fall through to allow self-edit. */}
+            {session.role !== 'PRINCIPAL'
+              && session.role !== 'PARENT'
+              && session.role !== 'DRIVER' && (
               <button onClick={() => { setEditName(session.name || ''); setEditMobile(session.mobileNumber || ''); setIsEditMode(true); }}
                 className="text-[9px] font-black text-indigo-600 hover:text-indigo-700">
                 Edit
