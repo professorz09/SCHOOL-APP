@@ -574,17 +574,22 @@ export const studentDashboardService = {
     const audiences = role === 'PARENT'
       ? ['ALL', 'PARENTS']
       : ['ALL', 'STUDENTS'];
+    // sender:users(role) gives us the role of whoever authored the notice
+    // so the student-side UI can show a "Principal" vs "Teacher" badge.
+    // The join is filtered by RLS but the notice row itself remains
+    // visible even when the user row was deleted (left join — sender is
+    // null then, which we map to empty string).
     const [broadcastRes, personalRes] = await Promise.all([
       supabase
         .from('notices')
-        .select('id, title, body, audience, sent_at, sent_by_name, pinned, target_student_id')
+        .select('id, title, body, audience, sent_at, sent_by_name, pinned, target_student_id, sender:users!notices_sent_by_fkey(role)')
         .eq('school_id', ctx.schoolId).eq('is_active', true)
         .in('audience', audiences)
         .order('pinned', { ascending: false })
         .order('sent_at', { ascending: false }),
       supabase
         .from('notices')
-        .select('id, title, body, audience, sent_at, sent_by_name, pinned, target_student_id')
+        .select('id, title, body, audience, sent_at, sent_by_name, pinned, target_student_id, sender:users!notices_sent_by_fkey(role)')
         .eq('school_id', ctx.schoolId).eq('is_active', true)
         .eq('target_student_id', ctx.studentId)
         .order('pinned', { ascending: false })
@@ -594,7 +599,8 @@ export const studentDashboardService = {
     if (personalRes.error)  throw new Error(personalRes.error.message);
 
     type NRow = { id: string; title: string; body: string; audience: string;
-      sent_at: string; sent_by_name: string | null; pinned: boolean; target_student_id: string | null };
+      sent_at: string; sent_by_name: string | null; pinned: boolean; target_student_id: string | null;
+      sender: { role: string } | { role: string }[] | null };
     // De-dupe by id (broadcast + personal can theoretically overlap on edge cases)
     const merged = new Map<string, NRow>();
     for (const r of [...(broadcastRes.data ?? []), ...(personalRes.data ?? [])] as NRow[]) {
@@ -613,6 +619,10 @@ export const studentDashboardService = {
         category: n.target_student_id ? 'PERSONAL' : inferNoticeCategory(n.title, n.body),
         pinned: n.pinned,
         sentBy: n.sent_by_name ?? '',
+        sentByRole: (() => {
+          const s = Array.isArray(n.sender) ? n.sender[0] : n.sender;
+          return s?.role ?? '';
+        })(),
       }));
   },
 

@@ -76,6 +76,10 @@ export interface StudentNotice {
   /** Display name of the user who sent the notice (principal / teacher).
    *  Empty string when the row is missing sent_by_name (legacy). */
   sentBy: string;
+  /** Sender's role — used to surface "Principal" vs "Teacher" badge
+   *  next to the name so the student/parent knows who authored it.
+   *  Empty when sent_by row no longer exists. */
+  sentByRole: string;
 }
 
 export interface StudentComplaint {

@@ -49,7 +49,7 @@ export const StudentLayout: React.FC = () => {
   // pinned forever — student wants a "what's new today" badge, not a
   // permanent feed (the Notices tab is already that).
   const [todayNotice, setTodayNotice] = useState<{
-    id: string; title: string; body: string; sentAt: string; pinned: boolean; sentBy: string;
+    id: string; title: string; body: string; sentAt: string; pinned: boolean; sentBy: string; sentByRole: string;
   } | null>(null);
   const { isSubView, setSubView } = useUIStore();
   const goTo = (v: StudentView) => { setView(v); setSubView(true); };
@@ -380,8 +380,17 @@ export const StudentLayout: React.FC = () => {
               <p className="text-[11px] lg:text-xs font-bold text-rose-800/80 line-clamp-2">
                 {todayNotice.body}
               </p>
-              {todayNotice.sentBy && (
-                <p className="text-[10px] font-bold text-rose-600 mt-1.5">By {todayNotice.sentBy}</p>
+              {(todayNotice.sentBy || todayNotice.sentByRole) && (
+                <p className="text-[10px] font-bold text-rose-600 mt-1.5">
+                  By {todayNotice.sentBy || 'School'}
+                  {todayNotice.sentByRole && (
+                    <span className="ml-1 text-rose-500/80">
+                      · {todayNotice.sentByRole === 'PRINCIPAL' ? 'Principal'
+                       : todayNotice.sentByRole === 'TEACHER'   ? 'Teacher'
+                       : todayNotice.sentByRole === 'SUPER_ADMIN' ? 'Admin' : todayNotice.sentByRole}
+                    </span>
+                  )}
+                </p>
               )}
             </div>
             <span className="text-[9px] font-black text-white bg-rose-600 px-2.5 py-1 rounded-full shrink-0 uppercase tracking-widest shadow-sm">

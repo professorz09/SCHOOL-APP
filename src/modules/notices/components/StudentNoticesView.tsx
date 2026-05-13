@@ -27,10 +27,22 @@ const NoticeCard: React.FC<{ notice: StudentNotice }> = ({ notice }) => {
   const [open, setOpen] = useState(false);
   const cat = NOTICE_CAT[notice.category] ?? NOTICE_CAT['GENERAL'];
 
+  // Role label + colour. Principal-sent notices get violet (authority,
+  // matches the SidebarNav principal accent); teacher-sent stay blue.
+  const role = notice.sentByRole;
+  const roleLabel =
+    role === 'PRINCIPAL' ? 'Principal' :
+    role === 'TEACHER'   ? 'Teacher'   :
+    role === 'SUPER_ADMIN' ? 'Admin'   : '';
+  const roleCls =
+    role === 'PRINCIPAL' ? 'bg-violet-50 text-violet-700 border-violet-200' :
+    role === 'TEACHER'   ? 'bg-blue-50 text-blue-700 border-blue-200' :
+    'bg-slate-50 text-slate-600 border-slate-200';
+
   return (
     <div className={`bg-white rounded-2xl border shadow-sm overflow-hidden ${notice.pinned ? 'border-violet-100' : 'border-slate-100'}`}>
       <div className="px-4 pt-3.5 pb-3">
-        <div className="flex items-center gap-2 mb-1.5">
+        <div className="flex items-center gap-2 mb-1.5 flex-wrap">
           {notice.pinned && <Pin size={10} className="text-violet-500 shrink-0"/>}
           <span className={`text-[9px] font-black px-2 py-0.5 rounded-full border uppercase ${cat.cls}`}>
             {cat.label}
@@ -38,9 +50,23 @@ const NoticeCard: React.FC<{ notice: StudentNotice }> = ({ notice }) => {
           <span className="ml-auto text-[10px] font-bold text-slate-400 shrink-0">{notice.sentAt}</span>
         </div>
 
-        <div className="font-black text-slate-900 text-sm leading-tight mb-1">{notice.title}</div>
-        {notice.sentBy && (
-          <div className="text-[10px] font-bold text-slate-500 mb-2">By {notice.sentBy}</div>
+        <div className="font-black text-slate-900 text-sm leading-tight mb-1.5">{notice.title}</div>
+        {/* Sender attribution — prominent pill with role + name so the
+            student / parent immediately knows whether it's a principal
+            broadcast or a class-teacher message. Earlier this was a
+            tiny "By {name}" line in muted slate-500 which most users
+            never noticed. */}
+        {(notice.sentBy || roleLabel) && (
+          <div className="flex items-center gap-1.5 mb-2 flex-wrap">
+            {roleLabel && (
+              <span className={`inline-flex items-center text-[9px] font-black px-2 py-0.5 rounded-full border uppercase tracking-widest ${roleCls}`}>
+                {roleLabel}
+              </span>
+            )}
+            {notice.sentBy && (
+              <span className="text-[10px] font-bold text-slate-600">{notice.sentBy}</span>
+            )}
+          </div>
         )}
 
         <button onClick={() => setOpen(o => !o)}
