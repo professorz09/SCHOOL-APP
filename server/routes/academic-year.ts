@@ -58,6 +58,31 @@ academicYearRouter.post('/create', requireAuth, PRINCIPAL, async (req, res) => {
       board?: string; medium?: string;
     }>(req, ['label', 'startDate', 'endDate']);
 
+    // Range sanity — must be a non-empty forward range.
+    if (!(body.startDate < body.endDate)) {
+      throw new ApiError(400, 'startDate must be earlier than endDate');
+    }
+
+    // Overlap check: a new year cannot share any calendar day with an
+    // existing year for this school. Without this, two AY rows can claim
+    // the same date — attendance / fees / exams then can't disambiguate
+    // which year they belong to. Two ranges [a,b] and [c,d] overlap iff
+    // a <= d AND c <= b.
+    const { data: clash } = await adminDb
+      .from('academic_years')
+      .select('id, label, start_date, end_date')
+      .eq('school_id', req.user.school_id!)
+      .lte('start_date', body.endDate)
+      .gte('end_date', body.startDate)
+      .limit(1);
+    const clashRow = ((clash ?? []) as Array<{ label: string; start_date: string; end_date: string }>)[0];
+    if (clashRow) {
+      throw new ApiError(
+        409,
+        `Date range overlaps with existing year "${clashRow.label}" (${clashRow.start_date} → ${clashRow.end_date})`,
+      );
+    }
+
     const { data, error } = await adminDb
       .from('academic_years')
       .insert({

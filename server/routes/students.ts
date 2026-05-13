@@ -701,6 +701,31 @@ studentsRouter.post('/readmit', requireAuth, requireRole('PRINCIPAL'), async (re
     });
     if (error) throw new ApiError(400, error.message);
 
+    // Parent reactivation — mirror of the /issue-tc deactivation cascade.
+    // When the last active kid got a TC, that flow set users.is_active=false
+    // on the parent so they couldn't log in any more. Re-admitting the kid
+    // without flipping the parent back on leaves the parent locked out.
+    // Best-effort: failures here don't roll back the student rejoin (the
+    // student's record is already restored).
+    try {
+      const { data: links } = await adminDb
+        .from('parent_student_links')
+        .select('parent_user_id')
+        .eq('student_id', studentId);
+      const parentIds = Array.from(new Set(
+        ((links ?? []) as { parent_user_id: string }[]).map(r => r.parent_user_id),
+      ));
+      if (parentIds.length) {
+        await adminDb.from('users')
+          .update({ is_active: true, updated_at: new Date().toISOString() })
+          .in('id', parentIds)
+          .eq('school_id', req.user.school_id!)
+          .eq('role', 'PARENT');
+      }
+    } catch (e) {
+      console.warn('[readmit] parent reactivation failed:', (e as Error).message);
+    }
+
     ok(res, { studentId });
   } catch (err) { fail(res, err); }
 });
@@ -997,12 +1022,24 @@ studentsRouter.post('/create', requireAuth, requireRole('PRINCIPAL'), studentCre
     const stu = stuRow as any;
 
     // ── Link parent → student (linkParentStudent pattern) ─────────────────────
+    // No silent swallow here — earlier this was wrapped in `try { … } catch {}`
+    // which produced orphans (parent + student rows exist but the link is
+    // missing → parent never sees the kid in the picker). If the upsert fails
+    // surface it so the principal can retry / contact support.
+    let linkWarning: string | null = null;
     if (parentUserId) {
-      try {
-        await adminDb.from('parent_student_links').upsert({
-          parent_user_id: parentUserId, student_id: stu.id, relation: 'FATHER',
-        }, { onConflict: 'parent_user_id,student_id' });
-      } catch { /* best-effort */ }
+      const { error: linkErr } = await adminDb.from('parent_student_links').upsert({
+        parent_user_id: parentUserId, student_id: stu.id, relation: 'FATHER',
+      }, { onConflict: 'parent_user_id,student_id' });
+      if (linkErr) {
+        // The student / parent rows are already committed — rolling back here
+        // would mean re-deleting them, which has its own failure modes. Stay
+        // conservative: keep the rows, return a clear warning so the principal
+        // knows to relink (the /students/:id page already exposes a manual
+        // parent link control).
+        linkWarning = `Parent link could not be created: ${linkErr.message}. Open the student page and link the parent manually.`;
+        console.error('[students.create] parent_student_links upsert failed', linkErr);
+      }
     }
 
     // ── Insert academic record (if class+section provided) ─────────────────────
@@ -1028,6 +1065,7 @@ studentsRouter.post('/create', requireAuth, requireRole('PRINCIPAL'), studentCre
       studentRow: stu,
       academicRecordRow: ar,
       parent: loginPhone && parentReused !== null ? { mobile: loginPhone, reused: parentReused } : null,
+      linkWarning,
     }, 201);
   } catch (err) { fail(res, err); }
 });
