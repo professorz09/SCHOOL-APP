@@ -141,11 +141,63 @@ teacherRouter.get('/attendance', requireAuth, requireRole('PRINCIPAL', 'TEACHER'
 // ─── Teacher Notice ────────────────────────────────────────────────────────────
 
 // POST /api/teacher/notice/create
+// Audience is sanitized server-side. Previously the client-supplied value
+// was inserted verbatim — a teacher could broadcast to "ALL" or
+// "SECTION:<some-other-section>" and pollute classes they don't teach.
 teacherRouter.post('/notice/create', requireAuth, requireRole('TEACHER'), async (req, res) => {
   try {
     const body = requireBody<{
       title: string; body: string; audience: string; sentByName: string;
     }>(req, ['title', 'body', 'audience']);
+
+    // ── Audience validation ──────────────────────────────────────────────
+    // Accept three shapes only:
+    //   - 'TEACHERS'           — fan-out to all teachers in the school (low risk)
+    //   - 'SECTION:<uuid>'     — single section, must be one the teacher
+    //                            actually has access to
+    //   - 'CLASS:<className>'  — every section of a class the teacher
+    //                            teaches at least one section of
+    // 'ALL' and any other free-form string is rejected.
+    const audience = body.audience.trim();
+    if (audience === 'ALL') {
+      throw new ApiError(403, 'Teachers cannot broadcast to ALL. Use a class or section audience instead.');
+    }
+
+    if (audience.startsWith('SECTION:')) {
+      const sectionId = audience.slice('SECTION:'.length).trim();
+      if (!sectionId) throw new ApiError(400, 'SECTION audience requires a section id');
+      // Verify the teacher actually has access to this section. Driven by
+      // staff_class_assignments via staff_class_assignments.section_id —
+      // covers both class teachers and subject teachers.
+      const { data: myStaff } = await adminDb
+        .from('staff').select('id').eq('user_id', req.user.id)
+        .eq('school_id', req.user.school_id!).maybeSingle();
+      const myStaffId = (myStaff as { id: string } | null)?.id;
+      if (!myStaffId) throw new ApiError(403, 'Teacher staff record not found');
+      const { data: assigned } = await adminDb
+        .from('staff_class_assignments').select('id')
+        .eq('staff_id', myStaffId).eq('section_id', sectionId).limit(1);
+      if (!assigned || assigned.length === 0) {
+        throw new ApiError(403, 'You do not teach this section.');
+      }
+    } else if (audience.startsWith('CLASS:')) {
+      const className = audience.slice('CLASS:'.length).trim();
+      if (!className) throw new ApiError(400, 'CLASS audience requires a class name');
+      const { data: myStaff } = await adminDb
+        .from('staff').select('id').eq('user_id', req.user.id)
+        .eq('school_id', req.user.school_id!).maybeSingle();
+      const myStaffId = (myStaff as { id: string } | null)?.id;
+      if (!myStaffId) throw new ApiError(403, 'Teacher staff record not found');
+      // Any one section of the class assigned to this teacher = allowed.
+      const { data: assigned } = await adminDb
+        .from('staff_class_assignments').select('id')
+        .eq('staff_id', myStaffId).eq('class_name', className).limit(1);
+      if (!assigned || assigned.length === 0) {
+        throw new ApiError(403, 'You do not teach this class.');
+      }
+    } else if (audience !== 'TEACHERS') {
+      throw new ApiError(400, `Invalid audience: ${audience}`);
+    }
 
     const { data, error } = await adminDb
       .from('notices')
@@ -153,7 +205,7 @@ teacherRouter.post('/notice/create', requireAuth, requireRole('TEACHER'), async 
         school_id:    req.user.school_id,
         title:        body.title,
         body:         body.body,
-        audience:     body.audience,
+        audience,
         sent_by:      req.user.id,
         sent_by_name: body.sentByName || req.user.name || '',
         pinned:       false,
@@ -184,14 +236,21 @@ teacherRouter.post('/test/create', requireAuth, requireRole('TEACHER'), async (r
       throw new ApiError(400, 'maxMarks must be between 1 and 1000');
     }
 
-    // Cross-school staff guard: teacherId must belong to the caller's school.
-    // Without this, a teacher could attribute a test to another school's
-    // staff member (server uses adminDb so RLS won't catch the forged id).
-    const { data: staffRow } = await adminDb
+    // Cross-school + attribution guard: teacherId must equal the caller's
+    // OWN staff row. Earlier the only check was same-school, so a teacher
+    // could create a test attributed to a colleague (showing up under
+    // their "My Tests"). Resolve caller's staff_id and reject if the
+    // payload teacherId doesn't match.
+    const { data: myStaff } = await adminDb
       .from('staff').select('id, school_id')
-      .eq('id', body.teacherId).maybeSingle();
-    if (!staffRow || (staffRow as { school_id: string }).school_id !== req.user.school_id) {
-      throw new ApiError(403, 'teacherId is not in your school');
+      .eq('user_id', req.user.id)
+      .eq('school_id', req.user.school_id!).maybeSingle();
+    const myStaffRow = myStaff as { id: string; school_id: string } | null;
+    if (!myStaffRow) {
+      throw new ApiError(403, 'Teacher staff record not found');
+    }
+    if (body.teacherId !== myStaffRow.id) {
+      throw new ApiError(403, 'You can only create tests attributed to yourself');
     }
 
     const { data, error } = await adminDb
@@ -237,19 +296,36 @@ teacherRouter.post('/test/publish-results', requireAuth, requireRole('TEACHER'),
       results: { studentId: string; obtainedMarks: number; remarks?: string | null }[];
     }>(req, ['testId', 'academicYearId', 'results']);
 
-    // Verify the test belongs to the caller's school (defence-in-depth — RLS
-    // is bypassed since we use adminDb here). Also pull max_marks so we
-    // can validate the submitted obtained_marks against it.
+    // Verify the test belongs to the caller's school AND was created by
+    // this teacher AND is not already LOCKED by the principal. Earlier
+    // any teacher in the same school could overwrite another teacher's
+    // marks, and even downgrade a principal-locked test back to
+    // SUBMITTED and rewrite scores.
     const { data: test, error: tErr } = await adminDb
       .from('test_schedules')
-      .select('id, school_id, max_marks')
+      .select('id, school_id, max_marks, teacher_id, result_status')
       .eq('id', body.testId)
       .maybeSingle();
     if (tErr) throw new ApiError(500, tErr.message);
     if (!test) throw new ApiError(404, 'Test not found');
-    const testRow = test as { id: string; school_id: string; max_marks: number };
+    const testRow = test as {
+      id: string; school_id: string; max_marks: number;
+      teacher_id: string | null; result_status: string | null;
+    };
     if (testRow.school_id !== req.user.school_id) {
       throw new ApiError(403, 'Test belongs to another school');
+    }
+    if (testRow.result_status === 'LOCKED') {
+      throw new ApiError(403, 'Results are locked by principal — re-publish via the principal flow.');
+    }
+    // Resolve caller's staff_id once for the ownership check below.
+    const { data: myStaff } = await adminDb
+      .from('staff').select('id').eq('user_id', req.user.id)
+      .eq('school_id', req.user.school_id!).maybeSingle();
+    const myStaffId = (myStaff as { id: string } | null)?.id ?? null;
+    if (!myStaffId) throw new ApiError(403, 'Teacher staff record not found');
+    if (testRow.teacher_id && testRow.teacher_id !== myStaffId) {
+      throw new ApiError(403, 'Only the teacher who created this test can publish its results.');
     }
 
     if (body.results.length > 0) {

@@ -2,6 +2,8 @@ import React, { useState } from 'react';
 import { User, Phone, Shield, LogOut, ChevronRight, Bell, Lock, GraduationCap, Briefcase, Car, Star, X, Save, Eye, EyeOff } from 'lucide-react';
 import { useAuthStore } from '@/store/authStore';
 import { useUIStore } from '@/store/uiStore';
+import { authService } from '@/modules/auth/auth.service';
+import { supabase } from '@/lib/supabase';
 
 const ROLE_LABEL: Record<string, string> = {
   SUPER_ADMIN: 'Super Admin',
@@ -41,25 +43,44 @@ export const ProfileView: React.FC = () => {
   const [newPassword, setNewPassword] = useState('');
   const [confirmPassword, setConfirmPassword] = useState('');
   const [showPassword, setShowPassword] = useState(false);
+  const [savingProfile, setSavingProfile] = useState(false);
+  const [savingPassword, setSavingPassword] = useState(false);
 
   if (!session) return null;
 
-  const handleSaveProfile = () => {
+  const handleSaveProfile = async () => {
+    if (savingProfile) return;
     if (!editName.trim()) {
       showToast('Name cannot be empty', 'error');
       return;
     }
-    if (!editMobile.trim() || editMobile.length < 10) {
-      showToast('Valid mobile number required', 'error');
-      return;
+    // Mobile change route is intentionally disabled here — the mobile is the
+    // login key and changing it would orphan the auth.users row. Only the
+    // name is persisted. The edit-mobile field is preserved in the UI but
+    // its value is silently ignored at save time; ideally the field should
+    // be removed for non-DRIVER/STUDENT/TEACHER roles in a follow-up.
+    setSavingProfile(true);
+    try {
+      // Server-side trigger users_prevent_self_escalation forces back
+      // role/school_id/email/mobile/is_active/first_login_changed/etc., so
+      // only the name UPDATE actually persists. Safe under RLS.
+      const { error } = await supabase
+        .from('users')
+        .update({ name: editName.trim(), updated_at: new Date().toISOString() })
+        .eq('id', session.userId);
+      if (error) throw new Error(error.message);
+      setSession({ ...session, name: editName.trim() });
+      setIsEditMode(false);
+      showToast('Profile updated');
+    } catch (e) {
+      showToast(e instanceof Error ? e.message : 'Update failed', 'error');
+    } finally {
+      setSavingProfile(false);
     }
-    const updated = { ...session, name: editName, mobileNumber: editMobile };
-    setSession(updated);
-    setIsEditMode(false);
-    showToast('Profile updated successfully');
   };
 
-  const handleChangePassword = () => {
+  const handleChangePassword = async () => {
+    if (savingPassword) return;
     if (!currentPassword || !newPassword || !confirmPassword) {
       showToast('All fields required', 'error');
       return;
@@ -76,11 +97,24 @@ export const ProfileView: React.FC = () => {
       showToast('New password must be different from current', 'error');
       return;
     }
-    setCurrentPassword('');
-    setNewPassword('');
-    setConfirmPassword('');
-    setShowChangePassword(false);
-    showToast('Password changed successfully');
+    setSavingPassword(true);
+    try {
+      // Actually call Supabase Auth. Earlier this handler was a pure UI
+      // no-op — toasted "Password changed successfully" without doing
+      // anything. Now wired to the real authService.changePassword which
+      // calls supabase.auth.updateUser({ password }) + the
+      // mark_first_login_complete RPC to flip first_login_changed.
+      await authService.changePassword(currentPassword, newPassword);
+      setCurrentPassword('');
+      setNewPassword('');
+      setConfirmPassword('');
+      setShowChangePassword(false);
+      showToast('Password changed successfully');
+    } catch (e) {
+      showToast(e instanceof Error ? e.message : 'Password change failed', 'error');
+    } finally {
+      setSavingPassword(false);
+    }
   };
 
   const initials = session.name
@@ -167,9 +201,9 @@ export const ProfileView: React.FC = () => {
             <input value={editMobile} onChange={e => setEditMobile(e.target.value)} placeholder="10-digit mobile"
               className="w-full border border-slate-200 bg-slate-50 rounded-xl px-4 py-3 font-bold text-sm outline-none focus:border-indigo-500" />
           </div>
-          <button onClick={handleSaveProfile}
-            className="w-full flex items-center justify-center gap-2 bg-indigo-600 text-white font-black text-sm py-3 rounded-xl hover:bg-indigo-700 transition-colors">
-            <Save size={16} /> Save Changes
+          <button onClick={handleSaveProfile} disabled={savingProfile}
+            className="w-full flex items-center justify-center gap-2 bg-indigo-600 text-white font-black text-sm py-3 rounded-xl hover:bg-indigo-700 transition-colors disabled:opacity-60">
+            <Save size={16} /> {savingProfile ? 'Saving…' : 'Save Changes'}
           </button>
         </div>
       )}
@@ -257,9 +291,9 @@ export const ProfileView: React.FC = () => {
                 className="flex-1 py-3 bg-slate-100 text-slate-900 font-black rounded-xl hover:bg-slate-200 transition-colors">
                 Cancel
               </button>
-              <button onClick={handleChangePassword}
-                className="flex-1 py-3 bg-indigo-600 text-white font-black rounded-xl hover:bg-indigo-700 transition-colors">
-                Change Password
+              <button onClick={handleChangePassword} disabled={savingPassword}
+                className="flex-1 py-3 bg-indigo-600 text-white font-black rounded-xl hover:bg-indigo-700 transition-colors disabled:opacity-60">
+                {savingPassword ? 'Saving…' : 'Change Password'}
               </button>
             </div>
           </div>

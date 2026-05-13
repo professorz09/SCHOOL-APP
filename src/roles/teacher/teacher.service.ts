@@ -1130,11 +1130,23 @@ Class: ${meta.className}
    * downstream consumers (saved-papers list, print) keep rendering.
    */
   async updateGeneratedPaper(paperId: string, sections: ExamSection[]): Promise<void> {
-    const { error } = await supabase
+    // Scope the update to rows this teacher owns. Earlier the .eq('id',
+    // paperId) was the only filter — RLS on generated_question_papers
+    // permitted any same-school teacher to UPDATE, so Teacher A could
+    // silently rewrite Teacher B's saved paper. The created_by match
+    // closes that gap at the query layer (defense in depth; tighten the
+    // RLS write policy in a follow-up migration).
+    const userId = getUserId();
+    const { error, data } = await supabase
       .from('generated_question_papers')
       .update({ sections: sections as unknown as Record<string, unknown>[] })
-      .eq('id', paperId);
+      .eq('id', paperId)
+      .eq('created_by', userId)
+      .select('id');
     if (error) throw new Error(error.message);
+    if (!data || data.length === 0) {
+      throw new Error('Paper not found or you are not its author');
+    }
   },
 
   /** Rich student profiles for My Students view — includes admission no, phone, father name. */
