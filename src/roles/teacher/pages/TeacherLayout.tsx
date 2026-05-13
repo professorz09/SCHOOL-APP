@@ -146,9 +146,9 @@ export const TeacherLayout: React.FC = () => {
     color: string;
   }> = [
     { icon: FileCheck2,    label: 'Attendance', view: 'ATTENDANCE', color: 'text-blue-600'    },
-    { icon: ClipboardList, label: 'Tests',      view: 'TESTS',      color: 'text-violet-600'  },
+    { icon: ClipboardList, label: 'Exam',       view: 'TESTS',      color: 'text-violet-600'  },
     { icon: ScrollText,    label: 'Notices',    view: 'NOTICES',    color: 'text-orange-500'  },
-    { icon: Sparkles,      label: 'Exam Gen.',  view: 'EXAM_GEN',   color: 'text-emerald-600' },
+    { icon: Sparkles,      label: 'Paper',      view: 'EXAM_GEN',   color: 'text-emerald-600' },
     { icon: CalendarDays,  label: 'Timetable',  view: 'TIMETABLE',  color: 'text-sky-600'     },
     { icon: Users,         label: 'Students',   view: 'STUDENTS',   color: 'text-indigo-600'  },
     { icon: CircleAlert,   label: 'Helpdesk',   view: 'COMPLAINTS', color: 'text-rose-500'    },
@@ -210,7 +210,7 @@ export const TeacherLayout: React.FC = () => {
           </button>
           <button onClick={() => goTo('TESTS')}
             className="bg-white/10 rounded-xl px-3 py-3 text-left hover:bg-white/15 transition-colors">
-            <div className="text-[9px] font-black uppercase tracking-widest text-white/60">Tests</div>
+            <div className="text-[9px] font-black uppercase tracking-widest text-white/60">Exam</div>
             <div className="text-2xl font-black mt-1 tabular-nums">
               {pendingTestCount ?? '—'}
             </div>
