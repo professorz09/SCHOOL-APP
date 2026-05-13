@@ -2,8 +2,9 @@ import React, { useEffect, useState } from 'react';
 import {
   ArrowLeft, User, Phone, Mail, MapPin, Calendar, Droplet,
   GraduationCap, IdCard, Lock, LogOut, X, Eye, EyeOff, Fingerprint,
-  Building2, ShieldCheck,
+  Building2, ShieldCheck, MessageCircle,
 } from 'lucide-react';
+import { buildContactLinks } from '@/shared/utils/contactLinks';
 import { supabase } from '@/lib/supabase';
 import { useAuthStore } from '@/store/authStore';
 import { useUIStore } from '@/store/uiStore';
@@ -411,17 +412,40 @@ export const StudentProfileView: React.FC<Props> = ({ onBack }) => {
                     </div>
                   </div>
                 )}
-                <div className="flex items-start gap-3 px-4 py-3.5">
-                  <div className="w-8 h-8 rounded-xl bg-violet-50 flex items-center justify-center shrink-0">
-                    <ShieldCheck size={15} className="text-violet-600" />
+                <div className="px-4 py-3.5">
+                  <div className="flex items-start gap-3 mb-2">
+                    <div className="w-8 h-8 rounded-xl bg-violet-50 flex items-center justify-center shrink-0">
+                      <ShieldCheck size={15} className="text-violet-600" />
+                    </div>
+                    <div className="flex-1 min-w-0">
+                      <div className="text-[9px] font-black uppercase tracking-widest text-slate-400">Principal</div>
+                      <div className="font-bold text-slate-900 text-sm mt-0.5 truncate">{school.principalName || '—'}</div>
+                      {school.principalPhone && (
+                        <div className="text-[11px] font-bold text-slate-500 mt-0.5">{school.principalPhone}</div>
+                      )}
+                    </div>
                   </div>
-                  <div className="flex-1 min-w-0">
-                    <div className="text-[9px] font-black uppercase tracking-widest text-slate-400">Principal</div>
-                    <div className="font-bold text-slate-900 text-sm mt-0.5 truncate">{school.principalName || '—'}</div>
-                    {school.principalPhone && (
-                      <a href={`tel:${school.principalPhone}`} className="text-[11px] font-bold text-emerald-600 mt-0.5 inline-block">{school.principalPhone}</a>
-                    )}
-                  </div>
+                  {/* Twin Call + WhatsApp buttons. Phone is the same number
+                      either way; tel: opens the dialer, wa.me opens the
+                      WhatsApp chat with this contact. Indian parents
+                      reach the principal almost entirely through
+                      WhatsApp — the dual surface saves a copy-paste step. */}
+                  {(() => {
+                    const links = buildContactLinks(school.principalPhone);
+                    if (!links) return null;
+                    return (
+                      <div className="flex gap-2 mt-1">
+                        <a href={links.tel}
+                          className="flex-1 flex items-center justify-center gap-1.5 py-2 bg-emerald-50 border border-emerald-200 text-emerald-700 font-black text-xs rounded-xl hover:bg-emerald-100 active:scale-95 transition-all">
+                          <Phone size={13} /> Call
+                        </a>
+                        <a href={links.whatsapp} target="_blank" rel="noopener noreferrer"
+                          className="flex-1 flex items-center justify-center gap-1.5 py-2 bg-green-50 border border-green-200 text-green-700 font-black text-xs rounded-xl hover:bg-green-100 active:scale-95 transition-all">
+                          <MessageCircle size={13} /> WhatsApp
+                        </a>
+                      </div>
+                    );
+                  })()}
                 </div>
               </div>
             )}

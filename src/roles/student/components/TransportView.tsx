@@ -3,12 +3,22 @@ import { ArrowLeft, Bus, CheckCircle2, Circle, Navigation, Phone } from 'lucide-
 import { transportService } from '@/modules/transport/transport.service';
 import { studentDashboardService } from '@/modules/students/studentDashboard.service';
 import { useUIStore } from '@/store/uiStore';
+import { supabase } from '@/lib/supabase';
 
 interface Props { onBack: () => void; }
+
+// Treat the bus as offline if the driver app hasn't pinged in 30 min
+// (matches server-side stale cutoff in /api/transport/live).
+const LIVE_STALE_MS = 30 * 60_000;
 
 export const TransportView: React.FC<Props> = ({ onBack }) => {
   const [data, setData] = useState<ReturnType<typeof transportService.getStudentTransportInfo> | null>(null);
   const [loading, setLoading] = useState(true);
+  // Live tracking state from vehicle_live (driver toggles is_tracking ON
+  // when they start the trip). Parents see a prominent banner that
+  // flips between "BUS IS LIVE NOW" and "Offline" so they know whether
+  // tracking is actually live or stale.
+  const [liveState, setLiveState] = useState<{ isTracking: boolean; lastSeen: string | null } | null>(null);
 
   // Resolve the active student from the session (handles both STUDENT and
   // PARENT-with-selected-child) and load their transport info. The refresh
@@ -57,6 +67,46 @@ export const TransportView: React.FC<Props> = ({ onBack }) => {
     return () => { cancelled = true; if (interval) clearInterval(interval); };
   }, []);
 
+  // Subscribe to vehicle_live updates for the assigned bus. RLS already
+  // limits this to the parent's linked student's vehicle, so no extra
+  // scoping needed client-side.
+  useEffect(() => {
+    if (!data?.vehicle.id) { setLiveState(null); return; }
+    const vid = data.vehicle.id;
+    let cancelled = false;
+
+    // Initial fetch.
+    supabase.from('vehicle_live')
+      .select('is_tracking, last_seen')
+      .eq('vehicle_id', vid).maybeSingle()
+      .then(({ data: row }) => {
+        if (cancelled) return;
+        const r = row as { is_tracking: boolean; last_seen: string | null } | null;
+        setLiveState(r ? { isTracking: r.is_tracking, lastSeen: r.last_seen } : { isTracking: false, lastSeen: null });
+      });
+
+    // Realtime subscription so the banner flips the moment the driver
+    // toggles tracking on the bus.
+    const channel = supabase.channel(`vlive-${vid}`)
+      .on('postgres_changes',
+        { event: '*', schema: 'public', table: 'vehicle_live', filter: `vehicle_id=eq.${vid}` },
+        (payload) => {
+          if (cancelled) return;
+          const next = payload.new as { is_tracking: boolean; last_seen: string | null } | null;
+          if (next) setLiveState({ isTracking: next.is_tracking, lastSeen: next.last_seen });
+        },
+      )
+      .subscribe();
+
+    return () => { cancelled = true; void supabase.removeChannel(channel); };
+  }, [data?.vehicle.id]);
+
+  // Compute fresh-live: is_tracking AND last_seen within the stale window.
+  const isLiveNow = (() => {
+    if (!liveState?.isTracking || !liveState.lastSeen) return false;
+    return Date.now() - new Date(liveState.lastSeen).getTime() < LIVE_STALE_MS;
+  })();
+
   if (loading) {
     return (
       <div className="w-full lg:max-w-5xl lg:mx-auto bg-slate-50 flex flex-col animate-in slide-in-from-right-8 duration-300">
@@ -103,6 +153,21 @@ export const TransportView: React.FC<Props> = ({ onBack }) => {
         <h2 className="text-xl font-black text-slate-900 uppercase tracking-tight">Transport Tracker</h2>
       </div>
       <div className="flex-1 overflow-y-auto p-4  space-y-4">
+        {/* Prominent "BUS IS LIVE NOW" banner — only when the driver has
+            tracking actively on. Parents asked for an unmistakable signal
+            because the prior "Live" pill in the card was always green
+            regardless of actual state and looked like a static label. */}
+        {isLiveNow && (
+          <div className="bg-gradient-to-r from-emerald-500 to-emerald-600 rounded-2xl p-3 flex items-center gap-3 shadow-md animate-in fade-in duration-300">
+            <div className="w-3 h-3 rounded-full bg-white animate-pulse"/>
+            <div className="flex-1">
+              <div className="text-[10px] font-black uppercase tracking-widest text-white/80">Bus Tracking</div>
+              <div className="text-sm font-black text-white">LIVE NOW — driver has started the trip</div>
+            </div>
+            <Navigation size={18} className="text-white"/>
+          </div>
+        )}
+
         {/* Vehicle card */}
         <div className="bg-slate-900 rounded-2xl p-4 text-white">
           <div className="flex items-center justify-between mb-3">
@@ -110,10 +175,17 @@ export const TransportView: React.FC<Props> = ({ onBack }) => {
               <Bus size={20} className="text-orange-400" />
               <span className="font-black text-white">{data.vehicle.vehicleNo}</span>
             </div>
-            <div className="flex items-center gap-1.5 bg-emerald-500/20 px-2 py-1 rounded-full">
-              <div className="w-2 h-2 bg-emerald-400 rounded-full animate-pulse" />
-              <span className="text-[10px] font-black text-emerald-400 uppercase">Live</span>
-            </div>
+            {isLiveNow ? (
+              <div className="flex items-center gap-1.5 bg-emerald-500/20 px-2 py-1 rounded-full">
+                <div className="w-2 h-2 bg-emerald-400 rounded-full animate-pulse" />
+                <span className="text-[10px] font-black text-emerald-400 uppercase">Live</span>
+              </div>
+            ) : (
+              <div className="flex items-center gap-1.5 bg-slate-700 px-2 py-1 rounded-full">
+                <div className="w-2 h-2 bg-slate-500 rounded-full"/>
+                <span className="text-[10px] font-black text-slate-300 uppercase">Offline</span>
+              </div>
+            )}
           </div>
           <div className="grid grid-cols-2 gap-3">
             <div>
