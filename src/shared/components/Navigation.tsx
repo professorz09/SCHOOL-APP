@@ -4,6 +4,7 @@ import {
   Building2, CreditCard, ClipboardList, MapPin,
   LayoutDashboard, LogOut, UserCheck, CheckSquare, CalendarCheck,
   ShieldCheck, MailPlus, BarChart3, History, Settings as SettingsIcon,
+  Clock, GraduationCap, Award,
 } from 'lucide-react';
 import { AppRole, NavTab } from '@/shared/types/index';
 import { useAuthStore } from '@/store/authStore';
@@ -20,6 +21,12 @@ const ROLE_TABS: Record<AppRole, TabDef[]> = {
     { id: 'HOME',      icon: Home,          label: 'Home'    },
     { id: 'FEES',      icon: IndianRupee,   label: 'Fees'    },
     { id: 'NOTICES',   icon: Bell,          label: 'Notices' },
+    // Desktop-only shortcuts — daily-reference items that don't fit
+    // in the 4-button mobile bottom nav but a desktop user wants
+    // one tap away.
+    { id: 'TIMETABLE',  icon: Clock,         label: 'Timetable',  desktopOnly: true },
+    { id: 'RESULTS',    icon: Award,         label: 'Results',    desktopOnly: true },
+    { id: 'ATTENDANCE', icon: CalendarCheck, label: 'Attendance', desktopOnly: true },
     { id: 'PROFILE',   icon: User,          label: 'Profile' },
   ],
   PRINCIPAL: [
@@ -51,6 +58,12 @@ const ROLE_TABS: Record<AppRole, TabDef[]> = {
     { id: 'HOME',       icon: Home,          label: 'Home'       },
     { id: 'ATTENDANCE', icon: ClipboardList, label: 'Attendance' },
     { id: 'NOTICES',    icon: Bell,          label: 'Notices'    },
+    // Desktop-only shortcuts — class roster, the day's timetable and
+    // the test/exam queue are what a teacher opens repeatedly through
+    // the day. Stay out of the 4-button mobile bottom nav.
+    { id: 'STUDENTS',  icon: Users,          label: 'Students',  desktopOnly: true },
+    { id: 'TIMETABLE', icon: Clock,          label: 'Timetable', desktopOnly: true },
+    { id: 'TESTS',     icon: GraduationCap,  label: 'Tests',     desktopOnly: true },
     { id: 'PROFILE',    icon: User,          label: 'Profile'    },
   ],
   DRIVER: [

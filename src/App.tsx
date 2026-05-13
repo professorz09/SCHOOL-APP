@@ -50,6 +50,19 @@ const PrincipalNoticesManager    = lazy(() => import('@/modules/notices/componen
 const PrincipalApprovalsManager  = lazy(() => import('@/roles/principal/components/ApprovalsManager').then(m => ({ default: m.ApprovalsManager })));
 const PrincipalSettingsManager   = lazy(() => import('@/roles/principal/components/SettingsManager').then(m => ({ default: m.SettingsManager })));
 
+// Student desktop-sidebar shortcuts — TimetableView, ResultsView,
+// AttendanceView are daily-reference screens. On mobile they are
+// reached via dashboard tiles; on desktop they get a one-tap entry.
+const StudentTimetableView   = lazy(() => import('@/roles/student/components/TimetableView').then(m => ({ default: m.TimetableView })));
+const StudentResultsView     = lazy(() => import('@/roles/student/components/ResultsView').then(m => ({ default: m.ResultsView })));
+const StudentAttendanceView  = lazy(() => import('@/roles/student/components/AttendanceView').then(m => ({ default: m.AttendanceView })));
+
+// Teacher desktop-sidebar shortcuts — class roster, daily timetable
+// view, and the test/exam manager.
+const TeacherStudentList     = lazy(() => import('@/roles/teacher/components/TeacherStudentList').then(m => ({ default: m.TeacherStudentList })));
+const TeacherTimetableView   = lazy(() => import('@/modules/timetable/components/TeacherTimetableView').then(m => ({ default: m.TeacherTimetableView })));
+const TeacherTestsManager    = lazy(() => import('@/modules/exams/components/TestsManager').then(m => ({ default: m.TestsManager })));
+
 // Route-chunk fallback uses the shared AppLoader so every loading
 // surface across the app (auth splash, route transitions, individual
 // tabs) shares one visual language. Earlier we had three different
@@ -337,8 +350,11 @@ export default function App() {
   const renderTabContent = () => {
     if (tab === 'HOME')    return renderDashboard();
     if (tab === 'PROFILE') return <ProfileView />;
-    if (tab === 'FEES'    && role === 'STUDENT')    return <FeesView           onBack={goHome} />;
-    if (tab === 'NOTICES' && role === 'STUDENT')    return <StudentNoticesView onBack={goHome} />;
+    if (tab === 'FEES'       && role === 'STUDENT') return <FeesView              onBack={goHome} />;
+    if (tab === 'NOTICES'    && role === 'STUDENT') return <StudentNoticesView    onBack={goHome} />;
+    if (tab === 'TIMETABLE'  && role === 'STUDENT') return <StudentTimetableView  onBack={goHome} />;
+    if (tab === 'RESULTS'    && role === 'STUDENT') return <StudentResultsView    onBack={goHome} />;
+    if (tab === 'ATTENDANCE' && role === 'STUDENT') return <StudentAttendanceView onBack={goHome} />;
     if (tab === 'STUDENTS'    && role === 'PRINCIPAL') return <StudentsManager onBack={goHome} />;
     if (tab === 'FEE_LEDGER'  && role === 'PRINCIPAL') return <ErrorBoundary label="Fee Ledger"><FeeLedger onBack={goHome} /></ErrorBoundary>;
     if (tab === 'STAFF'       && role === 'PRINCIPAL') return <PrincipalStaffManager onBack={goHome} />;
@@ -355,6 +371,9 @@ export default function App() {
     if (tab === 'PLATFORM_SETTINGS' && role === 'SUPER_ADMIN') return <PlatformSettingsManager onBack={goHome} />;
     if (tab === 'ATTENDANCE' && role === 'TEACHER') return <AttendanceManager  onBack={goHome} />;
     if (tab === 'NOTICES'    && role === 'TEACHER') return <TeacherNoticesView onBack={goHome} />;
+    if (tab === 'STUDENTS'   && role === 'TEACHER') return <TeacherStudentList onBack={goHome} />;
+    if (tab === 'TIMETABLE'  && role === 'TEACHER') return <TeacherTimetableView onBack={goHome} />;
+    if (tab === 'TESTS'      && role === 'TEACHER') return <TeacherTestsManager onBack={goHome} />;
     if (role === 'DRIVER' && tab === 'ROUTE')    return <DriverRouteView />;
     if (role === 'DRIVER' && tab === 'STUDENTS') return <DriverStudentsView />;
     if (role === 'DRIVER') return <DriverLayout />;

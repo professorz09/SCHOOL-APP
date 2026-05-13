@@ -8,6 +8,8 @@ export type NavTab =
   | 'STUDENTS'    | 'FEE_LEDGER'  // principal
   | 'STAFF'       | 'APPROVALS'   // principal (desktop sidebar only)
   | 'SETTINGS'                    // principal (desktop sidebar only)
+  | 'TIMETABLE'   | 'RESULTS'     // student desktop sidebar
+  | 'TESTS'                       // teacher desktop sidebar
   | 'SCHOOLS'     | 'BILLING'     // super admin (in BottomNav)
   | 'ADMINS'      | 'BROADCAST'   // super admin (desktop sidebar only)
   | 'REPORTS'     | 'LOGS'

@@ -1442,16 +1442,23 @@ export const StudentAttendanceManager: React.FC<Props> = ({ onBack }) => {
             );
           })()}
         </div>
-        <div className="fixed bottom-16 left-0 right-0 lg:sticky lg:left-auto lg:right-auto lg:bottom-0 p-4 lg:p-6 bg-white border-t border-slate-100 z-30 lg:rounded-t-2xl lg:shadow-lg">
-          <button onClick={submitMark} disabled={!canSubmit || isSubmitting}
-            className="w-full flex items-center justify-center gap-2 bg-blue-600 text-white font-black text-sm uppercase tracking-widest py-4 rounded-2xl active:scale-95 transition-transform shadow-lg disabled:opacity-50">
-            {isSubmitting
-              ? 'Saving…'
-              : markConflict
-                ? <><Save size={16}/> Save Changes</>
-                : <><Save size={16}/> Save Attendance</>}
-          </button>
-        </div>
+        {/* Save bar — only renders when there is an actual class+section
+            +date+roster ready to save. Earlier the bar (with a disabled
+            opacity-50 button) was always visible at the bottom on desktop,
+            leaving the principal staring at a half-faded blue strip
+            before they'd even picked a class. Now: no class → no bar. */}
+        {markStudents.length > 0 && (
+          <div className="fixed bottom-16 left-0 right-0 lg:sticky lg:left-auto lg:right-auto lg:bottom-0 p-4 lg:p-6 bg-white border-t border-slate-100 z-30 lg:rounded-t-2xl lg:shadow-lg">
+            <button onClick={submitMark} disabled={!canSubmit || isSubmitting}
+              className="w-full flex items-center justify-center gap-2 bg-blue-600 text-white font-black text-sm uppercase tracking-widest py-4 rounded-2xl active:scale-95 transition-transform shadow-lg disabled:opacity-50">
+              {isSubmitting
+                ? 'Saving…'
+                : markConflict
+                  ? <><Save size={16}/> Save Changes</>
+                  : <><Save size={16}/> Save Attendance</>}
+            </button>
+          </div>
+        )}
       </div>
     );
   }
