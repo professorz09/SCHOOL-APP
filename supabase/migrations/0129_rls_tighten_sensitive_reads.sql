@@ -3,9 +3,8 @@
 --
 -- A generic `*_select` loop earlier in _apply.sql granted PRINCIPAL **and**
 -- TEACHER roles SELECT access across every school-scoped table. Most of
--- those tables that is fine (timetable, subjects, assignments). For
--- the tables listed below it is not, and creates real privacy / safety
--- gaps:
+-- those tables that is fine (timetable, subjects, assignments). For the
+-- tables listed below it is not, and creates real privacy / safety gaps:
 --
 --   complaints           — anonymous student complaints carry the
 --                          author's identity in `from_user_id` /
@@ -21,20 +20,18 @@
 --                          principal / super-admin took (password
 --                          resets, fee changes, login times).
 --   staff_permissions    — info-gathering surface for malicious users.
---   school_billing_*     — platform billing data. Not relevant to
---                          anyone in the school role.
---   school_payments      — same; principal should see their school's
---                          rows, teachers should not.
---   government_payments  — RTE / scholarship financial data.
---
--- Fix: replace the generic SELECT policy on each of these tables with
--- a role-specific version that excludes TEACHER (and, where relevant,
--- adds a self-read carve-out for the data subject).
+--   school_payments      — principal should see their school's rows,
+--                          teachers should not.
 --
 -- Each block is wrapped in `to_regclass(...) IS NOT NULL` so this
--- migration is tolerant of leaner deployments where some optional
--- tables (e.g. platform billing rollup tables) were never created.
--- A missing table is logged and skipped, not an error.
+-- migration is tolerant of leaner deployments. A missing table is
+-- logged via RAISE NOTICE and skipped, not an error.
+--
+-- NOT included (intentionally):
+--   government_payments          — dropped in migration 0083 (RTE flow removed)
+--   school_billing_schedules     — legacy; replaced by school_billing_installments
+--   school_billing_years         — legacy; replaced by school_billing_installments
+--   school_billing_installments  — already super-admin-only (migration 0098)
 -- ─────────────────────────────────────────────────────────────────────────────
 
 
@@ -128,32 +125,6 @@ BEGIN
 END $$;
 
 
--- ─── school_billing_schedules: super-admin only (platform billing) ──────────
-DO $$
-BEGIN
-  IF to_regclass('public.school_billing_schedules') IS NOT NULL THEN
-    DROP POLICY IF EXISTS school_billing_schedules_select ON public.school_billing_schedules;
-    CREATE POLICY school_billing_schedules_select ON public.school_billing_schedules FOR SELECT
-      USING (public.is_super_admin());
-  ELSE
-    RAISE NOTICE 'skipping school_billing_schedules policy — table not present';
-  END IF;
-END $$;
-
-
--- ─── school_billing_years: super-admin only ─────────────────────────────────
-DO $$
-BEGIN
-  IF to_regclass('public.school_billing_years') IS NOT NULL THEN
-    DROP POLICY IF EXISTS school_billing_years_select ON public.school_billing_years;
-    CREATE POLICY school_billing_years_select ON public.school_billing_years FOR SELECT
-      USING (public.is_super_admin());
-  ELSE
-    RAISE NOTICE 'skipping school_billing_years policy — table not present';
-  END IF;
-END $$;
-
-
 -- ─── school_payments: super-admin + principal (principal sees own school) ───
 DO $$
 BEGIN
@@ -166,21 +137,5 @@ BEGIN
       );
   ELSE
     RAISE NOTICE 'skipping school_payments policy — table not present';
-  END IF;
-END $$;
-
-
--- ─── government_payments: super-admin + principal only ──────────────────────
-DO $$
-BEGIN
-  IF to_regclass('public.government_payments') IS NOT NULL THEN
-    DROP POLICY IF EXISTS government_payments_select ON public.government_payments;
-    CREATE POLICY government_payments_select ON public.government_payments FOR SELECT
-      USING (
-        public.is_super_admin()
-        OR (public.is_principal() AND school_id = public.current_user_school_id())
-      );
-  ELSE
-    RAISE NOTICE 'skipping government_payments policy — table not present';
   END IF;
 END $$;
