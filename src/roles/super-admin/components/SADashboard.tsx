@@ -1,11 +1,12 @@
 import React, { useEffect, useState } from 'react';
 import {
   Building2, ShieldCheck, IndianRupee, BarChart3, MailPlus, History,
-  AlertCircle, TrendingUp, Users, Settings as SettingsIcon, Sparkles,
+  AlertCircle, TrendingUp, Users, Settings as SettingsIcon, Sparkles, AlertTriangle,
 } from 'lucide-react';
 import { useSchoolStore } from '@/roles/super-admin/schoolStore';
 import { supabase } from '@/lib/supabase';
 import { SchoolStatus } from '@/shared/config/constants';
+import { schoolService } from '@/shared/utils/school.service';
 
 interface SADashboardProps {
   onNavigate: (view: string) => void;
@@ -24,12 +25,32 @@ export const SADashboard: React.FC<SADashboardProps> = ({ onNavigate }) => {
   const [thisMonthCollected, setThisMonthCollected] = useState(0);
   const [overdueCount, setOverdueCount] = useState(0);
   const [settledCount, setSettledCount] = useState(0);
+  // School-deletion workflow counters — surfaced as a red banner above
+  // the revenue hero so a pending principal request never gets missed.
+  // `pendingDeletions` is the highest-priority alert on this dashboard.
+  const [pendingDeletions, setPendingDeletions] = useState(0);
+  const [softDeletedCount, setSoftDeletedCount] = useState(0);
 
   useEffect(() => {
     fetchSchools();
     void loadBillingRollup();
+    void loadDeletionCounts();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  const loadDeletionCounts = async () => {
+    try {
+      const [p, d] = await Promise.all([
+        schoolService.getPendingDeletionRequests(),
+        schoolService.getSoftDeletedSchools(),
+      ]);
+      setPendingDeletions(p.length);
+      setSoftDeletedCount(d.length);
+    } catch {
+      // Silent — banners just won't show. The dedicated deletions
+      // surface will surface the real error on tap.
+    }
+  };
 
   const loadBillingRollup = async () => {
     const now = new Date();
@@ -89,6 +110,42 @@ export const SADashboard: React.FC<SADashboardProps> = ({ onNavigate }) => {
           <span className="text-[10px] font-black uppercase tracking-widest text-slate-700">{monthLabel}</span>
         </div>
       </div>
+
+      {/* ── School-deletion alerts — top of dashboard, highest priority.
+          Pending requests show in red (action needed: review + approve).
+          Soft-deleted schools show in amber (informational; restore /
+          permanent-delete decisions live inside the dedicated view). */}
+      {pendingDeletions > 0 && (
+        <button onClick={() => onNavigate('deletions')}
+          className="w-full flex items-center gap-3 bg-rose-50 border-2 border-rose-300 rounded-2xl p-4 text-left active:scale-[0.99] hover:bg-rose-100/60 transition-all shadow-sm">
+          <div className="w-11 h-11 bg-rose-500 text-white rounded-xl flex items-center justify-center shrink-0 shadow-md">
+            <AlertTriangle size={20} />
+          </div>
+          <div className="flex-1 min-w-0">
+            <p className="text-xs lg:text-sm font-black text-rose-800 uppercase tracking-tight">
+              {pendingDeletions} School{pendingDeletions > 1 ? 's' : ''} Requesting Deletion
+            </p>
+            <p className="text-[11px] font-bold text-rose-600 mt-0.5">Review &amp; approve / reject — tap to open</p>
+          </div>
+          <span className="text-[10px] font-black text-white bg-rose-600 px-2.5 py-1 rounded-full shrink-0 uppercase tracking-widest shadow-sm">
+            Action
+          </span>
+        </button>
+      )}
+      {softDeletedCount > 0 && (
+        <button onClick={() => onNavigate('deletions')}
+          className="w-full flex items-center gap-3 bg-amber-50 border border-amber-200 rounded-2xl p-3.5 text-left active:scale-[0.99] hover:bg-amber-100/60 transition-all">
+          <div className="w-10 h-10 bg-amber-100 text-amber-700 rounded-xl flex items-center justify-center shrink-0">
+            <AlertCircle size={18} />
+          </div>
+          <div className="flex-1 min-w-0">
+            <p className="text-[11px] lg:text-xs font-black text-amber-800 uppercase tracking-tight">
+              {softDeletedCount} Soft-Deleted School{softDeletedCount > 1 ? 's' : ''}
+            </p>
+            <p className="text-[10px] font-bold text-amber-600 mt-0.5">Restore window or permanent delete</p>
+          </div>
+        </button>
+      )}
 
       {/* Revenue hero — full-width slate gradient card with the headline
           number and split stats. Always at the top because monthly

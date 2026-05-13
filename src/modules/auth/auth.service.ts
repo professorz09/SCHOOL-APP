@@ -66,6 +66,22 @@ async function fetchLinkedStudentIds(parentUserId: string): Promise<string[]> {
 }
 
 async function buildSession(profile: UserProfileRow): Promise<AuthSession> {
+  // School-deletion gate — if this user's school has been soft-deleted,
+  // refuse to establish a session. Super-admin has no school_id so
+  // they're never blocked here (and they're the ones who restore /
+  // permanent-delete in the first place). Migration 0127.
+  if (profile.school_id) {
+    const { data: sch } = await supabase
+      .from('schools')
+      .select('deleted_at')
+      .eq('id', profile.school_id)
+      .maybeSingle();
+    if (sch && (sch as { deleted_at: string | null }).deleted_at) {
+      await supabase.auth.signOut().catch(() => {});
+      throw new Error('Yeh school delete kar di gayi hai. Principal ya platform admin se contact karein.');
+    }
+  }
+
   const session: AuthSession = {
     userId: profile.id,
     role: profile.role,

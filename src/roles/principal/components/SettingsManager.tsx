@@ -17,7 +17,7 @@ import { stripClassPrefix } from '@/shared/utils/className';
 import { useAcademicYear } from '@/shared/context/AcademicYearContext';
 import { PolicyFooter } from '@/shared/components/PolicyFooter';
 
-type View = 'MENU' | 'SCHOOL_INFO' | 'CLASSES' | 'FEE_STRUCT' | 'FEE_STRUCT_EDIT' | 'PAYMENTS' | 'SECURITY' | 'DATA_EXPORT' | 'ACTIVITY_LOG' | 'USERS';
+type View = 'MENU' | 'SCHOOL_INFO' | 'CLASSES' | 'FEE_STRUCT' | 'FEE_STRUCT_EDIT' | 'PAYMENTS' | 'SECURITY' | 'DATA_EXPORT' | 'ACTIVITY_LOG' | 'USERS' | 'DANGER_ZONE';
 
 interface Props { onBack: () => void; initialView?: View; }
 
@@ -409,10 +409,29 @@ export const SettingsManager: React.FC<Props> = ({ onBack, initialView }) => {
           </button>
         ))}
 
+        {/* Danger Zone — separated from the regular tiles with explicit
+            red styling so it never gets a casual tap. The view itself
+            is a multi-stage gated flow (request → super-admin approves →
+            soft delete) so even reaching this tile doesn't perform any
+            destructive action on its own. */}
+        <button onClick={() => setView('DANGER_ZONE')}
+          className="w-full flex items-center gap-4 bg-rose-50 border border-rose-200 rounded-2xl p-4 shadow-sm text-left active:scale-[0.98] transition-transform mt-6">
+          <div className="w-11 h-11 rounded-xl flex items-center justify-center shrink-0 bg-rose-100">
+            <AlertTriangle size={20} className="text-rose-600" />
+          </div>
+          <div className="flex-1 min-w-0">
+            <div className="font-black text-rose-900 text-sm uppercase tracking-tight">Danger Zone</div>
+            <div className="text-[10px] font-bold text-rose-700/80 mt-0.5">School deletion — needs super-admin approval</div>
+          </div>
+          <ChevronRight size={16} className="text-rose-400 shrink-0" />
+        </button>
+
         <PolicyFooter />
       </div>
     </div>
   );
+
+  if (view === 'DANGER_ZONE') return <DangerZoneView onBack={() => setView('MENU')} />;
 
   // USERS VIEW — students + staff connected to the school, with password reset
   if (view === 'USERS') return <UsersView onBack={() => setView('MENU')} />;
@@ -1771,6 +1790,248 @@ const UsersView: React.FC<{ onBack: () => void }> = ({ onBack }) => {
           </div>
         </div>
       )}
+    </div>
+  );
+};
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Danger Zone — multi-stage gated school-deletion surface for the principal.
+//
+// State machine (read from `schools` columns):
+//   - No request           → Button 1 "Request Deletion" visible
+//   - Request pending      → "Awaiting super-admin approval" card,
+//                            Cancel request button
+//   - Approved (allowed=T) → Button 2 "Delete School" visible (red, gated)
+//   - Soft-deleted         → "Scheduled for permanent deletion" card with
+//                            countdown; super-admin can still restore
+//
+// Reload state after every action so the user sees the new stage without
+// a manual refresh.
+// ─────────────────────────────────────────────────────────────────────────────
+const DangerZoneView: React.FC<{ onBack: () => void }> = ({ onBack }) => {
+  const { showToast } = useUIStore();
+  const session = useAuthStore(s => s.session);
+  const setSession = useAuthStore(s => s.setSession);
+  const last4 = (session?.mobileNumber ?? '').replace(/\D/g, '').slice(-4);
+
+  const [state, setState] = useState<{
+    requestedAt: string | null;
+    requestNote: string | null;
+    allowed: boolean;
+    allowedAt: string | null;
+    deletedAt: string | null;
+  } | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [busy, setBusy] = useState(false);
+  const [noteDraft, setNoteDraft] = useState('');
+
+  const load = async () => {
+    setLoading(true);
+    try {
+      const s = await principalService.getSchoolDeletionState();
+      setState(s);
+    } catch (e) {
+      showToast(e instanceof Error ? e.message : 'Load failed', 'error');
+    } finally {
+      setLoading(false);
+    }
+  };
+  useEffect(() => { void load(); /* eslint-disable-next-line react-hooks/exhaustive-deps */ }, []);
+
+  const askConfirm = async (title: string, message: string, requiredPhrase?: string): Promise<boolean> => {
+    if (last4.length !== 4) {
+      showToast('Mobile number missing on profile — set it first', 'error');
+      return false;
+    }
+    return useUIStore.getState().askMobileConfirm({ title, message, expectedLast4: last4, requiredPhrase });
+  };
+
+  const handleRequest = async () => {
+    const ok = await askConfirm(
+      'School deletion request bhejein?',
+      'Super-admin ko aap ka request jayega. Approval ke baad hi delete button enable hoga. Aap ye request kabhi bhi cancel kar sakte hain.',
+    );
+    if (!ok) return;
+    setBusy(true);
+    try {
+      await principalService.requestSchoolDeletion(noteDraft);
+      showToast('Request bhej diya — super-admin approve karenge.');
+      setNoteDraft('');
+      await load();
+    } catch (e) {
+      showToast(e instanceof Error ? e.message : 'Request failed', 'error');
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const handleCancel = async () => {
+    const ok = await askConfirm(
+      'Cancel deletion request?',
+      'Pending request hata di jayegi. Super-admin ki approval (agar di hai) bhi rahegi par delete tabhi hoga jab aap dobara request banayenge.',
+    );
+    if (!ok) return;
+    setBusy(true);
+    try {
+      await principalService.cancelSchoolDeletionRequest();
+      showToast('Request cancel kar di');
+      await load();
+    } catch (e) {
+      showToast(e instanceof Error ? e.message : 'Cancel failed', 'error');
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const handleDelete = async () => {
+    // Two-typed-value gate: mobile last-4 + the literal phrase
+    // "DELETE MY SCHOOL". Both must be entered correctly or the action
+    // aborts. Combined with the prior tap on Danger Zone + tap on this
+    // button, that is four deliberate actions before any destructive
+    // write — and the soft-delete itself is reversible by super-admin
+    // for 30 days.
+    const ok = await askConfirm(
+      'Delete this school?',
+      'Saare students, staff, fees, attendance — sab inaccessible ho jayega. 30 din ke andar super-admin restore kar sakta hai, uske baad data permanently delete ho sakta hai.',
+      'DELETE MY SCHOOL',
+    );
+    if (!ok) return;
+    setBusy(true);
+    try {
+      await principalService.softDeleteSchool();
+      showToast('School scheduled for deletion. Aap ko ab logout kiya ja raha hai.');
+      // Force logout — session is for a school that just got soft-deleted.
+      await authService.logout().catch(() => {});
+      setSession(null);
+    } catch (e) {
+      showToast(e instanceof Error ? e.message : 'Delete failed', 'error');
+      setBusy(false);
+    }
+  };
+
+  const stage: 'NONE' | 'PENDING' | 'APPROVED' | 'DELETED' =
+    state?.deletedAt ? 'DELETED'
+      : state?.requestedAt && state.allowed ? 'APPROVED'
+      : state?.requestedAt ? 'PENDING'
+      : 'NONE';
+
+  return (
+    <div className="w-full bg-slate-50 flex flex-col animate-in slide-in-from-right-8 duration-300">
+      <div className="bg-white border-b border-slate-100 px-4 pt-4 pb-4 sticky top-0 z-10 shadow-sm flex items-center gap-3">
+        <button onClick={onBack} className="p-2 -ml-2 bg-slate-100 rounded-full text-slate-600">
+          <ArrowLeft size={20} />
+        </button>
+        <div>
+          <h2 className="text-xl font-black text-slate-900 uppercase tracking-tight leading-none">Danger Zone</h2>
+          <p className="text-[10px] font-bold text-rose-600 mt-0.5">Multi-step deletion · reversible for 30 days</p>
+        </div>
+      </div>
+
+      <div className="flex-1 overflow-y-auto p-4 space-y-4">
+        {/* Explainer banner — always visible so principal understands
+            this is a guarded 3-step process, not a one-tap destroy. */}
+        <div className="bg-rose-50 border-2 border-rose-200 rounded-2xl p-4">
+          <div className="flex items-start gap-3">
+            <div className="w-10 h-10 rounded-xl bg-rose-500 text-white flex items-center justify-center shrink-0">
+              <AlertTriangle size={18} />
+            </div>
+            <div className="min-w-0">
+              <h3 className="text-sm font-black text-rose-900 uppercase tracking-tight">How school deletion works</h3>
+              <ol className="text-[11px] font-bold text-rose-800/90 mt-2 space-y-1.5 leading-relaxed list-decimal pl-4">
+                <li>Aap request bhejte hain — super-admin ko notification jata hai.</li>
+                <li>Super-admin review karke is school ke liye deletion <em>allow</em> karte hain.</li>
+                <li>Tab aap ke paas <strong>Delete</strong> button enable hota hai — type-to-confirm ke saath.</li>
+                <li>Delete ke baad 30 din tak super-admin restore kar sakta hai, uske baad permanent.</li>
+              </ol>
+            </div>
+          </div>
+        </div>
+
+        {loading ? (
+          <div className="flex flex-col items-center py-16 text-slate-400">
+            <div className="w-8 h-8 border-2 border-slate-200 border-t-slate-700 rounded-full animate-spin mb-3" />
+            <p className="text-xs font-bold">Loading…</p>
+          </div>
+        ) : stage === 'NONE' ? (
+          <div className="bg-white rounded-2xl border border-slate-100 shadow-sm p-4">
+            <div className="text-[10px] font-black uppercase tracking-widest text-slate-400 mb-2">Step 1 of 3</div>
+            <h3 className="text-base font-black text-slate-900 mb-1">Request school deletion</h3>
+            <p className="text-[11px] font-bold text-slate-500 leading-relaxed mb-3">
+              Yeh sirf request hai — kuch delete nahi hoga. Super-admin ko notification jayegi.
+            </p>
+            <textarea
+              value={noteDraft}
+              onChange={e => setNoteDraft(e.target.value)}
+              placeholder="Reason for deletion (optional, helps super-admin review)"
+              rows={3}
+              className="w-full border border-slate-200 bg-slate-50 rounded-xl px-3 py-2 text-sm font-medium outline-none focus:border-rose-500 focus:bg-white resize-none mb-3" />
+            <button
+              onClick={handleRequest}
+              disabled={busy}
+              className="w-full flex items-center justify-center gap-2 bg-rose-600 text-white font-black text-[11px] uppercase tracking-widest py-3 rounded-xl active:scale-95 transition-transform disabled:opacity-50">
+              <AlertTriangle size={14} /> Send Deletion Request
+            </button>
+          </div>
+        ) : stage === 'PENDING' ? (
+          <div className="bg-white rounded-2xl border border-amber-200 shadow-sm p-4">
+            <div className="flex items-center gap-2 mb-2">
+              <span className="text-[10px] font-black px-2 py-1 rounded-full bg-amber-100 text-amber-700 uppercase tracking-widest">Step 2 of 3</span>
+              <span className="text-[10px] font-bold text-amber-600">Awaiting super-admin</span>
+            </div>
+            <h3 className="text-base font-black text-slate-900 mb-1">Request pending</h3>
+            <p className="text-[11px] font-bold text-slate-500 leading-relaxed mb-2">
+              Aap ki request bhej di gayi hai. Super-admin review karke approve karenge — phir Delete button enable hoga.
+            </p>
+            {state?.requestNote && (
+              <div className="bg-slate-50 rounded-xl p-2.5 mb-3 border border-slate-100">
+                <p className="text-[10px] font-black text-slate-500 uppercase tracking-widest mb-1">Your note</p>
+                <p className="text-xs font-medium text-slate-700">{state.requestNote}</p>
+              </div>
+            )}
+            <button
+              onClick={handleCancel}
+              disabled={busy}
+              className="w-full py-3 rounded-xl bg-slate-100 text-slate-700 font-black text-[11px] uppercase tracking-widest active:scale-95 transition-transform disabled:opacity-50">
+              Cancel Request
+            </button>
+          </div>
+        ) : stage === 'APPROVED' ? (
+          <div className="bg-white rounded-2xl border-2 border-rose-300 shadow-sm p-4">
+            <div className="flex items-center gap-2 mb-2">
+              <span className="text-[10px] font-black px-2 py-1 rounded-full bg-rose-100 text-rose-700 uppercase tracking-widest">Step 3 of 3</span>
+              <span className="text-[10px] font-bold text-rose-600">Super-admin approved</span>
+            </div>
+            <h3 className="text-base font-black text-slate-900 mb-1">Delete this school</h3>
+            <p className="text-[11px] font-bold text-slate-500 leading-relaxed mb-3">
+              Confirm karne ke liye aap ko apna mobile ka last 4 digit + <code className="bg-slate-100 px-1 rounded text-[10px]">DELETE MY SCHOOL</code> type karna hoga.
+              Delete ke baad aap turant logout ho jayenge.
+            </p>
+            <button
+              onClick={handleDelete}
+              disabled={busy}
+              className="w-full flex items-center justify-center gap-2 bg-rose-600 text-white font-black text-[11px] uppercase tracking-widest py-3 rounded-xl active:scale-95 transition-transform disabled:opacity-50">
+              <Trash2 size={14} /> Delete School (Type-to-confirm)
+            </button>
+            <button
+              onClick={handleCancel}
+              disabled={busy}
+              className="w-full mt-2 py-3 rounded-xl bg-slate-100 text-slate-700 font-black text-[10px] uppercase tracking-widest active:scale-95 transition-transform disabled:opacity-50">
+              Cancel — keep school active
+            </button>
+          </div>
+        ) : (
+          // DELETED stage — surfaced briefly before the auto-logout in
+          // handleDelete fires. If a principal somehow lands here on a
+          // fresh login (RLS should block this), the view stays read-only.
+          <div className="bg-rose-50 rounded-2xl border-2 border-rose-300 shadow-sm p-4">
+            <h3 className="text-base font-black text-rose-900 mb-1">School scheduled for deletion</h3>
+            <p className="text-[11px] font-bold text-rose-800/80 leading-relaxed">
+              Soft-deleted on {state?.deletedAt ? new Date(state.deletedAt).toLocaleString('en-IN') : '—'}.
+              Super-admin can restore within 30 days; afterwards data is permanently removed.
+            </p>
+          </div>
+        )}
+      </div>
     </div>
   );
 };

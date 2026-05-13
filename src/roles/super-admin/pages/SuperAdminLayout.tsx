@@ -7,9 +7,10 @@ import { BroadcastManager } from '@/roles/super-admin/components/BroadcastManage
 import { ReportsView } from '@/roles/super-admin/components/ReportsView';
 import { LogsViewer } from '@/roles/super-admin/components/LogsViewer';
 import { PlatformSettingsManager } from '@/roles/super-admin/components/PlatformSettingsManager';
+import { SchoolDeletionManager } from '@/roles/super-admin/components/SchoolDeletionManager';
 import { useUIStore } from '@/store/uiStore';
 
-type ActiveView = 'dashboard' | 'schools' | 'billing' | 'admins' | 'broadcast' | 'reports' | 'logs' | 'settings';
+type ActiveView = 'dashboard' | 'schools' | 'billing' | 'admins' | 'broadcast' | 'reports' | 'logs' | 'settings' | 'deletions';
 
 // ToastContainer is mounted once at the App root, so individual views don't
 // need to render their own — keeping the layout focused on routing only.
@@ -47,6 +48,7 @@ export const SuperAdminLayout: React.FC = () => {
   if (view === 'reports')   return <ReportsView     onBack={onBack} />;
   if (view === 'logs')      return <LogsViewer      onBack={onBack} />;
   if (view === 'settings')  return <PlatformSettingsManager onBack={onBack} />;
+  if (view === 'deletions') return <SchoolDeletionManager onBack={onBack} />;
 
   return <SADashboard onNavigate={onNavigate} />;
 };

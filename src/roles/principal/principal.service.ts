@@ -1150,6 +1150,58 @@ export const principalService = {
   // Screenshot URL helper removed — fee submissions now carry a structured
   // transaction_id text instead of an uploaded image. The fee-screenshots
   // bucket and its RLS policies can be cleaned up in a follow-up migration.
+
+  // ─── School deletion workflow ───────────────────────────────────────────
+  // Three gated steps (see migration 0127): request → super-admin approves →
+  // soft delete. The principal's two buttons in Settings call methods 1 & 3;
+  // method 2 belongs to the super-admin service.
+  async getSchoolDeletionState(): Promise<{
+    requestedAt: string | null;
+    requestNote: string | null;
+    allowed: boolean;
+    allowedAt: string | null;
+    deletedAt: string | null;
+  }> {
+    const schoolId = getSchoolId();
+    const { data, error } = await supabase
+      .from('schools')
+      .select('deletion_requested_at, deletion_request_note, deletion_allowed, deletion_allowed_at, deleted_at')
+      .eq('id', schoolId)
+      .maybeSingle();
+    if (error) throw new Error(error.message);
+    return {
+      requestedAt: (data?.deletion_requested_at as string | null) ?? null,
+      requestNote: (data?.deletion_request_note as string | null) ?? null,
+      allowed:     Boolean(data?.deletion_allowed),
+      allowedAt:   (data?.deletion_allowed_at as string | null) ?? null,
+      deletedAt:   (data?.deleted_at as string | null) ?? null,
+    };
+  },
+
+  async requestSchoolDeletion(note: string): Promise<void> {
+    const schoolId = getSchoolId();
+    const { error } = await supabase.rpc('request_school_deletion', {
+      p_school_id: schoolId,
+      p_note: note,
+    });
+    if (error) throw new Error(error.message);
+  },
+
+  async cancelSchoolDeletionRequest(): Promise<void> {
+    const schoolId = getSchoolId();
+    const { error } = await supabase.rpc('cancel_school_deletion_request', {
+      p_school_id: schoolId,
+    });
+    if (error) throw new Error(error.message);
+  },
+
+  async softDeleteSchool(): Promise<void> {
+    const schoolId = getSchoolId();
+    const { error } = await supabase.rpc('soft_delete_school', {
+      p_school_id: schoolId,
+    });
+    if (error) throw new Error(error.message);
+  },
 };
 
 export type {

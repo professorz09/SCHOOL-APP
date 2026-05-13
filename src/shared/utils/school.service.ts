@@ -419,4 +419,80 @@ export const schoolService = {
       };
     });
   },
+
+  // ─── Deletion workflow (super-admin side) ──────────────────────────────
+  // Mirrors the three-stage gating in migration 0127. The two read helpers
+  // power the red-banner / soft-deleted-list views in SchoolsManager.
+  async getPendingDeletionRequests(): Promise<Array<{
+    id: string;
+    name: string;
+    code: string;
+    requestedAt: string;
+    requestedBy: string | null;
+    note: string | null;
+  }>> {
+    const { data, error } = await supabase
+      .from('schools')
+      .select('id, name, code, deletion_requested_at, deletion_requested_by, deletion_request_note')
+      .not('deletion_requested_at', 'is', null)
+      .eq('deletion_allowed', false)
+      .is('deleted_at', null)
+      .order('deletion_requested_at', { ascending: false });
+    if (error) throw new Error(error.message);
+    return (data ?? []).map(r => ({
+      id:          r.id as string,
+      name:        r.name as string,
+      code:        r.code as string,
+      requestedAt: r.deletion_requested_at as string,
+      requestedBy: (r.deletion_requested_by as string | null) ?? null,
+      note:        (r.deletion_request_note as string | null) ?? null,
+    }));
+  },
+
+  async getSoftDeletedSchools(): Promise<Array<{
+    id: string;
+    name: string;
+    code: string;
+    deletedAt: string;
+    daysSinceDelete: number;
+    canPermanentDelete: boolean;
+  }>> {
+    const { data, error } = await supabase
+      .from('schools')
+      .select('id, name, code, deleted_at')
+      .not('deleted_at', 'is', null)
+      .order('deleted_at', { ascending: false });
+    if (error) throw new Error(error.message);
+    const now = Date.now();
+    return (data ?? []).map(r => {
+      const deletedAt = r.deleted_at as string;
+      const days = Math.floor((now - new Date(deletedAt).getTime()) / 86400000);
+      return {
+        id:                 r.id as string,
+        name:               r.name as string,
+        code:               r.code as string,
+        deletedAt,
+        daysSinceDelete:    days,
+        canPermanentDelete: days >= 30,
+      };
+    });
+  },
+
+  async setSchoolDeletionAllowed(schoolId: string, allowed: boolean): Promise<void> {
+    const { error } = await supabase.rpc('set_school_deletion_allowed', {
+      p_school_id: schoolId,
+      p_allowed:   allowed,
+    });
+    if (error) throw new Error(error.message);
+  },
+
+  async restoreSchool(schoolId: string): Promise<void> {
+    const { error } = await supabase.rpc('restore_school', { p_school_id: schoolId });
+    if (error) throw new Error(error.message);
+  },
+
+  async permanentDeleteSchool(schoolId: string): Promise<void> {
+    const { error } = await supabase.rpc('permanent_delete_school', { p_school_id: schoolId });
+    if (error) throw new Error(error.message);
+  },
 };

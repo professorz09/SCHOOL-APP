@@ -1,0 +1,167 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>EduGrow — Privacy, Terms &amp; Account Deletion</title>
+<meta name="description" content="EduGrow privacy policy, terms of service, and account deletion instructions for the school management app." />
+<meta name="theme-color" content="#b91c1c" />
+<style>
+  :root { --red: #b91c1c; --red-soft: #fee2e2; --slate-900: #0f172a; --slate-700: #334155; --slate-500: #64748b; --slate-100: #f1f5f9; }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; }
+  body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif; color: var(--slate-700); line-height: 1.65; background: #fff; }
+  header { background: linear-gradient(135deg, #dc2626 0%, #991b1b 100%); color: #fff; padding: 48px 24px; }
+  .wrap { max-width: 760px; margin: 0 auto; padding: 0 24px; }
+  header h1 { margin: 0 0 8px; font-size: 32px; letter-spacing: -0.5px; }
+  header p { margin: 0; opacity: 0.9; font-size: 14px; }
+  nav { background: var(--slate-100); padding: 16px 0; position: sticky; top: 0; z-index: 10; border-bottom: 1px solid #e2e8f0; }
+  nav ul { list-style: none; padding: 0; margin: 0; display: flex; flex-wrap: wrap; gap: 12px 20px; }
+  nav a { color: var(--red); text-decoration: none; font-weight: 700; font-size: 13px; text-transform: uppercase; letter-spacing: 0.05em; }
+  nav a:hover { text-decoration: underline; }
+  main { padding: 40px 0 80px; }
+  section { margin-bottom: 56px; scroll-margin-top: 80px; }
+  h2 { color: var(--slate-900); border-bottom: 3px solid var(--red); padding-bottom: 8px; margin: 0 0 20px; font-size: 24px; letter-spacing: -0.3px; }
+  h3 { color: var(--slate-900); margin: 28px 0 10px; font-size: 17px; }
+  p, li { font-size: 15px; }
+  ul, ol { padding-left: 22px; }
+  li { margin: 6px 0; }
+  .callout { background: var(--red-soft); border-left: 4px solid var(--red); padding: 16px 20px; border-radius: 8px; margin: 20px 0; }
+  .callout strong { color: var(--red); }
+  code { background: var(--slate-100); padding: 2px 6px; border-radius: 4px; font-size: 13px; }
+  footer { background: var(--slate-900); color: #cbd5e1; padding: 32px 24px; text-align: center; font-size: 13px; }
+  footer a { color: #fff; }
+  .updated { color: var(--slate-500); font-size: 13px; margin-top: 4px; }
+</style>
+</head>
+<body>
+
+<header>
+  <div class="wrap">
+    <h1>EduGrow — Legal &amp; Policies</h1>
+    <p>Privacy Policy · Terms of Service · Account Deletion · Data Retention</p>
+    <p class="updated" style="color: rgba(255,255,255,0.7); margin-top: 8px;">Effective date: replace with go-live date</p>
+  </div>
+</header>
+
+<nav>
+  <div class="wrap">
+    <ul>
+      <li><a href="#privacy">Privacy</a></li>
+      <li><a href="#terms">Terms</a></li>
+      <li><a href="#deletion">Account Deletion</a></li>
+      <li><a href="#retention">Data Retention</a></li>
+      <li><a href="#contact">Contact</a></li>
+    </ul>
+  </div>
+</nav>
+
+<main class="wrap">
+
+  <div class="callout">
+    <strong>About this page.</strong> EduGrow is a school management platform used by Indian schools. Accounts are <strong>managed</strong> — each student, parent, teacher, and principal account is created and administered by their school. Individual users cannot create accounts on their own.
+  </div>
+
+  <section id="privacy">
+    <h2>1. Privacy Policy</h2>
+
+    <h3>1.1 Information we collect</h3>
+    <p>EduGrow stores only the information required to operate a school: full name, mobile number, role (Student, Parent, Teacher, Principal, Driver), school assignment, class/section, attendance, exam results, fees, transport routes, and notices. For optional features, the school may add date of birth, Aadhaar number (encrypted at rest), address, and parent contact details.</p>
+
+    <h3>1.2 How we use it</h3>
+    <ul>
+      <li>To run the school's day-to-day operations inside the app (attendance, fees, exams, transport, notices).</li>
+      <li>To authenticate users via mobile number + password.</li>
+      <li>To generate reports and exports for the school's own use.</li>
+      <li>To send service notifications inside the app (birthday greetings, fee reminders).</li>
+    </ul>
+
+    <h3>1.3 What we do NOT do</h3>
+    <ul>
+      <li>We do not sell or rent personal data to anyone.</li>
+      <li>We do not run third-party advertising inside the app.</li>
+      <li>We do not share Aadhaar, mobile, or contact details outside the school's own users.</li>
+    </ul>
+
+    <h3>1.4 Where data lives</h3>
+    <p>Data is hosted on Supabase (Postgres) in a region chosen for India-based latency. Backups are encrypted. Access is restricted by Row-Level Security policies — a student cannot read another student's record, a teacher cannot read another class's data unless explicitly permitted by the principal.</p>
+
+    <h3>1.5 Children</h3>
+    <p>Student accounts are administered by their school. We do not solicit information directly from children. Parents/guardians who notice incorrect data should ask the school principal to correct it.</p>
+  </section>
+
+  <section id="terms">
+    <h2>2. Terms of Service</h2>
+
+    <h3>2.1 Acceptable use</h3>
+    <p>By using EduGrow you agree to use it only for its intended purpose — administering or participating in your school. You must not attempt to access other schools' data, bulk-export data, or impersonate other users.</p>
+
+    <h3>2.2 Account responsibility</h3>
+    <p>Keep your password confidential. Notify your school principal immediately if you suspect unauthorised access. The school principal can reset any account password.</p>
+
+    <h3>2.3 Suspension</h3>
+    <p>We may suspend access if a user violates these terms, if a school's payment is unsettled past a grace period, or if a court order or legitimate legal request requires it.</p>
+
+    <h3>2.4 No warranty</h3>
+    <p>EduGrow is provided "as is". We work hard to keep it reliable, but we do not guarantee zero downtime. Critical academic records (results, mark-sheets) should also be preserved by the school in physical or independent digital form.</p>
+  </section>
+
+  <section id="deletion">
+    <h2>3. Account &amp; School Deletion</h2>
+
+    <div class="callout">
+      <strong>Important:</strong> EduGrow uses managed accounts. Students, parents, teachers, and drivers do not have a self-service "delete my account" button because their record is part of their school's roster. To remove a single user, contact the school principal. To remove an entire school (and every account inside it), the principal initiates the request.
+    </div>
+
+    <h3>3.1 Removing a single user (student / parent / teacher / driver)</h3>
+    <ol>
+      <li>Contact your <strong>school principal</strong> in person, by phone, or via the app's Helpdesk feature.</li>
+      <li>The principal removes the user from the school's roster through their Settings &rarr; Users panel.</li>
+      <li>The removal takes effect immediately; the user can no longer log in.</li>
+    </ol>
+
+    <h3>3.2 Deleting an entire school</h3>
+    <p>A school deletion is a guarded three-stage process so nothing is lost by mistake:</p>
+    <ol>
+      <li><strong>Principal requests deletion</strong> from Settings &rarr; Danger Zone. The request travels to the platform admin.</li>
+      <li><strong>Platform admin reviews</strong> and either approves or denies. Approval simply unlocks the principal's "Delete" button — no data is touched yet.</li>
+      <li><strong>Principal confirms deletion</strong> by typing their mobile-number last four digits + the phrase <code>DELETE MY SCHOOL</code>. The school enters a 30-day "soft-deleted" state where it is inaccessible but the data still exists.</li>
+      <li><strong>30-day grace window:</strong> the platform admin can restore the school any time during this window — every user, every record returns intact.</li>
+      <li><strong>After 30 days,</strong> the platform admin may manually permanently delete the school. There is no automated job that destroys data. The action is irreversible and requires another typed-phrase confirmation.</li>
+    </ol>
+
+    <h3>3.3 Account deletion request URL</h3>
+    <p>If you need to record an account deletion request for compliance purposes (for example, in your data-protection diary), use this page as the canonical URL. The mechanism is contact-based — message your school principal or the platform admin at the address in the Contact section below.</p>
+  </section>
+
+  <section id="retention">
+    <h2>4. Data Retention</h2>
+    <ul>
+      <li><strong>Active school:</strong> data is retained for as long as the school continues using EduGrow.</li>
+      <li><strong>Single user removed:</strong> the user row is deleted; historical records (attendance entries, exam marks, fee payments) remain in the school's records because they are part of the school's official register.</li>
+      <li><strong>Soft-deleted school:</strong> all data is preserved for 30 days for restore.</li>
+      <li><strong>Permanently deleted school:</strong> all primary records are removed. Encrypted backups roll out within the next backup retention cycle (typically 30 days).</li>
+      <li><strong>Audit logs:</strong> retained for one year then archived. They contain action metadata only (who changed what, when) — not message bodies or document contents.</li>
+    </ul>
+  </section>
+
+  <section id="contact">
+    <h2>5. Contact</h2>
+    <p>For privacy, deletion, or any other policy question:</p>
+    <ul>
+      <li>Email: <a href="mailto:support@edugrow.in">support@edugrow.in</a></li>
+      <li>Inside the app: <strong>Helpdesk</strong> tile (every role has it)</li>
+      <li>Postal: replace with platform operator's registered address</li>
+    </ul>
+  </section>
+
+</main>
+
+<footer>
+  <p>© <span id="year"></span> EduGrow. All rights reserved.</p>
+  <p><a href="/">Back to app</a></p>
+</footer>
+
+<script>document.getElementById('year').textContent = new Date().getFullYear();</script>
+</body>
+</html>
