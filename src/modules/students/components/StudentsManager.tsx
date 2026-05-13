@@ -22,6 +22,7 @@ import { schoolInfoService, SchoolInfo } from '@/shared/utils/schoolInfo.service
 import { AdmissionFormPrint } from '@/shared/components/AdmissionFormPrint';
 import { transportService } from '@/modules/transport/transport.service';
 import { StudentClassAssignmentModal } from '@/modules/students/components/StudentClassAssignmentModal';
+import { SkeletonRow } from '@/shared/components/ui/Skeleton';
 import { useAcademicYear } from '@/shared/context/AcademicYearContext';
 import { principalService } from '@/roles/principal/principal.service';
 import { feeService } from '@/modules/fees/fee.service';
@@ -1687,9 +1688,8 @@ export const StudentsManager: React.FC<Props> = ({
 
         <div className="flex-1 overflow-y-auto p-4">
           {archiveLoading && (
-            <div className="flex flex-col items-center py-12 text-slate-400">
-              <div className="w-7 h-7 border-4 border-slate-200 border-t-indigo-500 rounded-full animate-spin" />
-              <p className="font-bold text-xs mt-3">Loading…</p>
+            <div className="bg-white rounded-2xl border border-slate-100 shadow-sm overflow-hidden">
+              <SkeletonRow count={5} />
             </div>
           )}
           {!archiveLoading && filtered.length === 0 && (
