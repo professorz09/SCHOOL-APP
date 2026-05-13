@@ -433,7 +433,7 @@ export const StudentsManager: React.FC<Props> = ({
         showToast('Invalid admission date', 'error'); return;
       }
       if (adm > today) {
-        showToast('Admission date future me nahi ho sakti (aaj ya backdate)', 'error');
+        showToast('Admission date cannot be in the future — use today or an earlier date', 'error');
         return;
       }
     } else {
@@ -448,7 +448,7 @@ export const StudentsManager: React.FC<Props> = ({
       if (dob > today) { showToast('Date of birth cannot be in the future', 'error'); return; }
       const ageYrs = (today.getTime() - dob.getTime()) / (365.25 * 24 * 60 * 60 * 1000);
       if (ageYrs < 2 || ageYrs > 25) {
-        showToast('Date of birth looks wrong (age must be 2–25 years)', 'error');
+        showToast(`Date of birth looks wrong — calculated age is ${Math.floor(ageYrs)} years (expected 2–25)`, 'error');
         return;
       }
     }

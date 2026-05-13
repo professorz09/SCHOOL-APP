@@ -149,6 +149,20 @@ examsRouter.post('/result/upload', requireAuth, requireRole('PRINCIPAL', 'TEACHE
     if (!test) throw new ApiError(404, 'Test not found');
     if ((test as any).school_id !== req.user.school_id) throw new ApiError(403, 'Access denied');
 
+    // Validate that every student in the batch belongs to the caller's school.
+    // The test ownership check above only guards the test row itself; without
+    // this check a teacher could inject exam results for students from another
+    // school by supplying foreign student IDs in the results array.
+    const submittedStudentIds = body.results.map((r: any) => r.studentId);
+    if (submittedStudentIds.length > 0) {
+      const { data: validStudents } = await adminDb
+        .from('students').select('id')
+        .eq('school_id', req.user.school_id!).in('id', submittedStudentIds);
+      const validSet = new Set(((validStudents ?? []) as any[]).map((r: any) => r.id));
+      const intruder = submittedStudentIds.find((id: string) => !validSet.has(id));
+      if (intruder) throw new ApiError(403, `Student ${intruder} does not belong to this school`);
+    }
+
     const { data: existing } = await adminDb
       .from('exam_results')
       .select('student_id')

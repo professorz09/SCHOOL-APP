@@ -24,11 +24,20 @@ feesRouter.get('/structures', requireAuth, requireRole('PRINCIPAL'), async (req,
 feesRouter.get('/student/:studentId', requireAuth, requireRole('PRINCIPAL', 'TEACHER', 'PARENT', 'STUDENT'), async (req, res) => {
   try {
     const { yearId } = req.query as Record<string, string>;
+    const studentId = req.params.studentId;
+
+    // Verify the student belongs to the caller's school (BOLA guard).
+    // PARENT/STUDENT callers are further restricted to their own linked
+    // student via the school_id check (they share the same school tenant).
+    const { data: stuCheck } = await adminDb
+      .from('students').select('id')
+      .eq('id', studentId).eq('school_id', req.user.school_id!).maybeSingle();
+    if (!stuCheck) throw new ApiError(404, 'Student not found');
 
     let q = adminDb
       .from('fee_installments')
       .select('*')
-      .eq('student_id', req.params.studentId)
+      .eq('student_id', studentId)
       .order('due_date');
     if (yearId) q = q.eq('academic_year_id', yearId);
     const { data: installments, error: ie } = await q;
@@ -37,7 +46,7 @@ feesRouter.get('/student/:studentId', requireAuth, requireRole('PRINCIPAL', 'TEA
     const { data: payments } = await adminDb
       .from('payment_records')
       .select('*, payment_installment_links(installment_id, amount_applied)')
-      .eq('student_id', req.params.studentId)
+      .eq('student_id', studentId)
       .order('date', { ascending: false });
 
     ok(res, { installments, payments });
@@ -87,6 +96,10 @@ feesRouter.post('/schedule/generate', requireAuth, requireRole('PRINCIPAL'), asy
       isRte?: boolean; discountAmount?: number; discountPct?: number;
     }>(req, ['studentId', 'yearId', 'heads', 'dueDates']);
 
+    const { data: stuOwn } = await adminDb.from('students').select('id')
+      .eq('id', body.studentId).eq('school_id', req.user.school_id!).maybeSingle();
+    if (!stuOwn) throw new ApiError(404, 'Student not found');
+
     // Use user JWT so auth.uid() is set for the SECURITY DEFINER RPC
     const db = userDb(req.jwt);
     const { data, error } = await db.rpc('generate_student_fee_schedule', {
@@ -112,6 +125,10 @@ feesRouter.post('/pay', requireAuth, requireRole('PRINCIPAL'), async (req, res) 
       studentId: string; amount: number; method: string;
       date?: string; note?: string; applyLateFee?: boolean; discountAmount?: number;
     }>(req, ['studentId', 'amount', 'method']);
+
+    const { data: stuOwn } = await adminDb.from('students').select('id')
+      .eq('id', body.studentId).eq('school_id', req.user.school_id!).maybeSingle();
+    if (!stuOwn) throw new ApiError(404, 'Student not found');
 
     const amount   = Math.max(0, Math.round(body.amount));
     const discount = Math.max(0, Math.round(body.discountAmount ?? 0));

@@ -78,9 +78,9 @@ const csvCell = (v: unknown): string => {
   return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
 };
 const toCsv = (rows: Record<string, unknown>[], headers?: string[]): string => {
-  if (rows.length === 0) return (headers ?? []).join(',') + '\n';
+  if (rows.length === 0) return (headers ?? []).map(csvCell).join(',') + '\n';
   const cols = headers ?? Object.keys(rows[0]);
-  const lines = [cols.join(',')];
+  const lines = [cols.map(csvCell).join(',')];
   for (const r of rows) lines.push(cols.map(c => csvCell(r[c])).join(','));
   return lines.join('\n') + '\n';
 };

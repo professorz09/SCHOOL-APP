@@ -40,12 +40,44 @@ const monthsBetween = (startISO: string, endISO: string): number => {
   );
 };
 
+// Pre-numeric class progression. Without this, bumpClass('Nursery')
+// would return 'Nursery' (no digits to match) and pre-school students
+// would be silently re-enrolled into the same class in the next year.
+const PRE_NUMERIC_LADDER: Record<string, string> = {
+  PRE_NURSERY: 'NURSERY',
+  PRENURSERY:  'NURSERY',
+  PLAYGROUP:   'NURSERY',
+  NURSERY:     'LKG',
+  LKG:         'UKG',
+  'JR. KG':    'UKG',
+  JRKG:        'UKG',
+  UKG:         '1st',
+  'SR. KG':    '1st',
+  SRKG:        '1st',
+  KG:          '1st',
+};
+
 const bumpClass = (cls: string | null | undefined): string => {
   if (!cls) return cls ?? '';
-  const m = cls.match(/(\d+)/);
-  if (!m) return cls;
-  const next = parseInt(m[1], 10) + 1;
-  return cls.replace(m[1], String(next));
+  const trimmed = cls.trim();
+
+  // Pre-numeric labels (Nursery, LKG, UKG, …) progress via an explicit
+  // ladder. Match by an uppercased + space-stripped key so "L.K.G",
+  // "lkg" and "L K G" all map the same way.
+  const key = trimmed.toUpperCase().replace(/[.\s]+/g, '');
+  if (PRE_NUMERIC_LADDER[key]) return PRE_NUMERIC_LADDER[key];
+
+  // Replace the FIRST digit-run via a regex callback so the replace
+  // position is anchored to the match (not a free string search).
+  // Earlier `cls.replace(m[1], …)` did a string-based first-occurrence
+  // replace, which would target the wrong substring when the same
+  // digits appear elsewhere in the label (e.g. "Class 10, Group 10").
+  // If no digits and no ladder entry, return the label unchanged — the
+  // wizard's promotion decision UI surfaces this as "manual class
+  // required" so the principal can pick the destination class instead
+  // of silently re-enrolling in the same one.
+  if (!/\d/.test(trimmed)) return trimmed;
+  return trimmed.replace(/\d+/, (m) => String(parseInt(m, 10) + 1));
 };
 
 const isClass12 = (cls: string | null | undefined): boolean => {

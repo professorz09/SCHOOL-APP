@@ -195,6 +195,15 @@ studentsRouter.get('/:id/timeline', requireAuth, requireRole('PRINCIPAL', 'TEACH
 // GET /api/students/:id/academic-history — all yearly records for a student across all years
 studentsRouter.get('/:id/academic-history', requireAuth, requireRole('PRINCIPAL', 'TEACHER'), async (req, res) => {
   try {
+    // Explicit school ownership check first — the academic_years join filter
+    // below is insufficient on its own: it would silently return 0 rows for
+    // a cross-school student ID instead of a proper 404, and a future schema
+    // change could break the indirect guard without notice.
+    const { data: stuOwn } = await adminDb
+      .from('students').select('id')
+      .eq('id', req.params.id).eq('school_id', req.user.school_id!).maybeSingle();
+    if (!stuOwn) throw new ApiError(404, 'Student not found');
+
     const { data, error } = await adminDb
       .from('student_academic_records')
       .select(`
@@ -244,6 +253,14 @@ studentsRouter.post('/assign', requireAuth, requireRole('PRINCIPAL'), async (req
       feeHeads?: any[]; dueDates?: any[]; isRte?: boolean;
       discountAmount?: number; discountPct?: number;
     }>(req, ['studentId', 'className', 'section', 'academicYearId']);
+
+    // Explicit ownership guard before any mutation. The update below uses
+    // .eq('school_id') but silently does 0 rows when the student is from
+    // another school — subsequent upserts would then create cross-school
+    // academic records under a foreign student_id.
+    const { data: stuOwn } = await adminDb.from('students').select('id')
+      .eq('id', body.studentId).eq('school_id', req.user.school_id!).maybeSingle();
+    if (!stuOwn) throw new ApiError(404, 'Student not found');
 
     // Reactivate student row if it was inactive (readmit after TC, etc.)
     await adminDb.from('students')
@@ -426,17 +443,45 @@ studentsRouter.post('/update', requireAuth, requireRole('PRINCIPAL'), async (req
       academicYearId?: string;
     }>(req, ['studentId', 'patch']);
 
-    if (Object.keys(body.patch).length > 0) {
+    // Whitelist of columns a principal may update. Security-sensitive fields
+    // (school_id, is_active, status, user_id, id) are intentionally excluded
+    // — they have dedicated endpoints with stronger guards.
+    const ALLOWED_STUDENT_FIELDS = new Set([
+      'name', 'admission_no', 'roll_no', 'dob', 'gender', 'blood_group',
+      'aadhaar_no', 'phone', 'email', 'address', 'photo',
+      'father_name', 'father_phone', 'father_email', 'father_occupation', 'father_income',
+      'mother_name', 'mother_phone', 'mother_occupation',
+      'guardian_name', 'guardian_phone', 'guardian_relation',
+      'religion', 'caste', 'pen_number', 'birth_cert_no', 'tc_number',
+      'is_rte', 'admission_date',
+    ]);
+    const ALLOWED_AR_FIELDS = new Set([
+      'roll_no', 'class_name', 'section', 'fee_status', 'total_fee', 'paid_fee',
+      'attendance_percent', 'remarks',
+    ]);
+
+    const safePatch: Record<string, unknown> = {};
+    for (const [k, v] of Object.entries(body.patch)) {
+      if (ALLOWED_STUDENT_FIELDS.has(k)) safePatch[k] = v;
+    }
+    const safeArPatch: Record<string, unknown> = {};
+    if (body.academicYearPatch) {
+      for (const [k, v] of Object.entries(body.academicYearPatch)) {
+        if (ALLOWED_AR_FIELDS.has(k)) safeArPatch[k] = v;
+      }
+    }
+
+    if (Object.keys(safePatch).length > 0) {
       const { error } = await adminDb.from('students')
-        .update({ ...body.patch, updated_at: new Date().toISOString() })
+        .update({ ...safePatch, updated_at: new Date().toISOString() })
         .eq('id', body.studentId)
         .eq('school_id', req.user.school_id!);
       if (error) throw new ApiError(500, error.message);
     }
 
-    if (body.academicYearPatch && body.academicYearId && Object.keys(body.academicYearPatch).length > 0) {
+    if (body.academicYearId && Object.keys(safeArPatch).length > 0) {
       await adminDb.from('student_academic_records')
-        .update(body.academicYearPatch)
+        .update(safeArPatch)
         .eq('student_id', body.studentId)
         .eq('academic_year_id', body.academicYearId);
     }
@@ -656,6 +701,31 @@ studentsRouter.post('/readmit', requireAuth, requireRole('PRINCIPAL'), async (re
     });
     if (error) throw new ApiError(400, error.message);
 
+    // Parent reactivation — mirror of the /issue-tc deactivation cascade.
+    // When the last active kid got a TC, that flow set users.is_active=false
+    // on the parent so they couldn't log in any more. Re-admitting the kid
+    // without flipping the parent back on leaves the parent locked out.
+    // Best-effort: failures here don't roll back the student rejoin (the
+    // student's record is already restored).
+    try {
+      const { data: links } = await adminDb
+        .from('parent_student_links')
+        .select('parent_user_id')
+        .eq('student_id', studentId);
+      const parentIds = Array.from(new Set(
+        ((links ?? []) as { parent_user_id: string }[]).map(r => r.parent_user_id),
+      ));
+      if (parentIds.length) {
+        await adminDb.from('users')
+          .update({ is_active: true, updated_at: new Date().toISOString() })
+          .in('id', parentIds)
+          .eq('school_id', req.user.school_id!)
+          .eq('role', 'PARENT');
+      }
+    } catch (e) {
+      console.warn('[readmit] parent reactivation failed:', (e as Error).message);
+    }
+
     ok(res, { studentId });
   } catch (err) { fail(res, err); }
 });
@@ -666,6 +736,16 @@ studentsRouter.post('/document/add', requireAuth, requireRole('PRINCIPAL'), asyn
     const body = requireBody<{
       studentId: string; docType: string; docUrl: string;
     }>(req, ['studentId', 'docType', 'docUrl']);
+
+    // Reject non-HTTPS URLs. This blocks javascript:, data:, and plain http:
+    // payloads that could render as clickable XSS vectors in the UI.
+    let parsedUrl: URL;
+    try { parsedUrl = new URL(body.docUrl); } catch {
+      throw new ApiError(400, 'docUrl must be a valid URL');
+    }
+    if (parsedUrl.protocol !== 'https:') {
+      throw new ApiError(400, 'docUrl must use the https:// protocol');
+    }
 
     // Verify student belongs to this school
     const { data: st } = await adminDb
@@ -942,12 +1022,24 @@ studentsRouter.post('/create', requireAuth, requireRole('PRINCIPAL'), studentCre
     const stu = stuRow as any;
 
     // ── Link parent → student (linkParentStudent pattern) ─────────────────────
+    // No silent swallow here — earlier this was wrapped in `try { … } catch {}`
+    // which produced orphans (parent + student rows exist but the link is
+    // missing → parent never sees the kid in the picker). If the upsert fails
+    // surface it so the principal can retry / contact support.
+    let linkWarning: string | null = null;
     if (parentUserId) {
-      try {
-        await adminDb.from('parent_student_links').upsert({
-          parent_user_id: parentUserId, student_id: stu.id, relation: 'FATHER',
-        }, { onConflict: 'parent_user_id,student_id' });
-      } catch { /* best-effort */ }
+      const { error: linkErr } = await adminDb.from('parent_student_links').upsert({
+        parent_user_id: parentUserId, student_id: stu.id, relation: 'FATHER',
+      }, { onConflict: 'parent_user_id,student_id' });
+      if (linkErr) {
+        // The student / parent rows are already committed — rolling back here
+        // would mean re-deleting them, which has its own failure modes. Stay
+        // conservative: keep the rows, return a clear warning so the principal
+        // knows to relink (the /students/:id page already exposes a manual
+        // parent link control).
+        linkWarning = `Parent link could not be created: ${linkErr.message}. Open the student page and link the parent manually.`;
+        console.error('[students.create] parent_student_links upsert failed', linkErr);
+      }
     }
 
     // ── Insert academic record (if class+section provided) ─────────────────────
@@ -973,6 +1065,7 @@ studentsRouter.post('/create', requireAuth, requireRole('PRINCIPAL'), studentCre
       studentRow: stu,
       academicRecordRow: ar,
       parent: loginPhone && parentReused !== null ? { mobile: loginPhone, reused: parentReused } : null,
+      linkWarning,
     }, 201);
   } catch (err) { fail(res, err); }
 });

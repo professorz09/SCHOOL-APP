@@ -166,6 +166,15 @@ attendanceRouter.get('/export-excel', requireAuth, requireRole('TEACHER', 'PRINC
     if (!sectionId || !startDate || !endDate) {
       throw new ApiError(400, 'sectionId, startDate and endDate required');
     }
+
+    // Guard against memory-exhaustion via a huge date range. One academic
+    // year is ≤366 days; anything beyond that is never a legitimate export.
+    const msPerDay = 86_400_000;
+    const rangeMs = new Date(endDate).getTime() - new Date(startDate).getTime();
+    if (Number.isNaN(rangeMs) || rangeMs < 0 || rangeMs > 366 * msPerDay) {
+      throw new ApiError(400, 'Date range must be between 1 and 366 days');
+    }
+
     if (req.user.role === 'TEACHER') {
       const allowed = await verifyTeacherSectionAccess(req.user.id, req.user.school_id!, sectionId);
       if (!allowed) throw new ApiError(403, 'You are not assigned to this section');
@@ -362,30 +371,39 @@ attendanceRouter.post('/submit', requireAuth, requireRole('TEACHER', 'PRINCIPAL'
     }));
 
     // Defence-in-depth: drop students whose admission_date is after the
-    // attendance date. They weren't on the roster yet — marking them
-    // absent (or present) would distort their percentage and pollute the
-    // class register. Client-side already filters; this catches forged or
-    // legacy payloads.
+    // attendance date OR who are no longer on the roster (inactive /
+    // TC issued). They shouldn't be markable — distorts percentage and
+    // pollutes the register. Client-side already filters; this catches
+    // forged or legacy payloads.
     const stuIds = normalizedRecords.map(r => r.studentId);
-    let preEnrollment = new Set<string>();
+    let dropIds = new Set<string>();
     if (stuIds.length > 0) {
       const { data: admRows } = await adminDb.from('students')
-        .select('id, admission_date')
+        .select('id, admission_date, is_active, status')
         .eq('school_id', req.user.school_id!).in('id', stuIds);
-      const admMap = new Map<string, string | null>();
-      for (const r of (admRows ?? []) as Array<{ id: string; admission_date: string | null }>) {
-        admMap.set(r.id, r.admission_date);
-      }
-      preEnrollment = new Set(
+      type StuLite = { id: string; admission_date: string | null; is_active: boolean | null; status: string | null };
+      const stuMap = new Map<string, StuLite>();
+      for (const r of (admRows ?? []) as StuLite[]) stuMap.set(r.id, r);
+
+      // Reject the whole batch if a payload references a student not
+      // in this school — silent filtering would mask a forged request.
+      const stranger = stuIds.find(id => !stuMap.has(id));
+      if (stranger) throw new ApiError(403, `Student ${stranger} does not belong to this school`);
+
+      dropIds = new Set(
         normalizedRecords
           .filter(r => {
-            const ad = admMap.get(r.studentId);
-            return !!ad && body.date < ad;
+            const s = stuMap.get(r.studentId);
+            if (!s) return true;
+            if (s.is_active === false) return true;
+            if (s.status === 'TC_ISSUED' || s.status === 'INACTIVE') return true;
+            if (s.admission_date && body.date < s.admission_date) return true;
+            return false;
           })
           .map(r => r.studentId),
       );
     }
-    const filteredRecords = normalizedRecords.filter(r => !preEnrollment.has(r.studentId));
+    const filteredRecords = normalizedRecords.filter(r => !dropIds.has(r.studentId));
     const counts = countsByStatus(filteredRecords);
 
     // No more approval workflow. Whoever submits attendance — teacher or
@@ -498,21 +516,27 @@ attendanceRouter.post('/mark-by-principal', requireAuth, requireRole('PRINCIPAL'
       status: normalizeStatus(r.status, r.isPresent),
     }));
 
-    // Pre-enrollment guard mirrors /submit — a principal direct-mark on
-    // 1-Apr shouldn't put a student admitted on 1-May into the register.
+    // Pre-enrollment + roster guard mirrors /submit — a principal direct-mark
+    // on 1-Apr shouldn't put a student admitted on 1-May into the register,
+    // and an inactive / TC-issued student can't be marked at all.
     const stuIds = normalizedRecords.map(r => r.studentId);
-    let admMap = new Map<string, string | null>();
+    type StuLite = { id: string; admission_date: string | null; is_active: boolean | null; status: string | null };
+    const stuMap = new Map<string, StuLite>();
     if (stuIds.length > 0) {
       const { data: admRows } = await adminDb.from('students')
-        .select('id, admission_date')
+        .select('id, admission_date, is_active, status')
         .eq('school_id', req.user.school_id!).in('id', stuIds);
-      for (const r of (admRows ?? []) as Array<{ id: string; admission_date: string | null }>) {
-        admMap.set(r.id, r.admission_date);
-      }
+      for (const r of (admRows ?? []) as StuLite[]) stuMap.set(r.id, r);
+      const stranger = stuIds.find(id => !stuMap.has(id));
+      if (stranger) throw new ApiError(403, `Student ${stranger} does not belong to this school`);
     }
     const filteredRecords = normalizedRecords.filter(r => {
-      const ad = admMap.get(r.studentId);
-      return !ad || body.date >= ad;
+      const s = stuMap.get(r.studentId);
+      if (!s) return false;
+      if (s.is_active === false) return false;
+      if (s.status === 'TC_ISSUED' || s.status === 'INACTIVE') return false;
+      if (s.admission_date && body.date < s.admission_date) return false;
+      return true;
     });
     const counts = countsByStatus(filteredRecords);
 

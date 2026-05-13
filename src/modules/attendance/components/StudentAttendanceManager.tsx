@@ -230,7 +230,7 @@ export const StudentAttendanceManager: React.FC<Props> = ({ onBack }) => {
     }
     return Array.from(map.entries())
       .map(([name, sections]) => ({ name, sections: [...sections].sort() }))
-      .sort((a, b) => parseInt(stripClassPrefix(a.name)) - parseInt(stripClassPrefix(b.name)));
+      .sort((a, b) => parseInt(stripClassPrefix(a.name), 10) - parseInt(stripClassPrefix(b.name), 10));
   }, [students]);
 
   const overallAvg   = avg(students.map(s => s.attendancePercent));
@@ -278,7 +278,7 @@ export const StudentAttendanceManager: React.FC<Props> = ({ onBack }) => {
       const sectionStudents = students
         .filter(s => s.className === cls && s.section === sec)
         .filter(s => s.isActive !== false && (s as any).status !== 'TC_ISSUED')
-        .sort((a, b) => parseInt(a.rollNo || '0') - parseInt(b.rollNo || '0'))
+        .sort((a, b) => parseInt(a.rollNo || '0', 10) - parseInt(b.rollNo || '0', 10))
         .map(s => ({
           id: s.id, name: s.name, rollNo: s.rollNo ?? '',
           // admission_date drives the N/E gate — dates before this for a
@@ -557,7 +557,7 @@ export const StudentAttendanceManager: React.FC<Props> = ({ onBack }) => {
         const ss = students.filter(s => s.className === className && s.section === section)
           .filter(s => s.isActive !== false && (s as any).status !== 'TC_ISSUED')
           .filter(s => !isPreEnrollment(s.admissionDate ?? '', date))
-          .sort((a, b) => parseInt(a.rollNo) - parseInt(b.rollNo));
+          .sort((a, b) => parseInt(a.rollNo || '0', 10) - parseInt(b.rollNo || '0', 10));
         // On weekly-off days (Sundays by default) default the entire
         // roster to 'holiday' so the principal doesn't have to click
         // "All Holiday" every Sunday. They can still flip individual
@@ -1027,7 +1027,7 @@ export const StudentAttendanceManager: React.FC<Props> = ({ onBack }) => {
                       // dates with no record yet are always editable.
                       const showBulk = !isFuture && (!isLocked || editorModeActive);
                       return (
-                        <th key={d} className="border-b border-r border-slate-100 px-0.5 py-1 text-center">
+                        <th key={d} className="border-b border-r border-slate-100 px-0.5 py-1 text-center min-w-[36px]">
                           {isFuture ? (
                             <span className="text-[8px] font-black text-slate-300">·</span>
                           ) : !showBulk ? (
@@ -1085,7 +1085,7 @@ export const StudentAttendanceManager: React.FC<Props> = ({ onBack }) => {
                           if (preEnroll) {
                             return (
                               <td key={d}
-                                className="border-b border-r border-slate-100 text-center px-0.5 py-1 cursor-not-allowed bg-slate-50/40"
+                                className="border-b border-r border-slate-100 text-center px-0.5 py-1 min-w-[36px] cursor-not-allowed bg-slate-50/40"
                                 title={`Not enrolled until ${stu.admissionDate}`}>
                                 <span className="inline-flex items-center justify-center w-7 h-7 rounded-lg text-[8px] font-black text-slate-400 bg-slate-100/70 border border-dashed border-slate-200">
                                   N/E
@@ -1097,7 +1097,7 @@ export const StudentAttendanceManager: React.FC<Props> = ({ onBack }) => {
                           const bg = st ? CELL_BG[st] : 'bg-slate-100 text-slate-300';
                           return (
                             <td key={d}
-                              className={`border-b border-r border-slate-100 text-center px-0.5 py-1 ${
+                              className={`border-b border-r border-slate-100 text-center px-0.5 py-1 min-w-[36px] ${
                                 isFuture ? 'cursor-not-allowed bg-slate-50/60' :
                                 !editable ? 'cursor-not-allowed bg-slate-50/40' :
                                             'cursor-pointer active:scale-90'

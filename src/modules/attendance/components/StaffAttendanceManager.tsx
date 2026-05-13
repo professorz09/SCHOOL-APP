@@ -805,7 +805,7 @@ export const StaffAttendanceManager: React.FC<Props> = ({ onBack, startTab = 'OV
                       const st = dayMap.get(d);
                       const cfg = st ? STATUS_CONFIG[st] : null;
                       return (
-                        <td key={d} className="border-b border-r border-slate-100 text-center px-0.5 py-1">
+                        <td key={d} className="border-b border-r border-slate-100 text-center px-1 py-1 min-w-[28px]">
                           <span
                             title={st ? `${new Date(d).toLocaleDateString('en-IN')} · ${cfg!.label}` : 'Not marked'}
                             className={`inline-flex items-center justify-center w-6 h-6 rounded text-[9px] font-black ${cfg ? cfg.color + ' border' : 'text-slate-300'}`}>

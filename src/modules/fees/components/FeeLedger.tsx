@@ -1021,7 +1021,7 @@ export const FeeLedger: React.FC<Props> = ({ onBack }) => {
                           Payer:      i.payerType,
                         };
                       });
-                      const safeName = selected.name.replace(/\s+/g, '_');
+                      const safeName = selected.name.replace(/[^a-zA-Z0-9]/g, '_').replace(/_+/g, '_').replace(/^_|_$/g, '').slice(0, 30);
                       exportCsv(`fees_monthly_${safeName}_${selected.admissionNo}_${new Date().toISOString().slice(0, 10)}`,
                         rows);
                     }}
@@ -1050,7 +1050,7 @@ export const FeeLedger: React.FC<Props> = ({ onBack }) => {
                           Reversed:   t.reversedAt ? 'Yes' : '',
                           Note:       t.note ?? '',
                         }));
-                      const safeName = selected.name.replace(/\s+/g, '_');
+                      const safeName = selected.name.replace(/[^a-zA-Z0-9]/g, '_').replace(/_+/g, '_').replace(/^_|_$/g, '').slice(0, 30);
                       exportCsv(`fees_transactions_${safeName}_${selected.admissionNo}_${new Date().toISOString().slice(0, 10)}`,
                         txnRows);
                     }}
