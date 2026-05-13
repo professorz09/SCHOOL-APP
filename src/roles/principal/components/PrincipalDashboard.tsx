@@ -24,6 +24,9 @@ interface Props {
 
 type Action = {
   icon: React.ReactNode; label: string; view: PrincipalView; tint: string;
+  /** Short 1-3 word subtitle shown below the label — describes what the
+   *  tile does ("Generate pass", "Review stocks"). */
+  hint?: string;
   /** When true, the tile renders greyed out, ignores taps, and shows
    *  `disabledReason` as a toast on click. Used by the Transport tile
    *  when super-admin has set max_vehicles=0 for this school. */
@@ -340,13 +343,13 @@ export const PrincipalDashboard: React.FC<Props> = ({ onNavigate }) => {
       gradient: 'from-violet-500 to-fuchsia-500',
       ring: 'ring-violet-300',
       items: [
-        { icon: <Users size={20}/>,         label: 'Classes',    view: 'STUDENTS',    tint: 'bg-violet-50 text-violet-600' },
-        { icon: <UserCog size={20}/>,       label: 'Admission',  view: 'ADMISSION',   tint: 'bg-indigo-50 text-indigo-600' },
-        { icon: <IndianRupee size={20}/>,   label: 'Fees',       view: 'FEE_LEDGER',  tint: 'bg-emerald-50 text-emerald-600' },
+        { icon: <Users size={20}/>,         label: 'Classes',    view: 'STUDENTS',    tint: 'bg-violet-50 text-violet-600',   hint: 'View & manage' },
+        { icon: <UserCog size={20}/>,       label: 'Admission',  view: 'ADMISSION',   tint: 'bg-indigo-50 text-indigo-600',   hint: 'New entries' },
+        { icon: <IndianRupee size={20}/>,   label: 'Fees',       view: 'FEE_LEDGER',  tint: 'bg-emerald-50 text-emerald-600', hint: 'Collect & track' },
         // Attendance moved from Academics → Students. It's a per-student
         // action (mark roll, view a child's history) and lives more
         // naturally with the rest of the student-centric tiles.
-        { icon: <CalendarCheck size={20}/>, label: 'Attendance', view: 'ATTENDANCE',  tint: 'bg-teal-50 text-teal-600' },
+        { icon: <CalendarCheck size={20}/>, label: 'Attendance', view: 'ATTENDANCE',  tint: 'bg-teal-50 text-teal-600',       hint: 'Mark & review' },
       ],
     },
     {
@@ -360,14 +363,14 @@ export const PrincipalDashboard: React.FC<Props> = ({ onNavigate }) => {
         // Attendance / Salary Ledger / Expenses / Management. Earlier it
         // rendered as a full-width hero banner which clashed visually
         // with its peers; principal wanted a uniform grid.
-        { icon: <Users size={20}/>,         label: 'Staff List',     view: 'STAFF',            tint: 'bg-blue-50 text-blue-600' },
-        { icon: <CalendarCheck size={20}/>, label: 'Attendance',     view: 'STAFF_ATTENDANCE', tint: 'bg-teal-50 text-teal-600' },
-        { icon: <Banknote size={20}/>,      label: 'Salary Ledger',  view: 'SALARY_LEDGER',    tint: 'bg-amber-50 text-amber-600' },
-        { icon: <Wallet size={20}/>,        label: 'Expenses',       view: 'EXPENSES',         tint: 'bg-red-50 text-red-500' },
+        { icon: <Users size={20}/>,         label: 'Staff List',     view: 'STAFF',            tint: 'bg-blue-50 text-blue-600',     hint: 'Add & edit' },
+        { icon: <CalendarCheck size={20}/>, label: 'Attendance',     view: 'STAFF_ATTENDANCE', tint: 'bg-teal-50 text-teal-600',     hint: 'Daily roll' },
+        { icon: <Banknote size={20}/>,      label: 'Salary Ledger',  view: 'SALARY_LEDGER',    tint: 'bg-amber-50 text-amber-600',   hint: 'Pay & log' },
+        { icon: <Wallet size={20}/>,        label: 'Expenses',       view: 'EXPENSES',         tint: 'bg-red-50 text-red-500',       hint: 'Track spends' },
         // Management (class roster admin — teacher allotment, section
         // edits) is fundamentally a staff-management task ("who teaches
         // what / which section"), so it sits with the Staff hub.
-        { icon: <BookOpen size={20}/>,      label: 'Management',     view: 'CLASS_MGMT',       tint: 'bg-purple-50 text-purple-600' },
+        { icon: <BookOpen size={20}/>,      label: 'Management',     view: 'CLASS_MGMT',       tint: 'bg-purple-50 text-purple-600', hint: 'Class allotment' },
       ],
     },
     {
@@ -377,12 +380,12 @@ export const PrincipalDashboard: React.FC<Props> = ({ onNavigate }) => {
       gradient: 'from-rose-500 to-pink-500',
       ring: 'ring-rose-300',
       items: [
-        { icon: <GraduationCap size={20}/>, label: 'Exams',     view: 'EXAMS',     tint: 'bg-rose-50 text-rose-600' },
-        { icon: <Clock size={20}/>,         label: 'Timetable', view: 'TIMETABLE', tint: 'bg-fuchsia-50 text-fuchsia-600' },
+        { icon: <GraduationCap size={20}/>, label: 'Exams',     view: 'EXAMS',     tint: 'bg-rose-50 text-rose-600',       hint: 'Schedule & results' },
+        { icon: <Clock size={20}/>,         label: 'Timetable', view: 'TIMETABLE', tint: 'bg-fuchsia-50 text-fuchsia-600', hint: 'Build & view' },
         // Assets (library books / lab equipment) — academic resources,
         // belongs with Academics. Custodial workflow stays the same.
-        { icon: <Library size={20}/>,       label: 'Assets',    view: 'ASSETS',    tint: 'bg-amber-50 text-amber-600' },
-        { icon: <ArrowRight size={20}/>,    label: 'Promotion', view: 'PROMOTION', tint: 'bg-emerald-50 text-emerald-600' },
+        { icon: <Library size={20}/>,       label: 'Assets',    view: 'ASSETS',    tint: 'bg-amber-50 text-amber-600',     hint: 'Library & lab' },
+        { icon: <ArrowRight size={20}/>,    label: 'Promotion', view: 'PROMOTION', tint: 'bg-emerald-50 text-emerald-600', hint: 'Year-end move' },
       ],
     },
     {
@@ -398,17 +401,17 @@ export const PrincipalDashboard: React.FC<Props> = ({ onNavigate }) => {
         // the feature was removed; greyed-out tile makes the
         // "service not enabled" state obvious without losing the
         // affordance for when admin enables it later.
-        { icon: <Bus size={20}/>,            label: 'Transport',  view: 'TRANSPORT_MGMT', tint: 'bg-orange-50 text-orange-500', disabled: !transportEnabled, disabledReason: 'Transport service abhi enable nahi hai. Super-admin se kahein.' },
-        { icon: <Bell size={20}/>,           label: 'Notices',    view: 'NOTICES',        tint: 'bg-sky-50 text-sky-600' },
-        { icon: <ClipboardCheck size={20}/>, label: 'Approvals',  view: 'APPROVALS',      tint: 'bg-indigo-50 text-indigo-600' },
-        { icon: <CircleAlert size={20}/>,    label: 'Complaints', view: 'COMPLAINTS',     tint: 'bg-rose-50 text-rose-600' },
+        { icon: <Bus size={20}/>,            label: 'Transport',  view: 'TRANSPORT_MGMT', tint: 'bg-orange-50 text-orange-500', hint: 'Buses & routes',     disabled: !transportEnabled, disabledReason: 'Transport service abhi enable nahi hai. Super-admin se kahein.' },
+        { icon: <Bell size={20}/>,           label: 'Notices',    view: 'NOTICES',        tint: 'bg-sky-50 text-sky-600',       hint: 'Send updates' },
+        { icon: <ClipboardCheck size={20}/>, label: 'Approvals',  view: 'APPROVALS',      tint: 'bg-indigo-50 text-indigo-600', hint: 'Pending requests' },
+        { icon: <CircleAlert size={20}/>,    label: 'Complaints', view: 'COMPLAINTS',     tint: 'bg-rose-50 text-rose-600',     hint: 'Open helpdesk' },
         // Admin / system items previously lived in the bottom utility strip.
         // Folded into Operations on the user's request — Operations is now the
         // single home for everything that isn't People / Money / Academics.
-        { icon: <BarChart3 size={20}/>,      label: 'Analytics',  view: 'ANALYTICS',      tint: 'bg-blue-50 text-blue-600' },
-        { icon: <Sparkles size={20}/>,       label: 'Tools',      view: 'TOOLS',          tint: 'bg-purple-50 text-purple-600' },
-        { icon: <Calendar size={20}/>,       label: 'Year',       view: 'YEAR_CLOSING',   tint: 'bg-amber-50 text-amber-600' },
-        { icon: <Settings size={20}/>,       label: 'Settings',   view: 'SETTINGS',       tint: 'bg-slate-100 text-slate-600' },
+        { icon: <BarChart3 size={20}/>,      label: 'Analytics',  view: 'ANALYTICS',      tint: 'bg-blue-50 text-blue-600',     hint: 'Reports & charts' },
+        { icon: <Sparkles size={20}/>,       label: 'Tools',      view: 'TOOLS',          tint: 'bg-purple-50 text-purple-600', hint: 'Bulk actions' },
+        { icon: <Calendar size={20}/>,       label: 'Year',       view: 'YEAR_CLOSING',   tint: 'bg-amber-50 text-amber-600',   hint: 'Open / close AY' },
+        { icon: <Settings size={20}/>,       label: 'Settings',   view: 'SETTINGS',       tint: 'bg-slate-100 text-slate-600',  hint: 'School & users' },
       ],
     },
   ];
@@ -497,10 +500,20 @@ export const PrincipalDashboard: React.FC<Props> = ({ onNavigate }) => {
           const hub = HUBS.find(h => h.key === openHub)!;
           const heroItems = hub.items.filter(i => i.hero);
           const gridItems = hub.items.filter(i => !i.hero);
+          // Card-style tile — big icon top-left, bold title, muted
+          // subtitle hint. Matches the "Admit Cards / Lab Inventory"
+          // reference design the principal asked for: each action reads
+          // as a discrete card rather than a tiny pictogram in a dense
+          // grid. Trade-off: hub panel is taller, but every option is
+          // self-explanatory at a glance.
           const renderTile = (item: Action) => {
-            const { icon, label, view, tint } = item;
+            const { icon, label, view, tint, hint } = item;
             const isDisabled = item.disabled === true;
             const reason = item.disabledReason;
+            // Upscale the icon node so it fills the larger tile container.
+            const sizedIcon = React.isValidElement(icon)
+              ? React.cloneElement(icon as React.ReactElement, { size: 26 })
+              : icon;
             return (
               <button
                 key={label}
@@ -512,20 +525,29 @@ export const PrincipalDashboard: React.FC<Props> = ({ onNavigate }) => {
                   onNavigate(view);
                   setOpenHub(null);
                 }}
-                className={`flex flex-col items-center gap-1.5 lg:gap-2 p-2 lg:p-3 rounded-xl transition-all ${
+                className={`flex flex-col items-start gap-3 lg:gap-4 p-4 lg:p-5 rounded-2xl bg-white border border-slate-100 shadow-sm text-left transition-all ${
                   isDisabled
                     ? 'cursor-not-allowed opacity-50'
-                    : 'active:scale-95 hover:bg-slate-50'
+                    : 'active:scale-[0.98] hover:shadow-md hover:border-slate-200 hover:-translate-y-0.5'
                 }`}>
-                <div className={`relative w-11 h-11 lg:w-14 lg:h-14 rounded-2xl flex items-center justify-center ${tint}`}>
-                  {icon}
+                <div className={`relative w-14 h-14 lg:w-16 lg:h-16 rounded-2xl flex items-center justify-center shrink-0 ${tint}`}>
+                  {sizedIcon}
                   {isDisabled && (
                     <span className="absolute -top-1 -right-1 w-4 h-4 rounded-full bg-slate-400 text-white text-[8px] font-black flex items-center justify-center" aria-hidden>
                       🔒
                     </span>
                   )}
                 </div>
-                <span className="text-[9px] lg:text-[11px] font-black text-slate-600 uppercase tracking-wide text-center leading-tight">{label}</span>
+                <div className="min-w-0 w-full">
+                  <div className="text-sm lg:text-base font-black text-slate-900 leading-tight truncate">
+                    {label}
+                  </div>
+                  {hint && (
+                    <div className="text-[11px] lg:text-xs font-bold text-slate-500 mt-1 leading-tight">
+                      {hint}
+                    </div>
+                  )}
+                </div>
               </button>
             );
           };
@@ -570,8 +592,8 @@ export const PrincipalDashboard: React.FC<Props> = ({ onNavigate }) => {
             </button>
           );
           return (
-            <div className="bg-white rounded-2xl border border-slate-100 shadow-sm p-3 lg:p-5 animate-in slide-in-from-top-2 duration-200">
-              <div className="text-[10px] lg:text-xs font-black uppercase tracking-widest text-slate-400 mb-2 lg:mb-3 px-1">
+            <div className="bg-slate-50 rounded-2xl border border-slate-100 p-3 lg:p-5 animate-in slide-in-from-top-2 duration-200">
+              <div className="text-[10px] lg:text-xs font-black uppercase tracking-widest text-slate-400 mb-3 lg:mb-4 px-1">
                 {hub.label} Actions
               </div>
               {heroItems.length > 0 && (
@@ -579,7 +601,7 @@ export const PrincipalDashboard: React.FC<Props> = ({ onNavigate }) => {
                   {heroItems.map(renderHeroCta)}
                 </div>
               )}
-              <div className="grid grid-cols-4 lg:grid-cols-8 gap-2 lg:gap-3">
+              <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 lg:gap-4">
                 {gridItems.map(renderTile)}
               </div>
             </div>
