@@ -8,9 +8,12 @@ import { examService } from '@/modules/exams/exam.service';
 import { useAcademicYear } from '@/shared/context/AcademicYearContext';
 import { useUIStore } from '@/store/uiStore';
 import { useEditorModeStore } from '@/store/editorModeStore';
-import { apiExams } from '@/lib/apiClient';
+import { apiExams, apiTeacher } from '@/lib/apiClient';
 import { logAudit } from '@/lib/audit';
 import { Marksheet } from '@/modules/exams/components/Marksheet';
+import { CalendarPlus, X } from 'lucide-react';
+import { supabase } from '@/lib/supabase';
+import { useAuthStore } from '@/store/authStore';
 
 interface Props { onBack: () => void; }
 
@@ -59,6 +62,91 @@ export const PrincipalExamsManager: React.FC<Props> = ({ onBack }) => {
   const [editing, setEditing]       = useState(false);
   const [editMarks, setEditMarks]   = useState<Record<string, string>>({}); // resultId -> marks input
   const [savingEdits, setSavingEdits] = useState(false);
+
+  // ── Schedule Exam modal state ──────────────────────────────────────────
+  // Principal can schedule any test type (including FINAL) and attribute
+  // it to any teacher in the school. Server-side guards in
+  // /api/teacher/test/create enforce role + school scoping.
+  const session = useAuthStore(s => s.session);
+  const [showSchedule, setShowSchedule] = useState(false);
+  const [schedSaving, setSchedSaving]   = useState(false);
+  const [teachersList, setTeachersList] = useState<Array<{ id: string; name: string }>>([]);
+  const [sectionsList, setSectionsList] = useState<Array<{ id: string; className: string; section: string }>>([]);
+  const [schedForm, setSchedForm] = useState({
+    sectionId: '', className: '', section: '',
+    teacherId: '', subject: '', testType: 'NORMAL' as 'NORMAL' | 'FINAL',
+    title: '', scheduledDate: '', duration: 60, maxMarks: 100, syllabus: '',
+  });
+
+  // Pull teacher + section dropdowns when the modal opens.
+  useEffect(() => {
+    if (!showSchedule || !session?.schoolId || !activeYear?.id) return;
+    let cancelled = false;
+    (async () => {
+      const [staffRes, secRes] = await Promise.all([
+        supabase.from('staff').select('id, name')
+          .eq('school_id', session.schoolId)
+          .eq('role', 'TEACHER').eq('is_active', true)
+          .order('name'),
+        supabase.from('sections').select('id, class_name, section')
+          .eq('school_id', session.schoolId)
+          .eq('academic_year_id', activeYear.id)
+          .order('class_name').order('section'),
+      ]);
+      if (cancelled) return;
+      setTeachersList(((staffRes.data ?? []) as Array<{ id: string; name: string }>));
+      setSectionsList(((secRes.data ?? []) as Array<{ id: string; class_name: string; section: string }>)
+        .map(s => ({ id: s.id, className: s.class_name, section: s.section })));
+    })();
+    return () => { cancelled = true; };
+  }, [showSchedule, session?.schoolId, activeYear?.id]);
+
+  const submitSchedule = async () => {
+    if (schedSaving) return;
+    if (!activeYear?.id) { showToast('No active academic year', 'error'); return; }
+    const missing: string[] = [];
+    if (!schedForm.sectionId)   missing.push('Class · Section');
+    if (!schedForm.teacherId)   missing.push('Teacher');
+    if (!schedForm.title.trim()) missing.push('Title');
+    if (!schedForm.scheduledDate) missing.push('Date');
+    if (!Number.isFinite(schedForm.maxMarks) || schedForm.maxMarks <= 0 || schedForm.maxMarks > 1000) {
+      missing.push('Max Marks (1–1000)');
+    }
+    if (missing.length) { showToast(`Required: ${missing.join(', ')}`, 'error'); return; }
+    setSchedSaving(true);
+    try {
+      await apiTeacher.createTest({
+        academicYearId: activeYear.id,
+        sectionId:      schedForm.sectionId,
+        teacherId:      schedForm.teacherId,
+        className:      schedForm.className,
+        section:        schedForm.section,
+        subject:        schedForm.subject.trim(),
+        testType:       schedForm.testType,
+        title:          schedForm.title.trim(),
+        scheduledDate:  schedForm.scheduledDate,
+        duration:       schedForm.duration,
+        maxMarks:       schedForm.maxMarks,
+        syllabus:       schedForm.syllabus.trim(),
+      });
+      showToast(`${schedForm.testType === 'FINAL' ? 'Final exam' : 'Test'} scheduled`);
+      setShowSchedule(false);
+      setSchedForm({
+        sectionId: '', className: '', section: '', teacherId: '',
+        subject: '', testType: 'NORMAL', title: '', scheduledDate: '',
+        duration: 60, maxMarks: 100, syllabus: '',
+      });
+      // Reload the list so the new test appears immediately.
+      const fresh = await examService.getExams(activeYear.id);
+      setExams(fresh.sort((a: any, b: any) =>
+        new Date(b.scheduled_date).getTime() - new Date(a.scheduled_date).getTime()
+      ));
+    } catch (e) {
+      showToast(e instanceof Error ? e.message : 'Schedule failed', 'error');
+    } finally {
+      setSchedSaving(false);
+    }
+  };
 
   useEffect(() => {
     if (!activeYear) return;
@@ -336,10 +424,16 @@ export const PrincipalExamsManager: React.FC<Props> = ({ onBack }) => {
           </button>
           <h2 className="text-xl font-black text-slate-900 uppercase tracking-tight">Exams</h2>
         </div>
-        <button onClick={() => setView('MARKSHEET')}
-          className="flex items-center gap-1.5 px-3 py-2 bg-violet-50 border border-violet-200 text-violet-700 font-black text-[10px] uppercase tracking-widest rounded-xl active:scale-95 transition-transform">
-          <FileText size={13} /> Marksheet
-        </button>
+        <div className="flex items-center gap-2">
+          <button onClick={() => setShowSchedule(true)}
+            className="flex items-center gap-1.5 px-3 py-2 bg-emerald-600 hover:bg-emerald-700 text-white font-black text-[10px] uppercase tracking-widest rounded-xl active:scale-95 transition-transform shadow-sm">
+            <CalendarPlus size={13} /> Schedule
+          </button>
+          <button onClick={() => setView('MARKSHEET')}
+            className="flex items-center gap-1.5 px-3 py-2 bg-violet-50 border border-violet-200 text-violet-700 font-black text-[10px] uppercase tracking-widest rounded-xl active:scale-95 transition-transform">
+            <FileText size={13} /> Marksheet
+          </button>
+        </div>
       </div>
 
       <div className="p-4 space-y-4">
@@ -453,6 +547,139 @@ export const PrincipalExamsManager: React.FC<Props> = ({ onBack }) => {
           })}
         </div>
       </div>
+
+      {/* ── Schedule Exam modal ──────────────────────────────────────────
+          Principal-only entry point. Shipped on PrincipalExamsManager so
+          the principal doesn't need to navigate to TestsManager and
+          impersonate a teacher. Server-side guards in
+          /api/teacher/test/create accept PRINCIPAL and unlock FINAL. */}
+      {showSchedule && (
+        <div className="fixed inset-0 z-50 bg-slate-900/50 backdrop-blur-sm flex items-end sm:items-center justify-center p-0 sm:p-4 animate-in fade-in duration-150">
+          <div className="w-full sm:max-w-md bg-white rounded-t-3xl sm:rounded-3xl p-6 pb-8 animate-in slide-in-from-bottom-8 max-h-[92vh] overflow-y-auto">
+            <div className="flex items-center justify-between mb-4">
+              <h3 className="text-lg font-black text-slate-900">Schedule Exam</h3>
+              <button onClick={() => setShowSchedule(false)} disabled={schedSaving}
+                className="p-2 -mr-2 text-slate-400"><X size={20} /></button>
+            </div>
+
+            <div className="space-y-3">
+              <div>
+                <label className="block text-[10px] font-black uppercase tracking-widest text-slate-500 mb-1.5">Class · Section *</label>
+                <select value={schedForm.sectionId}
+                  onChange={e => {
+                    const sid = e.target.value;
+                    const sec = sectionsList.find(s => s.id === sid);
+                    setSchedForm(f => ({
+                      ...f,
+                      sectionId: sid,
+                      className: sec?.className ?? '',
+                      section:   sec?.section ?? '',
+                    }));
+                  }}
+                  className="w-full border border-slate-200 bg-slate-50 rounded-xl px-3 py-2.5 text-sm font-bold outline-none focus:border-blue-500">
+                  <option value="">— Select —</option>
+                  {sectionsList.map(s => (
+                    <option key={s.id} value={s.id}>{s.className}-{s.section}</option>
+                  ))}
+                </select>
+              </div>
+
+              <div>
+                <label className="block text-[10px] font-black uppercase tracking-widest text-slate-500 mb-1.5">Teacher *</label>
+                <select value={schedForm.teacherId}
+                  onChange={e => setSchedForm(f => ({ ...f, teacherId: e.target.value }))}
+                  className="w-full border border-slate-200 bg-slate-50 rounded-xl px-3 py-2.5 text-sm font-bold outline-none focus:border-blue-500">
+                  <option value="">— Select —</option>
+                  {teachersList.map(t => (
+                    <option key={t.id} value={t.id}>{t.name}</option>
+                  ))}
+                </select>
+                <p className="text-[10px] font-bold text-slate-400 mt-1">Conducting teacher — published marks will appear under their name.</p>
+              </div>
+
+              <div>
+                <label className="block text-[10px] font-black uppercase tracking-widest text-slate-500 mb-1.5">Exam Type *</label>
+                <div className="grid grid-cols-2 gap-2">
+                  {(['NORMAL', 'FINAL'] as const).map(t => (
+                    <button key={t} type="button"
+                      onClick={() => setSchedForm(f => ({ ...f, testType: t }))}
+                      className={`px-3 py-2.5 rounded-xl text-[11px] font-black uppercase tracking-wider border transition-all ${
+                        schedForm.testType === t
+                          ? (t === 'FINAL'
+                              ? 'bg-rose-100 text-rose-700 border-rose-200 ring-2 ring-rose-300 shadow-sm'
+                              : 'bg-blue-100 text-blue-700 border-blue-200 ring-2 ring-blue-300 shadow-sm')
+                          : 'bg-slate-50 border-slate-200 text-slate-400'
+                      }`}>
+                      {t === 'FINAL' ? 'Final Exam' : 'Normal'}
+                    </button>
+                  ))}
+                </div>
+                {schedForm.testType === 'FINAL' && (
+                  <p className="text-[10px] font-bold text-rose-500 mt-1.5">⚠ Final exam drives student promotion. One per class.</p>
+                )}
+              </div>
+
+              <div>
+                <label className="block text-[10px] font-black uppercase tracking-widest text-slate-500 mb-1.5">Title *</label>
+                <input value={schedForm.title}
+                  onChange={e => setSchedForm(f => ({ ...f, title: e.target.value }))}
+                  placeholder="e.g. Mid Term — September"
+                  className="w-full border border-slate-200 bg-slate-50 rounded-xl px-3 py-2.5 text-sm font-bold outline-none focus:border-blue-500" />
+              </div>
+
+              <div>
+                <label className="block text-[10px] font-black uppercase tracking-widest text-slate-500 mb-1.5">Subject</label>
+                <input value={schedForm.subject}
+                  onChange={e => setSchedForm(f => ({ ...f, subject: e.target.value }))}
+                  placeholder="e.g. Mathematics"
+                  className="w-full border border-slate-200 bg-slate-50 rounded-xl px-3 py-2.5 text-sm font-bold outline-none focus:border-blue-500" />
+              </div>
+
+              <div className="grid grid-cols-2 gap-2">
+                <div>
+                  <label className="block text-[10px] font-black uppercase tracking-widest text-slate-500 mb-1.5">Date *</label>
+                  <input type="date" value={schedForm.scheduledDate}
+                    onChange={e => setSchedForm(f => ({ ...f, scheduledDate: e.target.value }))}
+                    className="w-full border border-slate-200 bg-slate-50 rounded-xl px-3 py-2.5 text-sm font-bold outline-none focus:border-blue-500" />
+                </div>
+                <div>
+                  <label className="block text-[10px] font-black uppercase tracking-widest text-slate-500 mb-1.5">Duration (min)</label>
+                  <input type="number" min={15} max={300} value={schedForm.duration}
+                    onChange={e => setSchedForm(f => ({ ...f, duration: parseInt(e.target.value) || 60 }))}
+                    className="w-full border border-slate-200 bg-slate-50 rounded-xl px-3 py-2.5 text-sm font-bold outline-none focus:border-blue-500" />
+                </div>
+              </div>
+
+              <div>
+                <label className="block text-[10px] font-black uppercase tracking-widest text-slate-500 mb-1.5">Max Marks *</label>
+                <input type="number" min={1} max={1000} value={schedForm.maxMarks}
+                  onChange={e => setSchedForm(f => ({ ...f, maxMarks: parseInt(e.target.value) || 100 }))}
+                  className="w-full border border-slate-200 bg-slate-50 rounded-xl px-3 py-2.5 text-sm font-bold outline-none focus:border-blue-500" />
+              </div>
+
+              <div>
+                <label className="block text-[10px] font-black uppercase tracking-widest text-slate-500 mb-1.5">Syllabus (optional)</label>
+                <textarea value={schedForm.syllabus}
+                  onChange={e => setSchedForm(f => ({ ...f, syllabus: e.target.value }))}
+                  rows={2}
+                  placeholder="Chapters / topics covered"
+                  className="w-full border border-slate-200 bg-slate-50 rounded-xl px-3 py-2.5 text-sm font-bold outline-none focus:border-blue-500" />
+              </div>
+            </div>
+
+            <div className="flex gap-3 pt-4 mt-4 border-t border-slate-100">
+              <button onClick={() => setShowSchedule(false)} disabled={schedSaving}
+                className="flex-1 py-3 bg-slate-100 text-slate-700 font-black rounded-xl disabled:opacity-60">
+                Cancel
+              </button>
+              <button onClick={submitSchedule} disabled={schedSaving}
+                className="flex-1 py-3 bg-emerald-600 hover:bg-emerald-700 text-white font-black rounded-xl disabled:opacity-60 flex items-center justify-center gap-1.5">
+                {schedSaving ? 'Scheduling…' : <><CalendarPlus size={15} /> Schedule</>}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 };
