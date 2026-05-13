@@ -5,6 +5,8 @@ import { teacherService } from '@/roles/teacher/teacher.service';
 import { TeacherClass } from '@/roles/teacher/teacher.types';
 import { useRealtimeTable } from '@/shared/hooks/useRealtimeTable';
 import { getRelevantBroadcasts, type RelevantBroadcast } from '@/shared/utils/broadcasts.service';
+import { SkeletonRow } from '@/shared/components/ui/Skeleton';
+import { EmptyState } from '@/shared/components/ui/EmptyState';
 
 interface TeacherNotice {
   id: string;
@@ -205,39 +207,59 @@ export const TeacherNoticesView: React.FC<Props> = ({ onBack }) => {
         )}
         <p className="text-[10px] font-black uppercase tracking-widest text-slate-400">Notices for you and your classes</p>
         {isLoading ? (
-          <div className="flex flex-col items-center py-16 text-slate-400">
-            <p className="font-bold text-sm">Loading…</p>
+          <div className="bg-white rounded-2xl border border-slate-100 shadow-sm overflow-hidden">
+            <SkeletonRow count={4} />
           </div>
         ) : notices.length === 0 ? (
-          <div className="flex flex-col items-center py-16 text-slate-400">
-            <Bell size={32} className="mb-3 opacity-40" />
-            <p className="font-bold text-sm">No notices yet</p>
-            <p className="text-[11px] mt-1">School-wide notices and ones for your classes will show here.</p>
-          </div>
+          <EmptyState
+            icon={Bell}
+            title="No notices yet"
+            hint="School-wide notices and ones for your classes will show here."
+          />
         ) : (
           <>
-          {notices.slice(0, shown).map(n => (
-            <div key={n.id} className="bg-white rounded-2xl border border-slate-100 shadow-sm p-4">
-              <div className="flex items-start justify-between gap-2 mb-2">
-                <div className="font-extrabold text-slate-900 text-sm flex-1">{n.title}</div>
-                <span className={`text-[9px] font-black px-2 py-0.5 rounded-full uppercase shrink-0 ${TYPE_COLORS[n.type]}`}>{n.type}</span>
-              </div>
-              <p className="text-xs font-bold text-slate-500 mb-2 line-clamp-2">{n.body}</p>
-              <div className="flex items-center gap-2 flex-wrap">
+          {notices.slice(0, shown).map(n => {
+            // Sent-by-me vs received styling — chat-app analogue.
+            //   • Sent: emerald-tinted card, "You sent" pill in header.
+            //     Right-aligned subtle indent on desktop so a glance
+            //     down the feed reads as a conversation.
+            //   • Received: white card with sender attribution pill,
+            //     no indent. Plain styling for "incoming".
+            // Earlier both rendered identical white cards with a tiny
+            // 9px label at the bottom — visually indistinguishable.
+            const mine = n.isMine;
+            return (
+              <div key={n.id}
+                className={`rounded-2xl border shadow-sm p-4 ${
+                  mine
+                    ? 'bg-emerald-50/70 border-emerald-200 lg:ml-12'
+                    : 'bg-white border-slate-100 lg:mr-12'
+                }`}>
+                <div className="flex items-center gap-2 mb-1.5 flex-wrap">
+                  {mine ? (
+                    <span className="inline-flex items-center gap-1 text-[9px] font-black bg-emerald-600 text-white px-2 py-0.5 rounded-full uppercase tracking-widest">
+                      <span className="w-1.5 h-1.5 rounded-full bg-white"/>You sent
+                    </span>
+                  ) : (
+                    <span className="inline-flex items-center gap-1 text-[9px] font-black bg-slate-100 text-slate-700 border border-slate-200 px-2 py-0.5 rounded-full uppercase tracking-widest">
+                      From {n.sentByName || 'school'}
+                    </span>
+                  )}
+                  <span className={`text-[9px] font-black px-2 py-0.5 rounded-full uppercase ${TYPE_COLORS[n.type]}`}>{n.type}</span>
+                  <span className="text-[9px] font-bold text-slate-400 ml-auto">{n.sentAt}</span>
+                </div>
+                <div className={`font-extrabold text-sm leading-tight mb-1.5 ${mine ? 'text-emerald-900' : 'text-slate-900'}`}>{n.title}</div>
+                <p className={`text-xs font-bold leading-relaxed line-clamp-3 ${mine ? 'text-emerald-800/90' : 'text-slate-500'}`}>{n.body}</p>
                 {(n.targetClass || n.targetSection) && (
-                  <span className="text-[9px] font-black bg-indigo-50 text-indigo-700 px-2 py-0.5 rounded-full">
-                    {n.targetClass}{n.targetSection ? `-${n.targetSection}` : ''}
-                  </span>
+                  <div className="mt-2">
+                    <span className={`text-[9px] font-black px-2 py-0.5 rounded-full ${mine ? 'bg-white text-emerald-700 border border-emerald-200' : 'bg-indigo-50 text-indigo-700'}`}>
+                      To {n.targetClass}{n.targetSection ? `-${n.targetSection}` : ''}
+                    </span>
+                  </div>
                 )}
-                {n.isMine ? (
-                  <span className="text-[9px] font-black bg-emerald-50 text-emerald-700 px-2 py-0.5 rounded-full">Sent by you</span>
-                ) : n.sentByName ? (
-                  <span className="text-[9px] font-bold text-slate-500">From {n.sentByName}</span>
-                ) : null}
-                <span className="text-[9px] font-bold text-slate-400 ml-auto">{n.sentAt}</span>
               </div>
-            </div>
-          ))}
+            );
+          })}
           {notices.length > shown && (
             <button onClick={() => setShown(s => s + 50)}
               className="w-full py-3 bg-white border border-slate-200 rounded-2xl font-black text-xs text-indigo-700 hover:bg-indigo-50 transition-colors">
