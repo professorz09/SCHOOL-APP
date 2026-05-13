@@ -217,9 +217,21 @@ export default function App() {
   useEffect(() => {
     const ids = session?.linkedStudentIds ?? [];
     if (session?.role !== 'PARENT' || ids.length <= 1) { setLinkedStudents([]); return; }
-    Promise.all(ids.map((id) => studentService.getById(id))).then((results) => {
-      setLinkedStudents(results.filter((s): s is Student => !!s));
-    });
+    // Use allSettled so one failed lookup (deleted/inactive student, network
+    // blip) doesn't blank the whole picker — the parent still gets the kids
+    // that loaded. Earlier .then-only chain silently swallowed rejections.
+    Promise.allSettled(ids.map((id) => studentService.getById(id)))
+      .then((settled) => {
+        const ok = settled
+          .filter((r): r is PromiseFulfilledResult<Student | null> => r.status === 'fulfilled')
+          .map((r) => r.value)
+          .filter((s): s is Student => !!s);
+        setLinkedStudents(ok);
+      })
+      .catch((err) => {
+        console.error('[App] linked students load failed', err);
+        setLinkedStudents([]);
+      });
   }, [session?.userId, session?.role, (session?.linkedStudentIds ?? []).join(',')]);
 
   // ── Loading splash while restoring Supabase session ──────────────────────

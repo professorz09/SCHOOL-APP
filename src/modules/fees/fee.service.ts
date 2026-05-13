@@ -724,7 +724,11 @@ export const feeService = {
         outstanding: totalOutstanding,
         installments: yearInsts,
       };
-    }).sort((a, b) => (b.yearLabel).localeCompare(a.yearLabel));
+    // Sort by outstanding amount (descending) so the biggest dues surface
+    // first. Earlier this compared yearLabel ("Year (5 records)") which
+    // sorted lexicographically and put "Year (50 records)" before
+    // "Year (5 records)" — clearly wrong ordering for the UI.
+    }).sort((a, b) => b.outstanding - a.outstanding);
   },
 
   // ── Async writes (RPC-backed) ───────────────────────────────────────────

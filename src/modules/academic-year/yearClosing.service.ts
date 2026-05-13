@@ -42,10 +42,12 @@ const monthsBetween = (startISO: string, endISO: string): number => {
 
 const bumpClass = (cls: string | null | undefined): string => {
   if (!cls) return cls ?? '';
-  const m = cls.match(/(\d+)/);
-  if (!m) return cls;
-  const next = parseInt(m[1], 10) + 1;
-  return cls.replace(m[1], String(next));
+  // Replace the FIRST digit-run via a regex callback so the replace
+  // position is anchored to the match (not a free string search).
+  // Earlier `cls.replace(m[1], …)` did a string-based first-occurrence
+  // replace, which would target the wrong substring when the same
+  // digits appear elsewhere in the label (e.g. "Class 10, Group 10").
+  return cls.replace(/\d+/, (m) => String(parseInt(m, 10) + 1));
 };
 
 const isClass12 = (cls: string | null | undefined): boolean => {

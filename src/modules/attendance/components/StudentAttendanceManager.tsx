@@ -230,7 +230,7 @@ export const StudentAttendanceManager: React.FC<Props> = ({ onBack }) => {
     }
     return Array.from(map.entries())
       .map(([name, sections]) => ({ name, sections: [...sections].sort() }))
-      .sort((a, b) => parseInt(stripClassPrefix(a.name)) - parseInt(stripClassPrefix(b.name)));
+      .sort((a, b) => parseInt(stripClassPrefix(a.name), 10) - parseInt(stripClassPrefix(b.name), 10));
   }, [students]);
 
   const overallAvg   = avg(students.map(s => s.attendancePercent));
@@ -278,7 +278,7 @@ export const StudentAttendanceManager: React.FC<Props> = ({ onBack }) => {
       const sectionStudents = students
         .filter(s => s.className === cls && s.section === sec)
         .filter(s => s.isActive !== false && (s as any).status !== 'TC_ISSUED')
-        .sort((a, b) => parseInt(a.rollNo || '0') - parseInt(b.rollNo || '0'))
+        .sort((a, b) => parseInt(a.rollNo || '0', 10) - parseInt(b.rollNo || '0', 10))
         .map(s => ({
           id: s.id, name: s.name, rollNo: s.rollNo ?? '',
           // admission_date drives the N/E gate — dates before this for a
@@ -557,7 +557,7 @@ export const StudentAttendanceManager: React.FC<Props> = ({ onBack }) => {
         const ss = students.filter(s => s.className === className && s.section === section)
           .filter(s => s.isActive !== false && (s as any).status !== 'TC_ISSUED')
           .filter(s => !isPreEnrollment(s.admissionDate ?? '', date))
-          .sort((a, b) => parseInt(a.rollNo) - parseInt(b.rollNo));
+          .sort((a, b) => parseInt(a.rollNo || '0', 10) - parseInt(b.rollNo || '0', 10));
         // On weekly-off days (Sundays by default) default the entire
         // roster to 'holiday' so the principal doesn't have to click
         // "All Holiday" every Sunday. They can still flip individual
