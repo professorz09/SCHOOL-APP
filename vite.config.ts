@@ -70,7 +70,11 @@ export default defineConfig(({mode}) => {
           // fee/attendance/result data. App-shell assets get stale-while-
           // revalidate so the app boots instantly even offline.
           navigateFallback: '/index.html',
-          navigateFallbackDenylist: [/^\/api\//],
+          // /api/* always hits the server. /policy and /policy.html let
+          // the network rewrite serve the static legal page — otherwise
+          // the SW would fall back to index.html and the React app would
+          // try (and fail) to route an unknown path.
+          navigateFallbackDenylist: [/^\/api\//, /^\/policy(\.html)?$/],
           runtimeCaching: [
             {
               urlPattern: /^https?:\/\/[^/]+\/api\//,

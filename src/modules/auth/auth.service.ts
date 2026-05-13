@@ -67,10 +67,11 @@ async function fetchLinkedStudentIds(parentUserId: string): Promise<string[]> {
 
 async function buildSession(profile: UserProfileRow): Promise<AuthSession> {
   // School-deletion gate — if this user's school has been soft-deleted,
-  // refuse to establish a session. Super-admin has no school_id so
-  // they're never blocked here (and they're the ones who restore /
-  // permanent-delete in the first place). Migration 0127.
-  if (profile.school_id) {
+  // refuse to establish a session. Super-admin is never blocked even
+  // if their row somehow carries a stale school_id; they're the ones
+  // who restore / permanent-delete and locking them out would be
+  // self-defeating. Migration 0127.
+  if (profile.role !== 'SUPER_ADMIN' && profile.school_id) {
     const { data: sch } = await supabase
       .from('schools')
       .select('deleted_at')

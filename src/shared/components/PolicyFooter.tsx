@@ -13,16 +13,27 @@ import { platformSettings } from '@/roles/super-admin/platformSettings.service';
  * - Required by Play Store + Apple for any account-based app — the
  *   privacy policy must be reachable from inside the app, not just on
  *   the store listing page.
+ *
+ * The URL is cached at module scope so every role's
+ * dashboard / profile / settings mount doesn't fire an independent
+ * supabase round-trip. Cache survives the whole tab lifetime; if
+ * super-admin changes the URL, a reload picks it up.
  */
+let cachedUrl: string | null = null;
+let inflight: Promise<string> | null = null;
+
 export const PolicyFooter: React.FC<{ className?: string }> = ({ className = '' }) => {
-  const [url, setUrl] = useState<string>('');
-  const [loaded, setLoaded] = useState(false);
+  const [url, setUrl] = useState<string>(cachedUrl ?? '');
+  const [loaded, setLoaded] = useState(cachedUrl !== null);
 
   useEffect(() => {
+    if (cachedUrl !== null) return;
     let cancelled = false;
-    platformSettings.getPolicyUrl()
-      .then(u => { if (!cancelled) { setUrl(u); setLoaded(true); } })
-      .catch(() => { if (!cancelled) { setUrl(''); setLoaded(true); } });
+    const p = inflight ?? (inflight = platformSettings.getPolicyUrl()
+      .then(u => { cachedUrl = u; return u; })
+      .catch(() => { cachedUrl = ''; return ''; })
+      .finally(() => { inflight = null; }));
+    p.then(u => { if (!cancelled) { setUrl(u); setLoaded(true); } });
     return () => { cancelled = true; };
   }, []);
 
