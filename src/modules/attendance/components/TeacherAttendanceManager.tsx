@@ -453,44 +453,34 @@ export const AttendanceManager: React.FC<Props> = ({ onBack }) => {
             )}
           </div>
 
-          {/* Today actions */}
-          {gridYM === currentYearMonth() && (
-            <div className="pb-1 space-y-1.5">
-              {!todayRec && (
-                <div className="flex gap-2">
-                  <button onClick={() => { initTodayBuffer(); bulkSetToday('present'); }}
-                    className="flex-1 py-1.5 bg-emerald-500 text-white text-[10px] font-black rounded-xl active:scale-95 transition-transform">
-                    All Present
-                  </button>
-                  <button onClick={() => { initTodayBuffer(); bulkSetToday('absent'); }}
-                    className="flex-1 py-1.5 bg-rose-500 text-white text-[10px] font-black rounded-xl active:scale-95 transition-transform">
-                    All Absent
-                  </button>
-                  <button onClick={() => { initTodayBuffer(); bulkSetToday('holiday'); }}
-                    className="flex-1 py-1.5 bg-slate-400 text-white text-[10px] font-black rounded-xl active:scale-95 transition-transform">
-                    Holiday
-                  </button>
-                </div>
-              )}
-              {/* Saved-and-locked banner removed per user feedback — the
-                  P / A / H stats pills + the disabled state of the row
-                  buttons already signal the locked state. */}
-              {todayRec && todayRec.approvalStatus === 'REJECTED' && (
-                <div className="space-y-1">
-                  <div className="flex items-center gap-2 bg-rose-50 border border-rose-100 rounded-xl px-3 py-2">
-                    <AlertCircle size={12} className="text-rose-500 shrink-0"/>
-                    <span className="text-[10px] font-bold text-rose-700 flex-1">Rejected — please re-submit</span>
-                  </div>
-                  <div className="flex gap-2">
-                    <button onClick={() => { initTodayBuffer(); bulkSetToday('present'); }}
-                      className="flex-1 py-1.5 bg-emerald-500 text-white text-[10px] font-black rounded-xl active:scale-95">All Present</button>
-                    <button onClick={() => { initTodayBuffer(); bulkSetToday('absent'); }}
-                      className="flex-1 py-1.5 bg-rose-500 text-white text-[10px] font-black rounded-xl active:scale-95">All Absent</button>
-                    <button onClick={() => { initTodayBuffer(); bulkSetToday('holiday'); }}
-                      className="flex-1 py-1.5 bg-slate-400 text-white text-[10px] font-black rounded-xl active:scale-95">Holiday</button>
-                  </div>
-                </div>
-              )}
+          {/* Bulk actions — small inline pills with subtle tinted backgrounds
+              instead of full-width slab buttons. Saves vertical space and
+              reads as "shortcuts" rather than the dominant action (which is
+              the per-student row buttons below). */}
+          {gridYM === currentYearMonth() && (!todayRec || todayRec.approvalStatus === 'REJECTED') && (
+            <div className="pb-1 flex items-center gap-1.5">
+              <span className="text-[9px] font-black uppercase tracking-widest text-slate-400 mr-0.5">Set all:</span>
+              <button onClick={() => { initTodayBuffer(); bulkSetToday('present'); }}
+                className="flex items-center gap-1 px-2.5 py-1 bg-emerald-50 hover:bg-emerald-100 border border-emerald-200 text-emerald-700 text-[10px] font-black rounded-full active:scale-95 transition-all">
+                <span className="w-1.5 h-1.5 rounded-full bg-emerald-500"/>Present
+              </button>
+              <button onClick={() => { initTodayBuffer(); bulkSetToday('absent'); }}
+                className="flex items-center gap-1 px-2.5 py-1 bg-rose-50 hover:bg-rose-100 border border-rose-200 text-rose-700 text-[10px] font-black rounded-full active:scale-95 transition-all">
+                <span className="w-1.5 h-1.5 rounded-full bg-rose-500"/>Absent
+              </button>
+              <button onClick={() => { initTodayBuffer(); bulkSetToday('holiday'); }}
+                className="flex items-center gap-1 px-2.5 py-1 bg-slate-100 hover:bg-slate-200 border border-slate-200 text-slate-600 text-[10px] font-black rounded-full active:scale-95 transition-all">
+                <span className="w-1.5 h-1.5 rounded-full bg-slate-400"/>Holiday
+              </button>
+            </div>
+          )}
+
+          {/* Rejection banner stays — it's an actionable state, not a
+              passive "already locked" hint. */}
+          {todayRec && todayRec.approvalStatus === 'REJECTED' && (
+            <div className="pb-1 flex items-center gap-2 bg-rose-50 border border-rose-100 rounded-lg px-2.5 py-1.5">
+              <AlertCircle size={11} className="text-rose-500 shrink-0"/>
+              <span className="text-[10px] font-bold text-rose-700 flex-1">Rejected — please re-submit</span>
             </div>
           )}
         </div>
