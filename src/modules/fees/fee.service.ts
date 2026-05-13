@@ -1,10 +1,10 @@
 // Supabase-backed fee service.
 //
 // Strategy: Atomic writes go through SECURITY DEFINER RPCs (record_fee_payment,
-// record_govt_payment, generate_student_fee_schedule). Reads pull from
-// fee_installments + payment_records and are cached in memory so the existing
-// FeeLedger / FeesView synchronous accessor pattern keeps working — components
-// only need to call `await refreshAll()` once on mount and after any write.
+// generate_student_fee_schedule). Reads pull from fee_installments +
+// payment_records and are cached in memory so the existing FeeLedger /
+// FeesView synchronous accessor pattern keeps working — components only need
+// to call `await refreshAll()` once on mount and after any write.
 
 import { supabase } from '@/lib/supabase';
 import { useAuthStore } from '@/store/authStore';
@@ -110,10 +110,6 @@ export interface StudentFeeProfile {
   installments: FeeInstallment[];
   isRte: boolean;
 }
-
-// GovernmentPaymentRecord removed — government_payments table dropped.
-// See migration 0083_drop_govt_payments.sql. Components that previously
-// consumed this should record govt grants as regular payments with a note.
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -427,11 +423,6 @@ async function _loadPaymentHistory(schoolId: string): Promise<void> {
     };
   });
 }
-
-// _loadGovtPayments removed — government_payments table dropped (migration
-// 0083). FeeLedger no longer renders a separate RTE/govt history; if a
-// school receives a government grant, the principal records it as a
-// regular payment with a note like "Govt grant 2026-Q1".
 
 async function _loadAdvances(schoolId: string): Promise<void> {
   const { data, error } = await supabase

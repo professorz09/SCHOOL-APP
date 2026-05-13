@@ -31,7 +31,6 @@ const TABLES_BY_SCHOOL = [
   'students', 'staff',
   'salary_payments', 'staff_attendance',
   'fee_structures', 'fee_installments', 'payment_records', 'fee_write_offs',
-  'government_payments',
   'attendance_records',
   'timetable_periods', 'timetable_entries',
   'transport_vehicles', 'route_stops',

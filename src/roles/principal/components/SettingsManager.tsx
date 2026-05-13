@@ -1130,7 +1130,6 @@ const EXPORT_TABLES_BY_SCHOOL = [
   'students',
   'staff', 'salary_payments', 'staff_attendance',
   'fee_structures', 'fee_installments', 'payment_records', 'fee_write_offs',
-  // 'government_payments' dropped in 0083 — RTE flow removed.
   'attendance_records',
   'timetable_periods', 'timetable_entries',
   'transport_vehicles',
@@ -1166,7 +1165,6 @@ const EXPORT_TABLES_EXCLUDED = [
   'staff_class_assignments',
   'staff_permissions',
   'payment_installment_links',
-  // 'govt_payment_student_links' dropped in 0083.
   'attendance_student_details',
   'route_stops',
   'driver_locations',

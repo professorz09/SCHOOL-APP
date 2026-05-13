@@ -195,11 +195,6 @@ feesRouter.post('/pay-installment', requireAuth, requireRole('PRINCIPAL'), async
   } catch (err) { fail(res, err); }
 });
 
-// /api/fees/govt-pay removed in 0083 — government grants are now
-// recorded as regular payments via /api/fees/pay with a "Govt grant"
-// note. The underlying record_govt_payment RPC and government_payments
-// table were dropped in the same migration.
-
 // POST /api/fees/writeoff
 feesRouter.post('/writeoff', requireAuth, requireRole('PRINCIPAL'), async (req, res) => {
   try {
