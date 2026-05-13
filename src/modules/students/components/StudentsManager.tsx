@@ -139,11 +139,13 @@ export const StudentsManager: React.FC<Props> = ({
   const [subView, setSubView] = useState<SubView>(
     mode === 'PRINCIPAL_FULL' ? 'LIST' : 'CREATE',
   );
-  // Admission stepper — 3 steps to keep the form scannable on
+  // Admission form is one scrollable page with section dividers
+  // (Basic / Family / Documents) — earlier it was a 3-step wizard
+  // which doubled the tap count and made copy-pasting parent details
+  // from a paper form harder.
   // mobile. Earlier the entire form was one giant scroll which
   // most principals found overwhelming. Order matches the user's
   // mental model: Basic → Family → Documents.
-  const [admStep, setAdmStep] = useState<1 | 2 | 3>(1);
   // Hides every optional step-1 field (Aadhaar, gender, religion,
   // caste, PEN, birth cert, TC no, DOB, blood, phone, email,
   // address) behind a single "Show more details" disclosure so the
@@ -398,10 +400,29 @@ export const StudentsManager: React.FC<Props> = ({
     if (!form.dob)                                        missing.push('Date of birth');
     if (!form.gender)                                     missing.push('Gender');
     if (missing.length > 0) {
-      // Jump back to step 1 so all mandatory fields are visible.
-      setAdmStep(1);
       showToast(`Yeh fields chahiye: ${missing.join(', ')}`, 'error');
       return;
+    }
+    // Cross-school mobile-uniqueness check — runs once on submit
+    // instead of mid-form. The /create endpoint repeats this
+    // server-side; this client check just gives a nicer toast.
+    if (mode !== 'TEACHER_DRAFT' && mode !== 'PRINCIPAL_REVIEW') {
+      const login10 = loginRaw.replace(/\D/g, '').slice(-10);
+      if (login10.length === 10) {
+        try {
+          const r = await apiStudents.checkAdmissionEligibility(login10);
+          if (!r.eligible) {
+            showToast(
+              'Yeh mobile pehle se kisi active student se linked hai. ' +
+              'Pichli school se TC karwana hoga ya alag mobile use karein.',
+              'error',
+            );
+            return;
+          }
+        } catch {
+          // Network hiccup — let it proceed; server re-checks.
+        }
+      }
     }
     // Date sanity checks — these are *format* / range errors rather than
     // "missing" so they keep their own focused toasts.
@@ -816,55 +837,14 @@ export const StudentsManager: React.FC<Props> = ({
             // — bail all the way back to the parent screen instead of
             // landing on an empty Students list.
             if (mode !== 'PRINCIPAL_FULL') { onBack(); return; }
-            setAdmStep(1); setSubView('LIST');
+            setSubView('LIST');
           },
         )}
 
-        {/* Stepper progress — 3 dots with labels. Tap a completed
-            step to jump back; future steps are locked behind
-            validation. */}
-        <div className="bg-white border-b border-slate-100 px-4 py-3 flex items-center gap-2">
-          {([
-            { n: 1 as const, label: 'Basic' },
-            { n: 2 as const, label: 'Family' },
-            { n: 3 as const, label: 'Documents' },
-          ]).map((s, idx, arr) => {
-            const done = admStep > s.n;
-            const active = admStep === s.n;
-            const reachable = s.n <= admStep;
-            return (
-              <React.Fragment key={s.n}>
-                <button
-                  type="button"
-                  onClick={() => { if (reachable) setAdmStep(s.n); }}
-                  disabled={!reachable}
-                  className={`flex flex-col items-center gap-1 ${reachable ? 'cursor-pointer' : 'cursor-not-allowed opacity-50'}`}
-                >
-                  <div className={`w-7 h-7 rounded-full flex items-center justify-center text-[11px] font-black transition-colors ${
-                    active ? 'bg-indigo-600 text-white shadow-md shadow-indigo-200'
-                      : done ? 'bg-emerald-500 text-white'
-                      : 'bg-slate-100 text-slate-500'
-                  }`}>
-                    {done ? <CheckCircle2 size={14} /> : s.n}
-                  </div>
-                  <span className={`text-[9px] font-black uppercase tracking-wider ${
-                    active ? 'text-indigo-700' : done ? 'text-emerald-700' : 'text-slate-400'
-                  }`}>{s.label}</span>
-                </button>
-                {idx < arr.length - 1 && (
-                  <div className={`flex-1 h-0.5 rounded-full transition-colors ${
-                    done ? 'bg-emerald-400' : 'bg-slate-200'
-                  }`} />
-                )}
-              </React.Fragment>
-            );
-          })}
-        </div>
-
         <div className="flex-1 overflow-y-auto p-4 space-y-4 pb-24">
 
-          {/* ─── STEP 1: BASIC INFO ─────────────────────────────────── */}
-          {admStep === 1 && (<>
+          {/* ─── Basic Info ────────────────────────────────────────── */}
+          <div className="text-[10px] font-black uppercase tracking-widest text-indigo-600 px-1">1. Basic Info</div>
           {/* Passport-size photo — top of form, dedicated upload with preview */}
           <div className="bg-white rounded-2xl border border-slate-100 shadow-sm p-3.5">
             <div className="flex items-center gap-3.5">
@@ -1130,11 +1110,8 @@ export const StudentsManager: React.FC<Props> = ({
             {/* /showMoreInfo */}
           </div>
 
-          </>)}
-          {/* ─── /STEP 1 ──────────────────────────────────────────── */}
-
-          {/* ─── STEP 2: FAMILY ───────────────────────────────────── */}
-          {admStep === 2 && (<>
+          {/* ─── Family ───────────────────────────────────────────── */}
+          <div className="text-[10px] font-black uppercase tracking-widest text-indigo-600 px-1 pt-4">2. Family</div>
           {/* ── Parent details — single consolidated section ────────────
               Login Mobile is now an explicit field separate from
               father / mother / guardian contact phones. */}
@@ -1179,11 +1156,8 @@ export const StudentsManager: React.FC<Props> = ({
             </div>
           </div>
 
-          </>)}
-          {/* ─── /STEP 2 ──────────────────────────────────────────── */}
-
-          {/* ─── STEP 3: DOCUMENTS ────────────────────────────────── */}
-          {admStep === 3 && (<>
+          {/* ─── Documents ────────────────────────────────────────── */}
+          <div className="text-[10px] font-black uppercase tracking-widest text-indigo-600 px-1 pt-4">3. Documents</div>
           {mode === 'TEACHER_DRAFT' && (
             <div className="bg-amber-50 border border-amber-200 rounded-2xl p-3.5">
               <p className="text-[10px] font-black uppercase tracking-widest text-amber-700">Note</p>
@@ -1247,88 +1221,35 @@ export const StudentsManager: React.FC<Props> = ({
             })}
           </div>
 
-          </>)}
-          {/* ─── /STEP 3 ──────────────────────────────────────────── */}
         </div>
 
-        {/* Sticky stepper footer — Back / Next or Back / Admit
-            depending on which step we're on. Validation runs on
-            Next: per-step required-field check with toast pointing
-            at the missing piece. Earlier the form just had a single
-            Admit button at the bottom, so on a 30-field scroll a
-            principal could miss a required field and only learn
-            about it after tapping Admit. */}
+        {/* Sticky footer — single Cancel + Submit pair. All field
+            validation runs inside handleCreate so missing fields are
+            reported in one aggregated toast instead of mid-scroll. */}
         <div className="sticky bottom-0 bg-white border-t border-slate-200 shadow-[0_-4px_12px_rgba(0,0,0,0.06)] px-4 py-3 flex items-center gap-2 z-20">
           <button
             type="button"
             onClick={() => {
-              if (admStep === 1) {
-                if (mode !== 'PRINCIPAL_FULL') { onBack(); return; }
-                setSubView('LIST'); return;
-              }
-              setAdmStep(s => (s - 1) as 1 | 2 | 3);
+              if (mode !== 'PRINCIPAL_FULL') { onBack(); return; }
+              setSubView('LIST');
             }}
             className="flex items-center gap-1.5 px-4 py-2.5 bg-slate-100 hover:bg-slate-200 text-slate-700 font-black text-xs uppercase tracking-widest rounded-xl active:scale-95 transition-transform">
-            <ArrowLeft size={14} /> {admStep === 1 ? 'Cancel' : 'Back'}
+            <ArrowLeft size={14} /> Cancel
           </button>
           <div className="flex-1" />
-          {admStep < 3 ? (
-            <button
-              type="button"
-              onClick={async () => {
-                // Per-step required-field validation. Step 1 needs
-                // name + admissionNo; step 2 needs at least one
-                // parent name + a login mobile.
-                if (admStep === 1) {
-                  if (!form.name?.trim()) { showToast('Full Name daalein', 'error'); return; }
-                  if (!form.admissionNo?.trim()) { showToast('Admission No. daalein', 'error'); return; }
-                }
-                if (admStep === 2) {
-                  if (!form.fatherName?.trim() && !form.motherName?.trim() && !form.guardianName?.trim()) {
-                    showToast('Kam se kam ek parent / guardian ka naam daalein', 'error'); return;
-                  }
-                  const login = (form.loginPhone || form.fatherPhone || form.motherPhone || form.guardianPhone || '').replace(/\D/g, '').slice(-10);
-                  if (login.length !== 10) {
-                    showToast('Login Mobile (10-digit) daalein', 'error'); return;
-                  }
-                  // Cross-school active check — only block if the mobile
-                  // is currently linked to an active student elsewhere.
-                  // Generic message, no detail revealed.
-                  try {
-                    const r = await apiStudents.checkAdmissionEligibility(login);
-                    if (!r.eligible) {
-                      showToast(
-                        'Yeh mobile pehle se kisi active student se linked hai. ' +
-                        'Pichli school se TC karwana hoga ya alag mobile use karein.',
-                        'error',
-                      );
-                      return;
-                    }
-                  } catch {
-                    // Network / server hiccup — let the principal proceed;
-                    // the server-side /create endpoint will re-check.
-                  }
-                }
-                setAdmStep(s => (s + 1) as 1 | 2 | 3);
-              }}
-              className="flex items-center gap-1.5 px-5 py-2.5 bg-indigo-600 hover:bg-indigo-700 text-white font-black text-xs uppercase tracking-widest rounded-xl active:scale-95 transition-transform shadow-md shadow-indigo-200">
-              Next <ArrowLeft size={14} className="rotate-180" />
-            </button>
-          ) : (
-            <button
-              type="button"
-              onClick={handleCreate}
-              disabled={isSubmitting}
-              className="flex items-center gap-1.5 px-5 py-2.5 bg-indigo-600 hover:bg-indigo-700 text-white font-black text-xs uppercase tracking-widest rounded-xl active:scale-95 transition-transform shadow-md shadow-indigo-200 disabled:opacity-60">
-              {isSubmitting
-                ? (mode === 'TEACHER_DRAFT' ? 'Submitting…' : 'Admitting…')
-                : mode === 'TEACHER_DRAFT'
-                  ? <><Plus size={14} /> Submit Draft</>
-                  : mode === 'PRINCIPAL_REVIEW'
-                    ? <><CheckCircle2 size={14} /> Approve & Admit</>
-                    : <><Plus size={14} /> Admit Student</>}
-            </button>
-          )}
+          <button
+            type="button"
+            onClick={handleCreate}
+            disabled={isSubmitting}
+            className="flex items-center gap-1.5 px-5 py-2.5 bg-indigo-600 hover:bg-indigo-700 text-white font-black text-xs uppercase tracking-widest rounded-xl active:scale-95 transition-transform shadow-md shadow-indigo-200 disabled:opacity-60">
+            {isSubmitting
+              ? (mode === 'TEACHER_DRAFT' ? 'Submitting…' : 'Admitting…')
+              : mode === 'TEACHER_DRAFT'
+                ? <><Plus size={14} /> Submit Draft</>
+                : mode === 'PRINCIPAL_REVIEW'
+                  ? <><CheckCircle2 size={14} /> Approve & Admit</>
+                  : <><Plus size={14} /> Admit Student</>}
+          </button>
         </div>
       </div>
     );
@@ -1403,7 +1324,7 @@ export const StudentsManager: React.FC<Props> = ({
                 className="flex items-center gap-1.5 px-3 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 font-black text-xs rounded-xl active:scale-95 transition-all disabled:opacity-40">
                 <Download size={13} /> CSV
               </button>
-              <button onClick={() => { setAdmStep(1); setSubView('CREATE'); }}
+              <button onClick={() => { setSubView('CREATE'); }}
                 className="flex items-center gap-1.5 px-3 py-2 bg-indigo-600 text-white font-black text-xs rounded-xl shadow-md active:scale-95 transition-transform">
                 <Plus size={14} /> New
               </button>
