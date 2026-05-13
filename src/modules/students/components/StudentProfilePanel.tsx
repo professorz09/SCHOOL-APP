@@ -2,7 +2,7 @@ import React, { useEffect, useState } from 'react';
 import {
   ArrowLeft, User, Phone, Mail,
   IndianRupee, BookOpen, Calendar, CheckCircle2,
-  FileText, BarChart2, FolderOpen, FileCheck,
+  FileText, BarChart2, FolderOpen,
   Bus, Briefcase, Droplets, GraduationCap, Shield,
   CreditCard, TrendingUp, Home as HomeIcon,
   UserCheck, AlertTriangle, Trash2,
@@ -17,7 +17,6 @@ import { Student, StudentAcademicRecord, StudentDoc } from '@/modules/students/s
 import { useUIStore } from '@/store/uiStore';
 import { schoolInfoService, SchoolInfo } from '@/shared/utils/schoolInfo.service';
 import { todayIST } from '@/shared/utils/date';
-import { AdmissionFormPrint } from '@/shared/components/AdmissionFormPrint';
 import {
   transportService, TransportVehicle, StudentTransportAssignment,
   TRANSPORT_CHANGE_REASONS,
@@ -245,7 +244,6 @@ export const StudentProfilePanel: React.FC<Props> = ({ student, onBack, onStuden
   const [assignTarget, setAssignTarget] = useState<Student | null>(null);
 
   // Admission form print
-  const [showAdmissionForm, setShowAdmissionForm] = useState(false);
   const [schoolInfo, setSchoolInfo] = useState<SchoolInfo | null>(null);
   // Eager-load school info on mount so the INFO tab can show contact
   // details without waiting for the Docs tab to trigger the fetch.
@@ -596,25 +594,6 @@ export const StudentProfilePanel: React.FC<Props> = ({ student, onBack, onStuden
       setCancelTransportBusy(false);
     }
   };
-
-  // ── Admission form print overlay ──────────────────────────────────────────
-  if (showAdmissionForm) {
-    if (!schoolInfo) {
-      return (
-        <div className="w-full p-6 text-center">
-          <div className="inline-block w-8 h-8 border-4 border-slate-300 border-t-emerald-600 rounded-full animate-spin" />
-          <p className="text-sm font-bold text-slate-600 mt-3">Loading school info…</p>
-        </div>
-      );
-    }
-    return (
-      <AdmissionFormPrint
-        student={currentStudent}
-        schoolInfo={schoolInfo}
-        onClose={() => setShowAdmissionForm(false)}
-      />
-    );
-  }
 
   // ── Sub-components ────────────────────────────────────────────────────────
   const initials = currentStudent.name.split(' ').map(w => w[0]).join('').slice(0, 2).toUpperCase();
@@ -1896,26 +1875,9 @@ export const StudentProfilePanel: React.FC<Props> = ({ student, onBack, onStuden
                 </div>
               )}
               {!docsLoading && (<>
-              {/* Admission Form download — surfaced inside Docs (the natural
-                  home for paperwork) instead of cluttering the profile header. */}
-              <div className="bg-white rounded-2xl border border-slate-100 shadow-sm p-4">
-                <SectionTitle icon={FileCheck} title="Admission Form" />
-                <div className="flex items-center justify-between gap-3 mt-1">
-                  <p className="text-[11px] font-bold text-slate-500 leading-relaxed">
-                    Generate and download {currentStudent.name.split(' ')[0]}'s admission form for printing or filing.
-                  </p>
-                  <button
-                    onClick={async () => {
-                      if (!schoolInfo) {
-                        try { const info = await schoolInfoService.get(); setSchoolInfo(info); } catch { /* ignore */ }
-                      }
-                      setShowAdmissionForm(true);
-                    }}
-                    className="flex items-center gap-1.5 px-3 py-2 bg-indigo-600 hover:bg-indigo-700 text-white font-black text-[10px] uppercase tracking-widest rounded-xl active:scale-95 transition-all shrink-0">
-                    <Download size={12} /> Form
-                  </button>
-                </div>
-              </div>
+              {/* Admission Form download lives in <StudentDocumentsPanel />
+                  above — single source for the action so principals don't
+                  see two near-identical cards on the same tab. */}
 
               <div className="bg-white rounded-2xl border border-slate-100 shadow-sm p-4">
                 <SectionTitle icon={FileText} title="Submitted Documents" />
