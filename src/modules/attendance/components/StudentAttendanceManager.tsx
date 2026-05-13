@@ -1027,7 +1027,7 @@ export const StudentAttendanceManager: React.FC<Props> = ({ onBack }) => {
                       // dates with no record yet are always editable.
                       const showBulk = !isFuture && (!isLocked || editorModeActive);
                       return (
-                        <th key={d} className="border-b border-r border-slate-100 px-0.5 py-1 text-center">
+                        <th key={d} className="border-b border-r border-slate-100 px-0.5 py-1 text-center min-w-[36px]">
                           {isFuture ? (
                             <span className="text-[8px] font-black text-slate-300">·</span>
                           ) : !showBulk ? (
@@ -1085,7 +1085,7 @@ export const StudentAttendanceManager: React.FC<Props> = ({ onBack }) => {
                           if (preEnroll) {
                             return (
                               <td key={d}
-                                className="border-b border-r border-slate-100 text-center px-0.5 py-1 cursor-not-allowed bg-slate-50/40"
+                                className="border-b border-r border-slate-100 text-center px-0.5 py-1 min-w-[36px] cursor-not-allowed bg-slate-50/40"
                                 title={`Not enrolled until ${stu.admissionDate}`}>
                                 <span className="inline-flex items-center justify-center w-7 h-7 rounded-lg text-[8px] font-black text-slate-400 bg-slate-100/70 border border-dashed border-slate-200">
                                   N/E
@@ -1097,7 +1097,7 @@ export const StudentAttendanceManager: React.FC<Props> = ({ onBack }) => {
                           const bg = st ? CELL_BG[st] : 'bg-slate-100 text-slate-300';
                           return (
                             <td key={d}
-                              className={`border-b border-r border-slate-100 text-center px-0.5 py-1 ${
+                              className={`border-b border-r border-slate-100 text-center px-0.5 py-1 min-w-[36px] ${
                                 isFuture ? 'cursor-not-allowed bg-slate-50/60' :
                                 !editable ? 'cursor-not-allowed bg-slate-50/40' :
                                             'cursor-pointer active:scale-90'

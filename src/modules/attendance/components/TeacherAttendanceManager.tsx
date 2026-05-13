@@ -613,7 +613,7 @@ export const AttendanceManager: React.FC<Props> = ({ onBack }) => {
                               // Locked columns get cursor-default + a faint
                               // striped tint so the teacher reads the column
                               // as "view only" before they ever try to tap.
-                              className={`border-b border-r border-slate-100 text-center px-0.5 py-1 ${
+                              className={`border-b border-r border-slate-100 text-center px-0.5 py-1 min-w-[34px] ${
                                 editable ? 'cursor-pointer active:scale-90' : 'cursor-default bg-slate-50/40'
                               }`}
                               title={locked ? 'View only — past attendance' : ''}
