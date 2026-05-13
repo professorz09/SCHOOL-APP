@@ -220,7 +220,12 @@ teacherRouter.post('/notice/create', requireAuth, requireRole('TEACHER'), async 
 // ─── Teacher Test Schedule ─────────────────────────────────────────────────────
 
 // POST /api/teacher/test/create
-teacherRouter.post('/test/create', requireAuth, requireRole('TEACHER'), async (req, res) => {
+// Despite the path, this endpoint is shared between TEACHER and PRINCIPAL.
+//   - Teachers may only attribute the test to their own staff row, and
+//     cannot create a FINAL exam (school-wide / board-level event).
+//   - Principals may attribute the test to ANY same-school staff member,
+//     and own the FINAL exam path entirely.
+teacherRouter.post('/test/create', requireAuth, requireRole('TEACHER', 'PRINCIPAL'), async (req, res) => {
   try {
     const body = requireBody<{
       schoolId: string; academicYearId: string; sectionId: string | null;
@@ -229,28 +234,43 @@ teacherRouter.post('/test/create', requireAuth, requireRole('TEACHER'), async (r
       duration: number; maxMarks: number; syllabus: string;
     }>(req, ['academicYearId', 'teacherId', 'className', 'title', 'testType']);
 
-    // maxMarks must be a positive whole number — earlier this was unchecked,
-    // so a teacher could create a 0-mark or negative test that broke every
-    // downstream percentage / grade calculation.
     if (!Number.isFinite(body.maxMarks) || body.maxMarks <= 0 || body.maxMarks > 1000) {
       throw new ApiError(400, 'maxMarks must be between 1 and 1000');
     }
 
-    // Cross-school + attribution guard: teacherId must equal the caller's
-    // OWN staff row. Earlier the only check was same-school, so a teacher
-    // could create a test attributed to a colleague (showing up under
-    // their "My Tests"). Resolve caller's staff_id and reject if the
-    // payload teacherId doesn't match.
-    const { data: myStaff } = await adminDb
-      .from('staff').select('id, school_id')
-      .eq('user_id', req.user.id)
-      .eq('school_id', req.user.school_id!).maybeSingle();
-    const myStaffRow = myStaff as { id: string; school_id: string } | null;
-    if (!myStaffRow) {
-      throw new ApiError(403, 'Teacher staff record not found');
+    const isPrincipal = req.user.role === 'PRINCIPAL';
+
+    // FINAL exam ownership: only the principal may schedule the annual /
+    // board-level final exam. Teachers see a friendly 403 explaining the
+    // principal must do it instead.
+    if (body.testType === 'FINAL' && !isPrincipal) {
+      throw new ApiError(403, 'FINAL exam can only be scheduled by the principal.');
     }
-    if (body.teacherId !== myStaffRow.id) {
-      throw new ApiError(403, 'You can only create tests attributed to yourself');
+
+    // Verify the teacherId belongs to a staff row in the caller's school.
+    // Then enforce role-specific attribution rules:
+    //   TEACHER  → teacherId must equal own staff.id
+    //   PRINCIPAL → teacherId may be any staff in the same school
+    const { data: attributedStaff } = await adminDb
+      .from('staff').select('id, school_id')
+      .eq('id', body.teacherId).maybeSingle();
+    const attributedRow = attributedStaff as { id: string; school_id: string } | null;
+    if (!attributedRow || attributedRow.school_id !== req.user.school_id) {
+      throw new ApiError(403, 'teacherId is not in your school');
+    }
+
+    if (!isPrincipal) {
+      const { data: myStaff } = await adminDb
+        .from('staff').select('id')
+        .eq('user_id', req.user.id)
+        .eq('school_id', req.user.school_id!).maybeSingle();
+      const myStaffId = (myStaff as { id: string } | null)?.id ?? null;
+      if (!myStaffId) {
+        throw new ApiError(403, 'Teacher staff record not found');
+      }
+      if (body.teacherId !== myStaffId) {
+        throw new ApiError(403, 'Teachers can only create tests attributed to themselves');
+      }
     }
 
     const { data, error } = await adminDb
@@ -289,18 +309,17 @@ teacherRouter.post('/test/create', requireAuth, requireRole('TEACHER'), async (r
 // Bulk upsert exam_results for a test + flip results_uploaded flag.
 // Teacher writes go through here because RLS only allows PRINCIPAL/SUPER_ADMIN
 // direct write access on test_schedules / exam_results.
-teacherRouter.post('/test/publish-results', requireAuth, requireRole('TEACHER'), async (req, res) => {
+// Endpoint shared between TEACHER and PRINCIPAL. Principal can publish
+// any test in their school regardless of who scheduled it; teacher can
+// only publish their own tests. LOCKED tests are read-only — re-publish
+// requires explicit principal unlock (future flow).
+teacherRouter.post('/test/publish-results', requireAuth, requireRole('TEACHER', 'PRINCIPAL'), async (req, res) => {
   try {
     const body = requireBody<{
       testId: string; academicYearId: string;
       results: { studentId: string; obtainedMarks: number; remarks?: string | null }[];
     }>(req, ['testId', 'academicYearId', 'results']);
 
-    // Verify the test belongs to the caller's school AND was created by
-    // this teacher AND is not already LOCKED by the principal. Earlier
-    // any teacher in the same school could overwrite another teacher's
-    // marks, and even downgrade a principal-locked test back to
-    // SUBMITTED and rewrite scores.
     const { data: test, error: tErr } = await adminDb
       .from('test_schedules')
       .select('id, school_id, max_marks, teacher_id, result_status')
@@ -316,16 +335,18 @@ teacherRouter.post('/test/publish-results', requireAuth, requireRole('TEACHER'),
       throw new ApiError(403, 'Test belongs to another school');
     }
     if (testRow.result_status === 'LOCKED') {
-      throw new ApiError(403, 'Results are locked by principal — re-publish via the principal flow.');
+      throw new ApiError(403, 'Results are locked. Unlock from the principal flow first.');
     }
-    // Resolve caller's staff_id once for the ownership check below.
-    const { data: myStaff } = await adminDb
-      .from('staff').select('id').eq('user_id', req.user.id)
-      .eq('school_id', req.user.school_id!).maybeSingle();
-    const myStaffId = (myStaff as { id: string } | null)?.id ?? null;
-    if (!myStaffId) throw new ApiError(403, 'Teacher staff record not found');
-    if (testRow.teacher_id && testRow.teacher_id !== myStaffId) {
-      throw new ApiError(403, 'Only the teacher who created this test can publish its results.');
+    // Principal can publish any test; teacher only their own.
+    if (req.user.role !== 'PRINCIPAL') {
+      const { data: myStaff } = await adminDb
+        .from('staff').select('id').eq('user_id', req.user.id)
+        .eq('school_id', req.user.school_id!).maybeSingle();
+      const myStaffId = (myStaff as { id: string } | null)?.id ?? null;
+      if (!myStaffId) throw new ApiError(403, 'Teacher staff record not found');
+      if (testRow.teacher_id && testRow.teacher_id !== myStaffId) {
+        throw new ApiError(403, 'Only the teacher who created this test (or the principal) can publish its results.');
+      }
     }
 
     if (body.results.length > 0) {

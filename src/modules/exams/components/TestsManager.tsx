@@ -62,8 +62,11 @@ function getExamPassMarks(exam: TestSchedule): number {
   return typeof p === 'number' ? p : Math.ceil(exam.maxMarks * 0.33);
 }
 
-// Only two creator-facing types now. Historical types still render via label/color maps.
-const EXAM_TYPES: TestType[] = ['NORMAL', 'FINAL'];
+// Teachers can only schedule NORMAL tests. FINAL exams are the principal's
+// responsibility (school-wide / promotion-driving) and live in
+// PrincipalExamsManager. Server-side guard in /api/teacher/test/create
+// also rejects testType='FINAL' from a TEACHER caller.
+const EXAM_TYPES: TestType[] = ['NORMAL'];
 
 const typeColor = (t: string): string => {
   const map: Record<string, string> = {
