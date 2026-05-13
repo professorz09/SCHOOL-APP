@@ -11,7 +11,7 @@ import { StudentLeaveView } from '@/roles/student/components/StudentLeaveView';
 import { StudentProfileView } from '@/roles/student/components/StudentProfileView';
 import {
   Calendar, GraduationCap, CreditCard, Bus, Bell, BookOpen,
-  UserCheck, HeadphonesIcon, Clock, FileText,
+  UserCheck, HeadphonesIcon, Clock, FileText, ChevronRight,
 } from 'lucide-react';
 import { useAuthStore } from '@/store/authStore';
 import {
@@ -255,17 +255,21 @@ export const StudentLayout: React.FC = () => {
         ))}
       </div>
 
-      {/* ── Today's schedule (compact preview, top 3 classes) ───────────── */}
+      {/* ── Today's schedule (compact preview, top 3 classes) ─────────────
+          Header is one tappable unit with a chevron — the period rows
+          themselves aren't routed individually, so a single header tap
+          opens the full Timetable. Cleaner than the orphaned
+          "View All →" pill that used to sit alongside the title. */}
       <section>
-        <div className="flex items-center justify-between mb-3">
+        <button onClick={() => goTo('TIMETABLE')}
+          className="w-full flex items-center justify-between gap-2 mb-3 group">
           <h3 className="text-lg lg:text-xl font-black text-slate-900 uppercase tracking-tight">
             Today's Schedule
           </h3>
-          <button onClick={() => goTo('TIMETABLE')}
-            className="text-[10px] lg:text-xs font-black text-blue-600 uppercase tracking-widest hover:text-blue-700 transition-colors">
-            View All →
-          </button>
-        </div>
+          <span className="flex items-center justify-center w-7 h-7 rounded-full bg-slate-100 group-hover:bg-blue-50 group-hover:text-blue-600 text-slate-500 transition-colors">
+            <ChevronRight size={14}/>
+          </span>
+        </button>
 
         {todaySchedule.length === 0 ? (
           <div className="bg-white rounded-2xl border border-slate-100 shadow-sm p-8 text-center">
@@ -314,15 +318,11 @@ export const StudentLayout: React.FC = () => {
       {/* ── Next exam preview — only shown when there is one ───────────── */}
       {nextExam && (
         <section>
-          <div className="flex items-center justify-between mb-3">
-            <h3 className="text-lg lg:text-xl font-black text-slate-900 uppercase tracking-tight">
-              Next Exam
-            </h3>
-            <button onClick={() => goTo('RESULTS')}
-              className="text-[10px] lg:text-xs font-black text-blue-600 uppercase tracking-widest hover:text-blue-700 transition-colors">
-              View All →
-            </button>
-          </div>
+          {/* Drop the redundant "View All →" header link — the card
+              below is the same destination. One tap target per section. */}
+          <h3 className="text-lg lg:text-xl font-black text-slate-900 uppercase tracking-tight mb-3">
+            Next Exam
+          </h3>
           <button onClick={() => goTo('RESULTS')}
             className="w-full bg-white rounded-2xl border border-slate-100 shadow-sm p-4 flex items-center gap-3 lg:gap-4 hover:shadow-md transition-all text-left">
             <div className="w-12 h-12 rounded-xl bg-amber-50 text-amber-600 border border-amber-200 flex items-center justify-center shrink-0">
@@ -353,16 +353,11 @@ export const StudentLayout: React.FC = () => {
             "what's new today", not a feed. */}
       {todayNotice && (
         <section>
-          <div className="flex items-center justify-between mb-3">
-            <h3 className="text-lg lg:text-xl font-black text-rose-700 uppercase tracking-tight flex items-center gap-2">
-              <span className="w-1.5 h-5 rounded-full bg-rose-500"/>
-              Needs Attention
-            </h3>
-            <button onClick={() => goTo('NOTICES')}
-              className="text-[10px] lg:text-xs font-black text-rose-600 uppercase tracking-widest hover:text-rose-700 transition-colors">
-              View All →
-            </button>
-          </div>
+          {/* Drop "View All →" — card below routes to the same view. */}
+          <h3 className="text-lg lg:text-xl font-black text-rose-700 uppercase tracking-tight flex items-center gap-2 mb-3">
+            <span className="w-1.5 h-5 rounded-full bg-rose-500"/>
+            Needs Attention
+          </h3>
           <button onClick={() => goTo('NOTICES')}
             className="w-full bg-rose-50 rounded-2xl border-2 border-rose-200 shadow-sm p-4 flex items-start gap-3 lg:gap-4 hover:shadow-md hover:bg-rose-100/60 transition-all text-left">
             <div className="w-12 h-12 rounded-xl bg-rose-500 text-white flex items-center justify-center shrink-0 shadow-md">
