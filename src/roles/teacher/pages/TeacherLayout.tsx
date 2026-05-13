@@ -2,7 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { useUIStore } from '@/store/uiStore';
 import {
   FileCheck2, ClipboardList, ScrollText, CircleAlert,
-  Bell, CalendarDays, Clock, Users, Sparkles, Play, BookOpen, UserPlus, Cake,
+  Bell, CalendarDays, Clock, Users, Sparkles, Play, BookOpen, UserPlus, Cake, ChevronRight,
 } from 'lucide-react';
 import { teacherService } from '@/roles/teacher/teacher.service';
 import { AttendanceManager } from '@/modules/attendance/components/TeacherAttendanceManager';
@@ -305,17 +305,21 @@ export const TeacherLayout: React.FC = () => {
         })}
       </div>
 
-      {/* ── Today's Classes ────────────────────────────────────────────── */}
+      {/* ── Today's Classes ──────────────────────────────────────────────
+          Whole header is a tappable button → opens Timetable. The
+          period rows below are individually action-routed (Mark live
+          class) so the header is the only way to reach the full
+          timetable view. Same pattern as the student dashboard. */}
       <section>
-        <div className="flex items-center justify-between mb-3">
+        <button onClick={() => goTo('TIMETABLE')}
+          className="w-full flex items-center justify-between gap-2 mb-3 group">
           <h3 className="text-lg lg:text-xl font-black text-slate-900 uppercase tracking-tight">
             Today's Classes
           </h3>
-          <button onClick={() => goTo('TIMETABLE')}
-            className="text-[10px] lg:text-xs font-black text-blue-600 uppercase tracking-widest hover:text-blue-700 transition-colors">
-            View Timetable →
-          </button>
-        </div>
+          <span className="flex items-center justify-center w-7 h-7 rounded-full bg-slate-100 group-hover:bg-blue-50 group-hover:text-blue-600 text-slate-500 transition-colors">
+            <ChevronRight size={14}/>
+          </span>
+        </button>
 
         {todayClasses.length === 0 ? (
           <div className="bg-white rounded-2xl border border-slate-100 shadow-sm p-8 text-center">
@@ -442,15 +446,9 @@ export const TeacherLayout: React.FC = () => {
           Hidden entirely if the teacher has no class assignments yet. ─── */}
       {assignedClassCount !== null && assignedClassCount > 0 && (
         <section>
-          <div className="flex items-center justify-between mb-3">
-            <h3 className="text-lg lg:text-xl font-black text-slate-900 uppercase tracking-tight">
-              My Classes
-            </h3>
-            <button onClick={() => goTo('STUDENTS')}
-              className="text-[10px] lg:text-xs font-black text-blue-600 uppercase tracking-widest hover:text-blue-700 transition-colors">
-              View Students →
-            </button>
-          </div>
+          <h3 className="text-lg lg:text-xl font-black text-slate-900 uppercase tracking-tight mb-3">
+            My Classes
+          </h3>
           <button onClick={() => goTo('STUDENTS')}
             className="w-full bg-white rounded-2xl border border-slate-100 shadow-sm p-4 flex items-center gap-3 lg:gap-4 hover:shadow-md hover:border-slate-200 transition-all text-left">
             <div className="w-12 h-12 rounded-xl bg-indigo-50 text-indigo-600 border border-indigo-200 flex items-center justify-center shrink-0">
