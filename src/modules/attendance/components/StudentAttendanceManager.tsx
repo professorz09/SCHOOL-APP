@@ -337,8 +337,25 @@ export const StudentAttendanceManager: React.FC<Props> = ({ onBack }) => {
     const stu = gridStudents.find(s => s.id === stuId);
     if (stu && isPreEnrollment(stu.admissionDate, date)) return;
     setEditBuffer(prev => {
+      const isFirstTouch = !prev[date] || Object.keys(prev[date]).length === 0;
+      // First cell tapped on a brand-new (no-record) date: seed every
+      // other student as PRESENT so the save guard passes without the
+      // principal having to first hit "All Present". Matches the real
+      // workflow — most students are present, only a few absent — and
+      // removes the "Brand-new date" toast that surprised the user.
+      // Bulk buttons (All Absent / All Holiday) still work to switch
+      // the baseline if needed.
+      const base: Record<string, AttendanceCellStatus> = { ...(prev[date] ?? {}) };
+      if (isFirstTouch && !rec) {
+        for (const s of gridStudents) {
+          if (s.id === stuId) continue;
+          if (isPreEnrollment(s.admissionDate, date)) continue;
+          base[s.id] = gridDetails[date]?.[s.id] ?? 'present';
+        }
+      }
       const cur = prev[date]?.[stuId] ?? gridDetails[date]?.[stuId] ?? 'present';
-      return { ...prev, [date]: { ...(prev[date] ?? {}), [stuId]: NEXT_STATUS(cur) } };
+      base[stuId] = NEXT_STATUS(cur);
+      return { ...prev, [date]: base };
     });
   };
 
@@ -405,26 +422,13 @@ export const StudentAttendanceManager: React.FC<Props> = ({ onBack }) => {
       showToast('Locked — enable Editor Mode in Settings to edit this date', 'error'); return false;
     }
 
-    // Brand-new date sanity check. If the user only flipped one
-    // student's cell on a date with no existing record, every other
-    // student would silently default to PRESENT and the record locks
-    // — fabricating a roll register. Force the principal to do an
-    // explicit "All Present" / "All Absent" / "All Holiday" bulk
-    // (which fills editBuffer for every student) before we'll save a
-    // brand-new date. For an existing record (rec exists), we keep
-    // the prior cell value as the fallback — those defaults reflect
-    // a real prior save, not a fabrication.
+    // Brand-new date safety: the previous "you must first tap All Present
+    // / All Absent / All Holiday" guard is no longer needed because
+    // `toggleCell` now auto-seeds an All-Present baseline the first time
+    // a cell is tapped on a no-record date. Any student not in the buffer
+    // still falls back to `'present'` in the payload build below, which
+    // matches the natural school workflow (majority present, flip absent).
     const eligible = gridStudents.filter(s => !isPreEnrollment(s.admissionDate, date));
-    if (!rec) {
-      const editedCount = eligible.filter(s => edits[s.id] !== undefined).length;
-      if (editedCount < eligible.length) {
-        showToast(
-          `Brand-new date — first tap "All Present" / "All Absent" / "All Holiday" to set a baseline, then adjust individual cells.`,
-          'error',
-        );
-        return false;
-      }
-    }
     // Build the per-student payload, dropping anyone who wasn't enrolled
     // yet on this date. Server also enforces the same filter as
     // defence-in-depth, but pruning client-side keeps the UI roster honest.
