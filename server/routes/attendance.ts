@@ -166,6 +166,15 @@ attendanceRouter.get('/export-excel', requireAuth, requireRole('TEACHER', 'PRINC
     if (!sectionId || !startDate || !endDate) {
       throw new ApiError(400, 'sectionId, startDate and endDate required');
     }
+
+    // Guard against memory-exhaustion via a huge date range. One academic
+    // year is ≤366 days; anything beyond that is never a legitimate export.
+    const msPerDay = 86_400_000;
+    const rangeMs = new Date(endDate).getTime() - new Date(startDate).getTime();
+    if (Number.isNaN(rangeMs) || rangeMs < 0 || rangeMs > 366 * msPerDay) {
+      throw new ApiError(400, 'Date range must be between 1 and 366 days');
+    }
+
     if (req.user.role === 'TEACHER') {
       const allowed = await verifyTeacherSectionAccess(req.user.id, req.user.school_id!, sectionId);
       if (!allowed) throw new ApiError(403, 'You are not assigned to this section');

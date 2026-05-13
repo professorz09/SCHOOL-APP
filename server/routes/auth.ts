@@ -47,7 +47,8 @@ authRouter.post('/login', loginLimiterByMobile, async (req, res) => {
       password,
     });
     if (error || !data.session) {
-      console.warn('[auth.login] signIn failed', { mobile, reason: error?.message });
+      const maskedMobile = mobile ? `***${mobile.toString().slice(-4)}` : '(empty)';
+      console.warn('[auth.login] signIn failed', { mobile: maskedMobile, reason: error?.message });
       throw new ApiError(401, GENERIC_ERR);
     }
 
@@ -88,7 +89,7 @@ authRouter.post('/login', loginLimiterByMobile, async (req, res) => {
       const sch = school as { status: string; name: string } | null;
       if (sch && (sch.status === 'INACTIVE' || sch.status === 'SUSPENDED')) {
         try { await adminDb.auth.admin.signOut(data.user.id); } catch { /* ignore */ }
-        console.warn('[auth.login] school inactive', { mobile, role: p.role, schoolStatus: sch.status });
+        console.warn('[auth.login] school inactive', { mobile: `***${mobile.toString().slice(-4)}`, role: p.role, schoolStatus: sch.status });
         throw new ApiError(
           403,
           `${sch.name} abhi ${sch.status === 'SUSPENDED' ? 'suspended' : 'inactive'} hai. Super-admin se contact karein.`,
@@ -98,7 +99,7 @@ authRouter.post('/login', loginLimiterByMobile, async (req, res) => {
 
     if (!p.is_active) {
       try { await adminDb.auth.admin.signOut(data.user.id); } catch { /* ignore */ }
-      console.warn('[auth.login] inactive account', { mobile, role: p.role });
+      console.warn('[auth.login] inactive account', { mobile: `***${mobile.toString().slice(-4)}`, role: p.role });
       throw new ApiError(401, GENERIC_ERR);
     }
 
