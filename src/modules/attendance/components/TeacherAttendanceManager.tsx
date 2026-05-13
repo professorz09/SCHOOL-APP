@@ -472,12 +472,9 @@ export const AttendanceManager: React.FC<Props> = ({ onBack }) => {
                   </button>
                 </div>
               )}
-              {todayRec && todayRec.approvalStatus !== 'REJECTED' && (
-                <div className="flex items-center gap-2 bg-emerald-50 border border-emerald-100 rounded-xl px-3 py-2">
-                  <ShieldCheck size={12} className="text-emerald-500 shrink-0"/>
-                  <span className="text-[10px] font-bold text-emerald-700 flex-1">Saved &amp; locked. Edits need Editor Mode.</span>
-                </div>
-              )}
+              {/* Saved-and-locked banner removed per user feedback — the
+                  P / A / H stats pills + the disabled state of the row
+                  buttons already signal the locked state. */}
               {todayRec && todayRec.approvalStatus === 'REJECTED' && (
                 <div className="space-y-1">
                   <div className="flex items-center gap-2 bg-rose-50 border border-rose-100 rounded-xl px-3 py-2">
