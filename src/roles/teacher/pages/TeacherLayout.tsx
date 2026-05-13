@@ -70,6 +70,13 @@ export const TeacherLayout: React.FC = () => {
     id: string; name: string; className: string; section: string;
     dob: string; daysAway: number; isToday: boolean;
   }>>([]);
+  // Today's freshest notice (relevant to this teacher — own classes,
+  // school-wide, or for STAFF audience). Same shape as the student
+  // dashboard card; rendered in a red "Needs Attention" panel so a
+  // teacher doesn't miss a principal announcement.
+  const [todayNotice, setTodayNotice] = useState<{
+    id: string; title: string; body: string; sentAt: string; sentBy: string;
+  } | null>(null);
   // School-wide permissions granted by the principal. Drives the
   // optional "New Admission" tile — only teachers with
   // CREATE_ADMISSION see it. `null` while loading; `[]` on failure
@@ -113,6 +120,26 @@ export const TeacherLayout: React.FC = () => {
     teacherService.getMyStudentBirthdays()
       .then(setBirthdays)
       .catch(() => setBirthdays([]));
+    // Latest notice landed today (IST). Cleared the next IST calendar day
+    // — the dashboard banner is "what's new today", not a feed (Notices
+    // tab handles the feed).
+    const istToday = new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Kolkata' });
+    teacherService.getMyNotices()
+      .then(list => {
+        const latestToday = list.find(n => (n.sentAt ?? '').slice(0, 10) === istToday);
+        if (latestToday) {
+          setTodayNotice({
+            id: latestToday.id,
+            title: latestToday.title,
+            body: latestToday.body,
+            sentAt: latestToday.sentAt,
+            sentBy: latestToday.sentByName ?? '',
+          });
+        } else {
+          setTodayNotice(null);
+        }
+      })
+      .catch(() => setTodayNotice(null));
   }, []);
 
   if (view === 'ATTENDANCE')  return <AttendanceManager      onBack={goBack} />;
@@ -218,6 +245,33 @@ export const TeacherLayout: React.FC = () => {
           </button>
         </div>
       </div>
+
+      {/* ── Needs Attention — today's freshest notice (if any) ──────────
+          Red-tinted so a principal announcement isn't quietly ignored.
+          Clears itself the next IST calendar day. */}
+      {todayNotice && (
+        <button onClick={() => goTo('NOTICES')}
+          className="w-full bg-rose-50 rounded-2xl border-2 border-rose-200 shadow-sm p-4 flex items-start gap-3 lg:gap-4 hover:shadow-md hover:bg-rose-100/60 transition-all text-left">
+          <div className="w-12 h-12 rounded-xl bg-rose-500 text-white flex items-center justify-center shrink-0 shadow-md">
+            <Bell size={20} />
+          </div>
+          <div className="flex-1 min-w-0">
+            <div className="flex items-center gap-2 mb-0.5">
+              <span className="text-[9px] font-black uppercase tracking-widest text-rose-600">Needs Attention</span>
+            </div>
+            <div className="font-black text-sm lg:text-base text-rose-900 truncate">{todayNotice.title}</div>
+            <p className="text-[11px] lg:text-xs font-bold text-rose-800/80 line-clamp-2 mt-0.5">
+              {todayNotice.body}
+            </p>
+            {todayNotice.sentBy && (
+              <p className="text-[10px] font-bold text-rose-600 mt-1.5">By {todayNotice.sentBy}</p>
+            )}
+          </div>
+          <span className="text-[9px] font-black text-white bg-rose-600 px-2.5 py-1 rounded-full shrink-0 uppercase tracking-widest shadow-sm">
+            New
+          </span>
+        </button>
+      )}
 
       {/* ── Module grid ────────────────────────────────────────────────── */}
       <div className="grid grid-cols-4 lg:grid-cols-7 gap-2.5 lg:gap-3">

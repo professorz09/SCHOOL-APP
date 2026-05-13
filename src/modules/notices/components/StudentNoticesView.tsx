@@ -38,7 +38,10 @@ const NoticeCard: React.FC<{ notice: StudentNotice }> = ({ notice }) => {
           <span className="ml-auto text-[10px] font-bold text-slate-400 shrink-0">{notice.sentAt}</span>
         </div>
 
-        <div className="font-black text-slate-900 text-sm leading-tight mb-2">{notice.title}</div>
+        <div className="font-black text-slate-900 text-sm leading-tight mb-1">{notice.title}</div>
+        {notice.sentBy && (
+          <div className="text-[10px] font-bold text-slate-500 mb-2">By {notice.sentBy}</div>
+        )}
 
         <button onClick={() => setOpen(o => !o)}
           className="flex items-center gap-1 text-[10px] font-black text-blue-600 uppercase tracking-wide">

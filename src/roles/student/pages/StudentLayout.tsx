@@ -49,7 +49,7 @@ export const StudentLayout: React.FC = () => {
   // pinned forever — student wants a "what's new today" badge, not a
   // permanent feed (the Notices tab is already that).
   const [todayNotice, setTodayNotice] = useState<{
-    id: string; title: string; body: string; sentAt: string; pinned: boolean;
+    id: string; title: string; body: string; sentAt: string; pinned: boolean; sentBy: string;
   } | null>(null);
   const { isSubView, setSubView } = useUIStore();
   const goTo = (v: StudentView) => { setView(v); setSubView(true); };
@@ -354,33 +354,37 @@ export const StudentLayout: React.FC = () => {
       {todayNotice && (
         <section>
           <div className="flex items-center justify-between mb-3">
-            <h3 className="text-lg lg:text-xl font-black text-slate-900 uppercase tracking-tight">
-              Today's Notice
+            <h3 className="text-lg lg:text-xl font-black text-rose-700 uppercase tracking-tight flex items-center gap-2">
+              <span className="w-1.5 h-5 rounded-full bg-rose-500"/>
+              Needs Attention
             </h3>
             <button onClick={() => goTo('NOTICES')}
-              className="text-[10px] lg:text-xs font-black text-blue-600 uppercase tracking-widest hover:text-blue-700 transition-colors">
+              className="text-[10px] lg:text-xs font-black text-rose-600 uppercase tracking-widest hover:text-rose-700 transition-colors">
               View All →
             </button>
           </div>
           <button onClick={() => goTo('NOTICES')}
-            className="w-full bg-white rounded-2xl border border-slate-100 shadow-sm p-4 flex items-start gap-3 lg:gap-4 hover:shadow-md transition-all text-left">
-            <div className="w-12 h-12 rounded-xl bg-indigo-50 text-indigo-600 border border-indigo-200 flex items-center justify-center shrink-0">
+            className="w-full bg-rose-50 rounded-2xl border-2 border-rose-200 shadow-sm p-4 flex items-start gap-3 lg:gap-4 hover:shadow-md hover:bg-rose-100/60 transition-all text-left">
+            <div className="w-12 h-12 rounded-xl bg-rose-500 text-white flex items-center justify-center shrink-0 shadow-md">
               <Bell size={20} />
             </div>
             <div className="flex-1 min-w-0">
               <div className="flex items-center gap-2 mb-0.5">
-                <div className="font-black text-sm lg:text-base text-slate-900 truncate flex-1">
+                <div className="font-black text-sm lg:text-base text-rose-900 truncate flex-1">
                   {todayNotice.title}
                 </div>
                 {todayNotice.pinned && (
                   <span className="text-[8px] font-black text-amber-700 bg-amber-50 border border-amber-200 px-1.5 py-0.5 rounded-full shrink-0 uppercase tracking-widest">Pinned</span>
                 )}
               </div>
-              <p className="text-[11px] lg:text-xs font-bold text-slate-500 line-clamp-2">
+              <p className="text-[11px] lg:text-xs font-bold text-rose-800/80 line-clamp-2">
                 {todayNotice.body}
               </p>
+              {todayNotice.sentBy && (
+                <p className="text-[10px] font-bold text-rose-600 mt-1.5">By {todayNotice.sentBy}</p>
+              )}
             </div>
-            <span className="text-[9px] font-black text-indigo-700 bg-indigo-50 border border-indigo-200 px-2.5 py-1 rounded-full shrink-0 uppercase tracking-widest">
+            <span className="text-[9px] font-black text-white bg-rose-600 px-2.5 py-1 rounded-full shrink-0 uppercase tracking-widest shadow-sm">
               New
             </span>
           </button>

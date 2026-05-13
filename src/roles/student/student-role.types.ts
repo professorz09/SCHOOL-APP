@@ -73,6 +73,9 @@ export interface StudentNotice {
   // PERSONAL = sent directly to this student (audience=SPECIFIC_STUDENT).
   category: 'EXAM' | 'FEE' | 'EVENT' | 'GENERAL' | 'PERSONAL';
   pinned: boolean;
+  /** Display name of the user who sent the notice (principal / teacher).
+   *  Empty string when the row is missing sent_by_name (legacy). */
+  sentBy: string;
 }
 
 export interface StudentComplaint {
