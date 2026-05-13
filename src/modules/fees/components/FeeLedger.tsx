@@ -9,6 +9,8 @@ import { feeService, FeeInstallment, FeeStatus, FeeType, PaymentRecord } from '@
 import { exportCsv } from '@/shared/utils/csv';
 import { studentService } from '@/modules/students/student.service';
 import { useStudentList } from '@/modules/students/useStudentList';
+import { SkeletonRow } from '@/shared/components/ui/Skeleton';
+import { EmptyState } from '@/shared/components/ui/EmptyState';
 import type { FeeStructureRecord } from '@/modules/fees/fees.types';
 import { useUIStore } from '@/store/uiStore';
 import { useEditorModeStore } from '@/store/editorModeStore';
@@ -2293,11 +2295,21 @@ export const FeeLedger: React.FC<Props> = ({ onBack }) => {
               <FeePaymentSubmissionsQueue pendingOnly />
             </div>
 
-            {visibleStudents.length === 0 && (
-              <div className="flex flex-col items-center py-16 lg:py-24 text-slate-400">
-                <Users size={32} className="mb-3 opacity-30" />
-                <p className="font-bold text-sm">No students</p>
+            {/* Initial load: show skeleton rows so the page doesn't flash
+                an empty state before the first batch lands. After the
+                first page lands, "No students" only renders when the
+                filter genuinely matches zero. */}
+            {visibleStudents.length === 0 && stuList.loading && (
+              <div className="bg-white rounded-2xl border border-slate-100 shadow-sm overflow-hidden">
+                <SkeletonRow count={6} />
               </div>
+            )}
+            {visibleStudents.length === 0 && !stuList.loading && (
+              <EmptyState
+                icon={Users}
+                title="No students match"
+                hint="Try changing the class or status filter — or admit a new student from the Students tab."
+              />
             )}
 
             <div className="grid grid-cols-1 lg:grid-cols-2 gap-2.5 lg:gap-3">

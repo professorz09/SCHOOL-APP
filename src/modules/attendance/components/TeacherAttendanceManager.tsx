@@ -6,6 +6,7 @@ import {
 import { teacherService } from '@/roles/teacher/teacher.service';
 import { TeacherClass } from '@/roles/teacher/teacher.types';
 import { useUIStore } from '@/store/uiStore';
+import { SkeletonRow } from '@/shared/components/ui/Skeleton';
 import type { DateAttendanceStatus, AttendanceCellStatus, GridDateRecord, GridStudentDetails } from '@/modules/attendance/attendance.service';
 import { useAcademicYear } from '@/shared/context/AcademicYearContext';
 import { stripClassPrefix } from '@/shared/utils/className';
@@ -500,7 +501,9 @@ export const AttendanceManager: React.FC<Props> = ({ onBack }) => {
             and the bottom Save & Lock bar work identically. */}
         <div className="flex-1 overflow-hidden">
           {gridLoading ? (
-            <div className="flex items-center justify-center py-16 text-slate-400 font-bold text-sm">Loading…</div>
+            <div className="bg-white rounded-2xl border border-slate-100 shadow-sm overflow-hidden m-3">
+              <SkeletonRow count={6} />
+            </div>
           ) : markMode === 'ROSTER' ? (
             <div className="overflow-auto h-full">
               {filteredStudents.length === 0 ? (
