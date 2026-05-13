@@ -1,28 +1,26 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
   <!--
-    EduGrow app icon. Designed for PWA install:
-    • Maskable-safe (key elements live inside the centre 80 % so circle
-      + squircle Android masks never clip them).
-    • Single accent colour (warm amber tassel) reads well at 48 px.
-    • No embedded text — the OS already shows "EduGrow" as the label
-      under the icon, so doubling it makes the mark feel busy.
+    EduGrow app icon — red/white YouTube-style.
+    • Maskable-safe: key elements live inside the centre 80 %.
+    • Single red plate + white mortarboard reads at any size.
+    • No embedded text — OS shows "EduGrow" as the label under the icon.
   -->
   <defs>
     <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
-      <stop offset="0%"   stop-color="#6366f1"/>
-      <stop offset="55%"  stop-color="#4f46e5"/>
-      <stop offset="100%" stop-color="#3730a3"/>
+      <stop offset="0%"   stop-color="#ef4444"/>
+      <stop offset="55%"  stop-color="#dc2626"/>
+      <stop offset="100%" stop-color="#991b1b"/>
     </linearGradient>
     <linearGradient id="cap" x1="0" y1="0" x2="0" y2="1">
       <stop offset="0%"   stop-color="#ffffff"/>
-      <stop offset="100%" stop-color="#dbeafe"/>
+      <stop offset="100%" stop-color="#fee2e2"/>
     </linearGradient>
     <linearGradient id="band" x1="0" y1="0" x2="0" y2="1">
       <stop offset="0%"   stop-color="#f8fafc"/>
-      <stop offset="100%" stop-color="#cbd5e1"/>
+      <stop offset="100%" stop-color="#fecaca"/>
     </linearGradient>
     <radialGradient id="shine" cx="0.35" cy="0.3" r="0.7">
-      <stop offset="0%"   stop-color="#ffffff" stop-opacity="0.18"/>
+      <stop offset="0%"   stop-color="#ffffff" stop-opacity="0.22"/>
       <stop offset="60%"  stop-color="#ffffff" stop-opacity="0"/>
     </radialGradient>
   </defs>
@@ -32,27 +30,26 @@
   <rect width="512" height="512" rx="112" fill="url(#bg)"/>
   <rect width="512" height="512" rx="112" fill="url(#shine)"/>
 
-  <!-- Mortarboard top — diamond with crisp navy edge. -->
+  <!-- Mortarboard top — diamond, white on red plate. -->
   <path d="M256 132 L80 220 L256 308 L432 220 Z"
         fill="url(#cap)"
-        stroke="#1e1b4b" stroke-width="8" stroke-linejoin="round"/>
+        stroke="#7f1d1d" stroke-width="8" stroke-linejoin="round"/>
 
-  <!-- Sweatband / cap body — curved bottom to suggest depth. -->
+  <!-- Sweatband / cap body — curved bottom for depth. -->
   <path d="M160 256 L160 348 Q160 396 256 396 Q352 396 352 348 L352 256 L256 304 Z"
         fill="url(#band)"
-        stroke="#1e1b4b" stroke-width="7" stroke-linejoin="round"/>
+        stroke="#7f1d1d" stroke-width="7" stroke-linejoin="round"/>
 
   <!-- Inner shadow under the mortarboard so the cap reads 3D. -->
   <path d="M170 262 L256 308 L342 262 L342 274 L256 318 L170 274 Z"
-        fill="#1e1b4b" opacity="0.15"/>
+        fill="#7f1d1d" opacity="0.18"/>
 
-  <!-- Tassel — amber accent that lifts the whole mark. -->
-  <rect x="418" y="220" width="14" height="118" rx="6" fill="#fbbf24"/>
-  <circle cx="425" cy="348" r="16" fill="#f59e0b"/>
+  <!-- Tassel — white accent that hangs off the right edge. -->
+  <rect x="418" y="220" width="14" height="118" rx="6" fill="#ffffff"/>
+  <circle cx="425" cy="348" r="16" fill="#ffffff"/>
   <path d="M414 360 L408 396 M425 362 L425 400 M436 360 L442 396"
-        stroke="#fbbf24" stroke-width="6" stroke-linecap="round" fill="none"/>
+        stroke="#ffffff" stroke-width="6" stroke-linecap="round" fill="none"/>
 
-  <!-- Center button on the mortarboard where the tassel anchors —
-       tiny visual detail that makes the cap feel real. -->
-  <circle cx="256" cy="220" r="11" fill="#fbbf24" stroke="#1e1b4b" stroke-width="3"/>
+  <!-- Center button on the mortarboard where the tassel anchors. -->
+  <circle cx="256" cy="220" r="11" fill="#ffffff" stroke="#7f1d1d" stroke-width="3"/>
 </svg>
