@@ -500,20 +500,10 @@ export const PrincipalDashboard: React.FC<Props> = ({ onNavigate }) => {
           const hub = HUBS.find(h => h.key === openHub)!;
           const heroItems = hub.items.filter(i => i.hero);
           const gridItems = hub.items.filter(i => !i.hero);
-          // Card-style tile — big icon top-left, bold title, muted
-          // subtitle hint. Matches the "Admit Cards / Lab Inventory"
-          // reference design the principal asked for: each action reads
-          // as a discrete card rather than a tiny pictogram in a dense
-          // grid. Trade-off: hub panel is taller, but every option is
-          // self-explanatory at a glance.
           const renderTile = (item: Action) => {
-            const { icon, label, view, tint, hint } = item;
+            const { icon, label, view, tint } = item;
             const isDisabled = item.disabled === true;
             const reason = item.disabledReason;
-            // Upscale the icon node so it fills the larger tile container.
-            const sizedIcon = React.isValidElement(icon)
-              ? React.cloneElement(icon as React.ReactElement, { size: 26 })
-              : icon;
             return (
               <button
                 key={label}
@@ -525,29 +515,20 @@ export const PrincipalDashboard: React.FC<Props> = ({ onNavigate }) => {
                   onNavigate(view);
                   setOpenHub(null);
                 }}
-                className={`flex flex-col items-start gap-3 lg:gap-4 p-4 lg:p-5 rounded-2xl bg-white border border-slate-100 shadow-sm text-left transition-all ${
+                className={`flex flex-col items-center gap-1.5 lg:gap-2 p-2 lg:p-3 rounded-xl transition-all ${
                   isDisabled
                     ? 'cursor-not-allowed opacity-50'
-                    : 'active:scale-[0.98] hover:shadow-md hover:border-slate-200 hover:-translate-y-0.5'
+                    : 'active:scale-95 hover:bg-slate-50'
                 }`}>
-                <div className={`relative w-14 h-14 lg:w-16 lg:h-16 rounded-2xl flex items-center justify-center shrink-0 ${tint}`}>
-                  {sizedIcon}
+                <div className={`relative w-11 h-11 lg:w-14 lg:h-14 rounded-2xl flex items-center justify-center ${tint}`}>
+                  {icon}
                   {isDisabled && (
                     <span className="absolute -top-1 -right-1 w-4 h-4 rounded-full bg-slate-400 text-white text-[8px] font-black flex items-center justify-center" aria-hidden>
                       🔒
                     </span>
                   )}
                 </div>
-                <div className="min-w-0 w-full">
-                  <div className="text-sm lg:text-base font-black text-slate-900 leading-tight truncate">
-                    {label}
-                  </div>
-                  {hint && (
-                    <div className="text-[11px] lg:text-xs font-bold text-slate-500 mt-1 leading-tight">
-                      {hint}
-                    </div>
-                  )}
-                </div>
+                <span className="text-[9px] lg:text-[11px] font-black text-slate-600 uppercase tracking-wide text-center leading-tight">{label}</span>
               </button>
             );
           };
@@ -592,8 +573,8 @@ export const PrincipalDashboard: React.FC<Props> = ({ onNavigate }) => {
             </button>
           );
           return (
-            <div className="bg-slate-50 rounded-2xl border border-slate-100 p-3 lg:p-5 animate-in slide-in-from-top-2 duration-200">
-              <div className="text-[10px] lg:text-xs font-black uppercase tracking-widest text-slate-400 mb-3 lg:mb-4 px-1">
+            <div className="bg-white rounded-2xl border border-slate-100 shadow-sm p-3 lg:p-5 animate-in slide-in-from-top-2 duration-200">
+              <div className="text-[10px] lg:text-xs font-black uppercase tracking-widest text-slate-400 mb-2 lg:mb-3 px-1">
                 {hub.label} Actions
               </div>
               {heroItems.length > 0 && (
@@ -601,7 +582,7 @@ export const PrincipalDashboard: React.FC<Props> = ({ onNavigate }) => {
                   {heroItems.map(renderHeroCta)}
                 </div>
               )}
-              <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 lg:gap-4">
+              <div className="grid grid-cols-4 lg:grid-cols-8 gap-2 lg:gap-3">
                 {gridItems.map(renderTile)}
               </div>
             </div>

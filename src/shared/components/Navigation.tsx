@@ -2,7 +2,7 @@ import React from 'react';
 import {
   Home, User, Bell, IndianRupee, Users,
   Building2, CreditCard, ClipboardList, MapPin,
-  LayoutDashboard, LogOut,
+  LayoutDashboard, LogOut, UserCheck, CheckSquare, CalendarCheck,
   ShieldCheck, MailPlus, BarChart3, History, Settings as SettingsIcon,
 } from 'lucide-react';
 import { AppRole, NavTab } from '@/shared/types/index';
@@ -26,6 +26,14 @@ const ROLE_TABS: Record<AppRole, TabDef[]> = {
     { id: 'HOME',        icon: LayoutDashboard, label: 'Home'     },
     { id: 'STUDENTS',    icon: Users,           label: 'Students' },
     { id: 'FEE_LEDGER',  icon: IndianRupee,     label: 'Fees'     },
+    // Desktop-only quick-access shortcuts — the hubs on the dashboard
+    // still hold every action, but these are the ones a principal opens
+    // multiple times a day so they get a top-level sidebar slot too.
+    { id: 'STAFF',       icon: UserCheck,       label: 'Staff',       desktopOnly: true },
+    { id: 'ATTENDANCE',  icon: CalendarCheck,   label: 'Attendance',  desktopOnly: true },
+    { id: 'NOTICES',     icon: Bell,            label: 'Notices',     desktopOnly: true },
+    { id: 'APPROVALS',   icon: CheckSquare,     label: 'Approvals',   desktopOnly: true },
+    { id: 'SETTINGS',    icon: SettingsIcon,    label: 'Settings',    desktopOnly: true },
     { id: 'PROFILE',     icon: User,            label: 'Profile'  },
   ],
   SUPER_ADMIN: [

@@ -40,6 +40,15 @@ const LogsViewer         = lazy(() => import('@/roles/super-admin/components/Log
 const PlatformSettingsManager = lazy(() => import('@/roles/super-admin/components/PlatformSettingsManager').then(m => ({ default: m.PlatformSettingsManager })));
 const AttendanceManager  = lazy(() => import('@/modules/attendance/components/TeacherAttendanceManager').then(m => ({ default: m.AttendanceManager })));
 const TeacherNoticesView = lazy(() => import('@/modules/notices/components/TeacherNoticesView').then(m => ({ default: m.TeacherNoticesView })));
+// Principal desktop-sidebar quick-access shortcuts. The PrincipalLayout
+// hub grid still routes to all of these via its own internal state;
+// these top-level entries just let a desktop user open them in one tap
+// instead of going Home → Hub → Tile.
+const PrincipalStaffManager      = lazy(() => import('@/modules/staff/components/StaffManager').then(m => ({ default: m.StaffManager })));
+const PrincipalStudentAttendance = lazy(() => import('@/modules/attendance/components/StudentAttendanceManager').then(m => ({ default: m.StudentAttendanceManager })));
+const PrincipalNoticesManager    = lazy(() => import('@/modules/notices/components/NoticesManager').then(m => ({ default: m.NoticesManager })));
+const PrincipalApprovalsManager  = lazy(() => import('@/roles/principal/components/ApprovalsManager').then(m => ({ default: m.ApprovalsManager })));
+const PrincipalSettingsManager   = lazy(() => import('@/roles/principal/components/SettingsManager').then(m => ({ default: m.SettingsManager })));
 
 // Route-chunk fallback uses the shared AppLoader so every loading
 // surface across the app (auth splash, route transitions, individual
@@ -332,6 +341,11 @@ export default function App() {
     if (tab === 'NOTICES' && role === 'STUDENT')    return <StudentNoticesView onBack={goHome} />;
     if (tab === 'STUDENTS'    && role === 'PRINCIPAL') return <StudentsManager onBack={goHome} />;
     if (tab === 'FEE_LEDGER'  && role === 'PRINCIPAL') return <ErrorBoundary label="Fee Ledger"><FeeLedger onBack={goHome} /></ErrorBoundary>;
+    if (tab === 'STAFF'       && role === 'PRINCIPAL') return <PrincipalStaffManager onBack={goHome} />;
+    if (tab === 'ATTENDANCE'  && role === 'PRINCIPAL') return <PrincipalStudentAttendance onBack={goHome} />;
+    if (tab === 'NOTICES'     && role === 'PRINCIPAL') return <PrincipalNoticesManager onBack={goHome} />;
+    if (tab === 'APPROVALS'   && role === 'PRINCIPAL') return <PrincipalApprovalsManager onBack={goHome} />;
+    if (tab === 'SETTINGS'    && role === 'PRINCIPAL') return <PrincipalSettingsManager onBack={goHome} />;
     if (tab === 'SCHOOLS'           && role === 'SUPER_ADMIN') return <SchoolsManager  onBack={goHome} />;
     if (tab === 'BILLING'           && role === 'SUPER_ADMIN') return <BillingManager  onBack={goHome} />;
     if (tab === 'ADMINS'            && role === 'SUPER_ADMIN') return <AdminsManager   onBack={goHome} />;
