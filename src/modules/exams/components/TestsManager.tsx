@@ -728,18 +728,23 @@ export const TestsManager: React.FC<Props> = ({ onBack }) => {
               <div className="p-4 space-y-3">
                 <div>
                   <label className="block text-[10px] font-black uppercase tracking-widest text-slate-500 mb-1.5">Subject *</label>
-                  {classSubjects.length > 0 ? (
-                    <select value={cForm.primarySubject}
-                      onChange={e => setCForm(f => ({ ...f, primarySubject: e.target.value }))}
-                      className="w-full border border-slate-200 bg-slate-50 rounded-xl px-3 py-3 font-bold text-sm outline-none focus:border-indigo-500">
-                      {classSubjects.map(s => <option key={s} value={s}>{s}</option>)}
-                    </select>
-                  ) : (
-                    <input value={cForm.primarySubject}
-                      onChange={e => setCForm(f => ({ ...f, primarySubject: e.target.value }))}
-                      placeholder={cForm.classId ? 'Type subject…' : 'Pick a class first'}
-                      disabled={!cForm.classId}
-                      className="w-full border border-slate-200 bg-slate-50 rounded-xl px-3 py-3 font-bold text-sm outline-none focus:border-indigo-500 disabled:opacity-60"/>
+                  {/* Text input with datalist autocomplete — suggestions come
+                      from the teacher's assigned subjects + class timetable
+                      entries, but the field is still free-form so a teacher
+                      can schedule a test on any subject (substitute period,
+                      one-off practical, etc.). Earlier this was a hard
+                      <select> that locked the teacher into the auto-detected
+                      list and surfaced no fallback. */}
+                  <input value={cForm.primarySubject}
+                    onChange={e => setCForm(f => ({ ...f, primarySubject: e.target.value }))}
+                    list="testmgr-subject-suggestions"
+                    placeholder={cForm.classId ? 'Type subject (suggestions below)' : 'Pick a class first'}
+                    disabled={!cForm.classId}
+                    className="w-full border border-slate-200 bg-slate-50 rounded-xl px-3 py-3 font-bold text-sm outline-none focus:border-indigo-500 disabled:opacity-60"/>
+                  {classSubjects.length > 0 && (
+                    <datalist id="testmgr-subject-suggestions">
+                      {classSubjects.map(s => <option key={s} value={s}/>)}
+                    </datalist>
                   )}
                 </div>
                 <div className="grid grid-cols-2 gap-3">
@@ -774,18 +779,16 @@ export const TestsManager: React.FC<Props> = ({ onBack }) => {
                     <div key={idx} className="px-4 py-3 space-y-2">
                       <div className="flex items-center gap-2">
                         <BookOpen size={14} className="text-slate-400 shrink-0"/>
-                        {classSubjects.length > 0 ? (
-                          <select value={s.subject}
-                            onChange={e => setSubjects(p => p.map((x, i) => i === idx ? { ...x, subject: e.target.value } : x))}
-                            className="flex-1 font-bold text-sm text-slate-800 bg-transparent outline-none">
-                            <option value="">Select subject…</option>
-                            {classSubjects.map(opt => <option key={opt} value={opt}>{opt}</option>)}
-                          </select>
-                        ) : (
-                          <input value={s.subject} onChange={e => setSubjects(p => p.map((x, i) => i === idx ? { ...x, subject: e.target.value } : x))}
-                            placeholder="Subject name"
-                            className="flex-1 font-bold text-sm text-slate-800 bg-transparent outline-none placeholder:text-slate-300"/>
-                        )}
+                        {/* Free-form input with datalist suggestions —
+                            same rationale as the single-subject path above.
+                            Teacher can pick from the suggestions or type
+                            any custom subject name (substitute, special
+                            practical, etc.). */}
+                        <input value={s.subject}
+                          onChange={e => setSubjects(p => p.map((x, i) => i === idx ? { ...x, subject: e.target.value } : x))}
+                          list="testmgr-subject-suggestions"
+                          placeholder="Subject name"
+                          className="flex-1 font-bold text-sm text-slate-800 bg-transparent outline-none placeholder:text-slate-300"/>
                         <button onClick={() => setSubjects(p => p.filter((_, i) => i !== idx))} className="text-slate-300 hover:text-rose-400">
                           <Trash2 size={14}/>
                         </button>
