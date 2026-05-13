@@ -100,7 +100,18 @@ timetableRouter.post('/periods/save', requireAuth, requireRole('PRINCIPAL'), asy
 
     // Wipe + insert. Two-step instead of upsert because we want to
     // remove rows that were dropped from the new config (e.g. school
-    // shrinks from 8 → 6 periods).
+    // shrinks from 8 → 6 periods). Snapshot the current rows first so
+    // an insert failure can restore the schedule — otherwise a single
+    // bad row would wipe the school's entire timetable with no rollback.
+    const { data: priorRowsRaw } = await adminDb
+      .from('timetable_periods')
+      .select('name, start_time, end_time, period_type, sort_order')
+      .eq('school_id', schoolId)
+      .eq('academic_year_id', body.academicYearId);
+    const priorRows = (priorRowsRaw ?? []) as Array<{
+      name: string; start_time: string; end_time: string; period_type: string; sort_order: number;
+    }>;
+
     const { error: delErr } = await adminDb
       .from('timetable_periods')
       .delete()
@@ -118,7 +129,21 @@ timetableRouter.post('/periods/save', requireAuth, requireRole('PRINCIPAL'), asy
       sort_order:       idx,
     }));
     const { error: insErr } = await adminDb.from('timetable_periods').insert(rows);
-    if (insErr) throw new ApiError(500, insErr.message);
+    if (insErr) {
+      // Restore the snapshot so the principal isn't left with a blank
+      // schedule. Best-effort — if the restore itself fails we report
+      // the original insert error so the cause is visible.
+      if (priorRows.length > 0) {
+        try {
+          await adminDb.from('timetable_periods').insert(priorRows.map(p => ({
+            school_id:        schoolId,
+            academic_year_id: body.academicYearId,
+            ...p,
+          })));
+        } catch { /* restore failed; surfacing insErr below is the priority */ }
+      }
+      throw new ApiError(500, insErr.message);
+    }
 
     ok(res, { count: rows.length });
   } catch (err) { fail(res, err); }

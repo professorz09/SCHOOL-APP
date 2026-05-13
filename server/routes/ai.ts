@@ -109,23 +109,58 @@ aiRouter.post('/generate', aiPerMinuteLimiter, aiPerDayLimiter, requireAuth, req
     // `savePaper` flag bypass the quota count but are still rate-
     // limited by aiPerMinuteLimiter / aiPerDayLimiter.
     const wantsSave = !!body.savePaper;
+    // Reserve a placeholder row up-front so the quota count is incremented
+    // BEFORE the slow Gemini call. Earlier the count check + actual insert
+    // were separated by a multi-second LLM call — N parallel requests at
+    // the cap could each see count < limit and all succeed, blowing past
+    // the monthly cap. Reserving early closes the race to ~one DB
+    // roundtrip; if the post-insert recount detects we crossed the line
+    // (another racer reserved first), we yank the placeholder + 429.
+    let reservedId: string | null = null;
+    let monthlyLimit = 0;
     if (wantsSave && req.user.school_id) {
       const { data: schoolRow } = await adminDb.from('schools')
         .select('ai_papers_monthly_limit').eq('id', req.user.school_id).maybeSingle();
-      const monthlyLimit = (schoolRow as { ai_papers_monthly_limit: number } | null)?.ai_papers_monthly_limit ?? 50;
+      monthlyLimit = (schoolRow as { ai_papers_monthly_limit: number } | null)?.ai_papers_monthly_limit ?? 50;
       if (monthlyLimit > 0) {
-        // Anchor month boundary in IST so the cap resets when the
-        // school's day rolls over — not at UTC midnight.
         const istMonthStart = new Date(
           new Date().toLocaleString('en-US', { timeZone: 'Asia/Kolkata' }),
         );
         istMonthStart.setDate(1);
         istMonthStart.setHours(0, 0, 0, 0);
-        const { count } = await adminDb.from('ai_paper_history')
+        // Pre-check (cheap reject when obviously over).
+        const { count: preCount } = await adminDb.from('ai_paper_history')
           .select('id', { count: 'exact', head: true })
           .eq('school_id', req.user.school_id)
           .gte('created_at', istMonthStart.toISOString());
-        if ((count ?? 0) >= monthlyLimit) {
+        if ((preCount ?? 0) >= monthlyLimit) {
+          throw new ApiError(429,
+            `This month's AI paper quota reached (${monthlyLimit}/month). Contact your school administrator.`);
+        }
+        // Reserve a slot. Empty paper_json gets filled in after Gemini
+        // returns; if Gemini fails or we lose the race, delete the row.
+        const { data: reserved, error: resErr } = await adminDb
+          .from('ai_paper_history')
+          .insert({
+            school_id:    req.user.school_id,
+            generated_by: req.user.id,
+            request_json: body.paperRequest ?? {},
+            paper_json:   { reserved: true },
+            prompt_chars: body.prompt.length,
+          })
+          .select('id')
+          .single();
+        if (resErr) throw new ApiError(500, `Quota reservation failed: ${resErr.message}`);
+        reservedId = (reserved as { id: string }).id;
+        // Re-count after our own insert. If parallel racers pushed us
+        // past the limit, surrender our reservation and 429.
+        const { count: postCount } = await adminDb.from('ai_paper_history')
+          .select('id', { count: 'exact', head: true })
+          .eq('school_id', req.user.school_id)
+          .gte('created_at', istMonthStart.toISOString());
+        if ((postCount ?? 0) > monthlyLimit) {
+          await adminDb.from('ai_paper_history').delete().eq('id', reservedId);
+          reservedId = null;
           throw new ApiError(429,
             `This month's AI paper quota reached (${monthlyLimit}/month). Contact your school administrator.`);
         }
@@ -151,6 +186,12 @@ aiRouter.post('/generate', aiPerMinuteLimiter, aiPerDayLimiter, requireAuth, req
     });
 
     if (!r.ok) {
+      // Gemini failed — surrender the reserved quota slot so the user
+      // isn't billed for a generation that never returned content.
+      if (reservedId) {
+        try { await adminDb.from('ai_paper_history').delete().eq('id', reservedId); }
+        catch { /* best-effort */ }
+      }
       let detail = r.statusText;
       try {
         const j = await r.json() as { error?: { message?: string } };
@@ -163,28 +204,29 @@ aiRouter.post('/generate', aiPerMinuteLimiter, aiPerDayLimiter, requireAuth, req
       candidates?: Array<{ content?: { parts?: Array<{ text?: string }> } }>;
     };
     const text = json.candidates?.[0]?.content?.parts?.[0]?.text;
-    if (!text) throw new ApiError(502, 'Gemini returned an empty response');
+    if (!text) {
+      if (reservedId) {
+        try { await adminDb.from('ai_paper_history').delete().eq('id', reservedId); }
+        catch { /* best-effort */ }
+      }
+      throw new ApiError(502, 'Gemini returned an empty response');
+    }
 
-    // Save to last-50 history when this was a paper generation. We
-    // store only the JSON content + the request; raw prompt size
-    // goes into prompt_chars for bookkeeping. The DB trigger trims
-    // anything beyond 50 per school automatically.
-    if (wantsSave && req.user.school_id) {
+    // Fill in the reserved row with the real content. (Previous code
+    // INSERTed here, but the quota-reservation path above already wrote
+    // a placeholder we just need to update.)
+    if (reservedId) {
       let parsed: unknown = text;
       try { parsed = JSON.parse(text); } catch { /* keep raw text */ }
       try {
-        await adminDb.from('ai_paper_history').insert({
-          school_id: req.user.school_id,
-          generated_by: req.user.id,
-          request_json: body.paperRequest ?? {},
+        await adminDb.from('ai_paper_history').update({
           paper_json: typeof parsed === 'string' ? { raw: parsed } : parsed,
-          prompt_chars: body.prompt.length,
-        });
+        }).eq('id', reservedId);
       } catch (e) {
-        // Save failure shouldn't fail the user-visible call — the
+        // Update failure shouldn't fail the user-visible call — the
         // paper already came back. Log and move on.
         // eslint-disable-next-line no-console
-        console.warn('[ai] paper history save failed:', e);
+        console.warn('[ai] paper history fill-in failed:', e);
       }
     }
 

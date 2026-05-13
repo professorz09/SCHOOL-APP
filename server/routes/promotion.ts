@@ -208,7 +208,18 @@ promotionRouter.post('/execute', requireAuth, PRINCIPAL, async (req, res) => {
             })
             .select('id')
             .single();
-          if (insErr) throw new Error(insErr.message);
+          if (insErr) {
+            // 23505 = unique_violation on (student_id, academic_year_id).
+            // Two concurrent promotion calls (e.g. principal double-tap)
+            // could both pass the pre-check; the DB constraint catches
+            // the second one. Treat as "already promoted" and skip
+            // gracefully instead of failing the whole batch.
+            if ((insErr as { code?: string }).code === '23505') {
+              skipped++;
+              continue;
+            }
+            throw new Error(insErr.message);
+          }
 
           const newRecordId = (newRec as any).id;
 

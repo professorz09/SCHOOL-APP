@@ -177,6 +177,23 @@ teacherRouter.post('/test/create', requireAuth, requireRole('TEACHER'), async (r
       duration: number; maxMarks: number; syllabus: string;
     }>(req, ['academicYearId', 'teacherId', 'className', 'title', 'testType']);
 
+    // maxMarks must be a positive whole number — earlier this was unchecked,
+    // so a teacher could create a 0-mark or negative test that broke every
+    // downstream percentage / grade calculation.
+    if (!Number.isFinite(body.maxMarks) || body.maxMarks <= 0 || body.maxMarks > 1000) {
+      throw new ApiError(400, 'maxMarks must be between 1 and 1000');
+    }
+
+    // Cross-school staff guard: teacherId must belong to the caller's school.
+    // Without this, a teacher could attribute a test to another school's
+    // staff member (server uses adminDb so RLS won't catch the forged id).
+    const { data: staffRow } = await adminDb
+      .from('staff').select('id, school_id')
+      .eq('id', body.teacherId).maybeSingle();
+    if (!staffRow || (staffRow as { school_id: string }).school_id !== req.user.school_id) {
+      throw new ApiError(403, 'teacherId is not in your school');
+    }
+
     const { data, error } = await adminDb
       .from('test_schedules')
       .insert({

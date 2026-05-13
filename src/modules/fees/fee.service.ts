@@ -204,6 +204,12 @@ let _cacheLoadedFor: string | null = null;
 // rapid writes (back-to-back recordPayment, transport ops, etc.) don't fan
 // out N parallel reads that race against each other.
 let _refreshInFlight: Promise<void> | null = null;
+// Separate in-flight handle for refreshLite(). FeeLedger fires this on
+// mount; without coalescing, a fast mount-then-action sequence used to
+// run _loadPaymentHistory + _loadAdvances twice in parallel, with the
+// later writes silently clobbering the earlier ones (race on shared
+// module-level caches).
+let _refreshLiteInFlight: Promise<void> | null = null;
 
 // Drop everything so the next refreshAll() pulls fresh rows. Wired to the
 // cache bus so AcademicYearContext can flush us on year switch.
@@ -213,6 +219,7 @@ function _resetCache(): void {
   _advanceCache = new Map<string, number>();
   _cacheLoadedFor = null;
   _refreshInFlight = null;
+  _refreshLiteInFlight = null;
 }
 registerCacheResetter(_resetCache);
 
@@ -521,11 +528,19 @@ export const feeService = {
    *  on FeeLedger mount; per-student installments are then fetched
    *  lazily via refreshStudent() when the principal taps a student. */
   async refreshLite(): Promise<void> {
+    if (_refreshLiteInFlight) return _refreshLiteInFlight;
     const schoolId = getSchoolId();
-    await Promise.all([
-      _loadPaymentHistory(schoolId),
-      _loadAdvances(schoolId),
-    ]);
+    _refreshLiteInFlight = (async () => {
+      try {
+        await Promise.all([
+          _loadPaymentHistory(schoolId),
+          _loadAdvances(schoolId),
+        ]);
+      } finally {
+        _refreshLiteInFlight = null;
+      }
+    })();
+    return _refreshLiteInFlight;
   },
 
   // ── Sync read accessors (assume refreshAll() was called) ────────────────

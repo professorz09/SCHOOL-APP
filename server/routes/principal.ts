@@ -1623,6 +1623,28 @@ principalRouter.post('/staff-attendance/save', requireAuth, PRINCIPAL, async (re
 
     const nowIso = new Date().toISOString();
 
+    // Cross-school write guard: confirm every staff_id in the payload
+    // belongs to the caller's school before any DB write. Without this,
+    // a forged staffId from another tenant could be upserted via the
+    // (staff_id, date) unique index — overwriting another school's row
+    // because adminDb bypasses RLS. Pre-validating staff ids closes the
+    // gap server-side.
+    const allStaffIds = Array.from(new Set([
+      ...clearedStaffIds,
+      ...body.rows.map(r => r.staffId),
+    ]));
+    if (allStaffIds.length > 0) {
+      const { data: validStaff } = await adminDb
+        .from('staff').select('id')
+        .eq('school_id', req.user.school_id!)
+        .in('id', allStaffIds);
+      const validSet = new Set(((validStaff ?? []) as Array<{ id: string }>).map(s => s.id));
+      const intruder = allStaffIds.find(id => !validSet.has(id));
+      if (intruder) {
+        throw new ApiError(403, `staff_id ${intruder} is not in your school`);
+      }
+    }
+
     if (clearedStaffIds.length) {
       const { error } = await adminDb.from('staff_attendance').delete()
         .eq('school_id', req.user.school_id!).eq('date', body.date)
@@ -1639,8 +1661,6 @@ principalRouter.post('/staff-attendance/save', requireAuth, PRINCIPAL, async (re
         marked_by:   req.user.id,
         modified_by: req.user.id,
         created_at:  nowIso,
-        // updated_at is intentionally omitted on INSERT so it matches
-        // created_at (first-save signal). The trigger bumps it on UPDATE.
       }));
       const { error } = await adminDb.from('staff_attendance')
         .upsert(payload, { onConflict: 'staff_id,date', ignoreDuplicates: false });
@@ -2011,44 +2031,45 @@ principalRouter.get('/dashboard-stats', requireAuth, PRINCIPAL, async (req, res)
     if (!yearId) throw new ApiError(400, 'yearId is required');
 
     // Students with outstanding fees
-    const { data: feesData } = await adminDb
+    // count: 'exact' + head: true returns the COUNT (not row data) so the
+    // dashboard isn't silently capped at supabase-js's default 1000-row
+    // response limit. Earlier `data?.length` could only ever read up to
+    // 1000, under-reporting big schools on every counter.
+    const { count: studentsWithDuesCount } = await adminDb
       .from('fee_installments')
-      .select('student_id', { count: 'exact' })
+      .select('student_id', { count: 'exact', head: true })
       .eq('school_id', req.user.school_id!)
       .eq('academic_year_id', yearId)
       .gt('balance', 0)
       .is('cancelled_on', null);
-    const studentsWithDues = feesData?.length ?? 0;
+    const studentsWithDues = studentsWithDuesCount ?? 0;
 
-    // Pending leaves
-    const { data: leavesData } = await adminDb
+    const { count: pendingLeavesCount } = await adminDb
       .from('approvals')
-      .select('id', { count: 'exact' })
+      .select('id', { count: 'exact', head: true })
       .eq('school_id', req.user.school_id!)
       .eq('academic_year_id', yearId)
       .eq('type', 'LEAVE')
       .eq('status', 'PENDING');
-    const pendingLeaves = leavesData?.length ?? 0;
+    const pendingLeaves = pendingLeavesCount ?? 0;
 
-    // Low attendance students
-    const { data: attendData } = await adminDb
+    const { count: lowAttendanceCount } = await adminDb
       .from('student_academic_records')
-      .select('id', { count: 'exact' })
+      .select('id', { count: 'exact', head: true })
       .eq('school_id', req.user.school_id!)
       .eq('academic_year_id', yearId)
       .lt('attendance_percentage', 75);
-    const lowAttendanceStudents = attendData?.length ?? 0;
+    const lowAttendanceStudents = lowAttendanceCount ?? 0;
 
-    // Unsubmitted attendance (last 7 days)
     const sevenDaysAgo = new Date(Date.now() - 7 * 86400000).toISOString().split('T')[0];
-    const { data: draftData } = await adminDb
+    const { count: draftCount } = await adminDb
       .from('attendance_records')
-      .select('id', { count: 'exact' })
+      .select('id', { count: 'exact', head: true })
       .eq('school_id', req.user.school_id!)
       .eq('academic_year_id', yearId)
       .eq('status', 'DRAFT')
       .gte('date', sevenDaysAgo);
-    const unsubmittedAttendanceDays = draftData?.length ?? 0;
+    const unsubmittedAttendanceDays = draftCount ?? 0;
 
     ok(res, {
       studentsWithDues,

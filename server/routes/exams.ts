@@ -156,6 +156,15 @@ examsRouter.post('/result/upload', requireAuth, requireRole('PRINCIPAL', 'TEACHE
     const existingIds = new Set(((existing ?? []) as any[]).map(r => r.student_id));
 
     const maxMarks = (test as any).max_marks ?? 100;
+    // Validate each row's marks against the test's max_marks — earlier
+    // this endpoint silently accepted negative values or marks > max
+    // (only /edit-results and the teacher path enforced the range).
+    for (const r of body.results) {
+      const m = Number(r.marks);
+      if (!Number.isFinite(m) || m < 0 || m > maxMarks) {
+        throw new ApiError(400, `Marks must be between 0 and ${maxMarks} (got ${r.marks} for student ${r.studentId})`);
+      }
+    }
     const toInsert = body.results
       .filter(r => !existingIds.has(r.studentId))
       .map(r => ({
