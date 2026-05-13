@@ -7564,7 +7564,8 @@ INSERT INTO public.platform_settings (key, value)
 VALUES
   ('plan_pricing', jsonb_build_object('BASIC', 2999, 'STANDARD', 5999, 'PREMIUM', 9999)),
   ('trial_days',   to_jsonb(30)),
-  ('brand',        jsonb_build_object('name', 'EduGrow', 'support_email', 'support@edugrow.in'))
+  ('brand',        jsonb_build_object('name', 'EduGrow', 'support_email', 'support@edugrow.in')),
+  ('policy_url',   to_jsonb(''::text))
 ON CONFLICT (key) DO NOTHING;
 
 

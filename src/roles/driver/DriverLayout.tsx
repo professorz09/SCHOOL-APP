@@ -6,6 +6,7 @@ import { transportService, TransportVehicle, RouteStop, StudentTransportAssignme
 import { useAuthStore } from '@/store/authStore';
 import { useUIStore } from '@/store/uiStore';
 import { supabase } from '@/lib/supabase';
+import { PolicyFooter } from '@/shared/components/PolicyFooter';
 
 // New Delhi as the GPS placeholder — only used until the real driver
 // grants browser geolocation. Without this initial point the route
@@ -543,6 +544,8 @@ export const DriverLayout: React.FC = () => {
           </div>
         </div>
       )}
+
+      <PolicyFooter />
     </div>
   );
 };

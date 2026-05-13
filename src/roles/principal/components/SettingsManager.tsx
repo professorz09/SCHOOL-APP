@@ -15,6 +15,7 @@ import { AuditLogsViewer } from '@/roles/principal/components/AuditLogsViewer';
 import { useEditorModeStore } from '@/store/editorModeStore';
 import { stripClassPrefix } from '@/shared/utils/className';
 import { useAcademicYear } from '@/shared/context/AcademicYearContext';
+import { PolicyFooter } from '@/shared/components/PolicyFooter';
 
 type View = 'MENU' | 'SCHOOL_INFO' | 'CLASSES' | 'FEE_STRUCT' | 'FEE_STRUCT_EDIT' | 'PAYMENTS' | 'SECURITY' | 'DATA_EXPORT' | 'ACTIVITY_LOG' | 'USERS';
 
@@ -407,6 +408,8 @@ export const SettingsManager: React.FC<Props> = ({ onBack, initialView }) => {
             <ChevronRight size={16} className="text-slate-300 shrink-0" />
           </button>
         ))}
+
+        <PolicyFooter />
       </div>
     </div>
   );

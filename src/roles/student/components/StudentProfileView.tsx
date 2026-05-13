@@ -12,6 +12,7 @@ import { authService } from '@/modules/auth/auth.service';
 import {
   studentDashboardService, type ActiveStudentContext,
 } from '@/modules/students/studentDashboard.service';
+import { PolicyFooter } from '@/shared/components/PolicyFooter';
 
 interface Props { onBack: () => void; }
 
@@ -476,6 +477,8 @@ export const StudentProfileView: React.FC<Props> = ({ onBack }) => {
             </div>
           </>
         )}
+
+        <PolicyFooter />
       </div>
 
       {/* Change Password Modal */}

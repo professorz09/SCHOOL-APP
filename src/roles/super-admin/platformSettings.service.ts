@@ -20,6 +20,11 @@ export const DEFAULT_PLAN_PRICING: PlanPricing = {
 };
 export const DEFAULT_TRIAL_DAYS = 30;
 export const DEFAULT_BRAND: BrandSettings = { name: 'EduGrow', support_email: 'support@edugrow.in' };
+/** Public URL where the Privacy Policy + Terms + Account-Deletion
+ *  instructions live (single page with anchored sections). Empty string
+ *  means the super-admin hasn't configured it yet — UI hides the link
+ *  rather than rendering a dead anchor. */
+export const DEFAULT_POLICY_URL = '';
 
 async function readKey<T>(key: string, fallback: T): Promise<T> {
   const { data, error } = await supabase
@@ -37,13 +42,20 @@ async function writeKey<T>(key: string, value: T): Promise<void> {
 }
 
 export const platformSettings = {
-  async getAll(): Promise<{ pricing: PlanPricing; trialDays: number; brand: BrandSettings }> {
-    const [pricing, trialDays, brand] = await Promise.all([
+  async getAll(): Promise<{ pricing: PlanPricing; trialDays: number; brand: BrandSettings; policyUrl: string }> {
+    const [pricing, trialDays, brand, policyUrl] = await Promise.all([
       readKey<PlanPricing>('plan_pricing', DEFAULT_PLAN_PRICING),
       readKey<number>('trial_days', DEFAULT_TRIAL_DAYS),
       readKey<BrandSettings>('brand', DEFAULT_BRAND),
+      readKey<string>('policy_url', DEFAULT_POLICY_URL),
     ]);
-    return { pricing, trialDays, brand };
+    return { pricing, trialDays, brand, policyUrl };
+  },
+
+  /** Lightweight read used by per-role Settings/Profile screens — they
+   *  only need the URL, not the whole bundle. Returns '' if unset. */
+  async getPolicyUrl(): Promise<string> {
+    return readKey<string>('policy_url', DEFAULT_POLICY_URL);
   },
 
   async setPricing(pricing: PlanPricing): Promise<void> {
@@ -65,5 +77,16 @@ export const platformSettings = {
   async setBrand(brand: BrandSettings): Promise<void> {
     if (!brand.name.trim()) throw new Error('Brand name required');
     await writeKey('brand', brand);
+  },
+
+  async setPolicyUrl(url: string): Promise<void> {
+    const trimmed = url.trim();
+    // Allow empty (= hide link everywhere) or a valid http/https URL.
+    // No partial/local URLs — Play Store + Apple want a publicly
+    // reachable page, so a typo'd value is safer rejected than saved.
+    if (trimmed && !/^https?:\/\/.+/i.test(trimmed)) {
+      throw new Error('Policy URL must start with https:// or http://');
+    }
+    await writeKey('policy_url', trimmed);
   },
 };

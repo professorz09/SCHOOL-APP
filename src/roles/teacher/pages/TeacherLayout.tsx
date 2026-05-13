@@ -15,6 +15,7 @@ import { TeacherStudentList } from '@/roles/teacher/components/TeacherStudentLis
 import { useAuthStore } from '@/store/authStore';
 import { principalService } from '@/roles/principal/principal.service';
 import { StudentsManager } from '@/modules/students/components/StudentsManager';
+import { PolicyFooter } from '@/shared/components/PolicyFooter';
 
 type TeacherView = 'DASHBOARD' | 'ATTENDANCE' | 'TESTS' | 'EXAM_GEN' | 'COMPLAINTS' | 'NOTICES' | 'TIMETABLE' | 'STUDENTS' | 'NEW_ADMISSION';
 
@@ -468,6 +469,8 @@ export const TeacherLayout: React.FC = () => {
           </button>
         </section>
       )}
+
+      <PolicyFooter />
     </div>
   );
 };
