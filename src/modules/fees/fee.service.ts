@@ -346,14 +346,25 @@ async function _refreshOneStudent(studentId: string): Promise<void> {
   else _advanceCache.delete(studentId);
 }
 
+// Cap on the in-memory payment-history cache. 500 was too tight — a
+// 200-student school books ~150 payments/month, so the cache wrapped
+// inside 3 months and the principal's older receipts silently vanished
+// from the FeeLedger list. 5000 covers ~2 academic years of typical
+// activity; anything beyond that should be pulled via Reports → CSV.
+const PAYMENT_HISTORY_CAP = 5000;
+
 async function _loadPaymentHistory(schoolId: string): Promise<void> {
   const { data, error } = await supabase
     .from('payment_records')
     .select('id, student_id, amount, method, date, receipt_no, advance_amount, discount_amount, note, created_at, reverses_payment_id, reversed_at, reversed_by, reversal_reason, students(name, admission_no)')
     .eq('school_id', schoolId)
     .order('date', { ascending: false }).order('created_at', { ascending: false })
-    .limit(500);
+    .limit(PAYMENT_HISTORY_CAP);
   if (error) throw new Error(error.message);
+  if ((data?.length ?? 0) === PAYMENT_HISTORY_CAP) {
+    // eslint-disable-next-line no-console
+    console.warn(`[fees] payment history capped at ${PAYMENT_HISTORY_CAP}; older receipts only via Reports CSV`);
+  }
 
   type PRow = {
     id: string; student_id: string; amount: number; method: string;

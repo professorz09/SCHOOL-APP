@@ -423,8 +423,17 @@ adminRouter.post('/reset-school-user-password', requireAuth, PRINCIPAL, async (r
   try {
     if (!req.user.school_id) return send(res, 403, { error: 'principal has no school' });
     const body = req.body as { userId: string; newPassword: string };
-    if (!body.userId || !body.newPassword || body.newPassword.length < 4) {
-      return send(res, 400, { error: 'userId and newPassword (>=4) required' });
+    if (!body.userId || !body.newPassword) {
+      return send(res, 400, { error: 'userId and newPassword required' });
+    }
+    // Same strength rule as self-change-password (auth.ts) — 4-char
+    // passwords were brute-forceable inside the per-mobile lockout
+    // window (8 attempts / 15 min).
+    if (body.newPassword.length < 8) {
+      return send(res, 400, { error: 'Password must be at least 8 characters' });
+    }
+    if (!/[A-Za-z]/.test(body.newPassword) || !/\d/.test(body.newPassword)) {
+      return send(res, 400, { error: 'Password must contain at least one letter and one digit' });
     }
     const { data: target } = await adminDb.from('users')
       .select('id, name, role, school_id').eq('id', body.userId).single();
