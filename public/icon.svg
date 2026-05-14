@@ -1,34 +1,45 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
   <!--
-    EduGrow app icon — 2×2 grid mark on a white plate.
-    Communicates "dashboard / modules" (fits a multi-feature school
-    management app) with a navy + green palette that ties to the
-    "Grow" half of the wordmark.
+    EduGrow app icon — 2×2 grid mark, maskable-safe.
 
-    Layout: four rounded squares with a uniform gap, the grid
-    centred on the plate. Maskable-safe — every tile sits inside
-    the centre 80 % so squircle / circle masks can't clip a tile.
+    Previous version had tiles spanning 71 → 441 which sat just at
+    the edge of the maskable safe area. On Android home screens the
+    OS adaptive-icon mask is applied ON TOP of our SVG, double-
+    clipping the corners and making the icon look "cut". This
+    revision pulls every tile into the recommended centre-66 % core
+    (87 → 425) so the icon survives every mask shape — circle,
+    squircle, rounded-square, teardrop — without trimming the
+    glyph.
+
+    Anatomy:
+      • Plate fills the full 512×512 — no rx on the outer rect, so
+        the OS mask is the single source of corner rounding (avoids
+        the double-clipping). When the OS renders with `purpose:
+        any` (no mask), the plate appears as a square white card,
+        which is what every install-prompt UI is already padded for.
+      • Each tile sits inside the centre 66 %, occupies a generous
+        ~32 % of the canvas, and uses a 28 px corner radius for the
+        modern Material-You / iOS friendly feel.
+      • Palette stays navy + greens — navy for trust, two greens
+        for the "Grow" half of the wordmark.
   -->
 
-  <!-- White plate with hair-fine slate outline so the icon stays
-       visible on very-light system backgrounds. -->
-  <rect width="512" height="512" rx="112" fill="#ffffff"/>
-  <rect x="2" y="2" width="508" height="508" rx="110"
-        fill="none" stroke="#e5e7eb" stroke-width="3"/>
+  <!-- Plate — fill the full square. The OS adaptive-icon mask
+       will round the corners; doing it again here would crop the
+       result twice and produce the visible "cut" the user saw. -->
+  <rect width="512" height="512" fill="#ffffff"/>
 
-  <!-- 2×2 grid: tile = 170×170, gap = 30, total = 370×370.
-       Centred at x = y = 71. Tile corner radius 24 keeps the
-       squares friendly without making them look like coins. -->
+  <!-- 2×2 grid, all tiles inside the centre 66 % safe zone (87→425). -->
 
-  <!-- Top-left — deep navy (trust, anchor) -->
-  <rect x="71"  y="71"  width="170" height="170" rx="24" fill="#0f172a"/>
+  <!-- Top-left — slate-900 anchor -->
+  <rect x="92"  y="92"  width="158" height="158" rx="28" fill="#0f172a"/>
 
-  <!-- Top-right — pale mint (lift, breathing space) -->
-  <rect x="271" y="71"  width="170" height="170" rx="24" fill="#a7f3d0"/>
+  <!-- Top-right — emerald-200 mint lift -->
+  <rect x="262" y="92"  width="158" height="158" rx="28" fill="#a7f3d0"/>
 
-  <!-- Bottom-left — deep navy again to balance the grid diagonally -->
-  <rect x="71"  y="271" width="170" height="170" rx="24" fill="#0f172a"/>
+  <!-- Bottom-left — slate-900 (diagonal balance) -->
+  <rect x="92"  y="262" width="158" height="158" rx="28" fill="#0f172a"/>
 
-  <!-- Bottom-right — vivid green (the "Grow" cue) -->
-  <rect x="271" y="271" width="170" height="170" rx="24" fill="#10b981"/>
+  <!-- Bottom-right — emerald-500 (the "Grow" cue) -->
+  <rect x="262" y="262" width="158" height="158" rx="28" fill="#10b981"/>
 </svg>
