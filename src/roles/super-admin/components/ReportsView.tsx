@@ -3,6 +3,7 @@ import { ArrowLeft, TrendingUp, Users, Activity, IndianRupee, Building2, AlertCi
 import { useSchoolStore } from '@/roles/super-admin/schoolStore';
 import { supabase } from '@/lib/supabase';
 import { SchoolStatus } from '@/shared/config/constants';
+import { fmtINRCompact as fmtINR } from '@/shared/utils/currency';
 
 interface Props { onBack: () => void; }
 
@@ -282,16 +283,6 @@ export const ReportsView: React.FC<Props> = ({ onBack }) => {
   );
 };
 
-// INR currency in compact Indian notation — `₹1.5L` for 1.5 lakh,
-// `₹2.3Cr` for crore. The previous `${(n/1000).toFixed(0)}k` truncated
-// lakhs as "100k", "150k" which is non-standard for Indian audiences.
-function fmtINR(n: number): string {
-  if (!Number.isFinite(n) || n === 0) return '₹0';
-  if (n >= 10000000) return `₹${(n / 10000000).toFixed(n % 10000000 === 0 ? 0 : 1)}Cr`;
-  if (n >= 100000)   return `₹${(n / 100000).toFixed(n % 100000 === 0 ? 0 : 1)}L`;
-  if (n >= 1000)     return `₹${(n / 1000).toFixed(n % 1000 === 0 ? 0 : 1)}k`;
-  return `₹${n.toLocaleString('en-IN')}`;
-}
 
 function fmtCompact(n: number): string {
   if (n >= 1000) return `${(n / 1000).toFixed(1)}k`;

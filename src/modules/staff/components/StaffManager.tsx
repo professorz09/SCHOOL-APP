@@ -7,6 +7,7 @@ import {
 import { staffService } from '@/modules/staff/staff.service';
 import { staffAttendanceService } from '@/modules/attendance/attendance.service';
 import { exportCsv } from '@/shared/utils/csv';
+import { fmtINR as fmtIN } from '@/shared/utils/currency';
 import {
   StaffMember, StaffRole, StaffStatus, SalaryPaymentMethod,
   StaffSalaryHistoryEntry, StaffStatusHistoryEntry, StaffDocument, SalaryPayment,
@@ -482,7 +483,6 @@ const BLANK: Omit<StaffMember, 'id'> = {
   assignedClasses: [], address: '', photo: '',
 };
 
-const fmtIN = (n: number) => `₹${n.toLocaleString('en-IN')}`;
 const fmtDate = (s: string | null | undefined) =>
   s ? new Date(s).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' }) : '—';
 

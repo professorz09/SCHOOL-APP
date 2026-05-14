@@ -17,6 +17,7 @@ import {
 import { useUIStore } from '@/store/uiStore';
 import { useSchoolStore } from '@/roles/super-admin/schoolStore';
 import { adminApi } from '@/lib/adminApi';
+import { fmtINR as fmt } from '@/shared/utils/currency';
 
 interface Props { onBack: () => void }
 
@@ -33,7 +34,6 @@ interface Installment {
   created_at: string;
 }
 
-const fmt = (n: number) => `₹${n.toLocaleString('en-IN')}`;
 const fmtDate = (d: string) => {
   const dt = new Date(d.length <= 10 ? d + 'T00:00:00' : d);
   return dt.toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' });

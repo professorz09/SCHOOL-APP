@@ -15,19 +15,12 @@ import { feeService } from '@/modules/fees/fee.service';
 import { studentService, type StudentListItem } from '@/modules/students/student.service';
 import { FeeLedger } from '@/modules/fees/components/FeeLedger';
 import { useUIStore } from '@/store/uiStore';
+import { fmtINRCompact as fmtINR } from '@/shared/utils/currency';
+import { todayIST as istToday } from '@/shared/utils/date';
 
 interface Props { onBack: () => void; }
 
 type Tab = 'COLLECTIONS' | 'DUES';
-
-const fmtINR = (n: number): string => {
-  if (n >= 10_000_000) return `₹${(n / 10_000_000).toFixed(1)}Cr`;
-  if (n >= 100_000)    return `₹${(n / 100_000).toFixed(1)}L`;
-  if (n >= 1_000)      return `₹${(n / 1_000).toFixed(0)}k`;
-  return `₹${n.toLocaleString('en-IN')}`;
-};
-
-const istToday = () => new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Kolkata' });
 
 interface DueItem extends StudentListItem {
   due: number;

@@ -7,6 +7,7 @@ import { useSchoolStore } from '@/roles/super-admin/schoolStore';
 import { supabase } from '@/lib/supabase';
 import { SchoolStatus } from '@/shared/config/constants';
 import { schoolService } from '@/shared/utils/school.service';
+import { fmtINR } from '@/shared/utils/currency';
 
 interface SADashboardProps {
   onNavigate: (view: string) => void;
@@ -92,7 +93,7 @@ export const SADashboard: React.FC<SADashboardProps> = ({ onNavigate }) => {
 
   const today = new Date();
   const monthLabel = today.toLocaleDateString('en-IN', { month: 'long', year: 'numeric' });
-  const fmtRupees = (n: number) => `₹${n.toLocaleString('en-IN')}`;
+  const fmtRupees = fmtINR;
 
   return (
     <div className="flex flex-col gap-4 lg:gap-6 px-4 lg:px-8 pt-4 lg:pt-8 pb-10 lg:max-w-7xl lg:mx-auto animate-in fade-in duration-300">

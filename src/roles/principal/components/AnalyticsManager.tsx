@@ -18,6 +18,7 @@ import { useUIStore } from '@/store/uiStore';
 import { useAcademicYear } from '@/shared/context/AcademicYearContext';
 import { toCsv, downloadCsv } from '@/shared/utils/csv';
 import { todayIST } from '@/shared/utils/date';
+import { fmtINR } from '@/shared/utils/currency';
 
 interface Props { onBack: () => void; }
 
@@ -61,8 +62,6 @@ interface AnalyticsData {
   rawStudents: Array<{ id: string; name: string; admission_no: string; class_name: string | null; section: string | null; status: string }>;
   rawStaff: Array<{ id: string; name: string; role: string; phone: string | null; salary: number; status: string }>;
 }
-
-const fmtINR = (n: number) => `₹${Math.round(n).toLocaleString('en-IN')}`;
 
 const monthKey = (d: string | Date): string => {
   const dt = typeof d === 'string' ? new Date(d) : d;
