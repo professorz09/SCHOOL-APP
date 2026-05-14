@@ -469,7 +469,7 @@ export const ExamPaperGeneratorView: React.FC<Props> = ({ onBack }) => {
 
         {/* Sticky bottom action bar — visible on Preview only */}
         {tab === 'PREVIEW' && questions.length > 0 && (
-          <div className="fixed bottom-0 left-0 right-0 z-30 bg-gradient-to-t from-slate-50 via-slate-50 to-transparent pt-4 px-3 md:px-6"
+          <div className="fixed bottom-0 left-0 right-0 lg:left-64 xl:left-72 z-30 bg-gradient-to-t from-slate-50 via-slate-50 to-transparent pt-4 px-3 md:px-6"
             style={{
               paddingBottom: 'calc(env(safe-area-inset-bottom, 0px) + 40px)',
             }}>

@@ -133,7 +133,7 @@ export const ToolShell: React.FC<Props> = ({
             phone's system gesture nav so the buttons don't sit under
             the Android nav bar / iOS home indicator. */}
         {tab === 'PREVIEW' && hasData && (
-          <div className="fixed bottom-0 left-0 right-0 z-30 bg-gradient-to-t from-slate-50 via-slate-50 to-transparent pt-4 px-3 md:px-6"
+          <div className="fixed bottom-0 left-0 right-0 lg:left-64 xl:left-72 z-30 bg-gradient-to-t from-slate-50 via-slate-50 to-transparent pt-4 px-3 md:px-6"
             style={{
               // Push buttons well clear of Android's gesture nav /
               // 3-button nav. `env()` returns 0 in regular Chrome

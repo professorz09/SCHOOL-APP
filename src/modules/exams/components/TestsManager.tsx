@@ -848,7 +848,7 @@ export const TestsManager: React.FC<Props> = ({ onBack }) => {
       {/* Fixed bottom action bar — Next on Details tab, Create on
           Subjects tab. Mirrors the principal's question-paper flow.
           Safe-area-inset padding keeps it above Android nav. */}
-      <div className="fixed bottom-0 left-0 right-0 z-30 bg-gradient-to-t from-slate-50 via-slate-50 to-transparent pt-4 px-3 md:px-6"
+      <div className="fixed bottom-0 left-0 right-0 lg:left-64 xl:left-72 z-30 bg-gradient-to-t from-slate-50 via-slate-50 to-transparent pt-4 px-3 md:px-6"
         style={{ paddingBottom: 'calc(env(safe-area-inset-bottom, 0px) + 40px)' }}>
         <div className="max-w-3xl mx-auto">
           {createTab === 'DETAILS' ? (
