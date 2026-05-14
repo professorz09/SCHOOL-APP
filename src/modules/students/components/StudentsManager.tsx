@@ -146,12 +146,11 @@ export const StudentsManager: React.FC<Props> = ({
   // mobile. Earlier the entire form was one giant scroll which
   // most principals found overwhelming. Order matches the user's
   // mental model: Basic → Family → Documents.
-  // Hides every optional step-1 field (Aadhaar, gender, religion,
-  // caste, PEN, birth cert, TC no, DOB, blood, phone, email,
-  // address) behind a single "Show more details" disclosure so the
-  // first screen the principal sees is just Name + Admission No +
-  // Photo. Everything else is one tap away.
-  const [showMoreInfo, setShowMoreInfo] = useState(false);
+  // (The previous "Show more details" disclosure was removed — DOB
+  // is mandatory in handleCreate's validation and principals were
+  // skipping it because it sat under the collapse. Every step-1
+  // field now renders inline so no compulsory input is one tap away
+  // from being missed.)
   const [students, setStudents] = useState<Student[]>([]);
   // Inactive students (TC issued + suspended/failed/etc) — fetched lazily
   // when the user picks the "Inactive" filter chip. studentService.getAll()
@@ -954,19 +953,15 @@ export const StudentsManager: React.FC<Props> = ({
               </p>
             </div>
 
-            {/* "Show more details" disclosure — hides every optional
-                step-1 field below until the principal asks. Keeps the
-                first screen ultra-short: just Name, Admission No,
-                and the photo card. Most admissions only need this. */}
-            <button type="button"
-              onClick={() => setShowMoreInfo(s => !s)}
-              className="w-full mt-1 flex items-center justify-center gap-1.5 text-[10px] font-black uppercase tracking-widest text-indigo-600 bg-indigo-50 hover:bg-indigo-100 active:scale-[0.99] rounded-xl py-2.5 transition-colors">
-              {showMoreInfo
-                ? <>Hide extra details <span className="text-base leading-none">▴</span></>
-                : <>+ Add more details (Aadhaar, DOB, contact, etc.)</>}
-            </button>
+            {/* Earlier these fields lived under a collapsible
+                "+ Add more details" disclosure. DOB is mandatory in
+                handleCreate's validation, so hiding it behind a tap
+                meant principals were skipping it and getting an
+                unexpected error on submit. Always-visible now —
+                slightly longer first screen, but no compulsory
+                field is one click away from being missed. */}
 
-            {showMoreInfo && (<>
+            <>
             {/* Aadhaar — moved here from the always-visible array
                 above. Optional for most boards; principals fill it
                 later once parents bring the card. */}
@@ -1113,8 +1108,7 @@ export const StudentsManager: React.FC<Props> = ({
                   className="w-full border border-slate-200 bg-slate-50 rounded-xl px-4 py-3 font-bold text-sm outline-none focus:border-indigo-500" />
               </div>
             ))}
-            </>)}
-            {/* /showMoreInfo */}
+            </>
           </div>
 
           {/* ─── Family ───────────────────────────────────────────── */}
