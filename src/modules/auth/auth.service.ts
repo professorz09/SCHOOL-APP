@@ -257,9 +257,38 @@ class AuthService {
     return buildSession(profile);
   }
 
-  /** Sign out the current user (clears Supabase tokens from storage). */
+  /** Sign out the current user from EVERY device + tab.
+   *  Default `signOut()` scope is 'local' — that only invalidates
+   *  the current browser's tokens. Other devices, other tabs, the
+   *  desktop install, the parent's phone — all stay logged in until
+   *  their tokens naturally expire. With scope 'global' Supabase
+   *  revokes every refresh token tied to this user, so the next API
+   *  call from any of those sessions hits 401 and they fall back to
+   *  the login screen too.
+   *
+   *  We also kick the server-side `/api/auth/logout` route which
+   *  calls `auth.admin.signOut(userId)` as a belt-and-braces in case
+   *  the client-side global signOut races a token refresh on another
+   *  tab. Failures swallowed — if either path errors out the local
+   *  store is cleared anyway by the caller. */
   async logout(): Promise<void> {
-    await supabase.auth.signOut();
+    const tasks: Promise<unknown>[] = [
+      supabase.auth.signOut({ scope: 'global' }).catch(() => {}),
+    ];
+    // Fire-and-await the server route too, since the global signOut
+    // sometimes 401s when the token is already mid-expiry.
+    try {
+      const tok = (await supabase.auth.getSession()).data.session?.access_token;
+      if (tok) {
+        tasks.push(
+          fetch('/api/auth/logout', {
+            method: 'POST',
+            headers: { authorization: `Bearer ${tok}` },
+          }).catch(() => {}),
+        );
+      }
+    } catch { /* ignore */ }
+    await Promise.all(tasks);
   }
 
   /**
