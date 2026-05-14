@@ -16,6 +16,8 @@ import { supabase } from '@/lib/supabase';
 import { useAuthStore } from '@/store/authStore';
 import { useUIStore } from '@/store/uiStore';
 import { useAcademicYear } from '@/shared/context/AcademicYearContext';
+import { toCsv, downloadCsv } from '@/shared/utils/csv';
+import { todayIST } from '@/shared/utils/date';
 
 interface Props { onBack: () => void; }
 
@@ -55,7 +57,7 @@ interface AnalyticsData {
   rawPayments: Array<{ id: string; date: string; amount: number; method: string; student_id: string | null; receipt_no: string | null }>;
   rawExpenses: Array<{ id: string; date: string; amount: number; category: string; description: string | null }>;
   rawSalaries: Array<{ id: string; staff_id: string | null; month: string; amount: number; paid_at: string | null }>;
-  rawAttendance: Array<{ id: string; date: string; class_name: string | null; section: string | null; total_present: number | null; total_absent: number | null }>;
+  rawAttendance: Array<{ id: string; date: string; class_name: string | null; section: string | null; total_present: number | null; total_absent: number | null; total_half: number | null; total_holiday: number | null }>;
   rawStudents: Array<{ id: string; name: string; admission_no: string; class_name: string | null; section: string | null; status: string }>;
   rawStaff: Array<{ id: string; name: string; role: string; phone: string | null; salary: number; status: string }>;
 }
@@ -72,19 +74,6 @@ const monthLabel = (ym: string): string => {
   return new Date(y, m - 1).toLocaleDateString('en-IN', { month: 'short', year: '2-digit' });
 };
 
-// CSV helper — quote any field containing comma / quote / newline.
-const csvCell = (v: unknown): string => {
-  const s = v === null || v === undefined ? '' : String(v);
-  return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
-};
-const toCsv = (rows: Record<string, unknown>[], headers?: string[]): string => {
-  if (rows.length === 0) return (headers ?? []).map(csvCell).join(',') + '\n';
-  const cols = headers ?? Object.keys(rows[0]);
-  const lines = [cols.map(csvCell).join(',')];
-  for (const r of rows) lines.push(cols.map(c => csvCell(r[c])).join(','));
-  return lines.join('\n') + '\n';
-};
-
 export const AnalyticsManager: React.FC<Props> = ({ onBack }) => {
   const session = useAuthStore(s => s.session);
   const { showToast } = useUIStore();
@@ -93,10 +82,13 @@ export const AnalyticsManager: React.FC<Props> = ({ onBack }) => {
   // Default range = current academic year (or last 12 months if no year).
   // currentYear loads asynchronously from context, so the initial mount may
   // see undefined — we fall back to a 12-month window and then sync once
-  // currentYear arrives.
-  const today = new Date();
-  const defaultFrom = currentYear?.startDate ?? new Date(today.getFullYear(), today.getMonth() - 11, 1).toISOString().slice(0, 10);
-  const defaultTo   = currentYear?.endDate   ?? today.toISOString().slice(0, 10);
+  // currentYear arrives. IST-anchored so the "today" boundary doesn't roll
+  // to yesterday before 5:30 AM IST.
+  const ymdToday = todayIST();
+  const [ty, tm] = ymdToday.split('-').map(Number);
+  const back11   = new Date(ty, tm - 1 - 11, 1);
+  const defaultFrom = currentYear?.startDate ?? `${back11.getFullYear()}-${String(back11.getMonth() + 1).padStart(2, '0')}-01`;
+  const defaultTo   = currentYear?.endDate ?? ymdToday;
 
   const [from, setFrom] = useState(defaultFrom);
   const [to,   setTo]   = useState(defaultTo);
@@ -122,12 +114,26 @@ export const AnalyticsManager: React.FC<Props> = ({ onBack }) => {
     try {
       const schoolId = session.schoolId;
       // Fire all queries in parallel — they're all read-only and independent.
+      // Reversal filters: payment_records' original-reversed rows still carry
+      // their positive amount (only `reversed_at` is stamped), and a NEW row
+      // with a negative amount and `reverses_payment_id` set is inserted. To
+      // get the true income we must drop both; otherwise the dashboard double-
+      // counts a reversal when the original and the reversal land in different
+      // months. Same shape for salary_payments + its balancing -ve `expenses`
+      // row, which is why we DON'T re-add rawSalaries to the expense sum.
+      const studentsQuery = supabase.from('students')
+        .select('id, name, admission_no, status, student_academic_records!inner(class_name, section, academic_year_id)')
+        .eq('school_id', schoolId).eq('is_active', true);
+      if (currentYear?.id) {
+        studentsQuery.eq('student_academic_records.academic_year_id', currentYear.id);
+      }
       const [
         payRes, expRes, salRes, attRes, stuRes, stfRes,
       ] = await Promise.all([
         supabase.from('payment_records')
           .select('id, date, amount, method, student_id, receipt_no')
           .eq('school_id', schoolId).gte('date', from).lte('date', to)
+          .is('reversed_at', null).is('reverses_payment_id', null)
           .order('date'),
         supabase.from('expenses')
           .select('id, date, amount, category, description')
@@ -135,13 +141,12 @@ export const AnalyticsManager: React.FC<Props> = ({ onBack }) => {
           .order('date'),
         supabase.from('salary_payments')
           .select('id, staff_id, month, amount, paid_at')
-          .eq('school_id', schoolId).gte('paid_at', from).lte('paid_at', to + 'T23:59:59'),
+          .eq('school_id', schoolId).gte('paid_at', from).lte('paid_at', to + 'T23:59:59')
+          .is('reversed_at', null),
         supabase.from('attendance_records')
-          .select('id, date, class_name, section, total_present, total_absent')
+          .select('id, date, class_name, section, total_present, total_absent, total_half, total_holiday')
           .eq('school_id', schoolId).gte('date', from).lte('date', to),
-        supabase.from('students')
-          .select('id, name, admission_no, status, student_academic_records!inner(class_name, section, academic_year_id)')
-          .eq('school_id', schoolId).eq('is_active', true),
+        studentsQuery,
         supabase.from('staff')
           .select('id, name, role, phone, salary, status')
           .eq('school_id', schoolId).eq('is_active', true),
@@ -155,14 +160,15 @@ export const AnalyticsManager: React.FC<Props> = ({ onBack }) => {
       const rawSalaries  = (salRes.data ?? []) as AnalyticsData['rawSalaries'];
       const rawAttendance = (attRes.data ?? []) as AnalyticsData['rawAttendance'];
 
-      // Flatten the embedded AR for student class/section
+      // Flatten the embedded AR for student class/section.
+      // The query already filtered student_academic_records by the active
+      // academic_year_id (when one is loaded), so the embed has exactly one
+      // row per student. No more fallback to [0] — that was returning a
+      // random prior year for promoted students and skewing class-strength.
       type StudentRow = { id: string; name: string; admission_no: string; status: string;
         student_academic_records: { class_name: string | null; section: string | null; academic_year_id: string }[] };
       const rawStudents: AnalyticsData['rawStudents'] = (stuRes.data as unknown as StudentRow[] ?? []).map(s => {
-        // Pick the AR row matching the active year if available, else the first.
-        const ar = currentYear?.id
-          ? s.student_academic_records.find(r => r.academic_year_id === currentYear.id)
-          : s.student_academic_records[0];
+        const ar = s.student_academic_records[0];
         return {
           id: s.id, name: s.name, admission_no: s.admission_no, status: s.status,
           class_name: ar?.class_name ?? null, section: ar?.section ?? null,
@@ -172,9 +178,12 @@ export const AnalyticsManager: React.FC<Props> = ({ onBack }) => {
       const rawStaff = (stfRes.data ?? []) as AnalyticsData['rawStaff'];
 
       // ── KPI rollups ────────────────────────────────────────────────────
+      // record_salary_payment already writes a matching `expenses` row
+      // (category='SALARY') AND reverse_salary_payment writes the balancing
+      // -ve `expenses` row. So `expenses` is the single source of truth for
+      // outflow; adding rawSalaries here would double-count every payroll.
       const income  = rawPayments.reduce((a, r) => a + Number(r.amount || 0), 0);
-      const expense = rawExpenses.reduce((a, r) => a + Number(r.amount || 0), 0)
-                    + rawSalaries.reduce((a, r) => a + Number(r.amount || 0), 0);
+      const expense = rawExpenses.reduce((a, r) => a + Number(r.amount || 0), 0);
 
       // Monthly buckets
       const buckets = new Map<string, MonthBucket>();
@@ -185,18 +194,25 @@ export const AnalyticsManager: React.FC<Props> = ({ onBack }) => {
       };
       for (const p of rawPayments)  ensure(monthKey(p.date)).income  += Number(p.amount || 0);
       for (const e of rawExpenses)  ensure(monthKey(e.date)).expense += Number(e.amount || 0);
-      for (const s of rawSalaries)  if (s.paid_at) ensure(monthKey(s.paid_at)).expense += Number(s.amount || 0);
       const monthly = [...buckets.values()].sort((a, b) => a.ym.localeCompare(b.ym));
 
-      // Attendance %
+      // Attendance % — half-days count as 0.5 present (they're worked hours,
+      // not absences) and holidays are excluded from the denominator. The
+      // earlier formula `present / (present + absent)` dropped half-days
+      // from both sides and read 3-5pp lower than the register on screen.
       const attTotals = rawAttendance.reduce(
-        (a, r) => ({ p: a.p + (r.total_present ?? 0), ab: a.ab + (r.total_absent ?? 0) }),
-        { p: 0, ab: 0 },
+        (a, r) => ({
+          p:  a.p  + (r.total_present ?? 0),
+          ab: a.ab + (r.total_absent ?? 0),
+          hd: a.hd + (r.total_half ?? 0),
+        }),
+        { p: 0, ab: 0, hd: 0 },
       );
+      const attDenom = attTotals.p + attTotals.ab + attTotals.hd;
       const attendance: AttendanceSummary = {
         totalRecords: rawAttendance.length,
-        presentPct: attTotals.p + attTotals.ab > 0
-          ? Math.round((attTotals.p / (attTotals.p + attTotals.ab)) * 100)
+        presentPct: attDenom > 0
+          ? Math.round(((attTotals.p + attTotals.hd * 0.5) / attDenom) * 100)
           : 0,
       };
 
@@ -231,7 +247,7 @@ export const AnalyticsManager: React.FC<Props> = ({ onBack }) => {
     }
   };
 
-  useEffect(() => { void load(); /* eslint-disable-next-line */ }, [from, to, session?.schoolId]);
+  useEffect(() => { void load(); /* eslint-disable-next-line */ }, [from, to, session?.schoolId, currentYear?.id]);
 
   const handleExport = async () => {
     if (!data) return;
@@ -311,7 +327,7 @@ export const AnalyticsManager: React.FC<Props> = ({ onBack }) => {
       // end — it was previously column A which made the sheet open
       // looking like a wall of uuids.
       zip.file(`${folder}/attendance.csv`, toCsv(data.rawAttendance,
-        ['date', 'class_name', 'section', 'total_present', 'total_absent', 'id']));
+        ['date', 'class_name', 'section', 'total_present', 'total_absent', 'total_half', 'total_holiday', 'id']));
 
       const blob = await zip.generateAsync({ type: 'blob' });
       const url  = URL.createObjectURL(blob);
@@ -332,21 +348,26 @@ export const AnalyticsManager: React.FC<Props> = ({ onBack }) => {
     }
   };
 
-  // Quick range presets
+  // Quick range presets — IST-anchored so "Today" doesn't rewind to
+  // yesterday before 5:30 AM IST (toISOString() gives UTC).
   const setPreset = (preset: 'YEAR' | 'M3' | 'M1' | 'TODAY') => {
     setUserTouchedRange(true);
-    const t = new Date();
+    const ymd = todayIST();
+    const [y, m] = ymd.split('-').map(Number);
+    const firstOf = (yr: number, mo: number) =>
+      `${yr}-${String(mo).padStart(2, '0')}-01`;
     if (preset === 'YEAR') {
-      setFrom(currentYear?.startDate ?? new Date(t.getFullYear(), 0, 1).toISOString().slice(0, 10));
-      setTo(currentYear?.endDate ?? t.toISOString().slice(0, 10));
+      setFrom(currentYear?.startDate ?? `${y}-01-01`);
+      setTo(currentYear?.endDate ?? ymd);
     } else if (preset === 'M3') {
-      setFrom(new Date(t.getFullYear(), t.getMonth() - 2, 1).toISOString().slice(0, 10));
-      setTo(t.toISOString().slice(0, 10));
+      const d = new Date(y, m - 1 - 2, 1);
+      setFrom(firstOf(d.getFullYear(), d.getMonth() + 1));
+      setTo(ymd);
     } else if (preset === 'M1') {
-      setFrom(new Date(t.getFullYear(), t.getMonth(), 1).toISOString().slice(0, 10));
-      setTo(t.toISOString().slice(0, 10));
+      setFrom(firstOf(y, m));
+      setTo(ymd);
     } else if (preset === 'TODAY') {
-      const d = t.toISOString().slice(0, 10); setFrom(d); setTo(d);
+      setFrom(ymd); setTo(ymd);
     }
   };
 
@@ -363,20 +384,6 @@ export const AnalyticsManager: React.FC<Props> = ({ onBack }) => {
   // From/To pickers in the header.
   const [reportBusy, setReportBusy] = useState<string | null>(null);
   const [classFilter, setClassFilter] = useState<string>(''); // 'class:section' or ''
-
-  const triggerCsvDownload = (filename: string, content: string) => {
-    // BOM prefix → Excel opens UTF-8 cleanly (₹, accents, devanagari).
-    const blob = new Blob(['﻿' + content], { type: 'text/csv;charset=utf-8' });
-    const url  = URL.createObjectURL(blob);
-    const a    = document.createElement('a');
-    a.href = url; a.download = filename;
-    a.style.display = 'none';
-    document.body.appendChild(a);
-    a.click();
-    // Deferred cleanup — synchronous revoke after click() races the
-    // file fetch on Safari / mobile WebKit, producing empty files.
-    setTimeout(() => { a.remove(); URL.revokeObjectURL(url); }, 1000);
-  };
 
   // Single source of truth for running a report. Rate-limit + error
   // surfacing live here so each report-definition can stay declarative.
@@ -408,8 +415,8 @@ export const AnalyticsManager: React.FC<Props> = ({ onBack }) => {
       }
 
       const { rows, headers, filenamePrefix } = await fetchFlat();
-      const stamp = new Date().toISOString().slice(0, 10);
-      triggerCsvDownload(`${filenamePrefix}_${stamp}.csv`, toCsv(rows, headers));
+      const stamp = todayIST();
+      downloadCsv(`${filenamePrefix}_${stamp}.csv`, toCsv(rows, headers));
       showToast(`${rows.length} row${rows.length === 1 ? '' : 's'} exported`);
     } catch (e) {
       showToast(e instanceof Error ? e.message : 'Export failed', 'error');
