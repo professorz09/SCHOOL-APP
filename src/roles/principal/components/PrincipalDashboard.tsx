@@ -631,18 +631,20 @@ export const PrincipalDashboard: React.FC<Props> = ({ onNavigate }) => {
             carry a perpetual "all clear" panel. */}
       {attentionItems.length > 0 && (
         <div className="bg-white rounded-2xl border border-slate-100 shadow-sm p-4 lg:p-5">
-          <div className="flex items-center justify-between mb-3">
-            <div className="flex items-center gap-2.5">
-              <div className="w-10 h-10 lg:w-11 lg:h-11 rounded-xl bg-gradient-to-br from-amber-400 to-rose-500 flex items-center justify-center text-white shadow-md">
-                <CircleAlert size={18}/>
-              </div>
-              <div>
-                <h2 className="text-sm lg:text-base font-black text-slate-900 uppercase tracking-tight">Needs Attention</h2>
-                <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">Approvals · complaints · fee uploads</p>
-              </div>
+          {/* Header: icon + title + inline count. Subtitle and the
+              "OPEN" pill that used to sit on the right were redundant —
+              the title says "Needs Attention", each row already has its
+              own action pill (Approve / Open / Review). Inline count
+              keeps the header tight and professional. */}
+          <div className="flex items-center gap-2.5 mb-3">
+            <div className="w-9 h-9 rounded-xl bg-rose-50 text-rose-600 flex items-center justify-center shrink-0">
+              <CircleAlert size={16}/>
             </div>
-            <span className="text-[10px] font-black text-rose-700 bg-rose-50 px-2 py-1 rounded-full uppercase tracking-widest">
-              {attentionItems.length} open
+            <h2 className="text-sm lg:text-base font-black text-slate-900 uppercase tracking-tight">
+              Needs Attention
+            </h2>
+            <span className="text-[10px] font-black text-rose-600 bg-rose-50 px-1.5 py-0.5 rounded-md tabular-nums">
+              {attentionItems.length}
             </span>
           </div>
           <div className="space-y-1.5">
