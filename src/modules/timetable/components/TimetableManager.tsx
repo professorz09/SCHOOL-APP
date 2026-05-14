@@ -83,7 +83,16 @@ export const TimetableManager: React.FC<Props> = ({ onBack }) => {
   const [selectedClass, setSelectedClass] = useState<ClassRow | null>(null);
   const [activeDay, setActiveDay] = useState<TDay>('Monday');
   const [entries, setEntries] = useState<TimetableEntry[]>([]);
-  const [slots, setSlots] = useState(() => [...PERIOD_SLOTS]);
+  // Start empty, NOT seeded from PERIOD_SLOTS. The default fallback
+  // carries placeholder slots (Assembly / Period 1 / Lunch …) that
+  // visibly flashed onto the screen for a beat before refreshAll()
+  // overwrote them with the real per-class config — the user would
+  // see a "ghost" timetable, then it'd snap to the actual one. The
+  // header + day picker now render against an empty slot list (which
+  // shows a skeleton or the "Configure schedule" empty state) and
+  // only populate once we have the real data.
+  const [slots, setSlots] = useState<typeof PERIOD_SLOTS>([]);
+  const [slotsLoaded, setSlotsLoaded] = useState(false);
   const [customizeOn, setCustomizeOn] = useState<boolean>(() => isTimetableCustomizeOn());
   // Per-class slot resolution lives in reload() now; no separate effect
   // so we don't flash the school default between renders.
@@ -131,6 +140,7 @@ export const TimetableManager: React.FC<Props> = ({ onBack }) => {
     // class switch. Resolve per-class up front so there's no flicker.
     setEntries(timetableService.getClassTimetable(cls.label));
     setSlots(timetableService.getSlotsForClass(cls.label));
+    setSlotsLoaded(true);
   }, []);
 
   useEffect(() => {
@@ -389,7 +399,13 @@ export const TimetableManager: React.FC<Props> = ({ onBack }) => {
     if (!ok) return;
     try {
       await timetableService.deleteSlot(slotTimeModal.slotId);
-      setSlots([...PERIOD_SLOTS]);
+      // Reload from the service (which is now fresh post-delete)
+      // instead of falling back to the hardcoded PERIOD_SLOTS default.
+      // Reverting to the default would flash placeholder rows on
+      // top of the real per-class config.
+      if (selectedClass) {
+        setSlots(timetableService.getSlotsForClass(selectedClass.label));
+      }
       setSlotTimeModal(null);
       showToast('Slot deleted');
     } catch (e) {
@@ -569,6 +585,31 @@ export const TimetableManager: React.FC<Props> = ({ onBack }) => {
               <div className="absolute left-3 lg:left-4 top-1.5 bottom-1.5 w-px bg-slate-200" />
 
               <div className="space-y-3">
+                {/* Show skeleton placeholders until real slots arrive
+                    instead of flashing the hardcoded PERIOD_SLOTS
+                    fallback. Renders 6 grey rows so the layout has
+                    weight and the user knows something is loading,
+                    not that the schedule is empty. */}
+                {!slotsLoaded && slots.length === 0 && (
+                  <>
+                    {[0, 1, 2, 3, 4, 5].map(i => (
+                      <div key={i} className="relative">
+                        <div className="absolute -left-[26px] lg:-left-[28px] top-3 w-4 h-4 rounded-full ring-4 bg-slate-200 ring-slate-100" />
+                        <div className="w-full rounded-2xl shadow-sm bg-white border border-slate-100 px-3 lg:px-4 py-3 flex items-center gap-3 lg:gap-4">
+                          <div className="shrink-0 w-20 lg:w-24 space-y-1.5">
+                            <div className="h-3 w-12 bg-slate-100 rounded animate-pulse" />
+                            <div className="h-2.5 w-10 bg-slate-100 rounded animate-pulse" />
+                          </div>
+                          <div className="w-px self-stretch bg-slate-100" />
+                          <div className="flex-1 space-y-1.5">
+                            <div className="h-3.5 w-2/3 bg-slate-100 rounded animate-pulse" />
+                            <div className="h-2.5 w-1/3 bg-slate-100 rounded animate-pulse" />
+                          </div>
+                        </div>
+                      </div>
+                    ))}
+                  </>
+                )}
                 {slots.map(slot => {
                   const entry = getEntry(slot.slotId);
                   // Per-day activity entries (migration 0131) make the
