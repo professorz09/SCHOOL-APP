@@ -425,9 +425,14 @@ export const StudentsManager: React.FC<Props> = ({
       }
     }
     // Date sanity checks — these are *format* / range errors rather than
-    // "missing" so they keep their own focused toasts.
-    if (form.admissionDate) {
-      const adm = new Date(form.admissionDate);
+    // "missing" so they keep their own focused toasts. Resolve the value
+    // into a local first: the previous version queued `setForm` for the
+    // empty case, but React state updates don't apply within the same
+    // handler — `form.admissionDate` stayed empty and the payload below
+    // shipped an empty admission date despite the toast suggesting today.
+    let resolvedAdmissionDate = form.admissionDate;
+    if (resolvedAdmissionDate) {
+      const adm = new Date(resolvedAdmissionDate);
       const today = new Date(todayIST());
       if (Number.isNaN(adm.getTime())) {
         showToast('Invalid admission date', 'error'); return;
@@ -437,7 +442,8 @@ export const StudentsManager: React.FC<Props> = ({
         return;
       }
     } else {
-      setForm(f => ({ ...f, admissionDate: todayIST() }));
+      resolvedAdmissionDate = todayIST();
+      setForm(f => ({ ...f, admissionDate: resolvedAdmissionDate }));
     }
     {
       const dob = new Date(form.dob);
@@ -474,7 +480,7 @@ export const StudentsManager: React.FC<Props> = ({
         // Father/Mother fields in the saved payload.
         const { parentMobileNumber: _pm, parentName: _pn, parentEmail: _pe, ...rest } = form;
         void _pm; void _pn; void _pe;
-        const payload = { ...rest } as Record<string, unknown>;
+        const payload = { ...rest, admissionDate: resolvedAdmissionDate } as Record<string, unknown>;
         await principalService.submitAdmissionDraft(
           payload, form.name.trim(), form.admissionNo.trim(),
         );
@@ -511,6 +517,7 @@ export const StudentsManager: React.FC<Props> = ({
       ).slice(-10);
       const studentData: CreateStudentInput = {
         ...rest,
+        admissionDate: resolvedAdmissionDate,
         // Force class/section blank so the AR insert in create() is skipped
         // (UNASSIGNED bucket). totalFee is taken in the assignment modal.
         className: '', section: '', stream: undefined, totalFee: 0,

@@ -294,10 +294,19 @@ export const TransportManager: React.FC<Props> = ({ onBack }) => {
   };
 
   const handleRemoveAssignment = async (studentId: string) => {
-    await transportService.removeStudentAssignment(studentId);
-    studentsLoadedRef.current = false;
-    await reloadCore();
-    await loadStudents();
+    try {
+      await transportService.removeStudentAssignment(studentId);
+      studentsLoadedRef.current = false;
+      await reloadCore();
+      await loadStudents();
+      showToast('Transport removed');
+    } catch (e) {
+      // Earlier this had no try/catch — a failed remove (RLS, network,
+      // server validation) bubbled silently to the error boundary.
+      // Surface the real error to the principal so they can retry or
+      // call out the data inconsistency.
+      showToast(e instanceof Error ? e.message : 'Could not remove transport', 'error');
+    }
   };
 
   const openDriverHistory = async (driverId: string, vehicleNo: string) => {
