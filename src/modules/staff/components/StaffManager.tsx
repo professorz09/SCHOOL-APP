@@ -1292,48 +1292,54 @@ export const StaffManager: React.FC<Props> = ({ onBack }) => {
             </span>
           </div>
 
-          <div className="grid grid-cols-2 gap-2">
-            <select value={docType} onChange={e => setDocType(e.target.value)}
-              disabled={pendingDocs.length >= MAX_STAFF_DOCS}
-              className="border border-slate-200 bg-slate-50 rounded-xl px-3 py-2.5 text-xs font-bold outline-none focus:border-blue-500 disabled:opacity-60">
-              {DOC_TYPES.map(t => <option key={t} value={t}>{t.replace('_', ' ')}</option>)}
-            </select>
-            <label className={`flex items-center justify-center gap-1.5 bg-blue-50 border border-blue-200 text-blue-700 font-black text-xs rounded-xl px-3 py-2.5 cursor-pointer hover:bg-blue-100 transition-colors ${pendingDocs.length >= MAX_STAFF_DOCS ? 'opacity-60 pointer-events-none' : ''}`}>
-              <Upload size={13}/>
-              <span>Add File</span>
-              <input type="file" accept="image/*,application/pdf" className="hidden"
-                disabled={pendingDocs.length >= MAX_STAFF_DOCS}
-                onChange={e => {
-                  const f = e.target.files?.[0];
-                  if (!f) { e.target.value = ''; return; }
-                  if (pendingDocs.length >= MAX_STAFF_DOCS) {
-                    showToast(`Limit reached — max ${MAX_STAFF_DOCS} documents`, 'error');
-                    e.target.value = '';
-                    return;
-                  }
-                  setPendingDocs(p => [...p, { type: docType, file: f }]);
-                  e.target.value = '';
-                }} />
-            </label>
-          </div>
-
-          {pendingDocs.length > 0 && (
-            <div className="space-y-1.5">
-              {pendingDocs.map((d, i) => (
-                <div key={i} className="flex items-center gap-2 bg-slate-50 rounded-xl px-3 py-2">
-                  <FileText size={13} className="text-slate-500 shrink-0"/>
-                  <div className="flex-1 min-w-0">
-                    <div className="text-xs font-black text-slate-800 truncate">{d.file.name}</div>
-                    <div className="text-[9px] font-bold text-slate-400">{d.type.replace('_', ' ')} · {(d.file.size / 1024).toFixed(0)} KB</div>
+          {/* One row per doc type — name on the left, upload (or
+              uploaded-file pill) on the right. Replaces the previous
+              "[dropdown] [Add File]" combo which made users repeat-tap
+              to upload different categories and was easy to misread. */}
+          <div className="space-y-2">
+            {DOC_TYPES.map(t => {
+              const idx = pendingDocs.findIndex(d => d.type === t);
+              const picked = idx >= 0 ? pendingDocs[idx] : null;
+              const disabled = !picked && pendingDocs.length >= MAX_STAFF_DOCS;
+              return (
+                <div key={t} className="flex items-center gap-2">
+                  <div className="flex-1 min-w-0 text-xs font-black text-slate-700 uppercase tracking-wide">
+                    {t.replace(/_/g, ' ')}
                   </div>
-                  <button onClick={() => setPendingDocs(p => p.filter((_, idx) => idx !== i))}
-                    className="p-1.5 bg-rose-100 text-rose-600 rounded-lg hover:bg-rose-200 transition-colors" title="Remove">
-                    <Trash2 size={12}/>
-                  </button>
+                  {picked ? (
+                    <>
+                      <div className="flex items-center gap-1.5 bg-emerald-50 border border-emerald-200 text-emerald-700 rounded-xl px-3 py-2 text-[11px] font-bold min-w-0 max-w-[55%]">
+                        <FileText size={12} className="shrink-0"/>
+                        <span className="truncate">{picked.file.name}</span>
+                      </div>
+                      <button onClick={() => setPendingDocs(p => p.filter((_, i) => i !== idx))}
+                        className="p-2 bg-rose-50 text-rose-600 rounded-xl hover:bg-rose-100 transition-colors shrink-0" title="Remove">
+                        <Trash2 size={12}/>
+                      </button>
+                    </>
+                  ) : (
+                    <label className={`flex items-center justify-center gap-1.5 bg-blue-50 border border-blue-200 text-blue-700 font-black text-[11px] rounded-xl px-3 py-2 cursor-pointer hover:bg-blue-100 transition-colors shrink-0 ${disabled ? 'opacity-60 pointer-events-none' : ''}`}>
+                      <Upload size={12}/>
+                      <span>Upload</span>
+                      <input type="file" accept="image/*,application/pdf" className="hidden"
+                        disabled={disabled}
+                        onChange={e => {
+                          const f = e.target.files?.[0];
+                          if (!f) { e.target.value = ''; return; }
+                          if (pendingDocs.length >= MAX_STAFF_DOCS) {
+                            showToast(`Limit reached — max ${MAX_STAFF_DOCS} documents`, 'error');
+                            e.target.value = '';
+                            return;
+                          }
+                          setPendingDocs(p => [...p, { type: t, file: f }]);
+                          e.target.value = '';
+                        }} />
+                    </label>
+                  )}
                 </div>
-              ))}
-            </div>
-          )}
+              );
+            })}
+          </div>
 
           <p className="text-[10px] font-bold text-slate-400">JPG/PNG/WEBP/HEIC/PDF · photo 1 MB · others 2 MB</p>
         </div>
