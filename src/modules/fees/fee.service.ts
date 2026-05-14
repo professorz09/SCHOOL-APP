@@ -971,16 +971,23 @@ export const feeService = {
     if (!ay) return;
     const ayRow = ay as { id: string; start_date: string; end_date: string };
 
-    const start = new Date(startDate);
-    const end = endDate ? new Date(endDate) : new Date(ayRow.end_date);
+    // Billing rule: a student is charged the full month if they boarded
+    // on or before the 10th of that month; later than the 10th and the
+    // first installment is the NEXT month. Day 10 is the policy choice
+    // (matches the school's typical mid-month fee window).
+    const BILLING_DAY = 10;
+    // ISO date strings parse as UTC midnight. In IST that's 05:30 of the
+    // same calendar date, so getDate() / setDate() agree with the YMD
+    // string regardless of whether the host runtime is IST or UTC.
+    const start     = new Date(startDate);
+    const end       = endDate ? new Date(endDate) : new Date(ayRow.end_date);
     const yearStart = new Date(ayRow.start_date);
-    const yearEnd = new Date(ayRow.end_date);
-    const cursor = new Date(Math.max(start.getTime(), yearStart.getTime()));
-    cursor.setDate(10);
-    // setDate(10) can rewind cursor to BEFORE the actual start date (e.g.
-    // assignment effective Apr 25 becomes Apr 10) — that creates an extra
-    // installment for time before the bus actually started. Bump forward
-    // one month if we just wound back past the start.
+    const yearEnd   = new Date(ayRow.end_date);
+    const cursor    = new Date(Math.max(start.getTime(), yearStart.getTime()));
+    cursor.setDate(BILLING_DAY);
+    // setDate() can rewind cursor to BEFORE start (e.g. assignment Apr 25
+    // becomes Apr 10) — that would bill for time before the bus actually
+    // started. Bump forward one month if we wound back past start.
     if (cursor < start) {
       cursor.setMonth(cursor.getMonth() + 1);
     }
