@@ -226,35 +226,58 @@ export const ComplaintsManager: React.FC<Props> = ({ onBack }) => {
             </button>
           ))}
         </div>
-        <div className="space-y-2">
-          {visible.map(c => (
-            <button key={c.id} onClick={() => { setSelected(c); setResponse(c.response ?? ''); setShowRejectModal(false); setRejectReason(''); }}
-              className="w-full bg-white rounded-2xl border border-slate-100 shadow-sm p-4 text-left active:bg-slate-50">
-              <div className="flex items-start justify-between gap-2 mb-2">
-                <div className="flex gap-1.5 flex-wrap">
-                  <span className={`text-[9px] font-black px-2 py-0.5 rounded-full uppercase ${fromColor(c.from)}`}>{c.from}</span>
-                  <span className={`text-[9px] font-black px-2 py-0.5 rounded-full uppercase ${statusColor(c.status)}`}>{STATUS_LABEL[c.status]}</span>
-                  {c.isAnonymous && (
-                    <span className="text-[9px] font-black px-2 py-0.5 rounded-full uppercase bg-violet-100 text-violet-700 flex items-center gap-1">
-                      <EyeOff size={9}/> Anon
-                    </span>
+        <div className="space-y-3">
+          {visible.map(c => {
+            // Open complaints (Pending / In Review) get a lifted "3D"
+            // treatment so they visibly stand apart from the resolved
+            // / rejected pile: rose tinted background, thicker rose
+            // border, deeper shadow, and a subtle hover-lift on
+            // hover. Resolved + rejected revert to the flat slate
+            // card so they recede into the background.
+            const isOpen = c.status === 'PENDING' || c.status === 'IN_REVIEW';
+            return (
+              <button key={c.id} onClick={() => { setSelected(c); setResponse(c.response ?? ''); setShowRejectModal(false); setRejectReason(''); }}
+                className={`relative w-full rounded-2xl p-4 text-left transition-all ${
+                  isOpen
+                    ? 'bg-rose-50 border-2 border-rose-300 shadow-lg shadow-rose-200/60 hover:-translate-y-0.5 hover:shadow-xl hover:shadow-rose-200/70 active:translate-y-0 active:shadow-md'
+                    : 'bg-white border border-slate-100 shadow-sm active:bg-slate-50'
+                }`}>
+                {/* Open-marker bead — small pulsing rose dot at the
+                    top-right so the unresolved state reads at a
+                    glance even when the list is scrolled past the
+                    status pill. */}
+                {isOpen && (
+                  <span aria-hidden className="absolute top-3 right-3 flex h-2.5 w-2.5">
+                    <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-rose-400 opacity-75" />
+                    <span className="relative inline-flex h-2.5 w-2.5 rounded-full bg-rose-600" />
+                  </span>
+                )}
+                <div className="flex items-start justify-between gap-2 mb-2">
+                  <div className="flex gap-1.5 flex-wrap">
+                    <span className={`text-[9px] font-black px-2 py-0.5 rounded-full uppercase ${fromColor(c.from)}`}>{c.from}</span>
+                    <span className={`text-[9px] font-black px-2 py-0.5 rounded-full uppercase ${statusColor(c.status)}`}>{STATUS_LABEL[c.status]}</span>
+                    {c.isAnonymous && (
+                      <span className="text-[9px] font-black px-2 py-0.5 rounded-full uppercase bg-violet-100 text-violet-700 flex items-center gap-1">
+                        <EyeOff size={9}/> Anon
+                      </span>
+                    )}
+                  </div>
+                  <span className={`text-[10px] font-bold shrink-0 ${isOpen ? 'text-rose-500 mr-4' : 'text-slate-400'}`}>{c.createdAt}</span>
+                </div>
+                <div className={`font-extrabold text-sm ${isOpen ? 'text-rose-900' : 'text-slate-900'}`}>{c.subject}</div>
+                <div className={`text-[11px] font-bold mt-1 line-clamp-2 ${isOpen ? 'text-rose-800/80' : 'text-slate-400'}`}>{c.description}</div>
+                <div className={`text-[10px] font-black mt-1.5 ${c.isAnonymous ? 'text-violet-600 italic' : (isOpen ? 'text-rose-700' : 'text-slate-500')}`}>
+                  {c.isAnonymous ? 'Anonymous' : (
+                    <>
+                      {c.fromName}
+                      {c.fromClass && <> · {c.fromClass}</>}
+                      {c.fromRollNo && <> · Roll #{c.fromRollNo}</>}
+                    </>
                   )}
                 </div>
-                <span className="text-[10px] font-bold text-slate-400 shrink-0">{c.createdAt}</span>
-              </div>
-              <div className="font-extrabold text-slate-900 text-sm">{c.subject}</div>
-              <div className="text-[11px] font-bold text-slate-400 mt-1 line-clamp-2">{c.description}</div>
-              <div className={`text-[10px] font-black mt-1.5 ${c.isAnonymous ? 'text-violet-600 italic' : 'text-slate-500'}`}>
-                {c.isAnonymous ? 'Anonymous' : (
-                  <>
-                    {c.fromName}
-                    {c.fromClass && <> · {c.fromClass}</>}
-                    {c.fromRollNo && <> · Roll #{c.fromRollNo}</>}
-                  </>
-                )}
-              </div>
-            </button>
-          ))}
+              </button>
+            );
+          })}
           {filtered.length === 0 && (
             <div className="flex flex-col items-center py-16 text-slate-400">
               <CircleAlert size={32} className="mb-3 opacity-40" />
