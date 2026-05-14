@@ -108,6 +108,9 @@ export const StaffAttendanceManager: React.FC<Props> = ({ onBack, startTab = 'OV
   const editGuard = useEditGuard(currentYear?.id, isYearClosed);
   const editorModeActive = useEditorModeStore(s => s.isActive());
   const stripRef = useRef<HTMLDivElement | null>(null);
+  // Grid (history) horizontal scroll container — we scroll it to the
+  // right on mount so today's column is in view instead of day-1.
+  const gridRef = useRef<HTMLDivElement | null>(null);
   const [tab, setTab] = useState<TabType>(startTab);
   const [selectedDate, setSelectedDate] = useState<string>(today());
   const [record, setRecord] = useState<DayRecord | null>(null);
@@ -211,6 +214,16 @@ export const StaffAttendanceManager: React.FC<Props> = ({ onBack, startTab = 'OV
     const el = stripRef.current;
     requestAnimationFrame(() => { el.scrollLeft = el.scrollWidth; });
   }, [dateStrip]);
+
+  // Same trick for the GRID view's horizontal table — scroll to today
+  // (rightmost column) when the history loads. Earlier the grid opened
+  // showing day 1 first and the principal had to scroll right to see
+  // the current week.
+  useEffect(() => {
+    if (!gridRef.current) return;
+    const el = gridRef.current;
+    requestAnimationFrame(() => { el.scrollLeft = el.scrollWidth; });
+  }, [historyData, historyMonth, historyRole]);
 
   // hardLocked = salary generated OR year closed without correction mode
   const hardLocked = (record?.isLocked ?? false) || !editGuard.canEdit;
@@ -682,7 +695,15 @@ export const StaffAttendanceManager: React.FC<Props> = ({ onBack, startTab = 'OV
             <ArrowLeft size={20} />
           </button>
           <div className="flex-1">
-            <h2 className="text-xl lg:text-2xl font-black text-slate-900 uppercase tracking-tight">Staff Attendance Grid</h2>
+            {/* Mobile shows "Attendance Grid" (the Staff context is
+                already clear from the section the user came from);
+                desktop reads the full "Staff Attendance Grid".
+                Prevents the title from wrapping to two lines on
+                narrow phones. */}
+            <h2 className="text-base lg:text-2xl font-black text-slate-900 uppercase tracking-tight truncate">
+              <span className="lg:hidden">Attendance Grid</span>
+              <span className="hidden lg:inline">Staff Attendance Grid</span>
+            </h2>
             <p className="text-[10px] lg:text-xs font-bold text-slate-400 mt-0.5">{filteredHistory.length} staff · {histDates.length} days{historyRole !== 'ALL' ? ` · ${ROLE_LABEL[historyRole] ?? historyRole}` : ''}</p>
           </div>
           {historyLoading && <RefreshCw size={16} className="text-slate-400 animate-spin"/>}
@@ -755,7 +776,7 @@ export const StaffAttendanceManager: React.FC<Props> = ({ onBack, startTab = 'OV
       </div>
 
       {/* Grid */}
-      <div className="flex-1 overflow-auto bg-white">
+      <div ref={gridRef} className="flex-1 overflow-auto bg-white">
         {historyLoading ? (
           <div className="flex items-center justify-center py-16">
             <div className="w-8 h-8 border-2 border-slate-200 border-t-slate-600 rounded-full animate-spin" />
