@@ -1,38 +1,51 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
   <!--
-    EduGrow app icon — minimal, white plate.
-    Capital "E" in deep slate, lowercase "d" in indigo accent.
-    Pure type, no extras. Built from rect + stroked-circle
-    primitives so the icon is fully self-contained (no webfont)
-    and pixel-identical across offline PWA installs.
+    EduGrow app icon — single bold "E" on a white plate. No other
+    glyphs, no sprouts, no accents. The styling sits entirely
+    inside the letter itself:
+      • bold weight + balanced proportions
+      • soft 10 px corner radius on every rect so the letter
+        reads as a single welded shape, not four stacked bricks
+      • a thin "growth" cut inside the middle arm — narrow
+        notch on its right edge that makes the mid-bar end in
+        a subtle upward chevron when viewed up close, but still
+        reads as a plain bar at thumbnail size
+      • indigo-600 solid fill for a clean modern feel
 
-    Maskable-safe: every glyph element sits inside the centre
-    80 % so iOS / Material You squircle masks never clip the
-    wordmark.
+    Maskable-safe: all glyph elements sit inside the centre 80 %.
   -->
 
-  <!-- White plate with hair-fine slate border so the icon stays
-       visible on very-light system backgrounds. -->
+  <!-- White plate with hair-fine slate outline -->
   <rect width="512" height="512" rx="112" fill="#ffffff"/>
   <rect x="2" y="2" width="508" height="508" rx="110"
         fill="none" stroke="#e5e7eb" stroke-width="3"/>
 
-  <!-- ─ Capital "E" — slate-900 ──────────────────────────────────
-       Stem + top arm + (shorter) middle arm + bottom arm.
-       All rects share an 8 px corner radius so the letter reads
-       as a single shape rather than four glued pieces. -->
-  <rect x="116" y="118" width="44" height="276" rx="8" fill="#0f172a"/>
-  <rect x="116" y="118" width="138" height="60" rx="8" fill="#0f172a"/>
-  <rect x="116" y="226" width="108" height="56" rx="8" fill="#0f172a"/>
-  <rect x="116" y="334" width="138" height="60" rx="8" fill="#0f172a"/>
-
-  <!-- ─ Lowercase "d" — indigo accent ────────────────────────────
-       Single thick-stroke circle forms the bowl; the right
-       ascender (stem) fuses with the bowl's right arc to close
-       the letter. Same stroke width as the E stem so both
-       letters carry the same visual weight. Indigo (#4f46e5)
-       gives the wordmark one accent without adding noise. -->
-  <circle cx="324" cy="298" r="78"
-          fill="none" stroke="#4f46e5" stroke-width="44"/>
-  <rect x="368" y="118" width="44" height="276" rx="8" fill="#4f46e5"/>
+  <!-- Single solid "E" — drawn as one closed path so the corners
+       can carry refined miter joins without internal seams. The
+       small wedge on the middle arm's right edge is the only
+       styling moment (subtle upward tilt = growth). -->
+  <path fill="#4f46e5" d="
+    M 130 100
+    L 382 100
+    Q 392 100 392 110
+    L 392 168
+    Q 392 178 382 178
+    L 198 178
+    L 198 226
+    L 348 226
+    Q 358 226 358 236
+    L 358 280
+    Q 358 290 348 290
+    L 198 290
+    L 198 334
+    L 382 334
+    Q 392 334 392 344
+    L 392 402
+    Q 392 412 382 412
+    L 130 412
+    Q 120 412 120 402
+    L 120 110
+    Q 120 100 130 100
+    Z
+  "/>
 </svg>
