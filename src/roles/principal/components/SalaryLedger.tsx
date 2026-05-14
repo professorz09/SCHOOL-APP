@@ -85,7 +85,11 @@ export const SalaryLedger: React.FC<Props> = ({ onBack }) => {
     if (!schoolId) return;
     const { data } = await supabase
       .from('schools').select('salary_pay_day').eq('id', schoolId).maybeSingle();
-    const d = (data as { salary_pay_day: number | null } | null)?.salary_pay_day ?? null;
+    // Default to 7th of the month if a school hasn't been migrated
+    // yet (or somehow stored NULL). Matches the DB default set in
+    // migration 0130. Avoids the "SALARY DAY · not set" pill that
+    // confused principals into thinking the feature was broken.
+    const d = (data as { salary_pay_day: number | null } | null)?.salary_pay_day ?? 7;
     setSalaryPayDay(d);
   };
 
