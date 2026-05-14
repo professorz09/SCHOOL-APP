@@ -252,18 +252,66 @@ export const AnalyticsManager: React.FC<Props> = ({ onBack }) => {
         generatedAt: new Date().toISOString(),
       }, null, 2));
 
+      // Build lookup maps so the row-level CSVs can carry human-
+      // readable names alongside the FK uuids. Principals open these
+      // sheets in Excel / Sheets and need to read names, not paste
+      // uuids into VLOOKUPs. The raw ids stay as the last column for
+      // power-user audits.
+      const studentNameById = new Map<string, string>();
+      const studentAdmissionById = new Map<string, string>();
+      for (const s of data.rawStudents) {
+        studentNameById.set(s.id, s.name);
+        studentAdmissionById.set(s.id, s.admission_no ?? '');
+      }
+      const staffNameById = new Map<string, string>();
+      const staffRoleById = new Map<string, string>();
+      for (const s of data.rawStaff) {
+        staffNameById.set(s.id, s.name);
+        staffRoleById.set(s.id, s.role);
+      }
+
       zip.file(`${folder}/students.csv`, toCsv(data.rawStudents,
-        ['id', 'name', 'admission_no', 'class_name', 'section', 'status']));
+        ['name', 'admission_no', 'class_name', 'section', 'status', 'id']));
       zip.file(`${folder}/staff.csv`, toCsv(data.rawStaff,
-        ['id', 'name', 'role', 'phone', 'salary', 'status']));
-      zip.file(`${folder}/payments.csv`, toCsv(data.rawPayments,
-        ['id', 'date', 'amount', 'method', 'student_id', 'receipt_no']));
+        ['name', 'role', 'phone', 'salary', 'status', 'id']));
+
+      // Payments: prepend student_name + admission_no so each row reads
+      // "Monu Saini · TES26001 · ₹500" without needing a join.
+      const paymentsRows = data.rawPayments.map(p => ({
+        student_name: p.student_id ? (studentNameById.get(p.student_id) ?? '—') : '—',
+        admission_no: p.student_id ? (studentAdmissionById.get(p.student_id) ?? '') : '',
+        date: p.date,
+        amount: p.amount,
+        method: p.method,
+        receipt_no: p.receipt_no ?? '',
+        student_id: p.student_id ?? '',
+        id: p.id,
+      }));
+      zip.file(`${folder}/payments.csv`, toCsv(paymentsRows,
+        ['student_name', 'admission_no', 'date', 'amount', 'method', 'receipt_no', 'student_id', 'id']));
+
       zip.file(`${folder}/expenses.csv`, toCsv(data.rawExpenses,
-        ['id', 'date', 'amount', 'category', 'description']));
-      zip.file(`${folder}/salaries.csv`, toCsv(data.rawSalaries,
-        ['id', 'staff_id', 'month', 'amount', 'paid_at']));
+        ['date', 'amount', 'category', 'description', 'id']));
+
+      // Salaries: same treatment for staff.
+      const salaryRows = data.rawSalaries.map(s => ({
+        staff_name: s.staff_id ? (staffNameById.get(s.staff_id) ?? '—') : '—',
+        role: s.staff_id ? (staffRoleById.get(s.staff_id) ?? '') : '',
+        month: s.month,
+        amount: s.amount,
+        paid_at: s.paid_at ?? '',
+        staff_id: s.staff_id ?? '',
+        id: s.id,
+      }));
+      zip.file(`${folder}/salaries.csv`, toCsv(salaryRows,
+        ['staff_name', 'role', 'month', 'amount', 'paid_at', 'staff_id', 'id']));
+
+      // Attendance is class-level (no per-student rows), so just put
+      // human-readable columns first and shove the record id to the
+      // end — it was previously column A which made the sheet open
+      // looking like a wall of uuids.
       zip.file(`${folder}/attendance.csv`, toCsv(data.rawAttendance,
-        ['id', 'date', 'class_name', 'section', 'total_present', 'total_absent']));
+        ['date', 'class_name', 'section', 'total_present', 'total_absent', 'id']));
 
       const blob = await zip.generateAsync({ type: 'blob' });
       const url  = URL.createObjectURL(blob);
