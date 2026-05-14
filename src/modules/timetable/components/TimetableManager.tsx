@@ -254,38 +254,53 @@ export const TimetableManager: React.FC<Props> = ({ onBack }) => {
     setConflictMsg('');
     try {
       let slotId = slotTimeModal.slotId;
-      // ── Step 1: ensure the slot row exists with the right type/time.
-      // For new slots OR placeholder fallback IDs (string slots like
-      // "assembly"/"p1"/"lunch" that don't have a DB row yet) we create.
-      // For existing UUID slots we ONLY touch the slot row if the user
-      // actually changed time / label. Type changes no longer mutate
-      // the slot — they save a per-day timetable_entries override
-      // (migration 0131) so Monday → Assembly doesn't bleed into
-      // Tuesday / Wednesday / …
+      // ── Step 1: ensure the slot row exists with the right time.
+      //
+      // Slots are school-wide structural rows (period_periods table).
+      // They define WHEN a period happens in the day; everything that
+      // varies day-to-day (subject, teacher, activity label) lives on
+      // the per-day timetable_entries row instead.
+      //
+      // Implications for this save:
+      //   • New slot          → create with a generic "Period N" name
+      //                         and CLASS type, regardless of mode.
+      //                         If the user picked Non-Teaching, the
+      //                         activity label they typed is saved on
+      //                         the entry, not on the slot.
+      //   • Existing slot     → update ONLY the time (when the user
+      //                         actually changed it). Don't touch
+      //                         `name` or `type` — those are the
+      //                         school-wide defaults and changing them
+      //                         here is what caused Monday's Assembly
+      //                         to bleed onto Tuesday / Wednesday / …
+      //   • Placeholder slot  → fallback string IDs like "assembly" /
+      //                         "p1" / "lunch" don't have a DB row;
+      //                         treat as new.
       const isUuid = (s: string) => /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(s);
       if (slotTimeModal.isNew || !isUuid(slotTimeModal.slotId)) {
         slotId = await timetableService.addCustomSlot({
           className: selectedClass.label,
-          name:      slotTimeModal.label || (isTeaching ? `Period ${slots.length + 1}` : 'Activity'),
+          // In teaching mode the user-typed label is a structural
+          // name like "Period 5"; in non-teaching mode their label
+          // ("Prayer") is per-day and goes on the entry instead.
+          name: isTeaching
+            ? (slotTimeModal.label.trim() || `Period ${slots.length + 1}`)
+            : `Period ${slots.length + 1}`,
           startTime: slotTimeModal.startTime,
           endTime:   slotTimeModal.endTime,
-          // New slots use CLASS as the structural default. The
-          // activity-vs-teaching distinction now lives on the entry,
-          // not the slot, so a freshly created slot stays neutral.
-          type:      isTeaching ? slotTimeModal.type : 'CLASS',
+          type:      'CLASS',
         });
       } else {
-        // Only update slot when time or label actually changed.
         const existing = slots.find(s => s.slotId === slotTimeModal.slotId);
         const timeChanged = existing && (existing.startTime !== slotTimeModal.startTime || existing.endTime !== slotTimeModal.endTime);
-        const labelChanged = existing && existing.label !== slotTimeModal.label;
+        // Label updates only fire in teaching mode (where the typed
+        // value IS the school-wide period name). Non-teaching labels
+        // ride on the per-day entry, so leave the slot's name alone.
+        const labelChanged = isTeaching && existing && existing.label !== slotTimeModal.label;
         if (timeChanged || labelChanged) {
           await timetableService.updateSlot(slotTimeModal.slotId, {
-            name: slotTimeModal.label,
-            startTime: slotTimeModal.startTime,
-            endTime: slotTimeModal.endTime,
-            // Don't pass type — leaving it unchanged preserves the
-            // school-wide structural slot definition.
+            ...(labelChanged ? { name: slotTimeModal.label } : {}),
+            ...(timeChanged  ? { startTime: slotTimeModal.startTime, endTime: slotTimeModal.endTime } : {}),
           });
         }
       }
