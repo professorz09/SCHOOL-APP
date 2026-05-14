@@ -1,51 +1,34 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
   <!--
-    EduGrow app icon — single bold "E" on a white plate. No other
-    glyphs, no sprouts, no accents. The styling sits entirely
-    inside the letter itself:
-      • bold weight + balanced proportions
-      • soft 10 px corner radius on every rect so the letter
-        reads as a single welded shape, not four stacked bricks
-      • a thin "growth" cut inside the middle arm — narrow
-        notch on its right edge that makes the mid-bar end in
-        a subtle upward chevron when viewed up close, but still
-        reads as a plain bar at thumbnail size
-      • indigo-600 solid fill for a clean modern feel
+    EduGrow app icon — 2×2 grid mark on a white plate.
+    Communicates "dashboard / modules" (fits a multi-feature school
+    management app) with a navy + green palette that ties to the
+    "Grow" half of the wordmark.
 
-    Maskable-safe: all glyph elements sit inside the centre 80 %.
+    Layout: four rounded squares with a uniform gap, the grid
+    centred on the plate. Maskable-safe — every tile sits inside
+    the centre 80 % so squircle / circle masks can't clip a tile.
   -->
 
-  <!-- White plate with hair-fine slate outline -->
+  <!-- White plate with hair-fine slate outline so the icon stays
+       visible on very-light system backgrounds. -->
   <rect width="512" height="512" rx="112" fill="#ffffff"/>
   <rect x="2" y="2" width="508" height="508" rx="110"
         fill="none" stroke="#e5e7eb" stroke-width="3"/>
 
-  <!-- Single solid "E" — drawn as one closed path so the corners
-       can carry refined miter joins without internal seams. The
-       small wedge on the middle arm's right edge is the only
-       styling moment (subtle upward tilt = growth). -->
-  <path fill="#4f46e5" d="
-    M 130 100
-    L 382 100
-    Q 392 100 392 110
-    L 392 168
-    Q 392 178 382 178
-    L 198 178
-    L 198 226
-    L 348 226
-    Q 358 226 358 236
-    L 358 280
-    Q 358 290 348 290
-    L 198 290
-    L 198 334
-    L 382 334
-    Q 392 334 392 344
-    L 392 402
-    Q 392 412 382 412
-    L 130 412
-    Q 120 412 120 402
-    L 120 110
-    Q 120 100 130 100
-    Z
-  "/>
+  <!-- 2×2 grid: tile = 170×170, gap = 30, total = 370×370.
+       Centred at x = y = 71. Tile corner radius 24 keeps the
+       squares friendly without making them look like coins. -->
+
+  <!-- Top-left — deep navy (trust, anchor) -->
+  <rect x="71"  y="71"  width="170" height="170" rx="24" fill="#0f172a"/>
+
+  <!-- Top-right — pale mint (lift, breathing space) -->
+  <rect x="271" y="71"  width="170" height="170" rx="24" fill="#a7f3d0"/>
+
+  <!-- Bottom-left — deep navy again to balance the grid diagonally -->
+  <rect x="71"  y="271" width="170" height="170" rx="24" fill="#0f172a"/>
+
+  <!-- Bottom-right — vivid green (the "Grow" cue) -->
+  <rect x="271" y="271" width="170" height="170" rx="24" fill="#10b981"/>
 </svg>
