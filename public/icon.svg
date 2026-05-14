@@ -1,43 +1,38 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
   <!--
-    EduGrow app icon — SaaS / Notion-style filled plate with a bold
-    "Ed" wordmark cut in white. Pure-type mark, no extra accents:
-    the colour + letterforms do all the brand work.
+    EduGrow app icon — minimal, white plate.
+    Capital "E" in deep slate, lowercase "d" in indigo accent.
+    Pure type, no extras. Built from rect + stroked-circle
+    primitives so the icon is fully self-contained (no webfont)
+    and pixel-identical across offline PWA installs.
 
-    Letterforms are built from primitive rects + a stroked circle so
-    the icon is fully self-contained (no embedded webfont needed for
-    offline PWA installs). Maskable-safe — every glyph element sits
-    inside the centre 80 % so iOS / Material You masks can't clip
-    the wordmark.
+    Maskable-safe: every glyph element sits inside the centre
+    80 % so iOS / Material You squircle masks never clip the
+    wordmark.
   -->
 
-  <defs>
-    <!-- Subtle two-stop gradient — premium depth without making the
-         plate look noisy at thumbnail size. -->
-    <linearGradient id="plate" x1="0" y1="0" x2="1" y2="1">
-      <stop offset="0%"   stop-color="#4f46e5"/>
-      <stop offset="100%" stop-color="#3730a3"/>
-    </linearGradient>
-  </defs>
+  <!-- White plate with hair-fine slate border so the icon stays
+       visible on very-light system backgrounds. -->
+  <rect width="512" height="512" rx="112" fill="#ffffff"/>
+  <rect x="2" y="2" width="508" height="508" rx="110"
+        fill="none" stroke="#e5e7eb" stroke-width="3"/>
 
-  <!-- Plate -->
-  <rect width="512" height="512" rx="112" fill="url(#plate)"/>
+  <!-- ─ Capital "E" — slate-900 ──────────────────────────────────
+       Stem + top arm + (shorter) middle arm + bottom arm.
+       All rects share an 8 px corner radius so the letter reads
+       as a single shape rather than four glued pieces. -->
+  <rect x="116" y="118" width="44" height="276" rx="8" fill="#0f172a"/>
+  <rect x="116" y="118" width="138" height="60" rx="8" fill="#0f172a"/>
+  <rect x="116" y="226" width="108" height="56" rx="8" fill="#0f172a"/>
+  <rect x="116" y="334" width="138" height="60" rx="8" fill="#0f172a"/>
 
-  <!-- ─ Capital "E" ─────────────────────────────────────────────
-       Stem (full height) + 3 arms; middle arm shorter for proper
-       typographic proportions. Same 8 px radius across rects so the
-       letter reads as one unit rather than four glued pieces. -->
-  <rect x="116" y="118" width="44" height="276" rx="8" fill="#ffffff"/>
-  <rect x="116" y="118" width="138" height="60" rx="8" fill="#ffffff"/>
-  <rect x="116" y="226" width="108" height="56" rx="8" fill="#ffffff"/>
-  <rect x="116" y="334" width="138" height="60" rx="8" fill="#ffffff"/>
-
-  <!-- ─ Lowercase "d" ────────────────────────────────────────────
-       Bowl is a thick-stroke circle; the right ascender (stem) sits
-       on top of the bowl's right arc, fusing them into a proper "d"
-       outline. Stroke width matches the E stem width so the two
-       letters carry the same visual weight. -->
+  <!-- ─ Lowercase "d" — indigo accent ────────────────────────────
+       Single thick-stroke circle forms the bowl; the right
+       ascender (stem) fuses with the bowl's right arc to close
+       the letter. Same stroke width as the E stem so both
+       letters carry the same visual weight. Indigo (#4f46e5)
+       gives the wordmark one accent without adding noise. -->
   <circle cx="324" cy="298" r="78"
-          fill="none" stroke="#ffffff" stroke-width="44"/>
-  <rect x="368" y="118" width="44" height="276" rx="8" fill="#ffffff"/>
+          fill="none" stroke="#4f46e5" stroke-width="44"/>
+  <rect x="368" y="118" width="44" height="276" rx="8" fill="#4f46e5"/>
 </svg>
