@@ -256,7 +256,16 @@ export const TimetableManager: React.FC<Props> = ({ onBack }) => {
       // which mis-identified the wrong row when two slots had the same
       // start time, then the entry insert hit the (section,day,slot)
       // unique constraint with a duplicate.
-      if (slotTimeModal.isNew) {
+      //
+      // Default-slot edits route through addCustomSlot too. The
+      // PERIOD_SLOTS fallback (used until a school configures its own
+      // periods) has string slotIds like "assembly" / "p1" / "lunch"
+      // — these are NOT UUIDs, so updateSlot would crash with
+      // "invalid input syntax for type uuid" the moment the server
+      // tries to UPDATE timetable_periods WHERE id='assembly'. Detect
+      // a non-UUID slotId and create instead.
+      const isUuid = (s: string) => /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(s);
+      if (slotTimeModal.isNew || !isUuid(slotTimeModal.slotId)) {
         slotId = await timetableService.addCustomSlot({
           className: selectedClass.label,
           name:      slotTimeModal.label || (isTeaching ? `Period ${slots.length + 1}` : 'Activity'),
@@ -315,6 +324,16 @@ export const TimetableManager: React.FC<Props> = ({ onBack }) => {
   const handleSlotDelete = async () => {
     if (!slotTimeModal || slotTimeModal.isNew) return;
     if (!editGuard.canEdit) { showToast('Year closed — pehle Correction Mode enable karein', 'error'); return; }
+    // Default-slot delete attempts would hit the same UUID error the
+    // save path does — the PERIOD_SLOTS fallback IDs are strings like
+    // "assembly" / "p1" / "lunch", not UUIDs. There's nothing to
+    // delete on the server side anyway, so just close the modal.
+    const isUuid = (s: string) => /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(s);
+    if (!isUuid(slotTimeModal.slotId)) {
+      setSlotTimeModal(null);
+      showToast('Default slot — koi save nahi hai, modal close kar diya.', 'info');
+      return;
+    }
     const ok = await useUIStore.getState().askConfirm({
       title: 'Slot delete karein?',
       message: `${slotTimeModal.label} hata diya jayega. Agar koi class is slot pe assigned hai, server reject karega — pehle assignments hatao.`,
