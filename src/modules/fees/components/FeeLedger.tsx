@@ -813,10 +813,13 @@ export const FeeLedger: React.FC<Props> = ({ onBack }) => {
   useEffect(() => { setShowCount(PAGE_SIZE); }, [search, listTab]);
 
   // ─── Loading ─────────────────────────────────────────────────────────────────
-  // Shared AppLoader so we don't fight the route-chunk Suspense fallback
-  // with a different look — earlier the parent's blue-tinted ring spinner
-  // and FeeLedger's own dotted spinner appeared together for ~200ms.
-  if (loading) return <AppLoader variant="centered" />;
+  // For the DETAIL view (a student is already selected) we still wait
+  // for the full data set — the per-student installments / payment
+  // history all need to be primed before the panel can render anything
+  // meaningful. For the LIST view we skip the full-page loader and let
+  // the shell (header, stats, search, tabs, skeleton cards) paint
+  // immediately so the page feels responsive from the first tick.
+  if (loading && selected) return <AppLoader variant="centered" />;
 
   // ─── Derived data ─────────────────────────────────────────────────────────────
   const getParentDue  = (id: string) => feeService.getParentDueSummary(id);
@@ -2225,19 +2228,34 @@ export const FeeLedger: React.FC<Props> = ({ onBack }) => {
           </button>
           <div className="flex-1">
             <h2 className="text-xl lg:text-2xl font-black text-slate-900 uppercase tracking-tight">Fee Collection</h2>
-            <p className="text-[10px] lg:text-xs font-bold text-slate-400">{students.length} students · {dueStudents.length} with dues</p>
+            <p className="text-[10px] lg:text-xs font-bold text-slate-400">
+              {loading
+                ? 'Loading…'
+                : `${students.length} students · ${dueStudents.length} with dues`}
+            </p>
           </div>
         </div>
 
-        {/* Stats row — bigger and bolder on desktop */}
+        {/* Stats row — bigger and bolder on desktop. When the initial
+            fetch hasn't resolved yet we show a tinted pulse placeholder
+            instead of "₹0" so the user doesn't see misleading zero
+            totals flash before the real numbers settle in. */}
         <div className="flex border-t border-slate-100">
           <div className="flex-1 px-4 lg:px-6 py-3 lg:py-5 text-center">
-            <div className="text-lg lg:text-3xl font-black text-emerald-600 tabular-nums">₹{totalCollected.toLocaleString('en-IN')}</div>
+            {loading ? (
+              <div className="mx-auto h-6 lg:h-8 w-24 lg:w-32 rounded-md bg-emerald-100 animate-pulse" />
+            ) : (
+              <div className="text-lg lg:text-3xl font-black text-emerald-600 tabular-nums">₹{totalCollected.toLocaleString('en-IN')}</div>
+            )}
             <div className="text-[9px] lg:text-[11px] font-black text-slate-400 uppercase tracking-widest mt-0.5 lg:mt-1">Collected</div>
           </div>
           <div className="w-px bg-slate-100" />
           <div className="flex-1 px-4 lg:px-6 py-3 lg:py-5 text-center">
-            <div className="text-lg lg:text-3xl font-black text-rose-600 tabular-nums">₹{totalParentDue.toLocaleString('en-IN')}</div>
+            {loading ? (
+              <div className="mx-auto h-6 lg:h-8 w-24 lg:w-32 rounded-md bg-rose-100 animate-pulse" />
+            ) : (
+              <div className="text-lg lg:text-3xl font-black text-rose-600 tabular-nums">₹{totalParentDue.toLocaleString('en-IN')}</div>
+            )}
             <div className="text-[9px] lg:text-[11px] font-black text-slate-400 uppercase tracking-widest mt-0.5 lg:mt-1">Total Due</div>
           </div>
         </div>
@@ -2266,9 +2284,13 @@ export const FeeLedger: React.FC<Props> = ({ onBack }) => {
                     : t === 'CLEARED'  ? 'bg-emerald-600 text-white'
                     :                    'bg-blue-600 text-white'
                   : 'bg-slate-100 text-slate-500 hover:bg-slate-200'}`}>
-                {t === 'DUE'      ? `Due (${dueStudents.length})`
-                  : t === 'UPCOMING' ? `Upcoming (${upcomingStudents.length})`
-                  : t === 'CLEARED'  ? `Cleared (${clearedStudents.length})`
+                {/* Hide the count chips while loading — flashing "(0)"
+                    on every tab right before the real counts arrive
+                    reads as "no students" and is more misleading than
+                    showing just the label. */}
+                {t === 'DUE'      ? (loading ? 'Due'      : `Due (${dueStudents.length})`)
+                  : t === 'UPCOMING' ? (loading ? 'Upcoming' : `Upcoming (${upcomingStudents.length})`)
+                  : t === 'CLEARED'  ? (loading ? 'Cleared'  : `Cleared (${clearedStudents.length})`)
                   :                    'History'}
               </button>
             ))}
@@ -2298,13 +2320,16 @@ export const FeeLedger: React.FC<Props> = ({ onBack }) => {
             {/* Initial load: show skeleton rows so the page doesn't flash
                 an empty state before the first batch lands. After the
                 first page lands, "No students" only renders when the
-                filter genuinely matches zero. */}
-            {visibleStudents.length === 0 && stuList.loading && (
+                filter genuinely matches zero. `loading` covers the
+                top-level page boot (priming aggregates + the slim fee
+                map); `stuList.loading` is the per-page fetch. Either
+                being true means we shouldn't claim emptiness yet. */}
+            {visibleStudents.length === 0 && (loading || stuList.loading) && (
               <div className="bg-white rounded-2xl border border-slate-100 shadow-sm overflow-hidden">
                 <SkeletonRow count={6} />
               </div>
             )}
-            {visibleStudents.length === 0 && !stuList.loading && (
+            {visibleStudents.length === 0 && !loading && !stuList.loading && (
               <EmptyState
                 icon={Users}
                 title="No students match"
