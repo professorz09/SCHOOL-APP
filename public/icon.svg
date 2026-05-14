@@ -1,57 +1,43 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
   <!--
-    EduGrow app icon — proper bold geometric "E" with a growth accent.
-    Built from clean primitive rects (no hacked overlays), each with a
-    small corner radius so the mark reads as modern + friendly rather
-    than industrial. Two-colour palette: deep indigo for "Edu", a
-    bright emerald sprout for "Grow", on a clean white plate.
+    EduGrow app icon — SaaS / Notion-style filled plate with a bold
+    "Ed" wordmark cut in white. Pure-type mark, no extra accents:
+    the colour + letterforms do all the brand work.
 
-    Maskable-safe — every glyph rect + the accent live inside the
-    centre 80 % so Material You / iOS squircle masks never clip.
+    Letterforms are built from primitive rects + a stroked circle so
+    the icon is fully self-contained (no embedded webfont needed for
+    offline PWA installs). Maskable-safe — every glyph element sits
+    inside the centre 80 % so iOS / Material You masks can't clip
+    the wordmark.
   -->
 
-  <!-- White plate with hairline slate outline so the icon doesn't
-       vanish on very-light system backgrounds. -->
-  <rect width="512" height="512" rx="112" fill="#ffffff"/>
-  <rect x="3" y="3" width="506" height="506" rx="109"
-        fill="none" stroke="#e2e8f0" stroke-width="3"/>
+  <defs>
+    <!-- Subtle two-stop gradient — premium depth without making the
+         plate look noisy at thumbnail size. -->
+    <linearGradient id="plate" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%"   stop-color="#4f46e5"/>
+      <stop offset="100%" stop-color="#3730a3"/>
+    </linearGradient>
+  </defs>
+
+  <!-- Plate -->
+  <rect width="512" height="512" rx="112" fill="url(#plate)"/>
 
   <!-- ─ Capital "E" ─────────────────────────────────────────────
-       Classic typographic proportions: top + bottom arms full
-       width, middle arm shorter (~78 %). All rects share a 10 px
-       corner radius which softens the geometry without losing the
-       letter's hard edges at thumbnail size. Indigo-600 (#4f46e5)
-       matches the wider brand accent used elsewhere in the app. -->
+       Stem (full height) + 3 arms; middle arm shorter for proper
+       typographic proportions. Same 8 px radius across rects so the
+       letter reads as one unit rather than four glued pieces. -->
+  <rect x="116" y="118" width="44" height="276" rx="8" fill="#ffffff"/>
+  <rect x="116" y="118" width="138" height="60" rx="8" fill="#ffffff"/>
+  <rect x="116" y="226" width="108" height="56" rx="8" fill="#ffffff"/>
+  <rect x="116" y="334" width="138" height="60" rx="8" fill="#ffffff"/>
 
-  <!-- Stem (vertical) -->
-  <rect x="116" y="100" width="76" height="312" rx="10" fill="#4f46e5"/>
-
-  <!-- Top arm -->
-  <rect x="116" y="100" width="252" height="76" rx="10" fill="#4f46e5"/>
-
-  <!-- Middle arm — shorter, slightly thinner so it reads as the
-       mid-bar even when the icon is tiny. -->
-  <rect x="116" y="218" width="196" height="68" rx="10" fill="#4f46e5"/>
-
-  <!-- Bottom arm -->
-  <rect x="116" y="336" width="252" height="76" rx="10" fill="#4f46e5"/>
-
-  <!-- ─ Growth accent ──────────────────────────────────────────
-       Tiny emerald sprout off the top-right of the "E" — a single
-       leaf curve + stem. Represents the "Grow" half of the
-       wordmark. Sized small so it doesn't compete with the letter,
-       big enough to register as a coloured accent at 48 px. -->
-
-  <!-- Stem of the sprout -->
-  <path d="M 398 162 Q 398 130 420 110"
-        stroke="#10b981" stroke-width="14" stroke-linecap="round"
-        fill="none"/>
-
-  <!-- Leaf -->
-  <path d="M 408 102 Q 438 96 444 124 Q 422 124 408 102 Z"
-        fill="#10b981"/>
-
-  <!-- Small grounding dot where the sprout meets the top arm —
-       glues the accent to the letter so it doesn't float. -->
-  <circle cx="398" cy="162" r="9" fill="#10b981"/>
+  <!-- ─ Lowercase "d" ────────────────────────────────────────────
+       Bowl is a thick-stroke circle; the right ascender (stem) sits
+       on top of the bowl's right arc, fusing them into a proper "d"
+       outline. Stroke width matches the E stem width so the two
+       letters carry the same visual weight. -->
+  <circle cx="324" cy="298" r="78"
+          fill="none" stroke="#ffffff" stroke-width="44"/>
+  <rect x="368" y="118" width="44" height="276" rx="8" fill="#ffffff"/>
 </svg>
