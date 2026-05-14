@@ -1,55 +1,48 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
   <!--
-    EduGrow app icon — red/white YouTube-style.
-    • Maskable-safe: key elements live inside the centre 80 %.
-    • Single red plate + white mortarboard reads at any size.
-    • No embedded text — OS shows "EduGrow" as the label under the icon.
+    EduGrow app icon — clean white plate, orange stylised "e", small
+    dark accent dot in upper-right. Mirrors the reference style: flat
+    colours, no gradient, modern minimalist mark designed to read at
+    48 px and stay distinctive at full app-icon size.
+
+    • Maskable-safe: critical glyph + dot live inside the centre 80 %
+      so circle / squircle masks never clip them.
+    • Pure-white plate works on iOS' default white status-bar
+      backdrop and on dark Android home screens alike.
   -->
-  <defs>
-    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
-      <stop offset="0%"   stop-color="#ef4444"/>
-      <stop offset="55%"  stop-color="#dc2626"/>
-      <stop offset="100%" stop-color="#991b1b"/>
-    </linearGradient>
-    <linearGradient id="cap" x1="0" y1="0" x2="0" y2="1">
-      <stop offset="0%"   stop-color="#ffffff"/>
-      <stop offset="100%" stop-color="#fee2e2"/>
-    </linearGradient>
-    <linearGradient id="band" x1="0" y1="0" x2="0" y2="1">
-      <stop offset="0%"   stop-color="#f8fafc"/>
-      <stop offset="100%" stop-color="#fecaca"/>
-    </linearGradient>
-    <radialGradient id="shine" cx="0.35" cy="0.3" r="0.7">
-      <stop offset="0%"   stop-color="#ffffff" stop-opacity="0.22"/>
-      <stop offset="60%"  stop-color="#ffffff" stop-opacity="0"/>
-    </radialGradient>
-  </defs>
 
-  <!-- Rounded-square plate. 22 % corner radius = Material You / iOS
-       compatible at any rendered size. -->
-  <rect width="512" height="512" rx="112" fill="url(#bg)"/>
-  <rect width="512" height="512" rx="112" fill="url(#shine)"/>
+  <!-- Plate: pure white rounded square with a hair-fine slate outline
+       so the icon doesn't disappear into very-light backgrounds. -->
+  <rect width="512" height="512" rx="112" fill="#ffffff"/>
+  <rect x="2" y="2" width="508" height="508" rx="110"
+        fill="none" stroke="#e5e7eb" stroke-width="3"/>
 
-  <!-- Mortarboard top — diamond, white on red plate. -->
-  <path d="M256 132 L80 220 L256 308 L432 220 Z"
-        fill="url(#cap)"
-        stroke="#7f1d1d" stroke-width="8" stroke-linejoin="round"/>
+  <!-- Orange "e" — the EduGrow mark. Two stacked shapes form the
+       lowercase letterform without using a webfont (icons must be
+       self-contained for offline PWA installs). -->
 
-  <!-- Sweatband / cap body — curved bottom for depth. -->
-  <path d="M160 256 L160 348 Q160 396 256 396 Q352 396 352 348 L352 256 L256 304 Z"
-        fill="url(#band)"
-        stroke="#7f1d1d" stroke-width="7" stroke-linejoin="round"/>
+  <!-- Outer ring of the "e" -->
+  <circle cx="248" cy="280" r="118" fill="none"
+          stroke="#f97316" stroke-width="56"/>
 
-  <!-- Inner shadow under the mortarboard so the cap reads 3D. -->
-  <path d="M170 262 L256 308 L342 262 L342 274 L256 318 L170 274 Z"
-        fill="#7f1d1d" opacity="0.18"/>
+  <!-- Crossbar — flat orange band that turns the open ring into an
+       "e". Slight asymmetry to the right gives the letter momentum. -->
+  <rect x="142" y="262" width="232" height="44"
+        fill="#f97316" rx="4"/>
 
-  <!-- Tassel — white accent that hangs off the right edge. -->
-  <rect x="418" y="220" width="14" height="118" rx="6" fill="#ffffff"/>
-  <circle cx="425" cy="348" r="16" fill="#ffffff"/>
-  <path d="M414 360 L408 396 M425 362 L425 400 M436 360 L442 396"
-        stroke="#ffffff" stroke-width="6" stroke-linecap="round" fill="none"/>
+  <!-- Right-side trim — clips the bottom-right of the ring so the
+       letter has the classic "e" opening pointing down-right. -->
+  <path d="M310 320 Q360 320 360 360 L360 380 L260 380 L260 320 Z"
+        fill="#ffffff"/>
 
-  <!-- Center button on the mortarboard where the tassel anchors. -->
-  <circle cx="256" cy="220" r="11" fill="#ffffff" stroke="#7f1d1d" stroke-width="3"/>
+  <!-- Tail (foot of the "e") — short downward stroke that anchors
+       the letter and gives it a custom feel vs. a plain typeface "e". -->
+  <rect x="330" y="288" width="30" height="80"
+        fill="#f97316" rx="6" transform="rotate(8 345 328)"/>
+
+  <!-- Accent dot — small black circle in upper-right, mirroring the
+       reference. Keeps brand recognition cue (notification-like dot)
+       and breaks the otherwise pure-orange palette with a hard black
+       so the icon pops at thumbnail size. -->
+  <circle cx="392" cy="128" r="28" fill="#0f172a"/>
 </svg>

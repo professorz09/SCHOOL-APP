@@ -52,7 +52,7 @@ export default defineConfig(({mode}) => {
           name: 'EduGrow — School Management',
           short_name: 'EduGrow',
           description: 'Attendance, fees, exams, transport — one app for the whole school.',
-          theme_color: '#b91c1c',
+          theme_color: '#ffffff',
           background_color: '#ffffff',
           display: 'standalone',
           orientation: 'portrait',
