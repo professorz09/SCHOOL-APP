@@ -8,7 +8,7 @@
 // that maps the principal's roster into the tool's expected row shape.
 
 import React from 'react';
-import { ArrowLeft, FileBadge, GraduationCap, FileCheck, FileQuestion, ScrollText, Calendar, FileText } from 'lucide-react';
+import { ArrowLeft, FileBadge, GraduationCap, FileCheck, FileQuestion, ScrollText, Calendar, FileText, Receipt, Wallet } from 'lucide-react';
 import { studentService } from '@/modules/students/student.service';
 import type { Student } from '@/modules/students/student.types';
 import { schoolInfoService, type SchoolInfo } from '@/shared/utils/schoolInfo.service';
@@ -18,9 +18,11 @@ import { MarksheetTool } from '@/modules/tools/MarksheetTool';
 import { TransferCertificateTool } from '@/modules/tools/TransferCertificateTool';
 import { TimetableTool } from '@/modules/tools/TimetableTool';
 import { AdmissionFormTool } from '@/modules/tools/AdmissionFormTool';
+import { FeeReceiptTool } from '@/modules/tools/FeeReceiptTool';
+import { SalarySlipTool } from '@/modules/tools/SalarySlipTool';
 import { ExamPaperGeneratorView } from '@/modules/exams/components/ExamPaperGenerator';
 
-type ToolType = 'id-card' | 'admit-card' | 'marksheet' | 'question-paper' | 'tc' | 'timetable' | 'admission-form';
+type ToolType = 'id-card' | 'admit-card' | 'marksheet' | 'question-paper' | 'tc' | 'timetable' | 'admission-form' | 'fee-receipt' | 'salary-slip';
 
 interface Props {
   onBack: () => void;
@@ -43,6 +45,8 @@ const TOOLS: ToolDef[] = [
   { id: 'tc',            label: 'Transfer Certificate', description: 'School Leaving / TC certificates.',        icon: <ScrollText size={20} />,   category: 'Certificates',categoryColor: 'bg-rose-100 text-rose-700' },
   { id: 'timetable',     label: 'Exam Timetable',    description: 'Examination or class timetables.',            icon: <Calendar size={20} />,     category: 'Management',  categoryColor: 'bg-emerald-100 text-emerald-700' },
   { id: 'admission-form',label: 'Admission Form',    description: 'Printable admission form per student.',       icon: <FileText size={20} />,     category: 'Admissions',  categoryColor: 'bg-sky-100 text-sky-700' },
+  { id: 'fee-receipt',   label: 'Fee Receipt',       description: 'Printable payment receipt with amount in words.', icon: <Receipt size={20} />,  category: 'Finance',     categoryColor: 'bg-emerald-100 text-emerald-700' },
+  { id: 'salary-slip',   label: 'Salary Slip',       description: 'Monthly salary slip per staff member.',       icon: <Wallet size={20} />,       category: 'Finance',     categoryColor: 'bg-amber-100 text-amber-700' },
 ];
 
 export const ToolsManager: React.FC<Props> = ({ onBack }) => {
@@ -64,6 +68,8 @@ export const ToolsManager: React.FC<Props> = ({ onBack }) => {
   if (activeTool === 'tc')             return <TransferCertificateTool onBack={backToDashboard} students={students} schoolInfo={schoolInfo} />;
   if (activeTool === 'timetable')      return <TimetableTool onBack={backToDashboard} schoolInfo={schoolInfo} />;
   if (activeTool === 'admission-form') return <AdmissionFormTool onBack={backToDashboard} students={students} schoolInfo={schoolInfo} />;
+  if (activeTool === 'fee-receipt')    return <FeeReceiptTool onBack={backToDashboard} students={students} schoolInfo={schoolInfo} />;
+  if (activeTool === 'salary-slip')    return <SalarySlipTool onBack={backToDashboard} students={students} schoolInfo={schoolInfo} />;
 
   // Dashboard — minimal, professional. No giant marketing text.
   return (

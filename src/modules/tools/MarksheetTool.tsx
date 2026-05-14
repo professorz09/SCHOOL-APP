@@ -43,6 +43,8 @@ const calculateGrade = (pct: number): string => {
 
 interface SubjectConfig { name: string; maxMarks: number; passMarks: number; }
 
+type Template = 'CLASSIC' | 'DECORATIVE_GREEN';
+
 // Default passing = 33 % of max marks (CBSE / state board norm).
 const defaultPass = (max: number) => Math.ceil(max * 0.33);
 
@@ -61,6 +63,7 @@ export const MarksheetTool: React.FC<Props> = ({ onBack, students, schoolInfo })
   const [academicYear, setAcademicYear] = useState('2025-2026');
   const [examTitle, setExamTitle] = useState('Final Examination');
   const [subjects, setSubjects] = useState<SubjectConfig[]>(DEFAULT_SUBJECTS);
+  const [template, setTemplate] = useState<Template>('CLASSIC');
   const logoUrl = schoolInfo?.logoPath ? schoolInfoService.getAssetUrl(schoolInfo.logoPath) : '';
 
   // ─── Load Marks from Exams ───────────────────────────────────────────
@@ -244,6 +247,20 @@ export const MarksheetTool: React.FC<Props> = ({ onBack, students, schoolInfo })
               <ToolField label="Academic Year" value={academicYear} onChange={setAcademicYear} />
               <ToolField label="Exam Name" value={examTitle} onChange={setExamTitle} placeholder="Final Examination" />
             </div>
+            <div>
+              <ToolLabel>Template</ToolLabel>
+              <select value={template} onChange={e => setTemplate(e.target.value as Template)}
+                className="w-full px-3 py-2.5 bg-slate-50 border border-slate-200 rounded-lg text-sm font-bold focus:outline-none focus:ring-2 focus:ring-indigo-500">
+                <option value="CLASSIC">Classic (clean, slate border)</option>
+                <option value="DECORATIVE_GREEN">Decorative Green (ornate, term-wise breakdown)</option>
+              </select>
+              {template === 'DECORATIVE_GREEN' && (
+                <p className="text-[10px] font-medium text-slate-500 mt-1.5 leading-snug">
+                  Yearly Exam, Term II Total, and Grand Total auto-fill from data.
+                  Term I cells (Oral / Half-Yearly / Total) print blank for manual entry.
+                </p>
+              )}
+            </div>
           </ToolCard>
 
           <div className="bg-white border border-slate-200 rounded-xl p-3 space-y-2">
@@ -332,8 +349,13 @@ export const MarksheetTool: React.FC<Props> = ({ onBack, students, schoolInfo })
       preview={(
         <div className="overflow-x-auto bg-white border border-slate-200 shadow-sm p-2 md:p-3 rounded-xl">
           <div className="min-w-[8in]">
-            <Marksheet row={data[0] ?? {}} subjectMax={subjectMaxMap} subjectPass={subjectPassMap}
-              schoolName={schoolName} academicYear={academicYear} examTitle={examTitle} logoUrl={logoUrl} />
+            {template === 'DECORATIVE_GREEN' ? (
+              <MarksheetDecorativeGreen row={data[0] ?? {}} subjectMax={subjectMaxMap} subjectPass={subjectPassMap}
+                schoolName={schoolName} academicYear={academicYear} examTitle={examTitle} logoUrl={logoUrl} schoolInfo={schoolInfo} />
+            ) : (
+              <Marksheet row={data[0] ?? {}} subjectMax={subjectMaxMap} subjectPass={subjectPassMap}
+                schoolName={schoolName} academicYear={academicYear} examTitle={examTitle} logoUrl={logoUrl} />
+            )}
           </div>
           {data.length > 1 && (
             <p className="text-center text-slate-500 mt-3 text-xs font-medium">
@@ -345,8 +367,13 @@ export const MarksheetTool: React.FC<Props> = ({ onBack, students, schoolInfo })
       printNode={(
         <div id="print-area-marksheets" className="flex flex-col pb-10 bg-white w-full max-w-[794px] mx-auto min-h-[1122px]">
           {data.map((row, i) => (
-            <Marksheet key={i} row={row} subjectMax={subjectMaxMap} subjectPass={subjectPassMap}
-              schoolName={schoolName} academicYear={academicYear} examTitle={examTitle} logoUrl={logoUrl} />
+            template === 'DECORATIVE_GREEN' ? (
+              <MarksheetDecorativeGreen key={i} row={row} subjectMax={subjectMaxMap} subjectPass={subjectPassMap}
+                schoolName={schoolName} academicYear={academicYear} examTitle={examTitle} logoUrl={logoUrl} schoolInfo={schoolInfo} />
+            ) : (
+              <Marksheet key={i} row={row} subjectMax={subjectMaxMap} subjectPass={subjectPassMap}
+                schoolName={schoolName} academicYear={academicYear} examTitle={examTitle} logoUrl={logoUrl} />
+            )
           ))}
         </div>
       )}
@@ -488,5 +515,230 @@ const Detail: React.FC<{ label: string; val: string; upper?: boolean }> = ({ lab
   <div className="flex border-b border-slate-200 pb-1">
     <span className="w-32 font-bold text-slate-600 uppercase">{label}</span>
     <span className={`font-semibold text-slate-900 ${upper ? 'uppercase' : ''}`}>{val}</span>
+  </div>
+);
+
+// ─── Decorative Green template ────────────────────────────────────────────
+// Reference: Saint Haider Convent School style — green double-line ornate
+// border, dark-blue serif school name, Term I + Term II breakdown per
+// subject, Co-Schooling + Discipline cards, grading scale at bottom.
+//
+// Data model note: the tool stores ONE mark per subject (the yearly /
+// final exam total). The decorative layout has 8 sub-columns (Term I:
+// Oral, Half-Yearly, Total; Term II: Note Book, Oral, Yearly Exam, Total;
+// Grand Total). We populate the three derived cells from data (Yearly
+// Exam, Term II Total, Grand Total — all the same value since we only
+// have one mark) and leave the Term I cells + Note Book + Oral blank so
+// the school can hand-fill if they actually track those.
+const MarksheetDecorativeGreen: React.FC<{
+  row: Record<string, unknown>;
+  subjectMax: Map<string, number>;
+  subjectPass: Map<string, number>;
+  schoolName: string;
+  academicYear: string;
+  examTitle: string;
+  logoUrl: string;
+  schoolInfo: SchoolInfo | null;
+}> = ({ row, subjectMax, subjectPass, schoolName, academicYear, logoUrl, schoolInfo }) => {
+  const subjectNames = Object.keys(row).filter(k => !STANDARD_KEYS.includes(k) && k !== 'admissionNo');
+  let total = 0, totalMax = 0, totalPass = 0, valid = 0;
+  let anyFailed = false;
+  const marks = subjectNames.map(sub => {
+    const v = String(row[sub] ?? '');
+    const n = parseFloat(v);
+    const ok = !isNaN(n) && v.trim().length > 0;
+    const max = subjectMax.get(sub) ?? 100;
+    const pass = subjectPass.get(sub) ?? Math.ceil(max * 0.33);
+    if (ok) {
+      total += n; totalMax += max; totalPass += pass; valid++;
+      if ((n as number) < pass) anyFailed = true;
+    }
+    return { subject: sub, mark: ok ? n : null, max, pass };
+  });
+  const pct = totalMax > 0 ? ((total / totalMax) * 100) : 0;
+  const overallPass = valid > 0 && !anyFailed && total >= totalPass;
+  const grade = valid > 0 ? calculateGrade(pct) : '';
+
+  return (
+    <div className="w-[794px] mx-auto bg-white avoid-break flex flex-col relative" style={{ minHeight: 1122 }}>
+      {/* Ornate green double border — outer + inner with thin gap. */}
+      <div className="m-4 border-[3px] border-emerald-700 rounded-sm flex-1 flex flex-col" style={{ minHeight: 1090 }}>
+        <div className="m-1.5 border border-emerald-600 rounded-sm flex-1 flex flex-col p-6 relative" style={{ background: 'repeating-linear-gradient(45deg, rgba(16,185,129,0.02), rgba(16,185,129,0.02) 12px, transparent 12px, transparent 24px)' }}>
+          {/* Header */}
+          <div className="text-center mb-2">
+            <h1 className="text-3xl font-black tracking-wider uppercase" style={{ fontFamily: 'Georgia, serif', color: '#0c4a6e' }}>
+              {schoolName}
+            </h1>
+            {(schoolInfo?.affiliationBoard || schoolInfo?.schoolCode) && (
+              <p className="text-[10px] font-semibold text-slate-600 mt-0.5">
+                {schoolInfo?.affiliationBoard && `Affiliated to ${schoolInfo.affiliationBoard}`}
+                {schoolInfo?.schoolCode && ` · Affiliation No.: ${schoolInfo.schoolCode}`}
+              </p>
+            )}
+            {(schoolInfo?.phone || schoolInfo?.email) && (
+              <p className="text-[10px] font-semibold text-slate-600">
+                {schoolInfo?.phone && `Ph.: ${schoolInfo.phone}`}
+                {schoolInfo?.phone && schoolInfo?.email && ' · '}
+                {schoolInfo?.email && `Email: ${schoolInfo.email}`}
+              </p>
+            )}
+          </div>
+
+          {/* Logo + Academic Record block */}
+          <div className="flex items-center gap-4 mb-4">
+            {logoUrl ? (
+              <img src={logoUrl} alt="School logo" crossOrigin="anonymous"
+                className="w-20 h-20 object-contain shrink-0" />
+            ) : <div className="w-20" />}
+            <div className="flex-1 text-center">
+              <h2 className="text-xl font-bold text-slate-800" style={{ fontFamily: 'Georgia, serif' }}>Academic Record</h2>
+              <p className="text-sm font-semibold text-slate-700 mt-1">Academic Session – {academicYear}</p>
+              <p className="text-sm font-semibold text-slate-700 mt-0.5">
+                Class : <span className="inline-block min-w-[80px] border-b border-dotted border-slate-400 px-2 text-center">{String(row.class || '')}</span>
+              </p>
+            </div>
+            <div className="w-20" />
+          </div>
+
+          {/* Student info — 2 columns, dotted underline */}
+          <div className="grid grid-cols-2 gap-x-6 gap-y-2 text-[11px] mb-3">
+            <DottedField label="Name of Student" value={String(row.name || '')} />
+            <DottedField label="Roll No." value={String(row.roll || '')} />
+            <DottedField label="Mother's Name" value="" />
+            <DottedField label="Scholar No." value={String(row.admissionNo || '')} />
+            <DottedField label="Father's Name" value={String(row.fatherName || '')} />
+            <DottedField label="Date of Birth" value="" />
+          </div>
+
+          {/* Marks table — Term I + Term II + Over All */}
+          <table className="w-full text-[10px] border-collapse border-2 border-blue-400 mb-3">
+            <thead>
+              <tr className="bg-blue-50 text-blue-900">
+                <th rowSpan={2} className="border border-blue-300 px-1 py-1 text-left font-bold">Scholastic Area</th>
+                <th colSpan={3} className="border border-blue-300 px-1 py-1 font-bold">Term I (100 Marks)</th>
+                <th colSpan={4} className="border border-blue-300 px-1 py-1 font-bold">Term II (100 Marks)</th>
+                <th rowSpan={2} className="border border-blue-300 px-1 py-1 font-bold">Over All<br/>Grand Total</th>
+              </tr>
+              <tr className="bg-blue-50 text-blue-900 text-[9px]">
+                <th className="border border-blue-300 px-1 py-1 font-semibold">Oral</th>
+                <th className="border border-blue-300 px-1 py-1 font-semibold">Half<br/>Yearly</th>
+                <th className="border border-blue-300 px-1 py-1 font-semibold">Total</th>
+                <th className="border border-blue-300 px-1 py-1 font-semibold">Note<br/>Book</th>
+                <th className="border border-blue-300 px-1 py-1 font-semibold">Oral</th>
+                <th className="border border-blue-300 px-1 py-1 font-semibold">Yearly<br/>Exam</th>
+                <th className="border border-blue-300 px-1 py-1 font-semibold">Total</th>
+              </tr>
+              <tr className="bg-blue-50 text-blue-900 text-[9px]">
+                <th className="border border-blue-300 px-1 py-0.5 text-left font-bold">Subjects</th>
+                <th colSpan={8}></th>
+              </tr>
+            </thead>
+            <tbody>
+              {marks.length > 0 ? marks.map((m, i) => {
+                const mk = m.mark === null ? '' : String(m.mark);
+                return (
+                  <tr key={i}>
+                    <td className="border border-blue-300 px-2 py-1.5 font-semibold text-slate-800">{m.subject}</td>
+                    <td className="border border-blue-300 px-1 py-1.5"></td>
+                    <td className="border border-blue-300 px-1 py-1.5"></td>
+                    <td className="border border-blue-300 px-1 py-1.5"></td>
+                    <td className="border border-blue-300 px-1 py-1.5"></td>
+                    <td className="border border-blue-300 px-1 py-1.5"></td>
+                    <td className="border border-blue-300 px-1 py-1.5 text-center font-bold text-slate-900">{mk}</td>
+                    <td className="border border-blue-300 px-1 py-1.5 text-center font-bold text-slate-900">{mk}</td>
+                    <td className="border border-blue-300 px-1 py-1.5 text-center font-bold text-blue-900">{mk}</td>
+                  </tr>
+                );
+              }) : (
+                <tr><td colSpan={9} className="border border-blue-300 px-3 py-4 text-center text-slate-400">No subjects configured</td></tr>
+              )}
+            </tbody>
+          </table>
+
+          {/* Summary pills — Over All / Percentage / Grade / Rank */}
+          <div className="grid grid-cols-4 gap-2 mb-4 text-[10px]">
+            <SummaryPill label="Over All Marks" value={valid > 0 ? `${total}` : ''} bg="bg-emerald-100" border="border-emerald-300" />
+            <SummaryPill label="Percentage" value={valid > 0 ? `${pct.toFixed(1)}%` : ''} bg="bg-rose-100" border="border-rose-300" />
+            <SummaryPill label="Grade" value={grade} bg="bg-indigo-100" border="border-indigo-300" />
+            <SummaryPill label="Rank" value="" bg="bg-pink-100" border="border-pink-300" />
+          </div>
+
+          {/* Co-Schooling + Discipline cards */}
+          <div className="grid grid-cols-2 gap-3 mb-4 text-[10px]">
+            <div className="border-2 border-amber-300 rounded-sm overflow-hidden">
+              <div className="bg-amber-100 px-2 py-1 text-center font-bold text-amber-900 uppercase">Co-Schooling Area</div>
+              <table className="w-full">
+                <thead>
+                  <tr className="bg-amber-50"><th className="border-y border-amber-200 px-2 py-1 text-left font-bold">Activity</th><th className="border-y border-amber-200 px-2 py-1"></th></tr>
+                </thead>
+                <tbody>
+                  {['Work Education', 'Art Education', 'Health Physical Education', 'Social Skills', 'Sports'].map(a => (
+                    <tr key={a}><td className="border-t border-amber-200 px-2 py-1.5 font-medium">{a}</td><td className="border-t border-amber-200 px-2 py-1.5"></td></tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+            <div className="border-2 border-sky-300 rounded-sm overflow-hidden">
+              <div className="bg-sky-100 px-2 py-1 text-center font-bold text-sky-900 uppercase">Discipline</div>
+              <table className="w-full">
+                <thead>
+                  <tr className="bg-sky-50"><th className="border-y border-sky-200 px-2 py-1 text-left font-bold">Activity</th><th className="border-y border-sky-200 px-2 py-1"></th></tr>
+                </thead>
+                <tbody>
+                  {['Regularity & Punctuality', 'Sincerity', 'Behaviour & Values', 'Respectfulness for Rules & Reg.', 'Attitude Towards Teachers', 'Attitude Towards Society'].map(a => (
+                    <tr key={a}><td className="border-t border-sky-200 px-2 py-1 font-medium">{a}</td><td className="border-t border-sky-200 px-2 py-1"></td></tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </div>
+
+          {/* Congratulation + Grading scale */}
+          <div className="text-[11px] font-semibold text-slate-800 mb-2">
+            {overallPass ? 'Congratulation ! Promoted to Class -' : 'Result -'}
+            <span className="inline-block min-w-[120px] border-b border-dotted border-slate-400 ml-2"></span>
+          </div>
+          <div className="mb-3">
+            <p className="text-center text-[10px] font-bold text-slate-700 mb-1">Grading Scale for Scholastic Areas</p>
+            <table className="w-full text-[10px] border-collapse border border-blue-300">
+              <thead>
+                <tr className="bg-blue-50">
+                  <th className="border border-blue-200 px-2 py-1 font-bold">Marks Range</th>
+                  {['91-100', '81-90', '71-80', '61-70', '51-60', '41-50', '32-40'].map(r => (
+                    <th key={r} className="border border-blue-200 px-2 py-1 font-semibold">{r}</th>
+                  ))}
+                </tr>
+                <tr>
+                  <th className="border border-blue-200 px-2 py-1 font-bold bg-blue-50">Grade</th>
+                  {['A+', 'A', 'B+', 'B', 'C+', 'C', 'D'].map(g => (
+                    <td key={g} className="border border-blue-200 px-2 py-1 text-center font-bold text-blue-900">{g}</td>
+                  ))}
+                </tr>
+              </thead>
+            </table>
+          </div>
+
+          {/* Signatures */}
+          <div className="flex justify-between items-end mt-auto pt-4 text-[10px] font-bold text-slate-700">
+            <div>Class Teacher's Signature</div>
+            <div>Principal's Signature</div>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+};
+
+const DottedField: React.FC<{ label: string; value: string }> = ({ label, value }) => (
+  <div className="flex items-baseline gap-1">
+    <span className="font-bold text-slate-700 shrink-0">{label}</span>
+    <span className="flex-1 border-b border-dotted border-slate-400 px-1 font-semibold text-slate-900">{value || ' '}</span>
+  </div>
+);
+
+const SummaryPill: React.FC<{ label: string; value: string; bg: string; border: string }> = ({ label, value, bg, border }) => (
+  <div className={`${bg} ${border} border-2 rounded-sm overflow-hidden flex`}>
+    <div className="px-2 py-1.5 font-bold text-slate-900 whitespace-nowrap">{label}</div>
+    <div className="flex-1 bg-white px-2 py-1.5 font-black text-slate-900 text-center">{value}</div>
   </div>
 );
