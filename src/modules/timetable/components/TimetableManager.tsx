@@ -206,15 +206,19 @@ export const TimetableManager: React.FC<Props> = ({ onBack }) => {
       return;
     }
     const existing = entries.find(e => e.day === activeDay && e.slotId === slotId);
+    // When the day already has an ACTIVITY entry, open the modal in
+    // Non-Teaching mode pre-loaded with the activity's label (instead
+    // of the slot's school-wide default). Migration 0131.
+    const dayIsActivity = existing?.entryKind === 'ACTIVITY';
     setSlotTimeModal({
       slotId: slot.slotId,
-      label: slot.label,
+      label: dayIsActivity ? (existing?.subject || slot.label) : slot.label,
       startTime: slot.startTime,
       endTime: slot.endTime,
-      type: slot.type,
-      subject:         existing?.subject ?? '',
-      teacherId:       existing?.teacherId ?? teachers[0]?.id ?? '',
-      room:            existing?.room ?? '',
+      type: dayIsActivity ? 'ASSEMBLY' : slot.type,
+      subject:         dayIsActivity ? '' : (existing?.subject ?? ''),
+      teacherId:       dayIsActivity ? '' : (existing?.teacherId ?? teachers[0]?.id ?? ''),
+      room:            dayIsActivity ? '' : (existing?.room ?? ''),
       existingEntryId: existing?.id ?? null,
     });
     setConflictMsg('');
@@ -251,19 +255,13 @@ export const TimetableManager: React.FC<Props> = ({ onBack }) => {
     try {
       let slotId = slotTimeModal.slotId;
       // ── Step 1: ensure the slot row exists with the right type/time.
-      // addCustomSlot returns the new row's UUID directly — earlier we
-      // tried to "find" the fresh slot by matching start_time + label
-      // which mis-identified the wrong row when two slots had the same
-      // start time, then the entry insert hit the (section,day,slot)
-      // unique constraint with a duplicate.
-      //
-      // Default-slot edits route through addCustomSlot too. The
-      // PERIOD_SLOTS fallback (used until a school configures its own
-      // periods) has string slotIds like "assembly" / "p1" / "lunch"
-      // — these are NOT UUIDs, so updateSlot would crash with
-      // "invalid input syntax for type uuid" the moment the server
-      // tries to UPDATE timetable_periods WHERE id='assembly'. Detect
-      // a non-UUID slotId and create instead.
+      // For new slots OR placeholder fallback IDs (string slots like
+      // "assembly"/"p1"/"lunch" that don't have a DB row yet) we create.
+      // For existing UUID slots we ONLY touch the slot row if the user
+      // actually changed time / label. Type changes no longer mutate
+      // the slot — they save a per-day timetable_entries override
+      // (migration 0131) so Monday → Assembly doesn't bleed into
+      // Tuesday / Wednesday / …
       const isUuid = (s: string) => /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(s);
       if (slotTimeModal.isNew || !isUuid(slotTimeModal.slotId)) {
         slotId = await timetableService.addCustomSlot({
@@ -271,18 +269,30 @@ export const TimetableManager: React.FC<Props> = ({ onBack }) => {
           name:      slotTimeModal.label || (isTeaching ? `Period ${slots.length + 1}` : 'Activity'),
           startTime: slotTimeModal.startTime,
           endTime:   slotTimeModal.endTime,
-          type:      slotTimeModal.type,
+          // New slots use CLASS as the structural default. The
+          // activity-vs-teaching distinction now lives on the entry,
+          // not the slot, so a freshly created slot stays neutral.
+          type:      isTeaching ? slotTimeModal.type : 'CLASS',
         });
       } else {
-        await timetableService.updateSlot(slotTimeModal.slotId, {
-          name: slotTimeModal.label,
-          startTime: slotTimeModal.startTime,
-          endTime: slotTimeModal.endTime,
-          type: slotTimeModal.type,
-        });
+        // Only update slot when time or label actually changed.
+        const existing = slots.find(s => s.slotId === slotTimeModal.slotId);
+        const timeChanged = existing && (existing.startTime !== slotTimeModal.startTime || existing.endTime !== slotTimeModal.endTime);
+        const labelChanged = existing && existing.label !== slotTimeModal.label;
+        if (timeChanged || labelChanged) {
+          await timetableService.updateSlot(slotTimeModal.slotId, {
+            name: slotTimeModal.label,
+            startTime: slotTimeModal.startTime,
+            endTime: slotTimeModal.endTime,
+            // Don't pass type — leaving it unchanged preserves the
+            // school-wide structural slot definition.
+          });
+        }
       }
 
-      // ── Step 2: handle the entry side (teaching mode only)
+      // ── Step 2: save the per-day entry (TEACHING or ACTIVITY).
+      // The entry is what makes a slot teaching vs activity FOR THIS
+      // DAY ONLY. Other days fall back to slot defaults.
       if (isTeaching) {
         const teacher = teachers.find(t => t.id === slotTimeModal.teacherId);
         if (!teacher) throw new Error('Teacher not found');
@@ -298,16 +308,37 @@ export const TimetableManager: React.FC<Props> = ({ onBack }) => {
           teacherId:      teacher.id,
           teacherName:    teacher.name,
           room:           slotTimeModal.room.trim(),
+          entryKind:      'TEACHING',
         });
         if (!result.ok) {
           setConflictMsg(result.reason ?? 'Save failed');
           return;
         }
-      } else if (slotTimeModal.existingEntryId) {
-        // Switched from teaching → non-teaching: drop the entry on
-        // this slot for the active day so the cell renders cleanly
-        // as the new activity.
-        await timetableService.deleteEntry(slotTimeModal.existingEntryId);
+      } else {
+        // Non-teaching: save (or replace) the day's entry with the
+        // activity label. teacherId is null so the row reads cleanly
+        // as a per-day activity. Existing teaching entries on this
+        // day get overwritten in-place (same primary key when
+        // `existingEntryId` is set).
+        const label = slotTimeModal.label.trim() || 'Activity';
+        const result = await timetableService.saveEntry({
+          id:             slotTimeModal.existingEntryId ?? undefined,
+          academicYearId: currentYear?.id ?? '',
+          className:      selectedClass.className,
+          section:        selectedClass.section,
+          classId:        selectedClass.label,
+          day:            activeDay,
+          slotId,
+          subject:        label,
+          teacherId:      '',
+          teacherName:    '',
+          room:           '',
+          entryKind:      'ACTIVITY',
+        });
+        if (!result.ok) {
+          setConflictMsg(result.reason ?? 'Save failed');
+          return;
+        }
       }
 
       setSlots(timetableService.getSlotsForClass(selectedClass.label));
@@ -525,26 +556,34 @@ export const TimetableManager: React.FC<Props> = ({ onBack }) => {
               <div className="space-y-3">
                 {slots.map(slot => {
                   const entry = getEntry(slot.slotId);
-                  const isFixed = slot.isFixed;
-                  const filled = !!entry;
+                  // Per-day activity entries (migration 0131) make the
+                  // slot read as a non-teaching block for THIS day only
+                  // — entry wins over slot.type. Falls back to the slot's
+                  // structural type when no entry exists.
+                  const dayIsActivity = !!entry && entry.entryKind === 'ACTIVITY';
+                  const isFixed = dayIsActivity || (slot.isFixed && !entry);
+                  const filled = !!entry && entry.entryKind !== 'ACTIVITY';
 
                   // Dot color encodes slot status:
-                  //   filled class → blue
-                  //   fixed (break/lunch/assembly) → amber/violet/violet
+                  //   filled teaching → blue
+                  //   activity (slot- or day-driven) → amber/violet
                   //   empty class slot → grey (dashed-border card prompts assign)
+                  const activityType = dayIsActivity
+                    ? (slot.type === 'LUNCH' ? 'LUNCH' : 'ASSEMBLY')
+                    : slot.type;
                   const dotColor = filled
                     ? 'bg-blue-500 ring-blue-100'
                     : isFixed
-                      ? slot.type === 'LUNCH'
+                      ? activityType === 'LUNCH'
                         ? 'bg-amber-400 ring-amber-100'
-                        : slot.type === 'ASSEMBLY'
+                        : activityType === 'ASSEMBLY'
                           ? 'bg-violet-400 ring-violet-100'
                           : 'bg-amber-300 ring-amber-100'
                       : 'bg-slate-300 ring-slate-100';
                   const cardClass = filled
                     ? 'bg-white border-slate-200 hover:border-blue-300'
                     : isFixed
-                      ? slotBg[slot.type] + ' border'
+                      ? slotBg[dayIsActivity ? activityType : slot.type] + ' border'
                       : 'bg-white border-dashed border-slate-300 hover:border-blue-400';
 
                   return (
@@ -575,10 +614,14 @@ export const TimetableManager: React.FC<Props> = ({ onBack }) => {
                             {isFixed ? (
                               <>
                                 <div className="flex items-center gap-2 font-black text-sm lg:text-base uppercase tracking-tight">
-                                  {slot.type === 'LUNCH'
+                                  {activityType === 'LUNCH'
                                     ? <Coffee size={14} className="text-amber-500" />
                                     : <Sparkles size={14} className="text-violet-500" />}
-                                  {slot.label}
+                                  {/* When the activity comes from a per-day entry,
+                                      use its subject as the label so principals see
+                                      what they typed (e.g. "Prayer" / "Assembly").
+                                      Slot-default activities keep using slot.label. */}
+                                  {dayIsActivity && entry ? entry.subject : slot.label}
                                 </div>
                                 {customizeOn && (
                                   <div className="flex items-center gap-1 text-[10px] lg:text-[11px] font-bold text-slate-500 mt-1">

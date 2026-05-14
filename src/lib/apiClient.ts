@@ -242,6 +242,7 @@ export const apiTimetable = {
     className: string; section: string; classId: string;
     day: string; slotId: string; subject: string;
     teacherId?: string | null; teacherName: string; room: string;
+    entryKind?: 'TEACHING' | 'ACTIVITY';
   }) => post<any>('/timetable/save', body),
   deleteEntry: (id: string) => post<any>('/timetable/delete', { id }),
   /** Replace the school's period definitions for the active year. */

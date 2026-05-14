@@ -14,6 +14,11 @@ timetableRouter.post('/save', requireAuth, requireRole('PRINCIPAL'), async (req,
       className: string; section: string;
       classId: string; day: string; slotId: string;
       subject: string; teacherId?: string | null; teacherName: string; room: string;
+      /** 'TEACHING' (default) or 'ACTIVITY'. ACTIVITY rows are per-day
+       *  non-teaching designations (assembly / lunch / prayer for that
+       *  one day only); teacher_id is null and `subject` carries the
+       *  display label. Migration 0131. */
+      entryKind?: 'TEACHING' | 'ACTIVITY';
       // `teacherName` and `room` are optional metadata — sending an empty
       // string used to silently 400 "Field is required" because requireBody
       // treats '' as missing. Leave them out of the required list.
@@ -43,6 +48,7 @@ timetableRouter.post('/save', requireAuth, requireRole('PRINCIPAL'), async (req,
       teacher_id:       body.teacherId || null,
       teacher_name:     body.teacherName ?? '',
       room:             body.room ?? '',
+      entry_kind:       body.entryKind === 'ACTIVITY' ? 'ACTIVITY' : 'TEACHING',
     };
 
     if (body.id) {

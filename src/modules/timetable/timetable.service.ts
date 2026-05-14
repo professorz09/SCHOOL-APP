@@ -59,6 +59,13 @@ export interface TimetableEntry {
   teacherName: string;
   room: string;
   academicYearId: string;
+  /** 'TEACHING' (default) — regular subject + teacher.
+   *  'ACTIVITY'           — per-day non-teaching designation (assembly /
+   *                         lunch / prayer for this one day only).
+   *                         Lets a single slot's behaviour vary by day
+   *                         without mutating the school-wide slot.type
+   *                         on timetable_periods. Migration 0131. */
+  entryKind: 'TEACHING' | 'ACTIVITY';
 }
 
 export interface TimetableTeacher {
@@ -117,6 +124,7 @@ interface EntryRow {
   subject: string | null; teacher_id: string | null;
   teacher_name: string | null; room: string | null;
   academic_year_id: string;
+  entry_kind: string | null;
   sections: { class_name: string; section: string } | null;
 }
 
@@ -189,7 +197,7 @@ async function _loadEntries(schoolId: string): Promise<void> {
   if (!_activeYearId) { _entriesCache = []; return; }
   const { data, error } = await supabase
     .from('timetable_entries')
-    .select('id, section_id, class_id, day, slot_id, subject, teacher_id, teacher_name, room, academic_year_id, sections(class_name, section)')
+    .select('id, section_id, class_id, day, slot_id, subject, teacher_id, teacher_name, room, academic_year_id, entry_kind, sections(class_name, section)')
     .eq('school_id', schoolId).eq('academic_year_id', _activeYearId);
   if (error) throw new Error(error.message);
   _entriesCache = ((data ?? []) as unknown as EntryRow[]).map(r => ({
@@ -204,6 +212,7 @@ async function _loadEntries(schoolId: string): Promise<void> {
     teacherName: r.teacher_name ?? '',
     room: r.room ?? '',
     academicYearId: r.academic_year_id,
+    entryKind: r.entry_kind === 'ACTIVITY' ? 'ACTIVITY' : 'TEACHING',
   }));
 }
 
@@ -307,6 +316,7 @@ export const timetableService = {
         teacherId:      entry.teacherId || null,
         teacherName:    entry.teacherName,
         room:           entry.room,
+        entryKind:      entry.entryKind,
       });
     } catch (e) {
       return { ok: false, reason: (e as Error).message };
