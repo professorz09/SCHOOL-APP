@@ -694,7 +694,9 @@ export const StudentProfilePanel: React.FC<Props> = ({ student, onBack, onStuden
                 <p className="text-[10px] font-bold text-slate-400 mt-0.5">{currentStudent.admissionNo}</p>
                 <div className="flex flex-wrap gap-1.5 mt-2">
                   <span className="text-[9px] font-black bg-blue-50 text-blue-700 px-2 py-0.5 rounded-full">
-                    {currentStudent.className ? `${currentStudent.className}-${currentStudent.section}` : 'Unassigned'}
+                    {currentStudent.className
+                      ? `${currentStudent.className}${currentStudent.section ? `-${currentStudent.section.replace(/_/g, '/')}` : ''}`
+                      : 'Unassigned'}
                   </span>
                   {currentStudent.rollNo && (
                     <span className="text-[9px] font-black bg-slate-100 text-slate-600 px-2 py-0.5 rounded-full">
@@ -875,7 +877,15 @@ export const StudentProfilePanel: React.FC<Props> = ({ student, onBack, onStuden
                         <div className="text-[9px] font-bold text-indigo-400 mt-0.5">Class</div>
                       </div>
                       <div className="bg-violet-50 rounded-xl p-3 text-center">
-                        <div className="text-base font-black text-violet-700">{currentStudent.section || '—'}</div>
+                        {/* Section labels like "BIO_CHE_PHY" (used for
+                            stream-as-section in 11/12) wrap into one
+                            ugly run of underscores. Swap underscores
+                            for `/` so multi-stream sections read as
+                            "BIO/CHE/PHY" without changing the
+                            persisted value. */}
+                        <div className="text-base font-black text-violet-700 leading-tight">
+                          {currentStudent.section ? currentStudent.section.replace(/_/g, '/') : '—'}
+                        </div>
                         <div className="text-[9px] font-bold text-violet-400 mt-0.5">Section</div>
                       </div>
                       <div className="bg-emerald-50 rounded-xl p-3 text-center">

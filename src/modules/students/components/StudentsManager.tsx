@@ -1463,19 +1463,27 @@ export const StudentsManager: React.FC<Props> = ({
                       <div className="font-extrabold text-slate-900 text-sm truncate">{student.name}</div>
                       <div className="flex items-center gap-2 mt-0.5">
                         <span className="text-[10px] font-bold text-slate-400">
-                          {student.className ? `${student.className}·${student.section}` : 'Unassigned'}
+                          {student.className
+                            ? `${student.className}${student.section ? `·${student.section.replace(/_/g, '/')}` : ''}`
+                            : 'Unassigned'}
                         </span>
                         <span className="text-[9px] font-bold text-slate-300">·</span>
                         <span className="text-[10px] font-bold text-indigo-500">{student.admissionNo}</span>
                       </div>
                     </div>
                     <div className="flex flex-col items-end gap-1">
+                      {/* Admission badge — assignment status, not fee status.
+                          Earlier this surfaced fee state (PARTIAL / PENDING)
+                          which clashed with the page header ("Admission") and
+                          left the principal asking "why is this PENDING when
+                          class is assigned?". Fee status is still visible on
+                          the student profile + Fee Ledger pages. */}
                       <span className={`text-[9px] font-black px-2 py-0.5 rounded-full uppercase ${
-                        student.feeStatus === PaymentStatus.PAID ? 'bg-emerald-100 text-emerald-700' :
-                        String(student.feeStatus) === 'PARTIAL' ? 'bg-amber-100 text-amber-700' :
-                        'bg-rose-100 text-rose-600'
+                        student.className
+                          ? 'bg-emerald-100 text-emerald-700'
+                          : 'bg-amber-100 text-amber-700'
                       }`}>
-                        {student.feeStatus}
+                        {student.className ? 'Assigned' : 'Unassigned'}
                       </span>
                       <ChevronRight size={14} className="text-slate-300" />
                     </div>
