@@ -59,10 +59,26 @@ export const useAuthStore = create<AuthState>((set) => ({
   },
 
   logout: async () => {
+    // Clear local state BEFORE the async signOut so the UI flips to
+    // the login screen on the next render — earlier this happened
+    // after the await, which left the user staring at the previous
+    // role's layout for a beat (and they could still tap reads while
+    // writes 401'd with "invalid or expired token" because the
+    // Supabase session was already gone server-side).
+    set({ session: null, error: null, selectedStudentId: null });
     try {
       await authService.logout();
-    } finally {
-      set({ session: null, error: null, selectedStudentId: null });
+    } catch {
+      // Swallow — local state is already cleared, server-side may
+      // have been gone already (token expiry, network blip). The
+      // user is logged out either way from the app's perspective.
+    }
+    // Hard-replace the URL so any React state that survived the
+    // store flip (component-level useState, in-flight queries, the
+    // service worker's runtime cache) is wiped. No half-state where
+    // the previous user's data is visible after logout.
+    if (typeof window !== 'undefined') {
+      window.location.replace('/');
     }
   },
 }));

@@ -1000,12 +1000,27 @@ export const SettingsManager: React.FC<Props> = ({ onBack, initialView }) => {
           </button>
         </div>
 
-        {/* Email-OTP 2FA — principal / super-admin only. Off by
-            default. When on, every login goes through password
-            then a 6-digit code from email. Mobile / parent / student
-            / teacher / driver accounts don't see this card at all
-            (they login by mobile and most don't have email on file). */}
+        {/* Email-OTP 2FA — shown as Coming Soon for now. Every account
+            currently carries a placeholder `<mobile>@edugrow.com`
+            address; OTPs sent there would go nowhere and lock the
+            user out. Toggle stays disabled until a real mail provider
+            is wired in. */}
         {(session?.role === 'PRINCIPAL' || session?.role === 'SUPER_ADMIN') && (
+          <div className="bg-white rounded-2xl border border-slate-100 shadow-sm p-4">
+            <div className="flex items-center gap-2 mb-1">
+              <ShieldCheck size={16} className="text-slate-400" />
+              <p className="text-[10px] font-black uppercase tracking-widest text-slate-400">Two-Factor Auth (Email OTP)</p>
+              <span className="ml-auto text-[9px] font-black uppercase tracking-widest text-amber-700 bg-amber-50 border border-amber-200 px-2 py-0.5 rounded-full">
+                Coming Soon
+              </span>
+            </div>
+            <p className="text-[11px] font-bold text-slate-500 leading-relaxed">
+              Login ke time password ke baad ek 6-digit code email par bheja jayega. Yeh feature filhal disabled hai — mail delivery setup hone ke baad enable hoga.
+            </p>
+          </div>
+        )}
+
+        {false && (session?.role === 'PRINCIPAL' || session?.role === 'SUPER_ADMIN') && (
           <div className="bg-white rounded-2xl border border-slate-100 shadow-sm p-4 space-y-3">
             <div className="flex items-center gap-2 mb-1">
               <ShieldCheck size={16} className="text-emerald-600" />
