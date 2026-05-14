@@ -17,6 +17,7 @@ import {
   Bus, Download, Loader, ChevronDown, ChevronRight,
 } from 'lucide-react';
 import { supabase } from '@/lib/supabase';
+import { todayIST, addDaysIST } from '@/shared/utils/date';
 
 // Match the runReport helper in AnalyticsManager.tsx
 type RunReport = (
@@ -168,8 +169,7 @@ export const ReportsSection: React.FC<Props> = ({
         {
           id: 'students_new', label: 'New Admissions · 30d', desc: 'Students admitted in the last 30 days',
           run: async () => {
-            const cutoff = new Date(); cutoff.setDate(cutoff.getDate() - 30);
-            const cutoffIso = cutoff.toISOString().slice(0, 10);
+            const cutoffIso = addDaysIST(todayIST(), -30);
             const { data, error } = await supabase.from('students')
               .select('id, name, admission_no, phone, is_rte, father_name, father_phone, mother_name, mother_phone, address, admission_date, student_academic_records(class_name, section, total_fee, paid_fee, attendance_percent, academic_year_id)')
               .eq('school_id', schoolId).gte('admission_date', cutoffIso)
@@ -563,7 +563,7 @@ export const ReportsSection: React.FC<Props> = ({
         {
           id: 'att_absent_today', label: 'Absent Students · Today', desc: 'Students absent on the most recent marked day',
           run: async () => {
-            const today = new Date().toISOString().slice(0, 10);
+            const today = todayIST();
             // Step 1: find the SINGLE most recent date with attendance.
             // Earlier we pulled the last 20 attendance_records and merged
             // their absentees — that quietly mixed multiple days into the
@@ -824,10 +824,10 @@ export const ReportsSection: React.FC<Props> = ({
         {
           id: 'staff_joining', label: 'Joining Report · 90d', desc: 'Staff who joined in last 90 days',
           run: async () => {
-            const cutoff = new Date(); cutoff.setDate(cutoff.getDate() - 90);
+            const cutoffIso = addDaysIST(todayIST(), -90);
             const { data, error } = await supabase.from('staff')
               .select('name, role, phone, joining_date, salary')
-              .eq('school_id', schoolId).gte('joining_date', cutoff.toISOString().slice(0, 10))
+              .eq('school_id', schoolId).gte('joining_date', cutoffIso)
               .order('joining_date', { ascending: false });
             if (error) throw new Error(error.message);
             return { rows: (data ?? []) as Record<string, unknown>[], headers: ['name','role','phone','joining_date','salary'], filenamePrefix: 'joining-90d' };

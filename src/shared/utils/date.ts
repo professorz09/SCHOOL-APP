@@ -24,3 +24,14 @@ export function istDateOf(d: string | Date | null | undefined): string | null {
 export function istDayStart(dateYmd: string): string {
   return new Date(`${dateYmd}T00:00:00+05:30`).toISOString();
 }
+
+/**
+ * Shift an IST calendar date by `days` (positive or negative) and return
+ * the new `YYYY-MM-DD`. Avoids `toISOString().slice(0,10)` which drifts a
+ * day in the early-morning hours when the JS runtime is UTC-ish.
+ */
+export function addDaysIST(ymd: string, days: number): string {
+  const [y, m, d] = ymd.split('-').map(Number);
+  const dt = new Date(y, m - 1, d + days);
+  return `${dt.getFullYear()}-${String(dt.getMonth() + 1).padStart(2, '0')}-${String(dt.getDate()).padStart(2, '0')}`;
+}

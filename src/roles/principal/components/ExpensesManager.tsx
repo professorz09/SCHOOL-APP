@@ -1,16 +1,13 @@
 import React, { useEffect, useState } from 'react';
 import { ArrowLeft, Plus, Wallet, IndianRupee, Download, Pencil, Trash2, Lock, Calendar, Ban, X } from 'lucide-react';
 import { exportCsv } from '@/shared/utils/csv';
+import { todayIST } from '@/shared/utils/date';
 import { principalService } from '@/roles/principal/principal.service';
 import { Expense } from '@/roles/principal/principal.types';
 import { useUIStore } from '@/store/uiStore';
 import { useAuthStore } from '@/store/authStore';
 import { useEditorModeStore } from '@/store/editorModeStore';
 import { useAcademicYear } from '@/shared/context/AcademicYearContext';
-
-// IST-anchored "today" so users opening the form after 18:30 UTC don't see
-// tomorrow's date pre-filled.
-const istToday = () => new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Kolkata' });
 
 type View = 'LIST' | 'ADD' | 'EDIT';
 
@@ -38,7 +35,7 @@ export const ExpensesManager: React.FC<Props> = ({ onBack }) => {
   const [editingId, setEditingId] = useState<string | null>(null);
   const [form, setForm] = useState<Omit<Expense, 'id'>>({
     category: 'MAINTENANCE', description: '', amount: 0,
-    date: istToday(), approvedBy: sessionName,
+    date: todayIST(), approvedBy: sessionName,
   });
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [deletingId, setDeletingId] = useState<string | null>(null);
@@ -108,7 +105,7 @@ export const ExpensesManager: React.FC<Props> = ({ onBack }) => {
   }, [expenses]);
 
   const resetForm = () => {
-    setForm({ category: 'MAINTENANCE', description: '', amount: 0, date: istToday(), approvedBy: sessionName });
+    setForm({ category: 'MAINTENANCE', description: '', amount: 0, date: todayIST(), approvedBy: sessionName });
     setEditingId(null);
   };
 
@@ -304,7 +301,7 @@ export const ExpensesManager: React.FC<Props> = ({ onBack }) => {
         <div className="flex items-center gap-2">
           <button
             onClick={() => exportCsv(
-              `expenses_monthly_${activeYear?.name?.replace(/\s+/g, '_') ?? 'all'}_${new Date().toISOString().slice(0, 10)}`,
+              `expenses_monthly_${activeYear?.name?.replace(/\s+/g, '_') ?? 'all'}_${todayIST()}`,
               monthlyRows,
             )}
             disabled={monthlyRows.length === 0}
@@ -314,7 +311,7 @@ export const ExpensesManager: React.FC<Props> = ({ onBack }) => {
           </button>
           <button
             onClick={() => exportCsv(
-              `expenses_${new Date().toISOString().slice(0, 10)}`,
+              `expenses_${todayIST()}`,
               expenses.map(e => ({
                 date:        e.date,
                 category:    e.category,

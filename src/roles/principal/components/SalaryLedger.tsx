@@ -1,6 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import { ArrowLeft, IndianRupee, CheckCircle2, Clock, AlertTriangle, Loader2, Download, Calendar, Pencil } from 'lucide-react';
 import { exportCsv } from '@/shared/utils/csv';
+import { todayIST } from '@/shared/utils/date';
 import { staffService } from '@/modules/staff/staff.service';
 import { StaffMember, SalaryPaymentMethod } from '@/modules/staff/staff.types';
 import { useUIStore } from '@/store/uiStore';
@@ -380,7 +381,7 @@ export const SalaryLedger: React.FC<Props> = ({ onBack }) => {
                     staff_paid: v.staffPaid,
                     staff_total: v.staffTotal,
                   }));
-                exportCsv(`salary_monthly_${new Date().toISOString().slice(0, 10)}`, monthlyRows);
+                exportCsv(`salary_monthly_${todayIST()}`, monthlyRows);
               }}
               disabled={filtered.length === 0}
               title="Monthly summary CSV"
@@ -401,7 +402,7 @@ export const SalaryLedger: React.FC<Props> = ({ onBack }) => {
                   paid_at:    s.paidAt ?? '',
                   note:       s.note ?? '',
                 })));
-                exportCsv(`salary_ledger_${new Date().toISOString().slice(0, 10)}`, rows);
+                exportCsv(`salary_ledger_${todayIST()}`, rows);
               }}
               disabled={filtered.length === 0}
               className="flex items-center gap-1.5 px-3 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 font-black text-xs rounded-xl active:scale-95 transition-all disabled:opacity-40">
