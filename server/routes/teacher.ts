@@ -1,6 +1,6 @@
 import { Router } from 'express';
 import { adminDb } from '../lib/db';
-import { ok, fail, ApiError, requireBody } from '../lib/helpers';
+import { ok, fail, ApiError, requireBody, requireText } from '../lib/helpers';
 import { requireAuth, requireRole } from '../middleware/auth';
 
 export const teacherRouter = Router();
@@ -149,6 +149,8 @@ teacherRouter.post('/notice/create', requireAuth, requireRole('TEACHER'), async 
     const body = requireBody<{
       title: string; body: string; audience: string; sentByName: string;
     }>(req, ['title', 'body', 'audience']);
+    const title = requireText(body.title, 'Title', { max: 200 });
+    const noticeBody = requireText(body.body, 'Body',  { max: 8000 });
 
     // ── Audience validation ──────────────────────────────────────────────
     // Accept three shapes only:
@@ -203,8 +205,8 @@ teacherRouter.post('/notice/create', requireAuth, requireRole('TEACHER'), async 
       .from('notices')
       .insert({
         school_id:    req.user.school_id,
-        title:        body.title,
-        body:         body.body,
+        title,
+        body:         noticeBody,
         audience,
         sent_by:      req.user.id,
         sent_by_name: body.sentByName || req.user.name || '',
@@ -410,6 +412,8 @@ teacherRouter.post('/complaint/create', requireAuth, requireRole('TEACHER'), asy
     const body = requireBody<{ subject: string; description: string; fromName: string }>(
       req, ['subject', 'description'],
     );
+    const subject     = requireText(body.subject, 'Subject', { max: 200 });
+    const description = requireText(body.description, 'Description', { max: 8000 });
 
     // Anti-spam: max 3 complaints per teacher per IST day. The DB trigger
     // (migration 0052) bypasses service-role inserts, so we explicitly check
@@ -435,8 +439,8 @@ teacherRouter.post('/complaint/create', requireAuth, requireRole('TEACHER'), asy
         from_role:    'TEACHER',
         from_name:    body.fromName || req.user.name || '',
         from_user_id: req.user.id,
-        subject:      body.subject,
-        description:  body.description,
+        subject,
+        description,
         status:       'PENDING',
       })
       .select('id, subject, description, status, response, created_at, resolved_at')

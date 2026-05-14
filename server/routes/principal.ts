@@ -1,7 +1,7 @@
 import { Router } from 'express';
 import rateLimit from 'express-rate-limit';
 import { adminDb, userDb } from '../lib/db';
-import { ok, fail, ApiError, requireBody } from '../lib/helpers';
+import { ok, fail, ApiError, requireBody, requireText } from '../lib/helpers';
 import { requireAuth, requireRole } from '../middleware/auth';
 import {
   generateSchoolBackup, assertBackupAllowed, logBackupSuccess,
@@ -261,6 +261,8 @@ principalRouter.post('/notice/create', requireAuth, PRINCIPAL, async (req, res) 
       pinned?: boolean; sentBy?: string;
       targetStudentId?: string | null;
     }>(req, ['title', 'body', 'audience']);
+    const title      = requireText(body.title, 'Title', { max: 200 });
+    const noticeBody = requireText(body.body, 'Body',  { max: 8000 });
 
     // Audience whitelist — must match NoticeAudience enum on the
     // client. Anything outside this set is rejected; without this an
@@ -292,8 +294,8 @@ principalRouter.post('/notice/create', requireAuth, PRINCIPAL, async (req, res) 
 
     const { data, error } = await adminDb.from('notices').insert({
       school_id:         req.user.school_id,
-      title:             body.title,
-      body:              body.body,
+      title,
+      body:              noticeBody,
       audience:          body.audience,
       pinned:            body.pinned ?? false,
       sent_by:           req.user.id,
@@ -336,10 +338,11 @@ const OPEN_COMPLAINT_STATUSES = ['PENDING', 'IN_REVIEW'];
 principalRouter.post('/complaint/resolve', requireAuth, PRINCIPAL, async (req, res) => {
   try {
     const body = requireBody<{ complaintId: string; response: string }>(req, ['complaintId', 'response']);
+    const response = requireText(body.response, 'Response', { max: 4000 });
 
     const COMPLAINT_FIELDS = 'id, from_role, from_name, from_class, subject, description, status, response, created_at, resolved_at, is_anonymous, students(roll_no, admission_no)';
     const { data, error } = await adminDb.from('complaints')
-      .update({ status: 'RESOLVED', response: body.response, resolved_at: new Date().toISOString() })
+      .update({ status: 'RESOLVED', response, resolved_at: new Date().toISOString() })
       .eq('id', body.complaintId).eq('school_id', req.user.school_id!)
       .in('status', OPEN_COMPLAINT_STATUSES)
       .select(COMPLAINT_FIELDS).maybeSingle();
@@ -353,10 +356,11 @@ principalRouter.post('/complaint/resolve', requireAuth, PRINCIPAL, async (req, r
 principalRouter.post('/complaint/reject', requireAuth, PRINCIPAL, async (req, res) => {
   try {
     const body = requireBody<{ complaintId: string; reason: string }>(req, ['complaintId', 'reason']);
+    const reason = requireText(body.reason, 'Reason', { max: 4000 });
 
     const COMPLAINT_FIELDS = 'id, from_role, from_name, from_class, subject, description, status, response, created_at, resolved_at, is_anonymous, students(roll_no, admission_no)';
     const { data, error } = await adminDb.from('complaints')
-      .update({ status: 'REJECTED', response: body.reason, resolved_at: new Date().toISOString() })
+      .update({ status: 'REJECTED', response: reason, resolved_at: new Date().toISOString() })
       .eq('id', body.complaintId).eq('school_id', req.user.school_id!)
       .in('status', OPEN_COMPLAINT_STATUSES)
       .select(COMPLAINT_FIELDS).maybeSingle();
