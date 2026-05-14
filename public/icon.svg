@@ -1,48 +1,57 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
   <!--
-    EduGrow app icon — clean white plate, orange stylised "e", small
-    dark accent dot in upper-right. Mirrors the reference style: flat
-    colours, no gradient, modern minimalist mark designed to read at
-    48 px and stay distinctive at full app-icon size.
+    EduGrow app icon — proper bold geometric "E" with a growth accent.
+    Built from clean primitive rects (no hacked overlays), each with a
+    small corner radius so the mark reads as modern + friendly rather
+    than industrial. Two-colour palette: deep indigo for "Edu", a
+    bright emerald sprout for "Grow", on a clean white plate.
 
-    • Maskable-safe: critical glyph + dot live inside the centre 80 %
-      so circle / squircle masks never clip them.
-    • Pure-white plate works on iOS' default white status-bar
-      backdrop and on dark Android home screens alike.
+    Maskable-safe — every glyph rect + the accent live inside the
+    centre 80 % so Material You / iOS squircle masks never clip.
   -->
 
-  <!-- Plate: pure white rounded square with a hair-fine slate outline
-       so the icon doesn't disappear into very-light backgrounds. -->
+  <!-- White plate with hairline slate outline so the icon doesn't
+       vanish on very-light system backgrounds. -->
   <rect width="512" height="512" rx="112" fill="#ffffff"/>
-  <rect x="2" y="2" width="508" height="508" rx="110"
-        fill="none" stroke="#e5e7eb" stroke-width="3"/>
+  <rect x="3" y="3" width="506" height="506" rx="109"
+        fill="none" stroke="#e2e8f0" stroke-width="3"/>
 
-  <!-- Orange "e" — the EduGrow mark. Two stacked shapes form the
-       lowercase letterform without using a webfont (icons must be
-       self-contained for offline PWA installs). -->
+  <!-- ─ Capital "E" ─────────────────────────────────────────────
+       Classic typographic proportions: top + bottom arms full
+       width, middle arm shorter (~78 %). All rects share a 10 px
+       corner radius which softens the geometry without losing the
+       letter's hard edges at thumbnail size. Indigo-600 (#4f46e5)
+       matches the wider brand accent used elsewhere in the app. -->
 
-  <!-- Outer ring of the "e" -->
-  <circle cx="248" cy="280" r="118" fill="none"
-          stroke="#f97316" stroke-width="56"/>
+  <!-- Stem (vertical) -->
+  <rect x="116" y="100" width="76" height="312" rx="10" fill="#4f46e5"/>
 
-  <!-- Crossbar — flat orange band that turns the open ring into an
-       "e". Slight asymmetry to the right gives the letter momentum. -->
-  <rect x="142" y="262" width="232" height="44"
-        fill="#f97316" rx="4"/>
+  <!-- Top arm -->
+  <rect x="116" y="100" width="252" height="76" rx="10" fill="#4f46e5"/>
 
-  <!-- Right-side trim — clips the bottom-right of the ring so the
-       letter has the classic "e" opening pointing down-right. -->
-  <path d="M310 320 Q360 320 360 360 L360 380 L260 380 L260 320 Z"
-        fill="#ffffff"/>
+  <!-- Middle arm — shorter, slightly thinner so it reads as the
+       mid-bar even when the icon is tiny. -->
+  <rect x="116" y="218" width="196" height="68" rx="10" fill="#4f46e5"/>
 
-  <!-- Tail (foot of the "e") — short downward stroke that anchors
-       the letter and gives it a custom feel vs. a plain typeface "e". -->
-  <rect x="330" y="288" width="30" height="80"
-        fill="#f97316" rx="6" transform="rotate(8 345 328)"/>
+  <!-- Bottom arm -->
+  <rect x="116" y="336" width="252" height="76" rx="10" fill="#4f46e5"/>
 
-  <!-- Accent dot — small black circle in upper-right, mirroring the
-       reference. Keeps brand recognition cue (notification-like dot)
-       and breaks the otherwise pure-orange palette with a hard black
-       so the icon pops at thumbnail size. -->
-  <circle cx="392" cy="128" r="28" fill="#0f172a"/>
+  <!-- ─ Growth accent ──────────────────────────────────────────
+       Tiny emerald sprout off the top-right of the "E" — a single
+       leaf curve + stem. Represents the "Grow" half of the
+       wordmark. Sized small so it doesn't compete with the letter,
+       big enough to register as a coloured accent at 48 px. -->
+
+  <!-- Stem of the sprout -->
+  <path d="M 398 162 Q 398 130 420 110"
+        stroke="#10b981" stroke-width="14" stroke-linecap="round"
+        fill="none"/>
+
+  <!-- Leaf -->
+  <path d="M 408 102 Q 438 96 444 124 Q 422 124 408 102 Z"
+        fill="#10b981"/>
+
+  <!-- Small grounding dot where the sprout meets the top arm —
+       glues the accent to the letter so it doesn't float. -->
+  <circle cx="398" cy="162" r="9" fill="#10b981"/>
 </svg>
