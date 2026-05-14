@@ -13,6 +13,7 @@ const LIVE_STALE_MS = 30 * 60_000;
 
 export const TransportView: React.FC<Props> = ({ onBack }) => {
   const [data, setData] = useState<ReturnType<typeof transportService.getStudentTransportInfo> | null>(null);
+  const [studentId, setStudentId] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   // Live tracking state from vehicle_live (driver toggles is_tracking ON
   // when they start the trip). Parents see a prominent banner that
@@ -20,15 +21,13 @@ export const TransportView: React.FC<Props> = ({ onBack }) => {
   // tracking is actually live or stale.
   const [liveState, setLiveState] = useState<{ isTracking: boolean; lastSeen: string | null } | null>(null);
 
-  // Resolve the active student from the session (handles both STUDENT and
-  // PARENT-with-selected-child) and load their transport info. The refresh
-  // loop also re-fetches from server (refreshAll) so the bus position and
-  // current stop stay genuinely live — earlier the interval just re-read
-  // the in-memory cache, so the "Live" badge was lying after first paint.
-  // 15s cadence balances live feel against load on a multi-route fleet.
+  // Resolve the active student (handles STUDENT and PARENT-with-selected-child)
+  // and load transport info once. Polling for live GPS is gated on the
+  // tracking flag below — when the driver hasn't started a trip there's
+  // nothing live to refresh, so we don't hammer the server every 15s for
+  // every parent device.
   useEffect(() => {
     let cancelled = false;
-    let interval: ReturnType<typeof setInterval> | null = null;
     (async () => {
       try {
         const [sid] = await Promise.all([
@@ -36,23 +35,9 @@ export const TransportView: React.FC<Props> = ({ onBack }) => {
           transportService.refreshAll(),
         ]);
         if (cancelled) return;
+        setStudentId(sid);
         setData(transportService.getStudentTransportInfo(sid));
-        interval = setInterval(async () => {
-          if (cancelled) return;
-          try {
-            await transportService.refreshAll();
-            if (!cancelled) setData(transportService.getStudentTransportInfo(sid));
-          } catch (err) {
-            // Don't surface a toast for transient polling failures — the
-            // last good data stays on screen and the next tick will retry.
-            // eslint-disable-next-line no-console
-            console.warn('[transport] poll refresh failed', err);
-          }
-        }, 15000);
       } catch (err) {
-        // Initial load failed — silent crash earlier left the loading
-        // spinner up forever and the user couldn't tell what happened.
-        // Surface a toast so they know to retry / contact school.
         console.error('[transport] resolve failed', err);
         if (!cancelled) {
           useUIStore.getState().showToast(
@@ -64,8 +49,28 @@ export const TransportView: React.FC<Props> = ({ onBack }) => {
         if (!cancelled) setLoading(false);
       }
     })();
-    return () => { cancelled = true; if (interval) clearInterval(interval); };
+    return () => { cancelled = true; };
   }, []);
+
+  // GPS poll — only while the driver has tracking ON. vehicle_live realtime
+  // flips `liveState.isTracking` the moment they toggle it, which starts /
+  // stops this loop. Idle hours = zero polling.
+  useEffect(() => {
+    if (!studentId || !liveState?.isTracking) return;
+    let cancelled = false;
+    const tick = async () => {
+      try {
+        await transportService.refreshAll();
+        if (!cancelled) setData(transportService.getStudentTransportInfo(studentId));
+      } catch (err) {
+        // eslint-disable-next-line no-console
+        console.warn('[transport] poll refresh failed', err);
+      }
+    };
+    void tick();
+    const interval = setInterval(tick, 15000);
+    return () => { cancelled = true; clearInterval(interval); };
+  }, [studentId, liveState?.isTracking]);
 
   // Subscribe to vehicle_live updates for the assigned bus. RLS already
   // limits this to the parent's linked student's vehicle, so no extra
