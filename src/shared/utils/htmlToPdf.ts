@@ -7,7 +7,6 @@ import { clsx, type ClassValue } from 'clsx';
 import { twMerge } from 'tailwind-merge';
 import { toJpeg } from 'html-to-image';
 import jsPDF from 'jspdf';
-import * as xlsx from 'xlsx';
 
 /** Tailwind className merge helper — clsx + tailwind-merge. */
 export function cn(...inputs: ClassValue[]): string {
@@ -18,23 +17,6 @@ export function cn(...inputs: ClassValue[]): string {
  *  show only `.print-only` content. */
 export function handlePrint(): void {
   window.print();
-}
-
-/** Excel/CSV parser — kept for any future tool that needs it. */
-export async function parseExcelFile(file: File): Promise<Record<string, unknown>[]> {
-  return new Promise((resolve, reject) => {
-    const reader = new FileReader();
-    reader.onload = (e) => {
-      try {
-        const data = e.target?.result;
-        const workbook = xlsx.read(data, { type: 'array' });
-        const worksheet = workbook.Sheets[workbook.SheetNames[0]];
-        resolve(xlsx.utils.sheet_to_json<Record<string, unknown>>(worksheet));
-      } catch (err) { reject(err); }
-    };
-    reader.onerror = (err) => reject(err);
-    reader.readAsArrayBuffer(file);
-  });
 }
 
 export interface DownloadPDFOptions {
