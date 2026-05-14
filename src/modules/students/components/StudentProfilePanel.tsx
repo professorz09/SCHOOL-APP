@@ -538,7 +538,9 @@ export const StudentProfilePanel: React.FC<Props> = ({ student, onBack, onStuden
 
   // ── Transport change / cancel ─────────────────────────────────────────────
   const openChangeTransportModal = () => {
-    const todayIso = new Date().toISOString().slice(0, 10);
+    // IST today so the default effective date matches the school's
+    // calendar — not UTC's previous day during early-morning hours.
+    const todayIso = todayIST();
     setChangeVehicleId(studentTransport?.vehicle.id ?? '');
     setChangeStopId(studentTransport?.assignment.boardingStopId ?? '');
     setChangeMonthly(String(studentTransport?.assignment.monthlyAmount ?? 500));

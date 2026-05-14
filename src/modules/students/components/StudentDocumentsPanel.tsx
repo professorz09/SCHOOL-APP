@@ -16,6 +16,7 @@ import { handlePrint, downloadPDF } from '@/shared/utils/htmlToPdf';
 import { useUIStore } from '@/store/uiStore';
 import { studentService } from '@/modules/students/student.service';
 import type { Student } from '@/modules/students/student.types';
+import { todayIST } from '@/shared/utils/date';
 import { BonafidePrint } from '@/shared/components/documents/BonafidePrint';
 import {
   MarksheetPrint, type MarksheetSubjectRow,
@@ -314,10 +315,14 @@ const AdmitRow: React.FC<{ student: Student; classPeers: Student[]; schoolInfo: 
   const targets = scope === 'SINGLE' ? [student] : classPeers;
 
   useEffect(() => {
-    const today = new Date(); today.setHours(0, 0, 0, 0);
-    const cutoff = new Date(today); cutoff.setDate(cutoff.getDate() + 30);
-    const todayIso = today.toISOString().slice(0, 10);
-    const cutoffIso = cutoff.toISOString().slice(0, 10);
+    // IST-anchored so a 4 AM IST refresh shows exams scheduled for "today"
+    // instead of dropping them as already-past based on a stale UTC date.
+    const todayIso = todayIST();
+    // Cutoff = today + 30 days. We add to the IST midnight UTC moment then
+    // re-format back to IST yyyy-mm-dd so DST/locale never drifts.
+    const cutoffDt = new Date(`${todayIso}T00:00:00+05:30`);
+    cutoffDt.setUTCDate(cutoffDt.getUTCDate() + 30);
+    const cutoffIso = cutoffDt.toLocaleDateString('en-CA', { timeZone: 'Asia/Kolkata' });
     apiExams.list({ className: student.className })
       .then((list: any[]) => {
         const upcoming = list.filter(e =>

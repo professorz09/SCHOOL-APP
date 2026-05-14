@@ -11,6 +11,7 @@ import { useAuthStore } from '@/store/authStore';
 import { logAudit } from '@/lib/audit';
 import { registerCacheResetter } from '@/lib/cacheBus';
 import { apiTransport } from '@/lib/apiClient';
+import { todayIST } from '@/shared/utils/date';
 // NOTE: All writes go through /api/transport/* — no direct supabase writes below vehicle/stop CRUD
 
 const calculateDistance = (lat1: number, lng1: number, lat2: number, lng2: number): number => {
@@ -429,7 +430,9 @@ export const transportService = {
     }
     if (!ayId) throw new Error('No active academic year');
 
-    const startIso = startDate ?? new Date().toISOString().slice(0, 10);
+    // IST-anchored fallback so an assignment created at 3 AM IST isn't
+    // backdated to UTC's previous calendar day.
+    const startIso = startDate ?? todayIST();
 
     // stopId param is accepted for backwards-compat but no longer sent to
     // the server (migration 0115 dropped student_transport_assignments.stop_id).
@@ -453,8 +456,8 @@ export const transportService = {
   },
 
   async removeStudentAssignment(studentId: string, reason?: string): Promise<void> {
-    const todayIso = new Date().toISOString().slice(0, 10);
-    await apiTransport.remove({ studentId, endDate: todayIso, reason });
+    // IST today — removal stamps a real-world calendar day, not UTC.
+    await apiTransport.remove({ studentId, endDate: todayIST(), reason });
     await logAudit('transport_removed', 'student_transport_assignment', studentId, { studentId, reason });
     await this.refreshAll();
   },

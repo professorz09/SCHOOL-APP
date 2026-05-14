@@ -16,6 +16,7 @@ import { adminApi } from '@/lib/adminApi';
 import { logAudit } from '@/lib/audit';
 import { PaymentStatus } from '@/shared/config/constants';
 import { apiStudents, apiTransport } from '@/lib/apiClient';
+import { todayIST } from '@/shared/utils/date';
 // FIELD_TO_DB: maps camelCase Student fields → DB column names for patch payloads
 import type {
   Student, StudentAcademicRecord, FeeRecord, CreateStudentInput,
@@ -1024,7 +1025,9 @@ export const studentService = {
     // Step 4: transport assignment via API (apiTransport.assign handles
     // closing prior assignment, cancelling installments, generating schedule).
     if (input.transport) {
-      const startIso = new Date().toISOString().slice(0, 10);
+      // IST-anchored so transport activation reflects the actual calendar
+      // day, not UTC's previous day during early-morning IST hours.
+      const startIso = todayIST();
       await apiTransport.assign({
         studentId:      input.studentId,
         vehicleId:      input.transport.vehicleId,

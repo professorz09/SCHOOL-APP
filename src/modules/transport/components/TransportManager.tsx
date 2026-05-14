@@ -12,6 +12,7 @@ import { staffService } from '@/modules/staff/staff.service';
 import { StaffMember } from '@/modules/staff/staff.types';
 import { useRealtimeTable } from '@/shared/hooks/useRealtimeTable';
 import { useUIStore } from '@/store/uiStore';
+import { todayIST } from '@/shared/utils/date';
 
 type Tab = 'VEHICLES' | 'TRACKING' | 'STUDENTS';
 
@@ -81,7 +82,7 @@ export const TransportManager: React.FC<Props> = ({ onBack }) => {
   const [bulkFromId,       setBulkFromId]       = useState<string | null>(null);
   const [bulkToVehicleId,  setBulkToVehicleId]  = useState('');
   const [bulkToStopId,     setBulkToStopId]     = useState('');
-  const [bulkDate,         setBulkDate]         = useState(() => new Date().toISOString().slice(0, 10));
+  const [bulkDate,         setBulkDate]         = useState(() => todayIST());
   const [bulkReason,       setBulkReason]       = useState('VEHICLE_BREAKDOWN');
   const [bulkNote,         setBulkNote]         = useState('');
   const [bulkBusy,         setBulkBusy]         = useState(false);

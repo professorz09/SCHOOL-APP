@@ -408,7 +408,9 @@ export const staffService = {
     await apiStaff.updateSalary({
       staffId,
       newAmount,
-      effectiveFrom: effectiveFrom || new Date().toISOString().slice(0, 10),
+      // IST-anchored — a salary change saved at 3 AM IST shouldn't be
+      // backdated one day because UTC is still on the previous date.
+      effectiveFrom: effectiveFrom || todayIST(),
       reason,
     });
   },

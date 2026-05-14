@@ -1017,10 +1017,9 @@ export const feeService = {
   },
 
   async removeTransportFeeSchedule(assignmentId: string): Promise<void> {
-    // Backwards-compat shim: cancel from today forward.
-    await this.cancelTransportInstallmentsAfter(
-      assignmentId, new Date().toISOString().slice(0, 10),
-    );
+    // Backwards-compat shim: cancel from today forward. IST-anchored so a
+    // 4 AM IST call doesn't keep tomorrow's installment alive.
+    await this.cancelTransportInstallmentsAfter(assignmentId, todayIST());
   },
 
   /**

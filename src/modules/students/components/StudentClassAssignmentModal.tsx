@@ -8,6 +8,7 @@ import { Student } from '@/modules/students/student.types';
 import { useUIStore } from '@/store/uiStore';
 import { useAcademicYear } from '@/shared/context/AcademicYearContext';
 import { apiAcademicYear } from '@/lib/apiClient';
+import { todayIST } from '@/shared/utils/date';
 
 const CLASS_OPTIONS = [
   'Nursery','LKG','UKG',
@@ -45,9 +46,7 @@ export const StudentClassAssignmentModal: React.FC<Props> = ({ student, onClose,
   const [sectionId, setSectionId] = useState<string>('');
   const [sectionName, setSectionName] = useState<string>('');
   const [rollNo, setRollNo] = useState<string>(student.rollNo || '');
-  const [allotmentDate, setAllotmentDate] = useState<string>(
-    new Date().toISOString().slice(0, 10)
-  );
+  const [allotmentDate, setAllotmentDate] = useState<string>(todayIST());
   const [totalFee, setTotalFee] = useState<number>(student.totalFee || 0);
   const [structures, setStructures] = useState<FeeStructureRecord[]>([]);
   const [structureId, setStructureId] = useState<string>('');
