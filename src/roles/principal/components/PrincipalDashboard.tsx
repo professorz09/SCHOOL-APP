@@ -17,6 +17,7 @@ import { useAuthStore } from '@/store/authStore';
 import { useUIStore } from '@/store/uiStore';
 import { useAcademicYear } from '@/shared/context/AcademicYearContext';
 import { SalaryReminderCard } from '@/roles/principal/components/SalaryReminderCard';
+import { todayIST } from '@/shared/utils/date';
 
 interface Props {
   onNavigate: (view: PrincipalView) => void;
@@ -216,11 +217,14 @@ export const PrincipalDashboard: React.FC<Props> = ({ onNavigate }) => {
   useEffect(() => {
     const load = async () => {
       try {
-      const today = new Date().toISOString().slice(0, 10);
-      // First / last day of the current calendar month — used by the
-      // monthly-collection query for the green hero card.
-      const now = new Date();
-      const monthStart = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-01`;
+      // IST-anchored so the monthly-collection range (`>= monthStart AND
+      // <= monthEnd`) doesn't go empty on an IST early-morning refresh
+      // where UTC is still on the previous calendar day. Earlier this
+      // produced `paid_at >= '2026-05-01' AND paid_at <= '2026-04-30'`
+      // around the 1st of the month at 4 AM IST → zero collections.
+      const today = todayIST();
+      const [yy, mm] = today.split('-');
+      const monthStart = `${yy}-${mm}-01`;
       const monthEnd   = today;
       await transportService.refreshAll();
       const [students, staff, complaints, approvals, feeUploads, allVehicles, attRes, dashStats, monthPayRes] = await Promise.all([

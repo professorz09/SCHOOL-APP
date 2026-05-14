@@ -797,7 +797,19 @@ export const SettingsManager: React.FC<Props> = ({ onBack, initialView }) => {
           <p className="text-xs font-bold text-slate-500">This UPI ID will be shown to parents in the fee payment screen.</p>
           <div className="flex gap-2">
             <input value={upiId} onChange={e => { setUpiId(e.target.value); setUpiSaved(false); }} placeholder="e.g. school@okaxis" className="flex-1 border border-slate-200 bg-slate-50 rounded-xl px-4 py-3 font-bold text-sm outline-none focus:border-blue-500" />
-            <button onClick={async () => { await schoolInfoService.save({ upiId }); setUpiSaved(true); showToast('UPI ID saved'); }} className={`px-4 py-3 rounded-xl font-black text-sm transition-colors ${upiSaved ? 'bg-emerald-500 text-white' : 'bg-slate-900 text-white'}`}>
+            <button onClick={async () => {
+              try {
+                await schoolInfoService.save({ upiId });
+                setUpiSaved(true);
+                showToast('UPI ID saved');
+              } catch (e) {
+                // Without this catch, the previous code optimistically
+                // showed "saved" even when the upsert failed — principal
+                // walked away thinking UPI was set, parents kept seeing
+                // no UPI on the Fee Payment screen.
+                showToast(e instanceof Error ? e.message : 'Save failed', 'error');
+              }
+            }} className={`px-4 py-3 rounded-xl font-black text-sm transition-colors ${upiSaved ? 'bg-emerald-500 text-white' : 'bg-slate-900 text-white'}`}>
               {upiSaved ? <CheckCircle2 size={16} /> : <Save size={16} />}
             </button>
           </div>
@@ -871,7 +883,17 @@ export const SettingsManager: React.FC<Props> = ({ onBack, initialView }) => {
           {qrFileName && (
             <div className="flex items-center justify-between bg-slate-50 rounded-xl px-3 py-2.5">
               <span className="text-xs font-bold text-slate-600 truncate">{qrFileName}</span>
-              <button onClick={async () => { await schoolInfoService.save({ paymentQrPath: '' }); setQrFileName(''); setQrPreviewUrl(''); setQrPreviewBroken(false); }} className="text-slate-400 hover:text-rose-500 transition-colors ml-2 shrink-0"><Trash2 size={13} /></button>
+              <button onClick={async () => {
+                try {
+                  await schoolInfoService.save({ paymentQrPath: '' });
+                  setQrFileName(''); setQrPreviewUrl(''); setQrPreviewBroken(false);
+                } catch (e) {
+                  // Don't blank the preview unless the server actually
+                  // cleared the path — otherwise the UI lies about the
+                  // QR being gone while the DB still has it.
+                  showToast(e instanceof Error ? e.message : 'Delete failed', 'error');
+                }
+              }} className="text-slate-400 hover:text-rose-500 transition-colors ml-2 shrink-0"><Trash2 size={13} /></button>
             </div>
           )}
         </div>
