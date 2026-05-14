@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import {
   ArrowLeft, ChevronLeft, ChevronRight, ShieldCheck,
   Save, Download, RefreshCw, Search, Lock,
@@ -136,14 +136,21 @@ export const StudentAttendanceManager: React.FC<Props> = ({ onBack }) => {
   // opens — otherwise it sits at the leftmost (Custom tile + oldest
   // dates) and today is hidden off-screen to the right.
   const markStripRef = useRef<HTMLDivElement | null>(null);
-  useEffect(() => {
+  useLayoutEffect(() => {
     if (view !== 'MARK') return;
     const el = markStripRef.current;
     if (!el) return;
-    // Scroll all the way right so today (last tile in chronological
-    // strip) lands centered / visible.
+    // Belt-and-braces scroll: do it sync first (covers the case
+    // where the strip's layout is already stable), then again after
+    // two animation frames (covers the slower-layout case where tile
+    // widths haven't settled yet). Earlier the single rAF sometimes
+    // fired before the strip's DOM width was final and the user
+    // ended up looking at older dates instead of today.
+    el.scrollLeft = el.scrollWidth;
     requestAnimationFrame(() => {
-      el.scrollLeft = el.scrollWidth;
+      requestAnimationFrame(() => {
+        if (markStripRef.current) markStripRef.current.scrollLeft = markStripRef.current.scrollWidth;
+      });
     });
   }, [view, markDate]);
 

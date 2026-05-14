@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useRef, useState, useCallback } from 'react';
+import React, { useEffect, useLayoutEffect, useMemo, useRef, useState, useCallback } from 'react';
 import {
   ArrowLeft, Save, ChevronRight, Search, Lock,
   ShieldCheck, AlertCircle, ChevronLeft, RefreshCw,
@@ -132,11 +132,27 @@ export const AttendanceManager: React.FC<Props> = ({ onBack }) => {
     });
   }, [currentYear?.id]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // Scroll date strip to today on mount
-  useEffect(() => {
+  // Scroll date strip to today on mount. Earlier this used a single
+  // useEffect + scrollIntoView which sometimes fired before the
+  // strip's tile widths had settled, leaving the user pinned to the
+  // oldest end of the range. useLayoutEffect + double-rAF gives the
+  // layout two paint frames to stabilise; the sync set before that
+  // covers the fast-layout case so the strip never visibly snaps.
+  useLayoutEffect(() => {
     if (!stripRef.current) return;
-    const todayEl = stripRef.current.querySelector('[data-today="true"]');
-    if (todayEl) (todayEl as HTMLElement).scrollIntoView({ behavior: 'auto', inline: 'end', block: 'nearest' });
+    const el = stripRef.current;
+    el.scrollLeft = el.scrollWidth;
+    requestAnimationFrame(() => {
+      requestAnimationFrame(() => {
+        if (!stripRef.current) return;
+        const todayEl = stripRef.current.querySelector('[data-today="true"]') as HTMLElement | null;
+        if (todayEl) {
+          todayEl.scrollIntoView({ behavior: 'auto', inline: 'end', block: 'nearest' });
+        } else {
+          stripRef.current.scrollLeft = stripRef.current.scrollWidth;
+        }
+      });
+    });
   }, [dateStrip]);
 
   // Load class list once

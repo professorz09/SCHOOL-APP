@@ -1,4 +1,4 @@
-import React, { useState, useMemo, useEffect, useRef } from 'react';
+import React, { useState, useMemo, useEffect, useLayoutEffect, useRef } from 'react';
 import {
   ArrowLeft, CheckCircle2, Lock, Save, Search, ChevronLeft, ChevronRight,
   Unlock, AlertTriangle, Pencil, LayoutGrid, Download, RefreshCw, AlertCircle,
@@ -205,24 +205,44 @@ export const StaffAttendanceManager: React.FC<Props> = ({ onBack, startTab = 'OV
     ) : []
   , [record, search]);
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     if (!stripRef.current) return;
-    // Scroll the strip to the right end so today (last tile in
-    // chronological order) is visible on first open. Earlier this
-    // used scrollIntoView('end') which sometimes fired before render
-    // and missed; scrollLeft = scrollWidth inside rAF is bulletproof.
+    // Scroll the strip to the right end so today (rightmost tile in
+    // chronological order) is visible on first open. Previously this
+    // used a single rAF after useEffect, but the strip's DOM width
+    // sometimes hadn't settled when the callback fired — the user
+    // ended up looking at May-1 instead of today.
+    //
+    // useLayoutEffect runs synchronously after DOM mutations + a
+    // double-rAF defers until two paint frames have elapsed; together
+    // that's enough headroom for tile widths + sticky-header layout
+    // to stabilise on every device we've seen. As a final belt-and-
+    // braces, set scrollLeft once immediately too so even if the rAFs
+    // miss on some browser, the strip still lands on the right edge.
     const el = stripRef.current;
-    requestAnimationFrame(() => { el.scrollLeft = el.scrollWidth; });
+    el.scrollLeft = el.scrollWidth;
+    requestAnimationFrame(() => {
+      requestAnimationFrame(() => {
+        if (stripRef.current) stripRef.current.scrollLeft = stripRef.current.scrollWidth;
+      });
+    });
   }, [dateStrip]);
 
   // Same trick for the GRID view's horizontal table — scroll to today
   // (rightmost column) when the history loads. Earlier the grid opened
   // showing day 1 first and the principal had to scroll right to see
-  // the current week.
-  useEffect(() => {
+  // the current week. Uses the same belt-and-braces double-rAF as the
+  // strip above so the scroll lands even when the table's layout
+  // isn't yet stable on the first frame.
+  useLayoutEffect(() => {
     if (!gridRef.current) return;
     const el = gridRef.current;
-    requestAnimationFrame(() => { el.scrollLeft = el.scrollWidth; });
+    el.scrollLeft = el.scrollWidth;
+    requestAnimationFrame(() => {
+      requestAnimationFrame(() => {
+        if (gridRef.current) gridRef.current.scrollLeft = gridRef.current.scrollWidth;
+      });
+    });
   }, [historyData, historyMonth, historyRole]);
 
   // hardLocked = salary generated OR year closed without correction mode
