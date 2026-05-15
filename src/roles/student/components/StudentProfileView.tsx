@@ -86,7 +86,6 @@ export const StudentProfileView: React.FC<Props> = ({ onBack }) => {
   // initial profile paint isn't slowed by it.
   const [showPrivacy, setShowPrivacy] = useState(false);
   const [consentInfo, setConsentInfo] = useState<{ version: number; at: string | null } | null>(null);
-  const [consentLang, setConsentLang] = useState<'hi' | 'en'>('hi');
 
   useEffect(() => {
     let cancelled = false;
@@ -489,7 +488,7 @@ export const StudentProfileView: React.FC<Props> = ({ onBack }) => {
                 </div>
                 <div className="flex-1 text-left">
                   <div className="font-bold text-slate-900 text-sm">Privacy &amp; Data Use</div>
-                  <div className="text-[9px] font-bold text-slate-400">Aapne kya consent diya — pura text padhein</div>
+                  <div className="text-[9px] font-bold text-slate-400">What you agreed to — read the full policy</div>
                 </div>
               </button>
               <button onClick={() => logout()}
@@ -512,11 +511,10 @@ export const StudentProfileView: React.FC<Props> = ({ onBack }) => {
       {/* Privacy & Data Use modal — full structured policy (DPDP §11
           right-to-information). Reads CONSENT_SECTIONS so the same
           content drives both this view and the first-login consent
-          gate. Toggles HI/EN inline; no localStorage to keep it simple. */}
+          gate. */}
       {showPrivacy && (
         <div className="fixed inset-0 bg-slate-900/50 backdrop-blur-sm z-50 flex items-end justify-center">
           <div className="w-full max-h-[92dvh] bg-white rounded-t-3xl flex flex-col animate-in slide-in-from-bottom-8">
-            {/* Sticky header with language toggle */}
             <div className="flex items-center justify-between px-5 pt-5 pb-3 border-b border-slate-100">
               <div className="min-w-0">
                 <h3 className="text-lg font-black text-slate-900 leading-tight">Privacy &amp; Data Use</h3>
@@ -526,42 +524,26 @@ export const StudentProfileView: React.FC<Props> = ({ onBack }) => {
                     : `Version ${CURRENT_CONSENT_VERSION}`}
                 </p>
               </div>
-              <div className="flex items-center gap-2 shrink-0">
-                <div className="flex bg-slate-100 rounded-full p-0.5">
-                  <button onClick={() => setConsentLang('hi')}
-                    className={`px-3 py-1 rounded-full text-[10px] font-black ${consentLang === 'hi' ? 'bg-white text-slate-900 shadow-sm' : 'text-slate-500'}`}>
-                    हिंदी
-                  </button>
-                  <button onClick={() => setConsentLang('en')}
-                    className={`px-3 py-1 rounded-full text-[10px] font-black ${consentLang === 'en' ? 'bg-white text-slate-900 shadow-sm' : 'text-slate-500'}`}>
-                    EN
-                  </button>
-                </div>
-                <button onClick={() => setShowPrivacy(false)}
-                  className="p-2 -mr-2 text-slate-400"><X size={20} /></button>
-              </div>
+              <button onClick={() => setShowPrivacy(false)}
+                className="p-2 -mr-2 text-slate-400 shrink-0"><X size={20} /></button>
             </div>
 
-            {/* Scrollable sections */}
             <div className="overflow-y-auto flex-1 px-5 py-4 space-y-4">
               {CONSENT_SECTIONS.map(s => (
                 <div key={s.number} className="bg-slate-50 rounded-2xl p-4">
                   <h4 className="font-black text-sm text-slate-900 mb-2">
-                    {s.number}. {consentLang === 'hi' ? s.title_hi : s.title_en}
+                    {s.number}. {s.title}
                   </h4>
                   <p className="text-[12px] font-medium text-slate-700 leading-relaxed whitespace-pre-wrap">
-                    {consentLang === 'hi' ? s.body_hi : s.body_en}
+                    {s.body}
                   </p>
                 </div>
               ))}
               <p className="text-[10px] font-bold text-slate-400 text-center pt-2 pb-1">
-                {consentLang === 'hi'
-                  ? 'Consent withdraw karne ke liye apne school principal se TC request karein.'
-                  : 'To withdraw consent, request a TC from your school principal.'}
+                To withdraw consent, request a TC from your school principal.
               </p>
             </div>
 
-            {/* Footer */}
             <div className="px-5 py-3 border-t border-slate-100">
               <button onClick={() => setShowPrivacy(false)}
                 className="w-full py-3 bg-slate-900 text-white font-black text-sm rounded-2xl active:scale-95 transition-transform">
