@@ -416,54 +416,35 @@ attendanceRouter.post('/submit', requireAuth, requireRole('TEACHER', 'PRINCIPAL'
     const isLocked       = true;
     const approvedBy     = req.user.id;
 
-    let attendanceId: string;
-    if (existing) {
-      attendanceId = existing.id;
-      await adminDb.from('attendance_records').update({
-        total_present:   counts.present,
-        total_absent:    counts.absent,
-        total_holiday:   counts.holiday,
-        total_half:      counts.half,
-        total_students:  filteredRecords.length,
-        marked_by:       req.user.id,
-        approval_status: approvalStatus,
-        is_locked:       isLocked,
-        approved_by:     approvedBy,
-      }).eq('id', attendanceId);
-      await adminDb.from('attendance_student_details').delete().eq('attendance_id', attendanceId);
-    } else {
-      const { data: recData, error: recErr } = await adminDb
-        .from('attendance_records').insert({
-          school_id:        section.school_id,
-          academic_year_id: section.academic_year_id,
-          section_id:       body.sectionId,
-          class_name:       section.class_name,
-          section:          section.section,
-          date:             body.date,
-          total_present:    counts.present,
-          total_absent:     counts.absent,
-          total_holiday:    counts.holiday,
-          total_half:       counts.half,
-          total_students:   filteredRecords.length,
-          marked_by:        req.user.id,
-          approval_status:  approvalStatus,
-          is_locked:        isLocked,
-          approved_by:      approvedBy,
-        }).select('id').single();
-      if (recErr) throw new ApiError(500, recErr.message);
-      attendanceId = (recData as Pick<RecordRow, 'id'>).id;
-    }
-
-    const rows = filteredRecords.map(r => ({
-      attendance_id: attendanceId,
-      student_id:    r.studentId,
-      is_present:    statusToIsPresent(r.status),
-      status:        r.status,
+    // One RPC instead of UPDATE/INSERT → DELETE → INSERT so a failure
+    // in the middle can't leave the parent row mutated with no children
+    // (or no children where children were expected). ON CONFLICT on
+    // (section_id, date) inside the RPC also handles concurrent submits.
+    const rpcRecords = filteredRecords.map(r => ({
+      student_id: r.studentId,
+      status:     r.status,
+      is_present: statusToIsPresent(r.status),
     }));
-    if (rows.length > 0) {
-      const { error: insErr } = await adminDb.from('attendance_student_details').insert(rows);
-      if (insErr) throw new ApiError(500, insErr.message);
-    }
+    const { data: attId, error: rpcErr } = await adminDb.rpc('submit_attendance_atomic', {
+      p_school_id:        section.school_id,
+      p_section_id:       body.sectionId,
+      p_date:             body.date,
+      p_class_name:       section.class_name,
+      p_section:          section.section,
+      p_academic_year_id: section.academic_year_id,
+      p_total_present:    counts.present,
+      p_total_absent:     counts.absent,
+      p_total_half:       counts.half,
+      p_total_holiday:    counts.holiday,
+      p_total_students:   filteredRecords.length,
+      p_marked_by:        req.user.id,
+      p_approved_by:      approvedBy,
+      p_approval_status:  approvalStatus,
+      p_is_locked:        isLocked,
+      p_records:          rpcRecords,
+    });
+    if (rpcErr) throw new ApiError(500, rpcErr.message);
+    const attendanceId = attId as string;
 
     ok(res, { attendanceId, date: body.date, ...counts });
   } catch (err) { fail(res, err); }
