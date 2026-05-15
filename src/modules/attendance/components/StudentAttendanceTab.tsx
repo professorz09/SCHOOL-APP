@@ -82,38 +82,31 @@ export const StudentAttendanceTab: React.FC<Props> = ({ studentId }) => {
     });
   }, [currentYear?.id]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  const loadMonth = async (ym: string) => {
-    // Build the visible date columns up-front from the academic-year bounds,
-    // independent of whether the data fetch succeeds. Earlier the columns
-    // were tied to the same try-block as the supabase query, so any guard
-    // that bailed (missing session, missing year) left the grid header
-    // empty — even though the dates themselves are pure date math.
+  // Request token so a slower load (e.g. tapping month-back twice
+  // quickly) can't land its results onto a newer month's column header.
+  // Without this, older month's per-day P/A statuses ended up displayed
+  // under the newer month's dates.
+  const monthLoadIdRef = React.useRef(0);
+
+  const loadMonth = async (ym: string, requestId: number) => {
     const dates = currentYear
       ? buildMonthDates(ym, currentYear.startDate, currentYear.endDate)
       : buildMonthDates(ym);
+    if (requestId !== monthLoadIdRef.current) return;
     setGridDates(dates);
 
     if (!currentYear || !studentId || !session?.schoolId) {
-      // Nothing to query yet, but the grid still renders the date header.
       setDateStatusMap({});
       return;
     }
 
     setGridLoading(true);
     try {
-      // Month bounds for the date filter.
       const [y, m] = ym.split('-').map(Number);
       const lastDay = new Date(y, m, 0).getDate();
       const monthStart = `${ym}-01`;
       const monthEnd   = `${ym}-${String(lastDay).padStart(2, '0')}`;
 
-      // Two-step lookup. Earlier this was a single query that filtered on a
-      // joined table (`attendance_records!inner`) — that join works in
-      // theory but silently returned no rows under PostgREST when the
-      // selector path didn't propagate; the profile showed dates with no
-      // statuses no matter how much was marked.
-      //
-      // Step 1 — find attendance_record IDs for the school+year+month.
       const { data: records, error: recErr } = await supabase
         .from('attendance_records')
         .select('id, date')
@@ -122,6 +115,7 @@ export const StudentAttendanceTab: React.FC<Props> = ({ studentId }) => {
         .gte('date', monthStart)
         .lte('date', monthEnd);
       if (recErr) throw new Error(recErr.message);
+      if (requestId !== monthLoadIdRef.current) return;
 
       const recRows = (records ?? []) as Array<{ id: string; date: string }>;
       if (recRows.length === 0) {
@@ -132,13 +126,13 @@ export const StudentAttendanceTab: React.FC<Props> = ({ studentId }) => {
       const idToDate = new Map<string, string>();
       recRows.forEach(r => idToDate.set(r.id, r.date));
 
-      // Step 2 — pull this student's per-record rows by attendance_id IN (..).
       const { data: details, error: detErr } = await supabase
         .from('attendance_student_details')
         .select('attendance_id, is_present, status')
         .eq('student_id', studentId)
         .in('attendance_id', recRows.map(r => r.id));
       if (detErr) throw new Error(detErr.message);
+      if (requestId !== monthLoadIdRef.current) return;
 
       const next: Record<string, AttendanceCellStatus> = {};
       for (const r of (details ?? []) as Array<{
@@ -153,14 +147,16 @@ export const StudentAttendanceTab: React.FC<Props> = ({ studentId }) => {
       }
       setDateStatusMap(next);
     } catch (e) {
+      if (requestId !== monthLoadIdRef.current) return;
       showToast(e instanceof Error ? e.message : 'Failed to load attendance', 'error');
     } finally {
-      setGridLoading(false);
+      if (requestId === monthLoadIdRef.current) setGridLoading(false);
     }
   };
 
   useEffect(() => {
-    loadMonth(gridYM);
+    const id = ++monthLoadIdRef.current;
+    loadMonth(gridYM, id);
   }, [gridYM, studentId, currentYear?.id, session?.schoolId]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const changeMonth = (delta: number) => {

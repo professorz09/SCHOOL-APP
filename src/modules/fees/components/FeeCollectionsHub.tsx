@@ -202,10 +202,17 @@ const DuesPanel: React.FC = () => {
   // due_date <= today), so upcoming months don't inflate Pending Dues.
   // Earlier this filtered on totalFee - paidFee which counted the entire
   // yearly schedule as "due" from April 1st.
+  // Request token: increments on every search/page so a slow earlier
+  // response can't overwrite a faster later one. Without this, typing
+  // "rah" → backspace → "vik" could leave the slower "rah" result
+  // displayed as the "vik" list (the response landed last).
+  const requestIdRef = React.useRef(0);
   const appendPage = React.useCallback(async (offset: number, q: string) => {
+    const myId = ++requestIdRef.current;
     const page = await studentService.getList({
       offset, limit: DUE_PAGE, search: q || undefined,
     });
+    if (myId !== requestIdRef.current) return; // a newer request started; drop this result
     const dues: DueItem[] = page.items
       .filter(s => s.currentDue > 0)
       .map(s => ({

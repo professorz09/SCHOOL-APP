@@ -172,21 +172,29 @@ export const StudentClassAssignmentModal: React.FC<Props> = ({ student, onClose,
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [className, sectionName]);
 
-  // Debounced uniqueness check on roll change
+  // Debounced uniqueness check on roll change. Token-tracked so a
+  // slow check for the previous roll can't land its (now stale)
+  // available/taken verdict on top of the user's newer roll — that
+  // produced the "type 12 (slow) → type 13 → see green tick → half a
+  // second later red" flicker the audit flagged.
+  const rollCheckIdRef = React.useRef(0);
   useEffect(() => {
     if (!rollNo || !className || !sectionName) {
       setRollAvailable(null);
       return;
     }
     setRollChecking(true);
+    const myId = ++rollCheckIdRef.current;
     const t = setTimeout(async () => {
       try {
         const ok = await studentService.isRollAvailable(className, sectionName, rollNo, student.id);
+        if (myId !== rollCheckIdRef.current) return;
         setRollAvailable(ok);
       } catch {
+        if (myId !== rollCheckIdRef.current) return;
         setRollAvailable(null);
       } finally {
-        setRollChecking(false);
+        if (myId === rollCheckIdRef.current) setRollChecking(false);
       }
     }, 300);
     return () => clearTimeout(t);
