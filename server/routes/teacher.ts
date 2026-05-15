@@ -1,9 +1,24 @@
 import { Router } from 'express';
+import rateLimit from 'express-rate-limit';
 import { adminDb } from '../lib/db';
 import { ok, fail, ApiError, requireBody, requireText } from '../lib/helpers';
 import { requireAuth, requireRole } from '../middleware/auth';
 
 export const teacherRouter = Router();
+
+// Teacher notices fan out to a class/section's parents and students.
+// 30/hour per teacher comfortably covers a heavy day (a class teacher
+// posts ~3-5 notices/day in practice) but blocks runaway loops or a
+// compromised teacher session being used to flood the audience.
+const teacherNoticeLimiter = rateLimit({
+  windowMs: 60 * 60_000,
+  limit: 30,
+  keyGenerator: (req: any) => `teacher-notice:${req.user?.id ?? req.ip}`,
+  validate: { keyGeneratorIpFallback: false },
+  standardHeaders: 'draft-7',
+  legacyHeaders: false,
+  message: { ok: false, error: 'Notice rate limit reached (30/hour). Try again later.' },
+});
 
 // Helper: get staff row for a user
 async function getStaffId(userId: string, schoolId: string): Promise<string> {
@@ -144,7 +159,7 @@ teacherRouter.get('/attendance', requireAuth, requireRole('PRINCIPAL', 'TEACHER'
 // Audience is sanitized server-side. Previously the client-supplied value
 // was inserted verbatim — a teacher could broadcast to "ALL" or
 // "SECTION:<some-other-section>" and pollute classes they don't teach.
-teacherRouter.post('/notice/create', requireAuth, requireRole('TEACHER'), async (req, res) => {
+teacherRouter.post('/notice/create', requireAuth, requireRole('TEACHER'), teacherNoticeLimiter, async (req, res) => {
   try {
     const body = requireBody<{
       title: string; body: string; audience: string; sentByName: string;

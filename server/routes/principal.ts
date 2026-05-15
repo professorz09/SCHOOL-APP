@@ -28,6 +28,34 @@ const resetPasswordLimiter = rateLimit({
   message: { ok: false, error: 'Password-reset limit reached (20/hour). Try again later.' },
 });
 
+// Notices fan out to every student/parent in the school and trigger
+// client polls — a compromised principal token (or a script) could
+// flood the notices table. 60/hour is well above any real cadence
+// (a busy school posts ~5/day) but blocks runaway loops.
+const noticeCreateLimiter = rateLimit({
+  windowMs: 60 * 60_000,
+  limit: 60,
+  keyGenerator: (req: any) => `notice-create:${req.user?.id ?? req.ip}`,
+  validate: { keyGeneratorIpFallback: false },
+  standardHeaders: 'draft-7',
+  legacyHeaders: false,
+  message: { ok: false, error: 'Notice rate limit reached (60/hour). Try again later.' },
+});
+
+// Complaint resolve/reject writes a 4000-char response onto a
+// student-visible row and stamps resolved_at — same DoS / replay
+// concerns as notices. 120/hour covers a school with a heavy
+// complaint backlog day.
+const complaintActionLimiter = rateLimit({
+  windowMs: 60 * 60_000,
+  limit: 120,
+  keyGenerator: (req: any) => `complaint-action:${req.user?.id ?? req.ip}`,
+  validate: { keyGeneratorIpFallback: false },
+  standardHeaders: 'draft-7',
+  legacyHeaders: false,
+  message: { ok: false, error: 'Complaint action rate limit reached (120/hour). Try again later.' },
+});
+
 // ─── Connected Users (students + staff) — for the Settings → Users screen ──
 
 // GET /api/principal/users/list — server-paginated. Used by Settings → Users
@@ -254,7 +282,7 @@ principalRouter.get('/notice/list', requireAuth, async (req, res) => {
 });
 
 // POST /api/principal/notice/create
-principalRouter.post('/notice/create', requireAuth, PRINCIPAL, async (req, res) => {
+principalRouter.post('/notice/create', requireAuth, PRINCIPAL, noticeCreateLimiter, async (req, res) => {
   try {
     const body = requireBody<{
       title: string; body: string; audience: string;
@@ -335,7 +363,7 @@ principalRouter.post('/notice/delete', requireAuth, PRINCIPAL, async (req, res) 
 const OPEN_COMPLAINT_STATUSES = ['PENDING', 'IN_REVIEW'];
 
 // POST /api/principal/complaint/resolve
-principalRouter.post('/complaint/resolve', requireAuth, PRINCIPAL, async (req, res) => {
+principalRouter.post('/complaint/resolve', requireAuth, PRINCIPAL, complaintActionLimiter, async (req, res) => {
   try {
     const body = requireBody<{ complaintId: string; response: string }>(req, ['complaintId', 'response']);
     const response = requireText(body.response, 'Response', { max: 4000 });
@@ -353,7 +381,7 @@ principalRouter.post('/complaint/resolve', requireAuth, PRINCIPAL, async (req, r
 });
 
 // POST /api/principal/complaint/reject
-principalRouter.post('/complaint/reject', requireAuth, PRINCIPAL, async (req, res) => {
+principalRouter.post('/complaint/reject', requireAuth, PRINCIPAL, complaintActionLimiter, async (req, res) => {
   try {
     const body = requireBody<{ complaintId: string; reason: string }>(req, ['complaintId', 'reason']);
     const reason = requireText(body.reason, 'Reason', { max: 4000 });
