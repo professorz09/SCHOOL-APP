@@ -300,6 +300,16 @@ promotionRouter.post('/execute', requireAuth, PRINCIPAL, async (req, res) => {
             .eq('student_id', p.studentId)
             .eq('academic_year_id', body.fromYearId);
 
+          // Without this update the students row stays is_active=TRUE,
+          // status='ACTIVE'. Attendance, fee-due, and notice queries
+          // filter on those columns, so a TC'd 12th-grader would keep
+          // appearing in next year's rosters until a principal manually
+          // deactivated them. Mirror what issue_tc_and_leave does.
+          await adminDb
+            .from('students')
+            .update({ status: 'TC_ISSUED', is_active: false, updated_at: new Date().toISOString() })
+            .eq('id', p.studentId);
+
           // Upsert tc_records (ignore duplicate for same student+year)
           await adminDb.from('tc_records').upsert({
             school_id:        schoolId,
