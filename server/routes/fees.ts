@@ -365,6 +365,7 @@ feesRouter.post('/payment/reverse', requireAuth, requireRole('PRINCIPAL'), requi
       if (rpcErr.message.includes('non_positive_amount')) throw new ApiError(400, 'Cannot reverse a non-positive payment');
       if (rpcErr.message.includes('payment_not_found')) throw new ApiError(404, 'Payment not found');
       if (rpcErr.message.includes('reversal_window_expired')) throw new ApiError(403, '24 hours beet chuke — ab reverse nahi hoga. Naya correction payment ya write-off use karein.');
+      if (rpcErr.message.includes('daily_cap_exceeded')) throw new ApiError(429, 'Daily limit reached: max 3 reversals per principal per day');
       throw new ApiError(500, `Reversal failed: ${rpcErr.message}`);
     }
     const reversalRow = (Array.isArray(rpcData) ? rpcData[0] : rpcData) as

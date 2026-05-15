@@ -163,12 +163,6 @@ examsRouter.post('/result/upload', requireAuth, requireRole('PRINCIPAL', 'TEACHE
       if (intruder) throw new ApiError(403, `Student ${intruder} does not belong to this school`);
     }
 
-    const { data: existing } = await adminDb
-      .from('exam_results')
-      .select('student_id')
-      .eq('test_id', body.testId);
-    const existingIds = new Set(((existing ?? []) as any[]).map(r => r.student_id));
-
     const maxMarks = (test as any).max_marks ?? 100;
     // Validate each row's marks against the test's max_marks — earlier
     // this endpoint silently accepted negative values or marks > max
@@ -179,24 +173,35 @@ examsRouter.post('/result/upload', requireAuth, requireRole('PRINCIPAL', 'TEACHE
         throw new ApiError(400, `Marks must be between 0 and ${maxMarks} (got ${r.marks} for student ${r.studentId})`);
       }
     }
-    const toInsert = body.results
-      .filter(r => !existingIds.has(r.studentId))
-      .map(r => ({
-        test_id:          body.testId,
-        student_id:       r.studentId,
-        academic_year_id: body.academicYearId,
-        obtained_marks:   r.marks,
-        grade:            r.grade ?? null,
-        remarks:          r.remarks ?? null,
-      }));
 
-    if (toInsert.length > 0) {
-      const { error } = await adminDb.from('exam_results').insert(toInsert);
+    // Upsert on (test_id, student_id) — the unique constraint on
+    // exam_results enforces dedup atomically. The earlier SELECT-then-INSERT
+    // pattern raced: two concurrent uploads from two teachers (or a
+    // retried browser tab) both saw "not in existing" and both INSERTed,
+    // hitting the constraint with a 500 — or worse, before this constraint
+    // landed, producing duplicate result rows. ignoreDuplicates=true keeps
+    // the first row and silently drops the second.
+    const toUpsert = body.results.map(r => ({
+      test_id:          body.testId,
+      student_id:       r.studentId,
+      academic_year_id: body.academicYearId,
+      obtained_marks:   r.marks,
+      grade:            r.grade ?? null,
+      remarks:          r.remarks ?? null,
+    }));
+
+    if (toUpsert.length > 0) {
+      const { error, count } = await adminDb
+        .from('exam_results')
+        .upsert(toUpsert, { onConflict: 'test_id,student_id', ignoreDuplicates: true, count: 'exact' });
       if (error) throw new ApiError(500, error.message);
       await adminDb.from('test_schedules').update({ results_uploaded: true }).eq('id', body.testId);
+      const uploaded = count ?? 0;
+      ok(res, { uploaded, skipped: toUpsert.length - uploaded });
+      return;
     }
 
-    ok(res, { uploaded: toInsert.length, skipped: body.results.length - toInsert.length });
+    ok(res, { uploaded: 0, skipped: 0 });
   } catch (err) { fail(res, err); }
 });
 
