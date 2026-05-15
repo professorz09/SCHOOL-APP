@@ -267,6 +267,24 @@ feesRouter.post('/writeoff', requireAuth, requireRole('PRINCIPAL'), async (req, 
     }).eq('id', body.installmentId);
     if (updErr) throw new ApiError(500, updErr.message);
 
+    // Central audit_logs row so the principal's audit feed surfaces
+    // write-offs alongside payments and reversals. fee_write_offs
+    // stays as the domain table; this is the canonical timeline entry.
+    await adminDb.from('audit_logs').insert({
+      user_id:     req.user.id,
+      school_id:   req.user.school_id,
+      action:      'fee_write_off',
+      entity_type: 'fee_installment',
+      entity_id:   body.installmentId,
+      details: {
+        student_id: r.student_id,
+        amount:     writeOff,
+        reason:     body.reason,
+        new_status: newStatus,
+        balance_after: Math.max(0, Number(r.amount) - Number(r.paid_amount) - newWriteOff),
+      },
+    });
+
     ok(res, { installmentId: body.installmentId, writeOffAmount: newWriteOff, status: newStatus });
   } catch (err) { fail(res, err); }
 });

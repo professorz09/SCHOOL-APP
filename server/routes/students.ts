@@ -406,11 +406,22 @@ studentsRouter.post('/update-login-phone', requireAuth, requireRole('PRINCIPAL')
       throw new ApiError(409, `Mobile ${newPhone} pehle se kisi aur user (${(clash as { role: string }).role}) ke saath linked hai.`);
     }
 
-    // Update users + the auth row's email (which mirrors the mobile)
-    // in one go. Any error rolls back nothing, so we update users LAST
-    // so a failed auth update doesn't desync.
+    // Update users + the auth row's email (which mirrors the mobile).
+    // Order is auth → users (auth is the credential gate; if auth fails
+    // we don't want users to point at a phone the parent can't log in
+    // with). On users-update failure, revert the auth email so the
+    // system stays consistent — otherwise auth would point at the new
+    // mobile while users still says the old one, and the app profile
+    // would display a stale mobile while the new mobile silently became
+    // the login.
     const MOBILE_EMAIL_DOMAIN = '@edugrow.local';
     const newEmail = `${newPhone}${MOBILE_EMAIL_DOMAIN}`;
+
+    const { data: priorUser } = await adminDb.from('users')
+      .select('mobile_number').eq('id', parentUserId).single();
+    const priorPhone = (priorUser as { mobile_number: string } | null)?.mobile_number;
+    const priorEmail = priorPhone ? `${priorPhone}${MOBILE_EMAIL_DOMAIN}` : null;
+
     const { error: authErr } = await adminDb.auth.admin.updateUserById(parentUserId, {
       email: newEmail,
       user_metadata: { mobile_number: newPhone },
@@ -420,7 +431,19 @@ studentsRouter.post('/update-login-phone', requireAuth, requireRole('PRINCIPAL')
     const { error: usrErr } = await adminDb.from('users')
       .update({ mobile_number: newPhone, updated_at: new Date().toISOString() })
       .eq('id', parentUserId);
-    if (usrErr) throw new ApiError(500, `User row update failed: ${usrErr.message}`);
+    if (usrErr) {
+      if (priorEmail && priorPhone) {
+        try {
+          await adminDb.auth.admin.updateUserById(parentUserId, {
+            email: priorEmail,
+            user_metadata: { mobile_number: priorPhone },
+          });
+        } catch (revertErr) {
+          console.error('[update-login-phone] auth revert failed', revertErr);
+        }
+      }
+      throw new ApiError(500, `User row update failed: ${usrErr.message}`);
+    }
 
     // Audit log so the change is traceable later.
     await adminDb.from('audit_logs').insert({
@@ -737,14 +760,28 @@ studentsRouter.post('/document/add', requireAuth, requireRole('PRINCIPAL'), asyn
       studentId: string; docType: string; docUrl: string;
     }>(req, ['studentId', 'docType', 'docUrl']);
 
-    // Reject non-HTTPS URLs. This blocks javascript:, data:, and plain http:
-    // payloads that could render as clickable XSS vectors in the UI.
+    // Reject non-HTTPS URLs and anything not pointing at our own Supabase
+    // storage bucket. The earlier check only validated the scheme, so a
+    // principal (or compromised token) could register
+    // `https://attacker.tld/100GB.bin` as a student document — readers
+    // would download it; or cross-tenant reference another school's
+    // private file by URL. Pin the host to the configured SUPABASE_URL.
     let parsedUrl: URL;
     try { parsedUrl = new URL(body.docUrl); } catch {
       throw new ApiError(400, 'docUrl must be a valid URL');
     }
     if (parsedUrl.protocol !== 'https:') {
       throw new ApiError(400, 'docUrl must use the https:// protocol');
+    }
+    const supabaseHost = (() => {
+      try { return new URL(process.env.SUPABASE_URL ?? '').host; }
+      catch { return ''; }
+    })();
+    if (!supabaseHost || parsedUrl.host !== supabaseHost) {
+      throw new ApiError(400, 'docUrl must point to this project\'s storage bucket');
+    }
+    if (!parsedUrl.pathname.startsWith('/storage/v1/object/')) {
+      throw new ApiError(400, 'docUrl must be a storage object URL');
     }
 
     // Verify student belongs to this school
