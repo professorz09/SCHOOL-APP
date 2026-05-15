@@ -206,19 +206,19 @@ export const StaffAttendanceManager: React.FC<Props> = ({ onBack, startTab = 'OV
   , [record, search]);
 
   useLayoutEffect(() => {
-    if (!stripRef.current) return;
     // Scroll the strip to the right end so today (rightmost tile in
-    // chronological order) is visible on first open. Previously this
-    // used a single rAF after useEffect, but the strip's DOM width
-    // sometimes hadn't settled when the callback fired — the user
-    // ended up looking at May-1 instead of today.
+    // chronological order) is visible on first open. The strip only
+    // mounts when tab === 'ATTENDANCE', so we must include `tab` in
+    // the deps — otherwise the effect ran once at component-mount
+    // (Overview tab, stripRef still null), no-op'd, and never re-fired
+    // when the user switched to Attendance. Result: strip opened
+    // pinned to May-1 instead of today.
     //
-    // useLayoutEffect runs synchronously after DOM mutations + a
-    // double-rAF defers until two paint frames have elapsed; together
-    // that's enough headroom for tile widths + sticky-header layout
-    // to stabilise on every device we've seen. As a final belt-and-
-    // braces, set scrollLeft once immediately too so even if the rAFs
-    // miss on some browser, the strip still lands on the right edge.
+    // Double-rAF gives layout + sticky-header sizing time to settle
+    // before we compute scrollWidth, and the immediate write below
+    // is belt-and-braces for browsers that miss the rAF callbacks.
+    if (tab !== 'ATTENDANCE') return;
+    if (!stripRef.current) return;
     const el = stripRef.current;
     el.scrollLeft = el.scrollWidth;
     requestAnimationFrame(() => {
@@ -226,7 +226,7 @@ export const StaffAttendanceManager: React.FC<Props> = ({ onBack, startTab = 'OV
         if (stripRef.current) stripRef.current.scrollLeft = stripRef.current.scrollWidth;
       });
     });
-  }, [dateStrip]);
+  }, [dateStrip, tab]);
 
   // Same trick for the GRID view's horizontal table — scroll to today
   // (rightmost column) when the history loads. Earlier the grid opened
