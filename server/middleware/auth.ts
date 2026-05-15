@@ -8,6 +8,7 @@ export interface AuthUser {
   school_id: string | null;
   name: string;
   editor_mode_until: string | null;
+  first_login_changed: boolean;
 }
 
 declare global {
@@ -30,7 +31,7 @@ export async function requireAuth(req: Request, res: Response, next: NextFunctio
 
     const { data: profile, error: pe } = await adminDb
       .from('users')
-      .select('id, role, school_id, name, editor_mode_until')
+      .select('id, role, school_id, name, editor_mode_until, first_login_changed')
       .eq('id', user.id)
       .eq('is_active', true)
       .maybeSingle();
@@ -39,6 +40,24 @@ export async function requireAuth(req: Request, res: Response, next: NextFunctio
 
     req.user = profile as AuthUser;
     req.jwt  = token;
+
+    // First-login password gate. Until the user has changed the default
+    // (mobile-as-password for parents, similar for staff), every API write
+    // is refused except the change-password / me / logout endpoints. The
+    // client already routes through FirstLoginPasswordChange via
+    // App.tsx:246, but a JWT obtained outside the UI could still hit
+    // /api/* directly — this closes the gap server-side without touching
+    // any individual route. originalUrl is the full path including the
+    // /api/auth prefix; safer than req.path which is router-relative.
+    const allowedBeforeChange = new Set([
+      '/api/auth/change-password',
+      '/api/auth/me',
+      '/api/auth/logout',
+    ]);
+    if (!profile.first_login_changed && !allowedBeforeChange.has(req.originalUrl.split('?')[0])) {
+      throw new ApiError(403, 'Password change required before continuing');
+    }
+
     next();
   } catch (err) {
     fail(res, err);
