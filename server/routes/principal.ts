@@ -692,18 +692,6 @@ principalRouter.post('/leave/submit', requireAuth, async (req, res) => {
       fromDate: body.fromDate, toDate: body.toDate, reason: body.reason,
     };
 
-    // Diagnostic — log the resolved insert payload + the key role
-    // adminDb is using so we can confirm in dev logs whether the
-    // server-side client is actually service_role at runtime.
-    const supaKey = (process.env.SUPABASE_SERVICE_ROLE_KEY ?? '').slice(0, 30);
-    console.log('[leave/submit]', {
-      school_id:    req.user.school_id,
-      requested_by: req.user.id,
-      caller_role:  req.user.role,
-      entity_id:    body.studentId,
-      keyHead:      supaKey,
-    });
-
     const { data, error } = await adminDb.from('approvals').insert({
       school_id:    req.user.school_id,
       request_type: 'LEAVE',
