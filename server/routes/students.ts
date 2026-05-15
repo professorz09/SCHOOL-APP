@@ -1018,7 +1018,21 @@ studentsRouter.post('/create', requireAuth, requireRole('PRINCIPAL'), studentCre
       is_rte: !!body.rte, is_active: true, status: 'ACTIVE',
       admission_date: body.admissionDate || new Date().toISOString().slice(0, 10),
     }).select(STU_FIELDS).single();
-    if (stuErr) throw new ApiError(500, stuErr.message);
+    if (stuErr) {
+      // Compensation: if we just created a new parent account purely
+      // for this student, roll it back so a failed admission doesn't
+      // leave an orphan parent login that nobody owns. Reused parents
+      // (existing user we attached to a sibling) stay untouched.
+      if (parentUserId && !parentReused) {
+        try {
+          await adminDb.from('users').delete().eq('id', parentUserId);
+          await adminDb.auth.admin.deleteUser(parentUserId);
+        } catch (cleanupErr) {
+          console.error('[students.create] parent rollback after student insert failed', cleanupErr);
+        }
+      }
+      throw new ApiError(500, stuErr.message);
+    }
     const stu = stuRow as any;
 
     // ── Link parent → student (linkParentStudent pattern) ─────────────────────
