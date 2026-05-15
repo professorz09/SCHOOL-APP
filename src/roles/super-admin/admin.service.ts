@@ -82,7 +82,7 @@ export const adminService = {
   async getAll(): Promise<AdminUser[]> {
     const { data, error } = await supabase
       .from('users')
-      .select('id, mobile_number, role, name, email, school_id, is_active, last_login, created_at, school:schools(name, code)')
+      .select('id, mobile_number, role, name, email, school_id, is_active, last_login, created_at, school:schools!users_school_id_fkey(name, code)')
       .in('role', [...ADMIN_ROLES])
       .order('role', { ascending: true })
       .order('created_at', { ascending: true });
@@ -99,7 +99,7 @@ export const adminService = {
   async getById(id: string): Promise<AdminUser | null> {
     const { data, error } = await supabase
       .from('users')
-      .select('id, mobile_number, role, name, email, school_id, is_active, last_login, created_at, school:schools(name, code)')
+      .select('id, mobile_number, role, name, email, school_id, is_active, last_login, created_at, school:schools!users_school_id_fkey(name, code)')
       .eq('id', id)
       .maybeSingle();
     if (error) throw new Error(error.message);

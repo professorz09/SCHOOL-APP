@@ -1034,6 +1034,35 @@ studentsRouter.post('/create', requireAuth, requireRole('PRINCIPAL'), studentCre
       'guardian_name, guardian_phone, guardian_relation, ' +
       'religion, caste, pen_number, birth_cert_no, tc_number, ' +
       'is_rte, is_active, status, admission_date, created_at';
+    // Pre-check the admission_no UNIQUE constraint so we can surface a
+    // friendly "Admission #XYZ already exists" error before any auth /
+    // user / student rollback dance. The DB still has the UNIQUE backstop
+    // — this just avoids the raw "duplicate key value violates unique
+    // constraint students_admission_no_key" message bubbling to the toast.
+    {
+      const { data: dup } = await adminDb.from('students')
+        .select('id, school_id').eq('admission_no', body.admissionNo).maybeSingle();
+      if (dup) {
+        const dupRow = dup as { id: string; school_id: string };
+        const inThisSchool = dupRow.school_id === schoolId;
+        // Same compensation as below: if we just created a new parent
+        // purely for this student, roll it back.
+        if (parentUserId && !parentReused) {
+          try {
+            await adminDb.from('users').delete().eq('id', parentUserId);
+            await adminDb.auth.admin.deleteUser(parentUserId);
+          } catch (cleanupErr) {
+            console.error('[students.create] parent rollback after admission_no clash failed', cleanupErr);
+          }
+        }
+        throw new ApiError(409,
+          inThisSchool
+            ? `Admission #${body.admissionNo} already exists in this school. Use a different admission number.`
+            : `Admission #${body.admissionNo} is already in use. Use a different admission number.`,
+        );
+      }
+    }
+
     const { data: stuRow, error: stuErr } = await adminDb.from('students').insert({
       school_id: schoolId, user_id: null,
       name: body.name, admission_no: body.admissionNo,
@@ -1067,6 +1096,13 @@ studentsRouter.post('/create', requireAuth, requireRole('PRINCIPAL'), studentCre
         } catch (cleanupErr) {
           console.error('[students.create] parent rollback after student insert failed', cleanupErr);
         }
+      }
+      // The pre-check above usually catches the duplicate before we get
+      // here, but a race (two principals admitting in parallel) can still
+      // hit the UNIQUE constraint. Translate the raw error so the toast
+      // is readable.
+      if (/duplicate key|unique constraint/i.test(stuErr.message) && /admission_no/i.test(stuErr.message)) {
+        throw new ApiError(409, `Admission #${body.admissionNo} was just used by someone else. Try a different admission number.`);
       }
       throw new ApiError(500, stuErr.message);
     }

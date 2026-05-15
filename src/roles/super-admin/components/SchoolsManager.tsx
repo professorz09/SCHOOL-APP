@@ -254,6 +254,30 @@ export const SchoolsManager: React.FC<Props> = ({ onBack }) => {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  // Overdue-billing lookup: a school is "overdue" if it has at least one
+  // billing installment past its due_date with paid_amount < amount. One
+  // small query feeds the red-tint on the school card so the super-admin
+  // can spot defaulters without opening the Billing tab.
+  const [overdueSet, setOverdueSet] = useState<Set<string>>(new Set());
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      const today = new Date().toISOString().slice(0, 10);
+      const { data } = await supabase
+        .from('school_billing_installments')
+        .select('school_id, amount, paid_amount, due_date')
+        .lt('due_date', today);
+      if (cancelled || !data) return;
+      type Row = { school_id: string; amount: number; paid_amount: number; due_date: string };
+      const ids = new Set<string>();
+      for (const r of data as Row[]) {
+        if ((r.paid_amount ?? 0) < (r.amount ?? 0)) ids.add(r.school_id);
+      }
+      setOverdueSet(ids);
+    })();
+    return () => { cancelled = true; };
+  }, []);
+
   const filtered = schools.filter(s =>
     s.name.toLowerCase().includes(search.toLowerCase()) ||
     s.location.toLowerCase().includes(search.toLowerCase()) ||
@@ -379,6 +403,7 @@ export const SchoolsManager: React.FC<Props> = ({ onBack }) => {
   if (view === 'LIST') {
     const activeCount = schools.filter(s => s.status === SchoolStatus.ACTIVE).length;
     const inactiveCount = schools.length - activeCount;
+    const overdueCount = schools.filter(s => overdueSet.has(s.id)).length;
 
     return (
       <div className="w-full bg-slate-50 flex flex-col animate-in slide-in-from-right-8 duration-300">
@@ -405,6 +430,11 @@ export const SchoolsManager: React.FC<Props> = ({ onBack }) => {
               <div className="text-2xl font-black text-slate-500">{inactiveCount}</div>
               <div className="text-[9px] font-black uppercase tracking-widest text-slate-400">Inactive</div>
             </div>
+            <div className="w-px bg-slate-100" />
+            <div className="flex-1 text-center">
+              <div className={`text-2xl font-black ${overdueCount > 0 ? 'text-rose-600' : 'text-slate-300'}`}>{overdueCount}</div>
+              <div className="text-[9px] font-black uppercase tracking-widest text-slate-400">Overdue</div>
+            </div>
           </div>
 
           <div className="p-4  space-y-3">
@@ -423,9 +453,13 @@ export const SchoolsManager: React.FC<Props> = ({ onBack }) => {
               </div>
             )}
 
-            {filtered.map(school => (
+            {filtered.map(school => {
+              const isOverdue = overdueSet.has(school.id);
+              return (
               <button key={school.id}
-                className="w-full bg-white rounded-2xl border border-slate-100 shadow-sm text-left active:scale-[0.99] transition-transform overflow-hidden"
+                className={`w-full rounded-2xl border shadow-sm text-left active:scale-[0.99] transition-transform overflow-hidden ${
+                  isOverdue ? 'bg-rose-50 border-rose-200' : 'bg-white border-slate-100'
+                }`}
                 onClick={() => {
                   setSelected(school); setActiveAYIdx(0); setView('DETAIL');
                   setOverview(null); setOverviewLoading(true);
@@ -439,9 +473,14 @@ export const SchoolsManager: React.FC<Props> = ({ onBack }) => {
                     {school.name.split(' ').map(w => w[0]).join('').slice(0, 2)}
                   </div>
                   <div className="flex-1 min-w-0">
-                    <div className="flex items-center gap-2">
+                    <div className="flex items-center gap-2 flex-wrap">
                       <span className="font-extrabold text-slate-900 text-sm truncate">{school.name}</span>
                       <span className={`shrink-0 text-[9px] font-black px-1.5 py-0.5 rounded-full uppercase tracking-widest ${STATUS_COLORS[school.status]}`}>{school.status}</span>
+                      {isOverdue && (
+                        <span className="shrink-0 text-[9px] font-black px-1.5 py-0.5 rounded-full uppercase tracking-widest bg-rose-600 text-white">
+                          Overdue
+                        </span>
+                      )}
                     </div>
                     <div className="flex items-center gap-3 mt-1 text-slate-400">
                       <div className="flex items-center gap-1">
@@ -463,7 +502,8 @@ export const SchoolsManager: React.FC<Props> = ({ onBack }) => {
                   <ChevronRight size={16} className="text-slate-300 mt-1 shrink-0" />
                 </div>
               </button>
-            ))}
+              );
+            })}
           </div>
         </div>
       </div>
