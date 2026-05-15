@@ -871,28 +871,45 @@ export const StudentProfilePanel: React.FC<Props> = ({ student, onBack, onStuden
                 <SectionTitle icon={GraduationCap} title="Class Allotment" />
                 {currentStudent.className ? (
                   <>
-                    <div className="grid grid-cols-3 gap-2 mb-4">
-                      <div className="bg-indigo-50 rounded-xl p-3 text-center">
-                        <div className="text-base font-black text-indigo-700">{stripClassPrefix(currentStudent.className)}</div>
-                        <div className="text-[9px] font-bold text-indigo-400 mt-0.5">Class</div>
-                      </div>
-                      <div className="bg-violet-50 rounded-xl p-3 text-center">
-                        {/* Section labels like "BIO_CHE_PHY" (used for
-                            stream-as-section in 11/12) wrap into one
-                            ugly run of underscores. Swap underscores
-                            for `/` so multi-stream sections read as
-                            "BIO/CHE/PHY" without changing the
-                            persisted value. */}
-                        <div className="text-base font-black text-violet-700 leading-tight">
-                          {currentStudent.section ? currentStudent.section.replace(/_/g, '/') : '—'}
+                    {/* Section labels like "BIO_CHE_PHY" (used for
+                        stream-as-section in 11/12) wrap into one ugly
+                        run of underscores. Swap underscores for `/` so
+                        multi-stream sections read as "BIO/CHE/PHY"
+                        without changing the persisted value.
+                        Then auto-shrink the font for long values
+                        (≥7 chars) so the tile doesn't truncate "PHY"
+                        off the end. break-all is the safety net for
+                        sections without any natural break point. */}
+                    {(() => {
+                      const classDisplay = stripClassPrefix(currentStudent.className);
+                      const sectionDisplay = currentStudent.section
+                        ? currentStudent.section.replace(/_/g, '/')
+                        : '—';
+                      const fit = (s: string) =>
+                        s.length > 9 ? 'text-[11px]' : s.length > 6 ? 'text-xs' : 'text-base';
+                      return (
+                        <div className="grid grid-cols-3 gap-2 mb-4">
+                          <div className="bg-indigo-50 rounded-xl p-3 text-center min-w-0">
+                            <div className={`font-black text-indigo-700 leading-tight break-words ${fit(classDisplay)}`}>
+                              {classDisplay}
+                            </div>
+                            <div className="text-[9px] font-bold text-indigo-400 mt-0.5">Class</div>
+                          </div>
+                          <div className="bg-violet-50 rounded-xl p-3 text-center min-w-0">
+                            <div className={`font-black text-violet-700 leading-tight break-all ${fit(sectionDisplay)}`}>
+                              {sectionDisplay}
+                            </div>
+                            <div className="text-[9px] font-bold text-violet-400 mt-0.5">Section</div>
+                          </div>
+                          <div className="bg-emerald-50 rounded-xl p-3 text-center min-w-0">
+                            <div className="text-base font-black text-emerald-700 leading-tight">
+                              {currentStudent.rollNo || '—'}
+                            </div>
+                            <div className="text-[9px] font-bold text-emerald-400 mt-0.5">Roll No</div>
+                          </div>
                         </div>
-                        <div className="text-[9px] font-bold text-violet-400 mt-0.5">Section</div>
-                      </div>
-                      <div className="bg-emerald-50 rounded-xl p-3 text-center">
-                        <div className="text-base font-black text-emerald-700">{currentStudent.rollNo || '—'}</div>
-                        <div className="text-[9px] font-bold text-emerald-400 mt-0.5">Roll No</div>
-                      </div>
-                    </div>
+                      );
+                    })()}
                     {editorModeActive ? (
                       <button
                         onClick={() => setAssignTarget(currentStudent)}
