@@ -204,7 +204,7 @@ export const TimetableManager: React.FC<Props> = ({ onBack }) => {
     // viewing — principal flips the chip top-right when actually
     // editing, then locks it back.
     if (!customizeOn) {
-      showToast('Edit karne ke liye top-right ka "Customize" chip on karein', 'info');
+      showToast('Turn on the "Customize" chip at top-right to edit', 'info');
       return;
     }
     // Use the local per-class `slots` array — NOT the global
@@ -212,7 +212,7 @@ export const TimetableManager: React.FC<Props> = ({ onBack }) => {
     // live in the resolved state, not the global default.
     const slot = slots.find(s => s.slotId === slotId);
     if (!slot) {
-      showToast('Slot data refresh ho raha hai — ek baar dobara try karein', 'error');
+      showToast('Slot data is refreshing — please try again', 'error');
       return;
     }
     const existing = entries.find(e => e.day === activeDay && e.slotId === slotId);
@@ -241,21 +241,21 @@ export const TimetableManager: React.FC<Props> = ({ onBack }) => {
   const handleUnifiedSlotSave = async () => {
     if (!slotTimeModal || !selectedClass) return;
     if (!editGuard.canEdit) {
-      showToast('Year closed — pehle Correction Mode enable karein', 'error');
+      showToast('Year is closed — enable Correction Mode first', 'error');
       return;
     }
     if (!slotTimeModal.startTime || !slotTimeModal.endTime) {
       showToast('Start and end time required', 'error'); return;
     }
     if (slotTimeModal.startTime >= slotTimeModal.endTime) {
-      showToast('Start time end time se pehle hona chahiye', 'error'); return;
+      showToast('Start time must be before end time', 'error'); return;
     }
 
     const isTeaching = slotTimeModal.type === 'CLASS';
 
     if (isTeaching) {
       if (!slotTimeModal.subject.trim()) { showToast('Subject zaroori hai', 'error'); return; }
-      if (!slotTimeModal.teacherId)      { showToast('Teacher select karein', 'error'); return; }
+      if (!slotTimeModal.teacherId)      { showToast('Select a teacher', 'error'); return; }
     } else {
       if (!slotTimeModal.label.trim())   { showToast('Activity ka naam zaroori hai', 'error'); return; }
     }
@@ -379,7 +379,7 @@ export const TimetableManager: React.FC<Props> = ({ onBack }) => {
 
   const handleSlotDelete = async () => {
     if (!slotTimeModal || slotTimeModal.isNew) return;
-    if (!editGuard.canEdit) { showToast('Year closed — pehle Correction Mode enable karein', 'error'); return; }
+    if (!editGuard.canEdit) { showToast('Year is closed — enable Correction Mode first', 'error'); return; }
     // Default-slot delete attempts would hit the same UUID error the
     // save path does — the PERIOD_SLOTS fallback IDs are strings like
     // "assembly" / "p1" / "lunch", not UUIDs. There's nothing to
@@ -387,11 +387,11 @@ export const TimetableManager: React.FC<Props> = ({ onBack }) => {
     const isUuid = (s: string) => /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(s);
     if (!isUuid(slotTimeModal.slotId)) {
       setSlotTimeModal(null);
-      showToast('Default slot — koi save nahi hai, modal close kar diya.', 'info');
+      showToast('Default slot — nothing to save, modal closed.', 'info');
       return;
     }
     const ok = await useUIStore.getState().askConfirm({
-      title: 'Slot delete karein?',
+      title: 'Delete slot?',
       message: `${slotTimeModal.label} hata diya jayega. Agar koi class is slot pe assigned hai, server reject karega — pehle assignments hatao.`,
       destructive: true,
       confirmLabel: 'Delete',
@@ -564,7 +564,7 @@ export const TimetableManager: React.FC<Props> = ({ onBack }) => {
             </div>
             <p className="text-base font-black text-slate-700">{activeDay} — School Holiday</p>
             <p className="text-xs font-bold text-slate-400 mt-1 max-w-xs text-center">
-              Is din school band hai. Class assign nahi kar sakte. Holidays se {activeDay} ka weekly-off hatao agar lagani hai.
+              School is closed on this day. You cannot assign classes. Remove the weekly off for {activeDay} from Holidays if you want to schedule.
             </p>
             <button
               onClick={() => setShowHolidays(true)}
@@ -745,8 +745,8 @@ export const TimetableManager: React.FC<Props> = ({ onBack }) => {
                         // diverges this class from the school default,
                         // so we make the principal acknowledge it.
                         const ok = await useUIStore.getState().askConfirm({
-                          title: 'Naya period add karein?',
-                          message: `${selectedClass?.label} ke liye ek naya slot banega. Aap iska type (Teaching / Non-teaching), label aur time set kar sakte ho. Continue?`,
+                          title: 'Add new period?',
+                          message: `A new slot will be created for ${selectedClass?.label}. You can set its type (Teaching / Non-teaching), label and time. Continue?`,
                           confirmLabel: 'Add',
                           cancelLabel:  'Cancel',
                         });
@@ -971,7 +971,7 @@ export const TimetableManager: React.FC<Props> = ({ onBack }) => {
                 />
 
                 <p className="text-[10px] font-bold text-slate-500 bg-slate-50 rounded-xl p-2.5 mb-3">
-                  Non-teaching slot — koi teacher allot karne ki zaroorat nahi.
+                  Non-teaching slot — no teacher allocation needed.
                 </p>
               </>
             )}

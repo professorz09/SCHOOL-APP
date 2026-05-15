@@ -399,7 +399,7 @@ export const StudentsManager: React.FC<Props> = ({
     if (!form.dob)                                        missing.push('Date of birth');
     if (!form.gender)                                     missing.push('Gender');
     if (missing.length > 0) {
-      showToast(`Yeh fields chahiye: ${missing.join(', ')}`, 'error');
+      showToast(`Required fields: ${missing.join(', ')}`, 'error');
       return;
     }
     // Cross-school mobile-uniqueness check — runs once on submit
@@ -412,8 +412,8 @@ export const StudentsManager: React.FC<Props> = ({
           const r = await apiStudents.checkAdmissionEligibility(login10);
           if (!r.eligible) {
             showToast(
-              'Yeh mobile pehle se kisi active student se linked hai. ' +
-              'Pichli school se TC karwana hoga ya alag mobile use karein.',
+              'This mobile is already linked to an active student. ' +
+              'Get a TC from the previous school or use a different mobile.',
               'error',
             );
             return;
@@ -635,7 +635,7 @@ export const StudentsManager: React.FC<Props> = ({
   const handleMarkFailed = async (student: Student) => {
     const ok = await useUIStore.getState().askConfirm({
       title: `Mark ${student.name} as FAILED?`,
-      message: 'Active year ke promotion records me FAIL ho jayega. Reverse karne ke liye principal ko Editor Mode chahiye.',
+      message: 'Will be marked FAILED in the active year\'s promotion records. Reversing this requires the principal to enable Editor Mode.',
       confirmLabel: 'Mark Failed',
       destructive: true,
     });
@@ -924,7 +924,7 @@ export const StudentsManager: React.FC<Props> = ({
                   onClick={() => {
                     const rawName = (schoolInfo?.name ?? '').replace(/[^A-Za-z]/g, '').toUpperCase();
                     if (rawName.length < 3) {
-                      showToast('School name set karein (min 3 letters) — Settings → School Info', 'error');
+                      showToast('Set the school name (min 3 letters) — Settings → School Info', 'error');
                       return;
                     }
                     const code = rawName.slice(0, 3);
@@ -1163,8 +1163,8 @@ export const StudentsManager: React.FC<Props> = ({
             <div className="bg-amber-50 border border-amber-200 rounded-2xl p-3.5">
               <p className="text-[10px] font-black uppercase tracking-widest text-amber-700">Note</p>
               <p className="text-xs font-bold text-amber-800 mt-1.5 leading-relaxed">
-                Draft submission me document upload nahi hota — principal review ke time documents add karenge.
-                Aap step 3 ko skip kar ke "Submit Draft" pe tap kar sakte hain.
+                Document uploads are not part of draft submission — the principal will add them at review time.
+                You can skip step 3 and tap "Submit Draft".
               </p>
             </div>
           )}
@@ -1518,7 +1518,7 @@ export const StudentsManager: React.FC<Props> = ({
                 {rejectingDraft.fromName || 'Unnamed'} <span className="text-slate-400">· {rejectingDraft.fromAdmissionNo || '—'}</span>
               </p>
               <textarea
-                placeholder="Reason (teacher ko nahi dikhta — internal audit ke liye)"
+                placeholder="Reason (not visible to teacher — for internal audit only)"
                 value={rejectReasonText}
                 onChange={e => setRejectReasonText(e.target.value)}
                 rows={3}

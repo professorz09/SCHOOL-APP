@@ -1038,7 +1038,7 @@ export const SettingsManager: React.FC<Props> = ({ onBack, initialView }) => {
               onClick={async () => {
                 if (otp2faSaving || otp2faEnabled === null) return;
                 if (!otp2faEnabled && !session?.email) {
-                  showToast('Profile par email set karein pehle', 'error');
+                  showToast('Set an email on your profile first', 'error');
                   return;
                 }
                 setOtp2faSaving(true);
@@ -1057,7 +1057,7 @@ export const SettingsManager: React.FC<Props> = ({ onBack, initialView }) => {
                     throw new Error(j.error ?? `Failed (HTTP ${res.status})`);
                   }
                   setOtp2faEnabled(next);
-                  showToast(next ? '2FA enabled — next login me OTP step add ho gaya' : '2FA disabled');
+                  showToast(next ? '2FA enabled — an OTP step is now added on next login' : '2FA disabled');
                 } catch (e) {
                   showToast(e instanceof Error ? e.message : 'Could not update 2FA', 'error');
                 } finally {
@@ -1090,7 +1090,7 @@ export const SettingsManager: React.FC<Props> = ({ onBack, initialView }) => {
             <p className="text-[10px] font-black uppercase tracking-widest text-slate-400">Active Sessions</p>
           </div>
           <p className="text-[11px] font-bold text-slate-500 leading-relaxed">
-            Agar kahin aur (school computer, ghar, kisi aur device par) login chod diya ho, ya suspect ho ki kisi ne access kiya hai — ye button dabate hi sabhi <span className="text-slate-900">dusre devices</span> se logout ho jayega. Yeh device login rahega.
+            If you've left yourself logged in somewhere else (school computer, home, another device), or suspect unauthorised access — tap this and you'll be signed out of all <span className="text-slate-900">other devices</span>. This device stays signed in.
           </p>
           <button
             onClick={async () => {
@@ -1099,7 +1099,7 @@ export const SettingsManager: React.FC<Props> = ({ onBack, initialView }) => {
               try {
                 const { error } = await supabase.auth.signOut({ scope: 'others' });
                 if (error) throw error;
-                showToast('Sabhi dusre devices se logout ho gaya');
+                showToast('Signed out from all other devices');
               } catch (e) {
                 showToast(e instanceof Error ? e.message : 'Sign-out failed', 'error');
               } finally {

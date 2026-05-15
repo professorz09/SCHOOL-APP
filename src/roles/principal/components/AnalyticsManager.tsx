@@ -402,9 +402,9 @@ export const AnalyticsManager: React.FC<Props> = ({ onBack }) => {
       });
       if (logErr) {
         if (logErr.message.includes('rate_limited_hour')) {
-          showToast('1 ghante me 50 export se zyada nahi — thodi der baad try karein', 'error');
+          showToast('Hourly limit reached (50 exports/hour) — try again shortly', 'error');
         } else if (logErr.message.includes('rate_limited_day')) {
-          showToast('Aaj 100 export ho chuke — kal try karein', 'error');
+          showToast('Daily limit reached (100 exports today) — try again tomorrow', 'error');
         } else {
           // Don't fail the export just because the audit row couldn't
           // be written — log to console so the admin can debug.

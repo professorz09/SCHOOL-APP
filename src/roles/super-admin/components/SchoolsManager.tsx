@@ -307,7 +307,7 @@ export const SchoolsManager: React.FC<Props> = ({ onBack }) => {
       const cleanedOld = (selected.principalPhone ?? '').replace(/\D/g, '').slice(-10);
       const principalMobileChanged = cleanedNew && cleanedNew !== cleanedOld;
       if (principalMobileChanged && cleanedNew.length !== 10) {
-        showToast('Login mobile 10-digit hona chahiye', 'error');
+        showToast('Login mobile must be 10 digits', 'error');
         setIsSubmitting(false);
         return;
       }

@@ -217,9 +217,9 @@ export const AcademicYearManager: React.FC<Props> = ({ onBack, onNavigateToPromo
   // ─── Close confirmation ─────────────────────────────────────────────────
   const handleConfirmClose = async () => {
     if (!yearToClose) return;
-    if (!checklist) { showToast('Checklist abhi load nahi hua', 'error'); return; }
+    if (!checklist) { showToast('Checklist is still loading', 'error'); return; }
     if (checklist.salaryPending.total > 0 && !acknowledgedSalary) {
-      showToast('Salary pending hai — acknowledge karein ya pehle clear karein', 'error');
+      showToast('Salary is pending — acknowledge or clear it first', 'error');
       return;
     }
     // Type-to-confirm gate. Closing a year is irreversible without
@@ -251,11 +251,11 @@ export const AcademicYearManager: React.FC<Props> = ({ onBack, onNavigateToPromo
       ? `I confirm closing academic year ${yearToClose.name} mid-year today with ${daysToEnd} days still remaining and I take responsibility`
       : undefined;
     const warningText = isMidYear
-      ? `MID-YEAR CLOSE — ${yearToClose.name} abhi ${daysToEnd} din baad (${endISO}) end hogi. Aaj close karne se sab students naye year me chale jayenge. Sirf emergency me karein.`
+      ? `MID-YEAR CLOSE — ${yearToClose.name} ends ${daysToEnd} days from today (${endISO}). Closing today will move all students into the next year. Do this only in an emergency.`
       : undefined;
     const ok = await useUIStore.getState().askMobileConfirm({
       title: isMidYear ? `⚠ MID-YEAR CLOSE — ${yearToClose.name}` : `Lock ${yearToClose.name}?`,
-      message: `Year close hone ke baad attendance / fees / results pe writes lock ho jayenge. Re-open karne ke liye Correction Mode chahiye hoga (jo audit ho jayega).`,
+      message: `Once the year is closed, writes on attendance / fees / results are locked. Re-opening requires Correction Mode (which is audited).`,
       expectedLast4: last4,
       requiredPhrase,
       warningText,
@@ -265,11 +265,11 @@ export const AcademicYearManager: React.FC<Props> = ({ onBack, onNavigateToPromo
     try {
       await yearClosingService.closeAcademicYear(yearToClose.id);
       await refreshAY();
-      showToast(`${yearToClose.name} closed (read-only). Naya year wizard se open karein.`);
+      showToast(`${yearToClose.name} closed (read-only). Open a new year from the wizard.`);
       setClosingYearId(null);
     } catch (e) {
       const raw = e instanceof Error ? e.message : '';
-      showToast((raw && raw.trim()) || 'Year close mein error', 'error');
+      showToast((raw && raw.trim()) || 'Error closing the year', 'error');
     } finally {
       setClosing(false);
     }

@@ -286,7 +286,7 @@ export const TeacherLayout: React.FC = () => {
               key={label}
               onClick={() => {
                 if (locked) {
-                  showToast('Admission permission nahi hai — principal se enable karwayein.', 'info');
+                  showToast('You don\'t have admission permission — ask the principal to enable it.', 'info');
                   return;
                 }
                 goTo(v);

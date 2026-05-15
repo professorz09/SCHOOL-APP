@@ -82,7 +82,7 @@ async function buildSession(profile: UserProfileRow): Promise<AuthSession> {
       .maybeSingle();
     if (sch && (sch as { deleted_at: string | null }).deleted_at) {
       await supabase.auth.signOut().catch(() => {});
-      throw new Error('Yeh school delete kar di gayi hai. Principal ya platform admin se contact karein.');
+      throw new Error('This school has been deleted. Contact your principal or platform admin.');
     }
   }
 

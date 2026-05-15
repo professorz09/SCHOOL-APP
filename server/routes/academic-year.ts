@@ -244,7 +244,7 @@ academicYearRouter.post('/create-with-sections', requireAuth, PRINCIPAL, async (
       // debugging info.
       const m = error.message ?? '';
       if (/each section needs class_name and section/i.test(m)) {
-        throw new ApiError(400, `Ek ya zyada sections ka class name / section blank tha — Step 2 me jaake fix karein. (${m})`);
+        throw new ApiError(400, `One or more sections have a blank class or section name — fix this in Step 2. (${m})`);
       }
       throw new ApiError(500, m);
     }

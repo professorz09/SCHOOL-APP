@@ -223,7 +223,7 @@ export const FeeStructureForm: React.FC<Props> = ({
     // Surface "Monthly head with zero months" explicitly — silent drop
     // would let a saved structure produce no installments.
     if (feeHeads.some(h => toSimple(h.frequency) === 'MONTHLY' && h.name.trim() && h.amount > 0 && monthsForHead(h).length === 0)) {
-      showToast('Monthly head ke liye kam se kam ek month select karein', 'error');
+      showToast('Select at least one month for a monthly head', 'error');
       return;
     }
     // monthlyDueDates passed to the RPC is the UNION of every Monthly

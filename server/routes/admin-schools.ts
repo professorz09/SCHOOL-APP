@@ -176,7 +176,7 @@ adminSchoolsRouter.post('/:id/update-principal-mobile', requireAuth, SA, async (
     const body = requireBody<{ newPhone: string }>(req, ['newPhone']);
     const newPhone = body.newPhone.replace(/\D/g, '').slice(-10);
     if (newPhone.length !== 10) {
-      throw new ApiError(400, 'Mobile number 10-digit hona chahiye');
+      throw new ApiError(400, 'Mobile number must be 10 digits');
     }
 
     // 1. Resolve the active principal of this school

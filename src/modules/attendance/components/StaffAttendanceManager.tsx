@@ -299,7 +299,7 @@ export const StaffAttendanceManager: React.FC<Props> = ({ onBack, startTab = 'OV
   const handleSave = async () => {
     if (isLocked || !record || isSaving) return;
     if (!editGuard.canEdit) {
-      showToast('Year closed — pehle Correction Mode enable karein', 'error');
+      showToast('Year is closed — enable Correction Mode first', 'error');
       return;
     }
     const wasAlreadySaved = !!record.savedAt;

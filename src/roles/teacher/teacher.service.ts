@@ -943,7 +943,7 @@ export const teacherService = {
     // single sloppy response doesn't waste the user's quota.
     const parsed = tryParsePaperJson(raw);
     if (!parsed) {
-      throw new Error('AI returned an unparseable response — please try again. Topic ko thoda chhota karke retry karein.');
+      throw new Error('AI returned an unparseable response — please try again with a shorter topic.');
     }
 
     type RawQ = { no?: number; text: string; marks: number; type?: string; options?: unknown };

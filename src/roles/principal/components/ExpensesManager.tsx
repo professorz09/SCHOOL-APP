@@ -175,7 +175,7 @@ export const ExpensesManager: React.FC<Props> = ({ onBack }) => {
   const startEdit = (exp: Expense) => {
     const sameDay = isSameDayIst(exp.createdAt);
     if (!sameDay && !editorModeActive) {
-      showToast('Older expense ko edit karne ke liye Editor Mode chalu karein', 'error');
+      showToast('Enable Editor Mode to edit an older expense', 'error');
       return;
     }
     setForm({
@@ -191,7 +191,7 @@ export const ExpensesManager: React.FC<Props> = ({ onBack }) => {
   // the day boundary mid-session.
   const handleDelete = (exp: Expense) => {
     if (!isSameDayIst(exp.createdAt)) {
-      showToast('Same-day delete only — purane expenses ko Void karein', 'error');
+      showToast('Same-day delete only — Void older expenses instead', 'error');
       return;
     }
     setDeleteTarget(exp);
@@ -215,7 +215,7 @@ export const ExpensesManager: React.FC<Props> = ({ onBack }) => {
   // VOIDED badge so monthly reports / audit trail remain truthful.
   const openVoidModal = (exp: Expense) => {
     if (!editorModeActive) {
-      showToast('Void karne ke liye Editor Mode chalu karein', 'error');
+      showToast('Enable Editor Mode to void an expense', 'error');
       return;
     }
     setVoidTarget(exp);
@@ -226,7 +226,7 @@ export const ExpensesManager: React.FC<Props> = ({ onBack }) => {
     if (!voidTarget) return;
     const r = voidReason.trim();
     if (r.length < 3) {
-      showToast('Reason kam se kam 3 characters chahiye', 'error');
+      showToast('Reason must be at least 3 characters', 'error');
       return;
     }
     setVoiding(true);
@@ -471,7 +471,7 @@ export const ExpensesManager: React.FC<Props> = ({ onBack }) => {
             </div>
             <div className="bg-rose-50 border border-rose-100 rounded-2xl p-3 mb-4">
               <p className="text-[12px] font-bold text-rose-700 leading-relaxed">
-                Yeh undo nahi hoga. Sirf aaj ke entries delete ho sakti hain — purane expenses ko Void karein.
+                This cannot be undone. Only today's entries can be deleted — Void older expenses instead.
               </p>
             </div>
             <div className="flex gap-3">

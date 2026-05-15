@@ -96,7 +96,7 @@ export const SalaryLedger: React.FC<Props> = ({ onBack }) => {
 
   const saveSalaryDay = async () => {
     if (!editorModeActive) {
-      showToast('Editor Mode chalu karein — Settings → Editor Mode', 'error');
+      showToast('Enable Editor Mode — Settings → Editor Mode', 'error');
       return;
     }
     const schoolId = useAuthStore.getState().session?.schoolId;
@@ -452,7 +452,7 @@ export const SalaryLedger: React.FC<Props> = ({ onBack }) => {
             <button
               onClick={() => {
                 if (!editorModeActive) {
-                  showToast('Editor Mode chalu karein pehle — Settings → Editor Mode', 'info');
+                  showToast('Enable Editor Mode first — Settings → Editor Mode', 'info');
                   return;
                 }
                 setDayDraft(salaryPayDay !== null ? String(salaryPayDay) : '');

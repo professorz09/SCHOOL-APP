@@ -573,7 +573,7 @@ export const AcademicYearWizard: React.FC<Props> = ({
     setSaving(true); setError('');
     try {
       if (enabledClasses.length === 0) {
-        throw new Error('Kam se kam ek class enable karein.');
+        throw new Error('Enable at least one class.');
       }
 
       // Build the payload first, then validate the actual payload (not
@@ -599,11 +599,11 @@ export const AcademicYearWizard: React.FC<Props> = ({
         console.error('[AcademicYearWizard] invalid section payload', { bad, sectionsPayload });
         const labels = bad.map(b => b.className || '?').slice(0, 3).join(', ');
         throw new Error(
-          `${bad.length} section${bad.length === 1 ? '' : 's'} ka class name ya section blank hai (${labels}). Step 2 me jaake har section ko ek naam dein (e.g. "A").`,
+          `${bad.length} section${bad.length === 1 ? '' : 's'} have a blank class or section name (${labels}). Go to Step 2 and give each section a name (e.g. "A").`,
         );
       }
       if (sectionsPayload.length === 0) {
-        throw new Error('Kam se kam ek section banao har class me. Step 2 me jaake "Section Add Karein" press karein.');
+        throw new Error('Create at least one section in each class. Go to Step 2 and press "Add Section".');
       }
       const streamsUsed = [...new Set(
         enabledClasses.map(c => c.meta.stream).filter(Boolean) as string[],

@@ -440,7 +440,7 @@ export const PromotionWizard: React.FC<Props> = ({ onBack }) => {
     try {
       const pending = students.filter(s => s.status === 'PENDING');
       if (pending.length === 0) {
-        showToast('Koi pending student nahi hai', 'error');
+        showToast('No pending students', 'error');
         return;
       }
 
@@ -451,7 +451,7 @@ export const PromotionWizard: React.FC<Props> = ({ onBack }) => {
         s => s.decision === 'PROMOTE' && !isClass12(s.fromClass) && !s.toClass.trim(),
       );
       if (missingClass.length > 0) {
-        showToast(`${missingClass.length} students ka "To Class" missing hai`, 'error');
+        showToast(`${missingClass.length} students are missing "To Class"`, 'error');
         return;
       }
       // Validate: PROMOTE without fee structure — earlier "Auto-generate
@@ -462,7 +462,7 @@ export const PromotionWizard: React.FC<Props> = ({ onBack }) => {
         s => s.decision === 'PROMOTE' && !isClass12(s.fromClass) && !s.feeStructureId,
       );
       if (missingFee.length > 0) {
-        showToast(`${missingFee.length} students ka fee structure choose nahi kiya`, 'error');
+        showToast(`${missingFee.length} students don't have a fee structure selected`, 'error');
         return;
       }
       // Validate: TC without date

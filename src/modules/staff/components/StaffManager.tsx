@@ -651,49 +651,49 @@ export const StaffManager: React.FC<Props> = ({ onBack }) => {
     if (!form.joiningDate)                                 missing.push('Joining date');
     if (!form.salaryStartDate)                             missing.push('First salary month');
     if (missing.length > 0) {
-      showToast(`Yeh fields chahiye: ${missing.join(', ')}`, 'error');
+      showToast(`Required fields: ${missing.join(', ')}`, 'error');
       return;
     }
     if (form.salary > 10_000_000) {
-      showToast('Salary ₹1,00,00,000 se zyada nahi ho sakti', 'error'); return;
+      showToast('Salary cannot exceed ₹1,00,00,000', 'error'); return;
     }
     if (!Number.isInteger(form.salary)) {
-      showToast('Salary whole rupee value me likhna', 'error'); return;
+      showToast('Salary must be a whole rupee value', 'error'); return;
     }
     // Sanity: first-salary-from cannot be before joining date.
     if (form.salaryStartDate < form.joiningDate) {
-      showToast('First salary month joining date se pehle nahi ho sakta', 'error'); return;
+      showToast('First salary month cannot be before joining date', 'error'); return;
     }
     // Joining date sanity — refuse 1970-style typos and absurdly future dates.
     const jd = new Date(form.joiningDate);
     const minJd = new Date(); minJd.setFullYear(minJd.getFullYear() - 50);
     const maxJd = new Date(); maxJd.setFullYear(maxJd.getFullYear() + 1);
     if (jd < minJd || jd > maxJd) {
-      showToast('Joining date 50 saal pehle ya 1 saal aage se zyada nahi ho sakti', 'error');
+      showToast('Joining date must be within 50 years past and 1 year future', 'error');
       return;
     }
     // Contact phone (optional) — if provided, must be 10 digits.
     if (form.phone && form.phone.trim()) {
       const cleaned = form.phone.replace(/\D/g, '').slice(-10);
       if (cleaned.length !== 10) {
-        showToast('Contact mobile 10-digit hona chahiye', 'error'); return;
+        showToast('Contact mobile must be 10 digits', 'error'); return;
       }
     }
     // Login mobile (TEACHER + DRIVER only, optional) — must also be 10 digits.
     const needsLogin = form.role === 'TEACHER' || form.role === 'DRIVER';
     const loginPhoneClean = loginPhone.replace(/\D/g, '').slice(-10);
     if (needsLogin && loginPhone.trim() && loginPhoneClean.length !== 10) {
-      showToast('Login mobile 10-digit hona chahiye', 'error'); return;
+      showToast('Login mobile must be 10 digits', 'error'); return;
     }
     // Email (optional) — if provided, basic shape check.
     if (form.email && form.email.trim() && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(form.email.trim())) {
-      showToast('Email format galat hai', 'error'); return;
+      showToast('Invalid email format', 'error'); return;
     }
     // Aadhaar (optional) — if provided, must be exactly 12 digits.
     if (form.aadhaarNo && form.aadhaarNo.trim()) {
       const cleaned = form.aadhaarNo.replace(/\D/g, '');
       if (cleaned.length !== 12) {
-        showToast('Aadhaar number 12 digits ka hota hai', 'error'); return;
+        showToast('Aadhaar number must be 12 digits', 'error'); return;
       }
     }
     setIsSubmitting(true);
@@ -1239,7 +1239,7 @@ export const StaffManager: React.FC<Props> = ({ onBack }) => {
                 inputMode="numeric"
                 className="w-full border border-slate-200 bg-slate-50 rounded-xl px-4 py-3 font-bold text-sm outline-none focus:border-blue-500 focus:bg-white" />
               <p className="text-[10px] font-bold text-slate-400 mt-1.5 leading-relaxed">
-                {form.role === 'TEACHER' ? 'Teacher' : 'Driver'} apne mobile se login karenge. Default password = mobile (first-login pe change karna padega). Khali chhodne par koi login account nahi banega — record sirf school ke paas rahega.
+                The {form.role === 'TEACHER' ? 'teacher' : 'driver'} will log in with this mobile. Default password = mobile (must be changed on first login). Leave blank to skip creating a login account — the record stays with the school only.
               </p>
             </div>
           )}
@@ -1272,7 +1272,7 @@ export const StaffManager: React.FC<Props> = ({ onBack }) => {
             </div>
           </div>
           <p className="text-[10px] font-bold text-slate-400 leading-relaxed">
-            <span className="text-slate-600 font-black">First Salary From</span> = jis month se salary deni hai. Default: joining ke <span className="text-slate-600 font-black">agle month ki 1 tarikh</span> (kyunki joining day me partial salary nahi deni). The amount you enter is recorded as the &quot;Initial&quot; entry in salary history — revise any time from the Salary tab.
+            <span className="text-slate-600 font-black">First Salary From</span> = the month from which salary applies. Default: the <span className="text-slate-600 font-black">1st of the month after joining</span> (avoids partial-month payouts). The amount you enter is recorded as the &quot;Initial&quot; entry in salary history — revise any time from the Salary tab.
           </p>
         </div>
 
@@ -1436,7 +1436,7 @@ export const StaffManager: React.FC<Props> = ({ onBack }) => {
               onChange={e => setEditForm(f => ({ ...f, salaryStartDate: e.target.value }))}
               className="w-full border border-slate-200 bg-slate-50 rounded-xl px-3 py-3 font-bold text-sm outline-none focus:border-blue-500" />
             <p className="text-[10px] font-bold text-slate-400 mt-1 leading-relaxed">
-              Salary ledger ke months iss tarikh se start honge. Past payments touch nahi honge.
+              Salary ledger months will start from this date. Past payments are left untouched.
             </p>
           </div>
           <div>

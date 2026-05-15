@@ -394,9 +394,9 @@ const AddInstallmentModal: React.FC<{
 
   const submit = async () => {
     const amt = parseInt(amount.replace(/[^\d]/g, ''), 10);
-    if (!name.trim()) { showToast('Name daalein', 'error'); return; }
-    if (!Number.isFinite(amt) || amt <= 0) { showToast('Amount > 0 hona chahiye', 'error'); return; }
-    if (!dueDate) { showToast('Due date daalein', 'error'); return; }
+    if (!name.trim()) { showToast('Enter a name', 'error'); return; }
+    if (!Number.isFinite(amt) || amt <= 0) { showToast('Amount must be greater than 0', 'error'); return; }
+    if (!dueDate) { showToast('Enter a due date', 'error'); return; }
     setSaving(true);
     try {
       const row = await adminApi.createBillingInstallment(schoolId, {

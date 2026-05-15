@@ -144,7 +144,7 @@ export const StudentProfilePanel: React.FC<Props> = ({ student, onBack, onStuden
   // the principal sees what's there before typing a new value.
   const openLoginPhoneModal = async () => {
     if (!editorModeActive) {
-      showToast('Editor Mode chalu karein (Settings me)', 'error');
+      showToast('Enable Editor Mode (in Settings)', 'error');
       return;
     }
     setLoginPhoneCurrent('');
@@ -168,11 +168,11 @@ export const StudentProfilePanel: React.FC<Props> = ({ student, onBack, onStuden
   const handleSaveLoginPhone = async () => {
     const newPhone = loginPhoneInput.replace(/\D/g, '').slice(-10);
     if (newPhone.length !== 10) {
-      showToast('10-digit mobile number daalein', 'error');
+      showToast('Enter a 10-digit mobile number', 'error');
       return;
     }
     if (newPhone === loginPhoneCurrent) {
-      showToast('Number same hai — koi change nahi', 'error');
+      showToast('Same number — nothing to change', 'error');
       return;
     }
     setLoginPhoneSaving(true);

@@ -86,14 +86,14 @@ timetableRouter.post('/periods/save', requireAuth, requireRole('PRINCIPAL'), asy
     }>(req, ['academicYearId', 'periods']);
 
     if (!Array.isArray(body.periods) || body.periods.length === 0) {
-      throw new ApiError(400, 'Kam se kam ek period chahiye.');
+      throw new ApiError(400, 'At least one period is required.');
     }
     for (const p of body.periods) {
       if (!p.name?.trim() || !p.startTime || !p.endTime) {
         throw new ApiError(400, `Period payload incomplete (got ${JSON.stringify(p)})`);
       }
       if (p.startTime >= p.endTime) {
-        throw new ApiError(400, `${p.name}: start time end time se chhota hona chahiye (${p.startTime} → ${p.endTime}).`);
+        throw new ApiError(400, `${p.name}: start time must be before end time (${p.startTime} → ${p.endTime}).`);
       }
     }
 
@@ -164,7 +164,7 @@ timetableRouter.post('/periods/add', requireAuth, requireRole('PRINCIPAL'), asyn
       periodType: string; sortOrder: number;
     }>(req, ['academicYearId', 'name', 'startTime', 'endTime', 'periodType']);
     if (body.startTime >= body.endTime) {
-      throw new ApiError(400, 'Start time end time se chhota hona chahiye.');
+      throw new ApiError(400, 'Start time must be before end time.');
     }
     const schoolId = req.user.school_id!;
     const { data: yr } = await adminDb.from('academic_years').select('id')
@@ -200,7 +200,7 @@ timetableRouter.post('/periods/update', requireAuth, requireRole('PRINCIPAL'), a
     if (body.endTime   !== undefined) patch.end_time    = body.endTime;
     if (body.type      !== undefined) patch.period_type = body.type;
     if (patch.start_time && patch.end_time && (patch.start_time as string) >= (patch.end_time as string)) {
-      throw new ApiError(400, 'Start time end time se chhota hona chahiye.');
+      throw new ApiError(400, 'Start time must be before end time.');
     }
     const { data, error } = await adminDb.from('timetable_periods')
       .update(patch).eq('id', body.slotId).eq('school_id', schoolId)
@@ -222,7 +222,7 @@ timetableRouter.post('/periods/delete', requireAuth, requireRole('PRINCIPAL'), a
       .select('id', { count: 'exact', head: true })
       .eq('school_id', schoolId).eq('slot_id', slotId);
     if ((count ?? 0) > 0) {
-      throw new ApiError(409, `Is slot pe ${count} timetable entries assigned hain — pehle wo hatao, fir slot delete karein.`);
+      throw new ApiError(409, `${count} timetable entries are assigned to this slot — remove them before deleting the slot.`);
     }
     const { data, error } = await adminDb.from('timetable_periods')
       .delete().eq('id', slotId).eq('school_id', schoolId)

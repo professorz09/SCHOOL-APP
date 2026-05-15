@@ -265,7 +265,7 @@ export const StudentClassAssignmentModal: React.FC<Props> = ({ student, onClose,
 
   const submit = async () => {
     if (lockState === 'locked') {
-      showToast('Class change blocked — TC route use karein', 'error');
+      showToast('Class change blocked — use the TC route instead', 'error');
       return;
     }
     if (!rollNo.trim()) {
@@ -277,11 +277,11 @@ export const StudentClassAssignmentModal: React.FC<Props> = ({ student, onClose,
       return;
     }
     if (!selectedStructure) {
-      showToast('Fee structure choose karna zaroori hai', 'error');
+      showToast('Fee structure is required', 'error');
       return;
     }
     if (transportEnabled && !vehicleId) {
-      showToast('Vehicle aur stop choose karein ya transport disable karein', 'error');
+      showToast('Select a vehicle and stop, or disable transport', 'error');
       return;
     }
     if (transportEnabled && !selectedTransportStructure) {
