@@ -4,6 +4,7 @@
 // would require an external SMS provider.
 
 import { supabase, mobileToEmail } from '@/lib/supabase';
+import { CURRENT_CONSENT_VERSION } from '@/shared/config/consent';
 
 export type Role =
   | 'SUPER_ADMIN'
@@ -21,6 +22,7 @@ export interface AuthSession {
   name: string;
   email?: string | null;
   mustChangePassword: boolean;
+  mustGiveConsent: boolean;
   linkedStudentIds?: string[];
 }
 
@@ -41,10 +43,11 @@ interface UserProfileRow {
   first_login_changed: boolean;
   is_active: boolean;
   editor_mode_until: string | null;
+  consent_version: number;
 }
 
 const PROFILE_FIELDS =
-  'id, mobile_number, role, name, email, school_id, first_login_changed, is_active, editor_mode_until';
+  'id, mobile_number, role, name, email, school_id, first_login_changed, is_active, editor_mode_until, consent_version';
 
 async function fetchProfile(userId: string): Promise<UserProfileRow | null> {
   const { data, error } = await supabase
@@ -83,6 +86,13 @@ async function buildSession(profile: UserProfileRow): Promise<AuthSession> {
     }
   }
 
+  // Consent gate applies to parents + students only. Staff implicitly
+  // consent via employment contract. Super-admin runs the platform —
+  // they accept terms outside this app.
+  const needsConsent =
+    (profile.role === 'PARENT' || profile.role === 'STUDENT')
+    && (profile.consent_version ?? 0) < CURRENT_CONSENT_VERSION;
+
   const session: AuthSession = {
     userId: profile.id,
     role: profile.role,
@@ -91,6 +101,7 @@ async function buildSession(profile: UserProfileRow): Promise<AuthSession> {
     name: profile.name,
     email: profile.email,
     mustChangePassword: !profile.first_login_changed,
+    mustGiveConsent: needsConsent,
   };
   if (profile.role === 'PARENT') {
     session.linkedStudentIds = await fetchLinkedStudentIds(profile.id);

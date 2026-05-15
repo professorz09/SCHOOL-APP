@@ -1,6 +1,7 @@
 import type { Request, Response, NextFunction } from 'express';
 import { adminDb } from '../lib/db';
 import { ApiError, fail } from '../lib/helpers';
+import { CURRENT_CONSENT_VERSION } from '../../src/shared/config/consent';
 
 export interface AuthUser {
   id: string;
@@ -9,6 +10,7 @@ export interface AuthUser {
   name: string;
   editor_mode_until: string | null;
   first_login_changed: boolean;
+  consent_version: number;
 }
 
 declare global {
@@ -31,7 +33,7 @@ export async function requireAuth(req: Request, res: Response, next: NextFunctio
 
     const { data: profile, error: pe } = await adminDb
       .from('users')
-      .select('id, role, school_id, name, editor_mode_until, first_login_changed')
+      .select('id, role, school_id, name, editor_mode_until, first_login_changed, consent_version')
       .eq('id', user.id)
       .eq('is_active', true)
       .maybeSingle();
@@ -41,21 +43,33 @@ export async function requireAuth(req: Request, res: Response, next: NextFunctio
     req.user = profile as AuthUser;
     req.jwt  = token;
 
-    // First-login password gate. Until the user has changed the default
-    // (mobile-as-password for parents, similar for staff), every API write
-    // is refused except the change-password / me / logout endpoints. The
-    // client already routes through FirstLoginPasswordChange via
-    // App.tsx:246, but a JWT obtained outside the UI could still hit
-    // /api/* directly — this closes the gap server-side without touching
-    // any individual route. originalUrl is the full path including the
-    // /api/auth prefix; safer than req.path which is router-relative.
-    const allowedBeforeChange = new Set([
+    // Pre-app gates. Two checks, same exempt list — the user must be
+    // able to log out, fetch their profile, change the default password,
+    // and record consent without being blocked by either gate.
+    //   1. First-login password change (covers all roles)
+    //   2. Consent capture (PARENT / STUDENT only — staff implicitly
+    //      consent via their employment contract)
+    // App.tsx renders the corresponding gates in the UI; this middleware
+    // closes the server-side gap so a JWT obtained outside the UI can't
+    // hit /api/* directly with an unchanged credential or no consent.
+    const exemptPaths = new Set([
       '/api/auth/change-password',
       '/api/auth/me',
       '/api/auth/logout',
+      '/api/auth/consent',
     ]);
-    if (!profile.first_login_changed && !allowedBeforeChange.has(req.originalUrl.split('?')[0])) {
+    const currentPath = req.originalUrl.split('?')[0];
+
+    if (!profile.first_login_changed && !exemptPaths.has(currentPath)) {
       throw new ApiError(403, 'Password change required before continuing');
+    }
+
+    if (
+      (profile.role === 'PARENT' || profile.role === 'STUDENT')
+      && (profile.consent_version ?? 0) < CURRENT_CONSENT_VERSION
+      && !exemptPaths.has(currentPath)
+    ) {
+      throw new ApiError(403, 'Consent required before continuing');
     }
 
     next();

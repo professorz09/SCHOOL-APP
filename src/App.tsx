@@ -4,6 +4,7 @@ import { Header, BottomNav, SidebarNav } from '@/shared/components/Navigation';
 import { ProfileView } from '@/shared/components/ProfileView';
 import { LoginPage } from '@/shared/components/LoginPage';
 import { FirstLoginPasswordChange } from '@/shared/components/FirstLoginPasswordChange';
+import { ConsentGate } from '@/shared/components/ConsentGate';
 import { useAuthStore } from '@/store/authStore';
 import { useUIStore } from '@/store/uiStore';
 import { studentService } from '@/modules/students/student.service';
@@ -244,6 +245,10 @@ export default function App() {
 
   // ── First-login password change gate ─────────────────────────────────────
   if (session.mustChangePassword) return <FirstLoginPasswordChange />;
+
+  // ── Consent gate (PARENT / STUDENT only; staff implicitly consent
+  //   via employment, super-admin via platform terms) ────────────────────────
+  if (session.mustGiveConsent) return <ConsentGate />;
 
   // ── Multi-student parent picker ──────────────────────────────────────────
   const parentLinkedStudents = session.linkedStudentIds || [];

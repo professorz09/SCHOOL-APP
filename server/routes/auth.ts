@@ -4,6 +4,7 @@ import { createClient } from '@supabase/supabase-js';
 import { adminDb, userDb } from '../lib/db';
 import { ok, fail, ApiError, requireBody } from '../lib/helpers';
 import { requireAuth, requireRole } from '../middleware/auth';
+import { CURRENT_CONSENT_VERSION } from '../../src/shared/config/consent';
 
 export const authRouter = Router();
 
@@ -176,10 +177,40 @@ authRouter.get('/me', requireAuth, async (req, res) => {
   try {
     const { data: profile } = await adminDb
       .from('users')
-      .select('id, name, role, school_id, mobile_number, editor_mode_until')
+      .select('id, name, role, school_id, mobile_number, editor_mode_until, consent_version, consent_at')
       .eq('id', req.user.id)
       .maybeSingle();
     ok(res, profile);
+  } catch (err) { fail(res, err); }
+});
+
+// POST /api/auth/consent — record the caller's agreement to the current
+// privacy notice. Stores the version number + timestamp so a compliance
+// audit can prove "this user consented to version N at time T". Bumping
+// CURRENT_CONSENT_VERSION re-prompts every PARENT/STUDENT on next login.
+authRouter.post('/consent', requireAuth, async (req, res) => {
+  try {
+    const body = req.body as { version?: number };
+    if (Number(body.version) !== CURRENT_CONSENT_VERSION) {
+      throw new ApiError(400, `Stale consent version. Current: ${CURRENT_CONSENT_VERSION}`);
+    }
+    const { error } = await adminDb.from('users').update({
+      consent_version: CURRENT_CONSENT_VERSION,
+      consent_at:      new Date().toISOString(),
+      updated_at:      new Date().toISOString(),
+    }).eq('id', req.user.id);
+    if (error) throw new ApiError(500, error.message);
+
+    await adminDb.from('audit_logs').insert({
+      user_id:     req.user.id,
+      school_id:   req.user.school_id,
+      action:      'consent_recorded',
+      entity_type: 'user',
+      entity_id:   req.user.id,
+      details:     { version: CURRENT_CONSENT_VERSION },
+    });
+
+    ok(res, { version: CURRENT_CONSENT_VERSION });
   } catch (err) { fail(res, err); }
 });
 

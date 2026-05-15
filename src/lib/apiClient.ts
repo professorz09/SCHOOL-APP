@@ -58,6 +58,7 @@ export const apiAuth = {
     post<void>('/auth/change-password', { currentPassword, newPassword }),
   enableEditorMode:  () => post<{ until: string }>('/auth/editor-mode/enable'),
   disableEditorMode: () => post<{ until: null }>('/auth/editor-mode/disable'),
+  recordConsent:     (version: number) => post<{ version: number }>('/auth/consent', { version }),
 };
 
 // ─── Academic Year ───────────────────────────────────────────────────────────
