@@ -30,11 +30,12 @@ export function useRealtimeTable(table: string, onRefresh: () => void, opts: Rea
   const cbRef = useRef(onRefresh);
   cbRef.current = onRefresh;
 
-  // Reading directly from the store outside React; this hook may run before
-  // the auth store is hydrated (e.g. during login bootstrap). When schoolId
-  // is null we still subscribe globally — RLS will hide other tenants' data
-  // on follow-up reads.
-  const schoolId = useAuthStore.getState().session?.schoolId ?? null;
+  // Subscribe to schoolId via the store selector so a super-admin switching
+  // schools (or any login/logout that changes tenancy without unmounting
+  // the consumer) re-runs the effect. Previously we read it once with
+  // getState(), which pinned the channel to the first-render schoolId —
+  // every consumer kept streaming the old tenant's events forever.
+  const schoolId = useAuthStore(s => s.session?.schoolId ?? null);
 
   useEffect(() => {
     let timer: ReturnType<typeof setTimeout> | null = null;
