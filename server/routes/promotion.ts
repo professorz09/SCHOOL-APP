@@ -34,17 +34,22 @@ promotionRouter.get('/preview', requireAuth, PRINCIPAL, async (req, res) => {
 
     const alreadyAssigned = new Set(((newYearRecords ?? []) as any[]).map(r => r.student_id));
 
-    // Fetch final exam pass/fail: look for a final-type test in this year.
-    // Column: exam_results.obtained_marks (not marks_obtained).
-    // test_schedules has no passing_marks column — we default to 33% of max_marks.
+    // Fetch final exam pass/fail. Pass rule per Indian-board convention:
+    // a student passes only if they pass EVERY final test. Threshold per
+    // test, in priority order:
+    //   1. pass_marks_config[subject] (set on FINAL exams via the Exams UI)
+    //   2. pass_marks (overall, set on FINAL exams via the Exams UI)
+    //   3. 33% of max_marks (board fallback)
+    // The old code summed obtained vs max across all finals and used a
+    // flat 33% — a school with 40% pass marks (or per-subject rules)
+    // would see the wrong PROMOTE/RETAIN suggestion for borderline kids.
     const { data: finalTests } = await adminDb
       .from('test_schedules')
-      .select('id, class_name, max_marks')
+      .select('id, class_name, subject, max_marks, pass_marks, pass_marks_config')
       .eq('school_id', req.user.school_id!)
       .eq('academic_year_id', fromYearId)
       .in('test_type', ['FINAL', 'final', 'MAIN', 'main_exam', 'Annual', 'annual']);
 
-    // Build a map: student_id → passed (bool)
     const studentPassMap = new Map<string, boolean>();
 
     if (finalTests && finalTests.length > 0) {
@@ -57,21 +62,36 @@ promotionRouter.get('/preview', requireAuth, PRINCIPAL, async (req, res) => {
 
       if (results && results.length > 0) {
         const testMap = new Map<string, any>((finalTests as any[]).map(t => [t.id, t]));
-        const byStudent = new Map<string, { obtained: number; max: number }>();
+        // student_id → did the student fail ANY final?
+        const failedAny = new Map<string, boolean>();
+        // Track which students even have a result in any final so we
+        // don't mark a never-sat student as PROMOTE by default.
+        const sawResultFor = new Set<string>();
 
         for (const r of results as any[]) {
           const test = testMap.get(r.test_id);
           if (!test) continue;
-          const cur = byStudent.get(r.student_id) ?? { obtained: 0, max: 0 };
-          cur.obtained += Number(r.obtained_marks ?? 0);
-          cur.max      += Number(test.max_marks ?? 100);
-          byStudent.set(r.student_id, cur);
+          const max = Number(test.max_marks ?? 100);
+          if (max <= 0) continue;
+
+          const subjectKey = (test.subject ?? '').trim();
+          const subjectThreshold = subjectKey
+            ? Number(((test.pass_marks_config ?? {}) as Record<string, unknown>)[subjectKey] ?? NaN)
+            : NaN;
+          const overallThreshold = Number(test.pass_marks ?? NaN);
+          const threshold = Number.isFinite(subjectThreshold) && subjectThreshold > 0
+            ? subjectThreshold
+            : Number.isFinite(overallThreshold) && overallThreshold > 0
+              ? overallThreshold
+              : max * 0.33;
+
+          const obtained = Number(r.obtained_marks ?? 0);
+          sawResultFor.add(r.student_id);
+          if (obtained < threshold) failedAny.set(r.student_id, true);
         }
 
-        for (const [sid, totals] of byStudent) {
-          // Pass if obtained >= 33% of max (standard Indian board threshold)
-          const passingThreshold = totals.max * 0.33;
-          studentPassMap.set(sid, totals.obtained >= passingThreshold);
+        for (const sid of sawResultFor) {
+          studentPassMap.set(sid, !failedAny.get(sid));
         }
       }
     }
