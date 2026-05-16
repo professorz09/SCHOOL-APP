@@ -11,9 +11,13 @@ import { useUIStore } from '@/store/uiStore';
 type DayStatus = Exclude<AttendanceWeekDay['status'], 'HALF_DAY'>;
 
 const STATUS_CFG: Record<DayStatus, { icon: React.ReactNode; label: string; bg: string; text: string; ring: string }> = {
-  PRESENT:  { icon: <CheckCircle2 size={14}/>, label: 'P', bg: 'bg-emerald-500', text: 'text-white',    ring: 'ring-emerald-200' },
-  ABSENT:   { icon: <XCircle size={14}/>,      label: 'A', bg: 'bg-rose-500',    text: 'text-white',    ring: 'ring-rose-200' },
-  HOLIDAY:  { icon: <MinusCircle size={14}/>,  label: '—', bg: 'bg-slate-100',   text: 'text-slate-400',ring: 'ring-slate-200' },
+  PRESENT:  { icon: <CheckCircle2 size={14}/>, label: 'P', bg: 'bg-emerald-500', text: 'text-white',     ring: 'ring-emerald-200' },
+  ABSENT:   { icon: <XCircle size={14}/>,      label: 'A', bg: 'bg-rose-500',    text: 'text-white',     ring: 'ring-rose-200' },
+  HOLIDAY:  { icon: <MinusCircle size={14}/>,  label: '—', bg: 'bg-slate-100',   text: 'text-slate-400', ring: 'ring-slate-200' },
+  // UNMARKED = no attendance row yet for that date (today not yet marked,
+  // or a future day). Render as a faint dashed placeholder so the parent
+  // sees "blank slot" instead of mistaking it for a Holiday/Absent verdict.
+  UNMARKED: { icon: null,                       label: '·', bg: 'bg-white',       text: 'text-slate-300', ring: 'ring-slate-200' },
 };
 
 interface Props { onBack: () => void; }
@@ -48,7 +52,12 @@ export const AttendanceView: React.FC<Props> = ({ onBack }) => {
 
   const weekPresent  = weekDays.filter(d => d.status === 'PRESENT').length;
   const weekAbsent   = weekDays.filter(d => d.status === 'ABSENT').length;
-  const weekWorkDays = weekDays.filter(d => d.status !== 'HOLIDAY').length;
+  // Work-day denominator only counts days the school actually marked.
+  // Excluding UNMARKED keeps the % from collapsing every morning before
+  // the teacher marks today's register (the old rule included unmarked
+  // days as "work days" and made a freshly-opened app show 0% for the
+  // week until attendance was saved).
+  const weekWorkDays = weekDays.filter(d => d.status === 'PRESENT' || d.status === 'ABSENT').length;
   const weekPct      = weekWorkDays > 0 ? Math.round((weekPresent / weekWorkDays) * 100) : 0;
 
   const totalPresent  = months.reduce((a, m) => a + m.present, 0);
@@ -149,6 +158,7 @@ export const AttendanceView: React.FC<Props> = ({ onBack }) => {
                     </span>
                     <div className={`w-9 h-9 rounded-full flex items-center justify-center font-black text-xs
                       ${cfg.bg} ${cfg.text}
+                      ${status === 'UNMARKED' ? 'border border-dashed border-slate-300' : ''}
                       ${isToday ? `ring-2 ring-offset-1 ${cfg.ring}` : ''}
                     `}>
                       {cfg.label}
@@ -172,12 +182,13 @@ export const AttendanceView: React.FC<Props> = ({ onBack }) => {
             {/* Legend */}
             <div className="flex items-center gap-3 mt-3 flex-wrap">
               {([
-                { label: 'Present',  bg: 'bg-emerald-500' },
-                { label: 'Absent',   bg: 'bg-rose-500' },
-                { label: 'Holiday',  bg: 'bg-slate-200' },
+                { label: 'Present',    bg: 'bg-emerald-500',                           border: '' },
+                { label: 'Absent',     bg: 'bg-rose-500',                              border: '' },
+                { label: 'Holiday',    bg: 'bg-slate-200',                             border: '' },
+                { label: 'Not marked', bg: 'bg-white',                                 border: 'border border-dashed border-slate-300' },
               ] as const).map(l => (
                 <div key={l.label} className="flex items-center gap-1">
-                  <div className={`w-2.5 h-2.5 rounded-full ${l.bg}`}/>
+                  <div className={`w-2.5 h-2.5 rounded-full ${l.bg} ${l.border}`}/>
                   <span className="text-[9px] font-bold text-slate-500">{l.label}</span>
                 </div>
               ))}

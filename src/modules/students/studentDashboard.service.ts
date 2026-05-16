@@ -36,7 +36,7 @@ export interface UpcomingExam {
 export interface AttendanceWeekDay {
   date: string;
   day: string;
-  status: 'PRESENT' | 'ABSENT' | 'HOLIDAY' | 'HALF_DAY';
+  status: 'PRESENT' | 'ABSENT' | 'HOLIDAY' | 'HALF_DAY' | 'UNMARKED';
 }
 
 export interface AttendanceMonth {
@@ -779,11 +779,16 @@ export const studentDashboardService = {
       const isFuture = dt.getTime() > today.getTime();
       // Honour what the school actually recorded: if Sunday was marked
       // PRESENT/ABSENT (some schools hold Saturday tests / makeup classes),
-      // surface it. Default Sunday to HOLIDAY only if no row exists.
+      // surface it. Earlier this fell through to HOLIDAY whenever no row
+      // existed — that read "Holiday" on the student hero for today
+      // until the teacher had marked the register, which the parent
+      // mistook for an actual school holiday. UNMARKED is the honest
+      // state for "no attendance row yet"; future days are also
+      // UNMARKED (consumer renders them as a blank slot).
       const recorded = dateStatus.get(dateStr);
-      const status: DayStatus = isFuture
-        ? 'HOLIDAY'
-        : recorded ?? 'HOLIDAY';
+      const status: AttendanceWeekDay['status'] = isFuture
+        ? 'UNMARKED'
+        : recorded ?? 'UNMARKED';
       return { date: dateStr, day: label, status };
     });
 
