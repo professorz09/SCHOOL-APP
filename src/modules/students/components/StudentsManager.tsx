@@ -13,7 +13,6 @@ import { todayIST } from '@/shared/utils/date';
 import { stripClassPrefix } from '@/shared/utils/className';
 import { studentService } from '@/modules/students/student.service';
 import { apiStudents } from '@/lib/apiClient';
-import { storageService } from '@/shared/utils/storage.service';
 import { Student, CreateStudentInput, STREAMS, STREAM_CLASSES, StudentStream } from '@/modules/students/student.types';
 import { PaymentStatus, PAYMENT_COLORS } from '@/shared/config/constants';
 import { useUIStore } from '@/store/uiStore';
@@ -106,12 +105,6 @@ interface FormWithParent extends CreateStudentInput {
   parentMobileNumber: string;
   parentName: string;
   parentEmail: string;
-}
-
-interface DocumentUpload {
-  type: 'BIRTH_CERT' | 'TRANSFER_CERT' | 'AADHAAR' | 'PHOTO' | 'OTHER';
-  name: string;
-  uploaded: boolean;
 }
 
 const BLANK_FORM_WITH_PARENT: FormWithParent = {
@@ -284,31 +277,6 @@ export const StudentsManager: React.FC<Props> = ({
   const [showParentModal, setShowParentModal] = useState(false);
   const [schoolInfo, setSchoolInfo] = useState<SchoolInfo | null>(null);
   const [showAdmissionForm, setShowAdmissionForm] = useState(false);
-  // Trimmed to the truly essential ones — Aadhaar (KYC) + Birth Cert (age
-  // proof) + Transfer Cert (for transfer-in students). The catch-all "Other"
-  // bucket was removed to keep the checklist focused.
-  const [documents, setDocuments] = useState<DocumentUpload[]>([
-    { type: 'AADHAAR',     name: 'Aadhaar Card',         uploaded: false },
-    { type: 'BIRTH_CERT',  name: 'Birth Certificate',    uploaded: false },
-    { type: 'TRANSFER_CERT', name: 'Transfer Certificate', uploaded: false },
-  ]);
-  // Actual File objects collected during form fill — uploaded after student is created
-  const [documentFiles, setDocumentFiles] = useState<Map<DocumentUpload['type'], File>>(new Map());
-
-  // Photo preview URL — memoized + revoked on file change / unmount.
-  // Earlier the form recomputed `URL.createObjectURL(...)` inline in
-  // JSX on every render → a new blob URL each render, never revoked.
-  // Hundred form edits = 100 leaked blob URLs in browser memory.
-  const photoFile = documentFiles.get('PHOTO');
-  const photoPreviewUrl = React.useMemo(
-    () => (photoFile ? URL.createObjectURL(photoFile) : null),
-    [photoFile],
-  );
-  React.useEffect(() => {
-    if (!photoPreviewUrl) return;
-    return () => URL.revokeObjectURL(photoPreviewUrl);
-  }, [photoPreviewUrl]);
-
   // Archive state ─────────────────────────────────────────────────────────
   const [archiveTab, setArchiveTab] = useState<ArchiveTab>('ACTIVE');
   const [archiveLoading, setArchiveLoading] = useState(false);
@@ -487,7 +455,6 @@ export const StudentsManager: React.FC<Props> = ({
         setForm(BLANK_FORM_WITH_PARENT);
         setReligionIsOther(false);
         setCasteIsOther(false);
-        setDocumentFiles(new Map());
         if (onDraftDone) onDraftDone();
       } catch (e) {
         showToast(e instanceof Error ? e.message : 'Draft submit failed', 'error');
@@ -553,28 +520,10 @@ export const StudentsManager: React.FC<Props> = ({
         showToast(`${student.name} admitted successfully`);
       }
 
-      // Upload all selected documents in parallel
-      if (documentFiles.size > 0) {
-        // Capture each entry's docType + file so the failure message can
-        // include both. Earlier the toast only showed the filename, which
-        // hid the real reason (e.g. "Permission denied", "Bucket not found")
-        // — making "upload failed" effectively mute.
-        const entries: Array<[DocumentUpload['type'], File]> = Array.from(documentFiles.entries());
-        const uploads = entries.map(async ([docType, file]) => {
-          const { path } = await storageService.uploadStudentDocument(student.id, docType, file);
-          await studentService.addDocumentRecord(student.id, docType, path);
-        });
-        const results = await Promise.allSettled(uploads);
-        results.forEach((r, i) => {
-          if (r.status === 'rejected') {
-            const [docType, file] = entries[i];
-            const reason = r.reason instanceof Error ? r.reason.message : String(r.reason);
-            // eslint-disable-next-line no-console
-            console.error('[admission] document upload failed', { docType, file: file?.name, reason });
-            showToast(`${docType} upload failed: ${reason}`, 'error');
-          }
-        });
-      }
+      // Document uploads (photo / Aadhaar / Birth Cert / TC) were
+      // removed from the admission flow — they now happen from the
+      // student profile after admission, via the Document Checklist
+      // panel. Admission stays fast and offline-tolerant.
 
       // Wrap the post-create UI updates so a render error in any one of
       // the downstream components (admission-print, list refresh) doesn't
@@ -587,8 +536,6 @@ export const StudentsManager: React.FC<Props> = ({
         setForm(BLANK_FORM_WITH_PARENT);
         setReligionIsOther(false);
         setCasteIsOther(false);
-        setDocumentFiles(new Map());
-        setDocuments(prev => prev.map(d => ({ ...d, uploaded: false })));
         setSubView('LIST');
         // PRINCIPAL_REVIEW done — bounce back to the approvals queue.
         if (mode === 'PRINCIPAL_REVIEW' && onDraftDone) onDraftDone();
@@ -609,25 +556,6 @@ export const StudentsManager: React.FC<Props> = ({
     } finally {
       setIsSubmitting(false);
     }
-  };
-
-  const handleDocumentUpload = (e: React.ChangeEvent<HTMLInputElement>, docType: DocumentUpload['type']) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
-    // Mirror storage.service.ts: PHOTO 1 MB, TRANSFER_CERT 3 MB, others 2 MB.
-    const cap =
-      docType === 'PHOTO'         ? 1 * 1024 * 1024 :
-      docType === 'TRANSFER_CERT' ? 3 * 1024 * 1024 :
-      2 * 1024 * 1024;
-    const fmt = (b: number) => b >= 1024 * 1024 ? `${(b / 1024 / 1024).toFixed(1)} MB` : `${Math.round(b / 1024)} KB`;
-    if (file.size > cap) {
-      showToast(`File too large — max ${fmt(cap)} (got ${fmt(file.size)})`, 'error');
-      return;
-    }
-    setDocumentFiles(prev => { const n = new Map(prev); n.set(docType, file); return n; });
-    setDocuments(prev => prev.map(d => d.type === docType ? { ...d, uploaded: true } : d));
-    showToast(`${file.name} selected — will upload on admission`);
-    e.target.value = '';
   };
 
 
@@ -851,47 +779,9 @@ export const StudentsManager: React.FC<Props> = ({
 
           {/* ─── Basic Info ────────────────────────────────────────── */}
           <div className="text-[10px] font-black uppercase tracking-widest text-indigo-600 px-1">1. Basic Info</div>
-          {/* Passport-size photo — top of form, dedicated upload with preview */}
-          <div className="bg-white rounded-2xl border border-slate-100 shadow-sm p-3.5">
-            <div className="flex items-center gap-3.5">
-              <div className="w-20 h-24 rounded-xl border-2 border-dashed border-slate-300 bg-slate-50 overflow-hidden flex items-center justify-center shrink-0">
-                {photoPreviewUrl ? (
-                  <img
-                    src={photoPreviewUrl}
-                    alt="Passport"
-                    className="w-full h-full object-cover"
-                  />
-                ) : (
-                  <div className="text-center px-2">
-                    <User size={24} className="mx-auto text-slate-300 mb-1" />
-                    <p className="text-[9px] font-bold text-slate-400 leading-tight">No photo</p>
-                  </div>
-                )}
-              </div>
-              <div className="flex-1 min-w-0 space-y-1.5">
-                <p className="text-[10px] font-black uppercase tracking-widest text-slate-400">Passport Photo</p>
-                <p className="text-[10px] font-bold text-slate-400">JPG / PNG · Max 1 MB</p>
-                <div className="flex items-center gap-2">
-                  <label className="cursor-pointer">
-                    <input type="file" onChange={e => handleDocumentUpload(e, 'PHOTO')} className="hidden"
-                      accept="image/jpeg,image/png,image/webp,image/heic,image/heif" />
-                    <span className="flex items-center gap-1.5 text-[10px] font-black px-3 py-2 bg-indigo-600 text-white hover:bg-indigo-700 rounded-xl transition-colors">
-                      <Upload size={11} /> {documentFiles.get('PHOTO') ? 'Replace Photo' : 'Upload Photo'}
-                    </span>
-                  </label>
-                  {documentFiles.get('PHOTO') && (
-                    <button type="button"
-                      onClick={() => {
-                        setDocumentFiles(prev => { const n = new Map(prev); n.delete('PHOTO'); return n; });
-                      }}
-                      className="flex items-center gap-1 text-[10px] font-black px-3 py-2 bg-rose-50 text-rose-600 hover:bg-rose-100 rounded-xl transition-colors">
-                      <X size={11} /> Remove
-                    </button>
-                  )}
-                </div>
-              </div>
-            </div>
-          </div>
+          {/* Photo upload moved to Profile → Document Checklist (post-admission).
+              Keeping it inline at admission time stalled the form on slow
+              wifi and added one more "Did I tap upload?" gotcha. */}
 
           <div className="bg-white rounded-2xl border border-slate-100 shadow-sm p-4 space-y-4">
             <p className="text-[10px] font-black uppercase tracking-widest text-slate-400">Student Info</p>
@@ -1157,69 +1047,17 @@ export const StudentsManager: React.FC<Props> = ({
             </div>
           </div>
 
-          {/* ─── Documents ────────────────────────────────────────── */}
-          <div className="text-[10px] font-black uppercase tracking-widest text-indigo-600 px-1 pt-4">3. Documents</div>
-          {mode === 'TEACHER_DRAFT' && (
-            <div className="bg-amber-50 border border-amber-200 rounded-2xl p-3.5">
-              <p className="text-[10px] font-black uppercase tracking-widest text-amber-700">Note</p>
-              <p className="text-xs font-bold text-amber-800 mt-1.5 leading-relaxed">
-                Document uploads are not part of draft submission — the principal will add them at review time.
-                You can skip step 3 and tap "Submit Draft".
-              </p>
-            </div>
-          )}
-          <div className="bg-white rounded-2xl border border-slate-100 shadow-sm p-4 space-y-3">
-            <div>
-              <p className="text-[10px] font-black uppercase tracking-widest text-slate-400">Documents</p>
-              <p className="text-[10px] font-bold text-slate-400 mt-0.5">Photo 1 MB · TC 3 MB · others 2 MB · JPG / PNG / PDF — uploaded when you tap Admit</p>
-            </div>
-            {documents.map(doc => {
-              const file = documentFiles.get(doc.type);
-              return (
-                <div key={doc.type} className={`rounded-xl border p-3 transition-colors ${file ? 'bg-emerald-50 border-emerald-200' : 'bg-slate-50 border-slate-200'}`}>
-                  <div className="flex items-center justify-between gap-2">
-                    <div className="flex items-center gap-2.5 flex-1 min-w-0">
-                      {file
-                        ? <CheckCircle2 size={15} className="text-emerald-600 shrink-0" />
-                        : <div className="w-3.5 h-3.5 rounded border-2 border-slate-300 shrink-0" />}
-                      <div className="flex-1 min-w-0">
-                        <span className={`text-sm font-bold ${file ? 'text-emerald-800' : 'text-slate-700'}`}>{doc.name}</span>
-                        {file && (
-                          <p className="text-[9px] font-bold text-emerald-600 truncate mt-0.5">{file.name} · {(file.size / 1024).toFixed(0)}KB</p>
-                        )}
-                      </div>
-                    </div>
-                    <div className="flex items-center gap-1.5 shrink-0">
-                      {file && (
-                        <button type="button"
-                          onClick={() => {
-                            // Revoke after the new tab has had a chance
-                            // to fetch + render — synchronous revoke
-                            // breaks the preview tab, leaked URL on
-                            // every click adds up over a long admission
-                            // session.
-                            const previewUrl = URL.createObjectURL(file);
-                            window.open(previewUrl, '_blank', 'noopener');
-                            setTimeout(() => URL.revokeObjectURL(previewUrl), 60_000);
-                          }}
-                          className="flex items-center gap-1 text-[9px] font-black px-2 py-1.5 bg-emerald-100 text-emerald-700 hover:bg-emerald-200 rounded-full transition-colors">
-                          <Eye size={10} /> View
-                        </button>
-                      )}
-                      <label className="cursor-pointer">
-                        <input type="file" onChange={e => handleDocumentUpload(e, doc.type)} className="hidden"
-                          accept="image/jpeg,image/png,image/webp,image/heic,image/heif,application/pdf" />
-                        <span className={`flex items-center gap-1 text-[9px] font-black px-2 py-1.5 rounded-full transition-colors ${
-                          file ? 'bg-slate-100 text-slate-600 hover:bg-slate-200' : 'bg-indigo-100 text-indigo-700 hover:bg-indigo-200'
-                        }`}>
-                          <Upload size={10} /> {file ? 'Replace' : 'Select'}
-                        </span>
-                      </label>
-                    </div>
-                  </div>
-                </div>
-              );
-            })}
+          {/* Document uploads (Photo / Aadhaar / Birth Certificate /
+              Transfer Certificate) live on the student's profile page
+              now, in the Document Checklist panel. Removing them from
+              the admission flow cut three round-trips out of a slow-
+              wifi admission and ended the "form looks done but upload
+              still pending" gotcha. */}
+          <div className="bg-sky-50 border border-sky-200 rounded-2xl p-3.5 mt-2">
+            <p className="text-[10px] font-black uppercase tracking-widest text-sky-700">Documents</p>
+            <p className="text-xs font-bold text-sky-800 mt-1.5 leading-relaxed">
+              Upload photo + documents from the student's profile after admission. Open the student → Documents tab → Document Checklist.
+            </p>
           </div>
 
         </div>
